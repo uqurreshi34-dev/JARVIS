@@ -19,6 +19,10 @@ class ApplicationManager:
     def __init__(self):
         self._applications = self._load_applications()
 
+    @property
+    def applications(self):
+        return tuple(application.name for application in self._applications)
+
     def _load_applications(self):
         result = subprocess.run(
             [

@@ -1,33 +1,34 @@
-import re
-
 from actions.applications import ApplicationManager
+from llm import interpret
 
 
 _application_manager = ApplicationManager()
 
 
 def handle_command(command):
-    command = command.lower().strip()
+    result = interpret(
+        command,
+        _application_manager.applications,
+    )
 
-    match = re.match(r"^(open|launch|start|close|quit|exit)\s+(.+)$", command)
+    intent = result.get("intent")
+    application = result.get("application")
 
-    if not match:
+    if not application:
         return None
 
-    action, application_name = match.groups()
-
-    application_name = application_name.strip()
-
-    if action in {"open", "launch", "start"}:
+    if intent == "open_application":
         return {
-            "response": f"Opening {application_name}, sir.",
-            "action": lambda: _application_manager.launch(application_name),
+            "intent": intent,
+            "response": f"Opening {application}, sir.",
+            "action": lambda: _application_manager.launch(application),
         }
 
-    if action in {"close", "quit", "exit"}:
+    if intent == "close_application":
         return {
-            "response": f"Closing {application_name}, sir.",
-            "action": lambda: _application_manager.close(application_name),
+            "intent": intent,
+            "response": f"Closing {application}, sir.",
+            "action": lambda: _application_manager.close(application),
         }
 
     return None
