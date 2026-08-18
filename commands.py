@@ -1,35 +1,33 @@
-import os
-import shutil
-import subprocess
+import re
+
+from actions.applications import ApplicationManager
 
 
-def launch_application(app_name):
-    """Launch a Windows application using multiple fallback methods."""
-
-    executable = shutil.which(app_name)
-
-    if executable:
-        subprocess.Popen(
-            [executable],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return True
-
-    try:
-        os.startfile(app_name)
-        return True
-    except OSError:
-        return False
+_application_manager = ApplicationManager()
 
 
 def handle_command(command):
     command = command.lower().strip()
 
-    if "open chrome" in command or "launch chrome" in command:
+    match = re.match(r"^(open|launch|start|close|quit|exit)\s+(.+)$", command)
+
+    if not match:
+        return None
+
+    action, application_name = match.groups()
+
+    application_name = application_name.strip()
+
+    if action in {"open", "launch", "start"}:
         return {
-            "response": "Opening Chrome, sir.",
-            "action": lambda: launch_application("chrome"),
+            "response": f"Opening {application_name}, sir.",
+            "action": lambda: _application_manager.launch(application_name),
+        }
+
+    if action in {"close", "quit", "exit"}:
+        return {
+            "response": f"Closing {application_name}, sir.",
+            "action": lambda: _application_manager.close(application_name),
         }
 
     return None
