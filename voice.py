@@ -6,6 +6,10 @@ from difflib import SequenceMatcher
 import sounddevice as sd
 from vosk import KaldiRecognizer, Model
 
+from speech import is_speaking, speech_epoch
+
+from speech import is_speaking, speech_epoch
+
 
 MODEL_PATH = "model"
 SAMPLE_RATE = 16000
@@ -159,6 +163,8 @@ def listen():
     # own replies from the previous turn.
     _drain_queue()
 
+    epoch = speech_epoch()
+
     with sd.RawInputStream(
         samplerate=SAMPLE_RATE,
         blocksize=8000,
@@ -167,6 +173,20 @@ def listen():
         callback=audio_callback,
     ):
         while True:
+            # A reminder can speak at any moment, from its own thread. Throw
+            # away everything the microphone hears while that happens.
+            if is_speaking():
+                _drain_queue()
+                time.sleep(0.05)
+                continue
+
+            if speech_epoch() != epoch:
+                time.sleep(SETTLE_SECONDS)
+                _drain_queue()
+                recognizer.Reset()
+                epoch = speech_epoch()
+                continue
+
             data = audio_queue.get()
 
             if not recognizer.AcceptWaveform(data):
@@ -217,6 +237,7 @@ def listen():
             time.sleep(SETTLE_SECONDS)
             _drain_queue()
             recognizer.Reset()
+            epoch = speech_epoch()
 
             # Start the armed window only once JARVIS has finished speaking.
             _arm()

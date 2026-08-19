@@ -65,13 +65,24 @@ media_play_pause for play, pause, or resume.
 media_next to skip forward a track.
 media_previous to go back a track.
 
-Leave "amount" null for every intent except set_volume. When you do set it,
-give plain digits only, such as 40. Never write the word null as text.
+Leave "amount" null for every intent except set_volume and set_timer. When you
+do set it, give plain digits only, such as 40. Never write the word null as
+text. Leave "text" null for every intent except set_timer.
 
 Use minimise_all when the user wants all windows minimised or the desktop
 shown. Use restore_all when the user wants those windows brought back.
 
-Use get_time when the user asks for the current time or today's date.Use get_weather when the user asks about the weather, temperature, or forecast.
+Use set_reminder when the user wants a timer or reminder. Put the total duration
+in seconds in "amount" — so five minutes is 300, an hour is 3600, ninety
+seconds is 90 — and set "unit" to "seconds". If the user says what to be
+reminded about, put that in "text" as a short phrase, otherwise leave "text"
+null. For "remind me in ten minutes to call mum", amount is 600, unit is
+"seconds", and text is "call mum".
+Use list_reminders when the user asks what timers or reminders are running.
+Use cancel_reminders when the user wants timers or reminders cancelled.
+
+Use get_time when the user asks for the current time or today's date.
+Use get_weather when the user asks about the weather, temperature, or forecast.
 Use get_system_status when the user asks how the machine, PC, or system is
 doing, or about CPU, memory, disk space, or battery.
 For these, leave both "application" and "website" null.
@@ -131,6 +142,9 @@ class CommandInterpreter:
                                     "media_previous",
                                     "minimise_all",
                                     "restore_all",
+                                    "set_reminder",
+                                    "list_reminders",
+                                    "cancel_reminders",
                                     "get_time",
                                     "get_weather",
                                     "get_system_status",
@@ -150,6 +164,12 @@ class CommandInterpreter:
                             "amount": {
                                 "type": ["string", "number", "null"],
                             },
+                            "text": {
+                                "type": ["string", "null"],
+                            },
+                            "unit": {
+                                "type": ["string", "null"],
+                            },
                         },
                         "required": [
                             "intent",
@@ -157,6 +177,8 @@ class CommandInterpreter:
                             "website",
                             "project",
                             "amount",
+                            "text",
+                            "unit",
                         ],
                         "additionalProperties": False,
                     },

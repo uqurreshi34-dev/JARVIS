@@ -17,12 +17,14 @@ from actions.desktop import (
 )
 from actions.knowledge import answer
 from actions.projects import ProjectManager
+from actions.reminders import ReminderManager, describe_duration, to_seconds
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
 
 
 _application_manager = ApplicationManager()
 _project_manager = ProjectManager()
+reminder_manager = ReminderManager()
 _interpreter = CommandInterpreter()
 
 
@@ -115,6 +117,8 @@ def handle_command(command):
     website = result.get("website")
     project = result.get("project")
     amount = _to_number(result.get("amount"))
+    text = result.get("text")
+    unit = result.get("unit")
 
     if intent == "open_application" and application:
         return _action(
@@ -179,6 +183,34 @@ def handle_command(command):
 
     if intent == "get_system_status":
         return _query(intent, describe_system)
+
+    if intent == "set_reminder":
+        seconds = to_seconds(amount, unit)
+
+        if seconds:
+            spoken = describe_duration(seconds)
+            note = (text or "").strip()
+
+            if note:
+                response = f"I'll remind you to {note} in {spoken}, sir."
+            else:
+                response = f"Timer set for {spoken}, sir."
+
+            return _action(
+                intent,
+                response,
+                lambda: reminder_manager.add(seconds, note) is not None,
+            )
+
+    if intent == "list_reminders":
+        return _query(intent, reminder_manager.describe)
+
+    if intent == "cancel_reminders":
+        return _action(
+            intent,
+            "Clearing them, sir.",
+            lambda: reminder_manager.cancel_all() >= 0,
+        )
 
     if intent == "answer_question":
         return _query(intent, lambda: answer(command))

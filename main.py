@@ -4,7 +4,7 @@ import threading
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
-from commands import handle_command
+from commands import handle_command, reminder_manager
 from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
 from speech import set_amplitude_listener, speak
 from voice import listen, set_wake_listener
@@ -16,11 +16,13 @@ class Assistant:
     def __init__(self, hud):
         self._hud = hud
         self._stop = threading.Event()
+        self._current_state = IDLE
 
     def stop(self):
         self._stop.set()
 
     def _state(self, state):
+        self._current_state = state
         self._hud.state_changed.emit(state)
 
     def _heard(self, text):
@@ -69,6 +71,19 @@ class Assistant:
         else:
             self._say("I couldn't find that out, sir.")
 
+    def _on_alert(self, text):
+        """Called from a reminder's own thread when one falls due.
+
+        speech.speak() holds a lock, so this cannot talk over a reply in
+        progress, and the listener discards audio while JARVIS speaks.
+        """
+        previous = self._current_state
+
+        self._reply(text)
+        self._state(SPEAKING)
+        speak(text)
+        self._state(previous)
+
     def _on_wake(self):
         """Called when JARVIS hears his name with no command attached."""
         self._state(LISTENING)
@@ -78,6 +93,7 @@ class Assistant:
 
     def run(self):
         set_wake_listener(self._on_wake)
+        reminder_manager.set_alert_listener(self._on_alert)
 
         self._say("Good evening. JARVIS is online.")
 
@@ -126,6 +142,7 @@ class Assistant:
             self._state(IDLE)
 
         self._state(IDLE)
+        reminder_manager.cancel_all()
         self._hud.shutdown.emit()
 
 
@@ -141,6 +158,8 @@ def main():
     set_amplitude_listener(hud.amplitude_changed.emit)
 
     assistant = Assistant(hud)
+
+    # Reminders fire on their own thread and speak through the assistant.
 
     hud.shutdown.connect(lambda: QTimer.singleShot(400, app.quit))
     hud.closed.connect(assistant.stop)

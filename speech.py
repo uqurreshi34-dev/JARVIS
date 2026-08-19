@@ -1,6 +1,7 @@
 import asyncio
 import os
 import tempfile
+import threading
 
 import edge_tts
 import numpy as np
@@ -18,6 +19,31 @@ _BLOCK = 1024
 # Scales raw RMS up to a usable 0..1 range for the HUD.
 _GAIN = 6.0
 
+# Incremented after every completed utterance so the listener can tell that
+# JARVIS has spoken, and discard whatever the microphone picked up.
+_epoch = 0
+_epoch_lock = threading.Lock()
+
+_speaking = threading.Event()
+
+
+def speech_epoch():
+    """A counter that changes each time JARVIS finishes speaking."""
+    with _epoch_lock:
+        return _epoch
+
+
+def is_speaking():
+    """True while audio is actually being played."""
+    return _speaking.is_set()
+
+
+def _bump_epoch():
+    global _epoch
+
+    with _epoch_lock:
+        _epoch += 1
+
 
 class SpeechEngine:
     """Neural text-to-speech with a local SAPI5 fallback.
@@ -30,6 +56,9 @@ class SpeechEngine:
         self.voice = voice
         self.rate = rate
         self._amplitude_listener = None
+
+        # Reminders fire on their own thread, so utterances must not overlap.
+        self._lock = threading.Lock()
 
     def set_amplitude_listener(self, listener):
         """Register a callable taking a float 0..1, or None to clear."""
@@ -45,14 +74,19 @@ class SpeechEngine:
     def speak(self, text):
         print(f"JARVIS: {text}")
 
-        try:
-            self._speak_neural(text)
-        except Exception as error:
-            print(
-                f"[JARVIS] neural voice unavailable ({error}); using fallback.")
-            self._speak_fallback(text)
-        finally:
-            self._report(0.0)
+        with self._lock:
+            _speaking.set()
+
+            try:
+                self._speak_neural(text)
+            except Exception as error:
+                print(
+                    f"[JARVIS] neural voice unavailable ({error}); using fallback.")
+                self._speak_fallback(text)
+            finally:
+                self._report(0.0)
+                _speaking.clear()
+                _bump_epoch()
 
     def _speak_neural(self, text):
         path = os.path.join(tempfile.gettempdir(), "jarvis_tts.mp3")
