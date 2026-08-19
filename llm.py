@@ -37,7 +37,10 @@ For open_application and close_application, leave "website" null.
 For open_website, leave "application" null.
 
 Use get_time when the user asks for the current time or today's date.
-For get_time, leave both "application" and "website" null.
+Use get_weather when the user asks about the weather, temperature, or forecast.
+Use get_system_status when the user asks how the machine, PC, or system is
+doing, or about CPU, memory, disk space, or battery.
+For these, leave both "application" and "website" null.
 
 Use unknown for anything else.
 """
@@ -68,6 +71,8 @@ class CommandInterpreter:
                                     "close_application",
                                     "open_website",
                                     "get_time",
+                                    "get_weather",
+                                    "get_system_status",
                                     "unknown",
                                 ],
                             },

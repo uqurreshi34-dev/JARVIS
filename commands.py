@@ -2,7 +2,7 @@ import webbrowser
 from urllib.parse import urlparse
 
 from actions.applications import ApplicationManager
-from actions.system import describe_time
+from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
 
 
@@ -78,5 +78,11 @@ def handle_command(command):
 
     if intent == "get_time":
         return _query(intent, describe_time)
+
+    if intent == "get_weather":
+        return _query(intent, describe_weather)
+
+    if intent == "get_system_status":
+        return _query(intent, describe_system)
 
     return None
