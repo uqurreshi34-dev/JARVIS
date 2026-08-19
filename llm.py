@@ -53,10 +53,18 @@ Use list_projects when the user asks what their recent projects are.
 Use these for sound and media control:
 volume_up when the user wants the volume raised or something louder.
 volume_down when the user wants the volume lowered or something quieter.
-toggle_mute for mute or unmute.
+set_volume when the user names a specific level, such as "set volume to 40"
+or "volume at half". Put the target percentage in "amount" as a number from
+0 to 100. Treat "half" as 50, "full" or "max" as 100.
+get_volume when the user asks how loud it currently is.
+mute when the user clearly wants sound off. unmute when they clearly want it
+back on. toggle_mute only when it is ambiguous which they mean.
 media_play_pause for play, pause, or resume.
 media_next to skip forward a track.
 media_previous to go back a track.
+
+Leave "amount" null for every intent except set_volume. When you do set it,
+give plain digits only, such as 40. Never write the word null as text.
 
 Use minimise_all when the user wants all windows minimised or the desktop
 shown. Use restore_all when the user wants those windows brought back.
@@ -103,6 +111,10 @@ class CommandInterpreter:
                                     "list_projects",
                                     "volume_up",
                                     "volume_down",
+                                    "set_volume",
+                                    "get_volume",
+                                    "mute",
+                                    "unmute",
                                     "toggle_mute",
                                     "media_play_pause",
                                     "media_next",
@@ -124,12 +136,16 @@ class CommandInterpreter:
                             "project": {
                                 "type": ["string", "null"],
                             },
+                            "amount": {
+                                "type": ["string", "number", "null"],
+                            },
                         },
                         "required": [
                             "intent",
                             "application",
                             "website",
                             "project",
+                            "amount",
                         ],
                         "additionalProperties": False,
                     },

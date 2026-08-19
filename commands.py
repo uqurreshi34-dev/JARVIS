@@ -3,11 +3,14 @@ from urllib.parse import urlparse
 
 from actions.applications import ApplicationManager
 from actions.desktop import (
+    describe_volume,
     minimise_all,
     next_track,
     play_pause,
     previous_track,
     restore_all,
+    set_mute,
+    set_volume,
     toggle_mute,
     volume_down,
     volume_up,
@@ -61,12 +64,40 @@ _SIMPLE_ACTIONS = {
     "volume_up": ("Turning it up, sir.", volume_up),
     "volume_down": ("Turning it down, sir.", volume_down),
     "toggle_mute": ("Toggling mute, sir.", toggle_mute),
+    "mute": ("Muting, sir.", lambda: set_mute(True)),
+    "unmute": ("Unmuting, sir.", lambda: set_mute(False)),
     "media_play_pause": ("Certainly, sir.", play_pause),
     "media_next": ("Skipping ahead, sir.", next_track),
     "media_previous": ("Going back, sir.", previous_track),
     "minimise_all": ("Clearing the desktop, sir.", minimise_all),
     "restore_all": ("Bringing them back, sir.", restore_all),
 }
+
+
+def _to_number(value):
+    """Coerce an LLM-supplied amount to a float, or None.
+
+    The model sometimes sends the string "null" rather than JSON null, or a
+    number as text, so this accepts both and rejects anything unusable.
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        return None
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    text = str(value).strip().rstrip("%").strip()
+
+    if text.casefold() in ("", "null", "none", "nil"):
+        return None
+
+    try:
+        return float(text)
+    except ValueError:
+        return None
 
 
 def handle_command(command):
@@ -82,6 +113,7 @@ def handle_command(command):
     application = result.get("application")
     website = result.get("website")
     project = result.get("project")
+    amount = _to_number(result.get("amount"))
 
     if intent == "open_application" and application:
         return _action(
@@ -113,6 +145,18 @@ def handle_command(command):
 
     if intent == "list_projects":
         return _query(intent, _project_manager.describe)
+
+    if intent == "set_volume" and amount is not None:
+        level = max(0, min(100, round(amount)))
+
+        return _action(
+            intent,
+            f"Setting volume to {level} percent, sir.",
+            lambda: set_volume(level),
+        )
+
+    if intent == "get_volume":
+        return _query(intent, describe_volume)
 
     if intent in _SIMPLE_ACTIONS:
         response, function = _SIMPLE_ACTIONS[intent]
