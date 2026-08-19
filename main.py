@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import QApplication
 from commands import handle_command
 from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
 from speech import set_amplitude_listener, speak
-from voice import listen
+from voice import listen, set_wake_listener
 
 
 class Assistant:
@@ -67,11 +67,21 @@ class Assistant:
         else:
             self._say("I couldn't find that out, sir.")
 
+    def _on_wake(self):
+        """Called when JARVIS hears his name with no command attached."""
+        self._state(LISTENING)
+        self._heard("")
+        self._say("Yes, sir?")
+        self._state(LISTENING)
+
     def run(self):
+        set_wake_listener(self._on_wake)
+
         self._say("Good evening. JARVIS is online.")
 
         while not self._stop.is_set():
-            self._state(LISTENING)
+            # STANDBY until the wake word is heard.
+            self._state(IDLE)
             self._heard("")
             self._reply("")
 
