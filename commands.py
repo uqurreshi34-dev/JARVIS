@@ -18,6 +18,7 @@ from actions.desktop import (
 from actions.knowledge import answer
 from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
+from actions import clipboard
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
@@ -175,6 +176,23 @@ def handle_command(command):
         response, function = _SIMPLE_ACTIONS[intent]
 
         return _action(intent, response, function)
+
+    if intent == "read_clipboard":
+        return _query(intent, clipboard.describe)
+
+    if intent == "copy_to_clipboard" and text:
+        return _action(
+            intent,
+            "Copied, sir.",
+            lambda: clipboard.write(text),
+        )
+
+    if intent == "clear_clipboard":
+        return _action(
+            intent,
+            "Clearing your clipboard, sir.",
+            clipboard.clear,
+        )
 
     if intent == "take_screenshot":
         return _query(intent, describe_capture)

@@ -81,6 +81,11 @@ null. For "remind me in ten minutes to call mum", amount is 600, unit is
 Use list_reminders when the user asks what timers or reminders are running.
 Use cancel_reminders when the user wants timers or reminders cancelled.
 
+Use read_clipboard when the user asks what is on their clipboard.
+Use copy_to_clipboard when the user wants something put on the clipboard, and
+put the exact wording to copy in "text".
+Use clear_clipboard when the user wants the clipboard emptied.
+
 Use take_screenshot when the user wants a screenshot, screen capture, or a
 picture of their screen.
 
@@ -149,6 +154,9 @@ class CommandInterpreter:
                                     "list_reminders",
                                     "cancel_reminders",
                                     "take_screenshot",
+                                    "read_clipboard",
+                                    "copy_to_clipboard",
+                                    "clear_clipboard",
                                     "get_time",
                                     "get_weather",
                                     "get_system_status",

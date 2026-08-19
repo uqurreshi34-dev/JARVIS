@@ -8,8 +8,6 @@ from vosk import KaldiRecognizer, Model
 
 from speech import is_speaking, speech_epoch
 
-from speech import is_speaking, speech_epoch
-
 
 MODEL_PATH = "model"
 SAMPLE_RATE = 16000
@@ -25,19 +23,34 @@ FILLERS = frozenset({
     "yes", "what", "who", "that", "this", "of", "or", "on", "in",
 })
 
-# Set REQUIRE_WAKE_WORD to False to go back to acting on everything heard.
+# Set REQUIRE_WAKE_WORD to False to act on everything heard.
 REQUIRE_WAKE_WORD = True
+
+# Set to False to skip the spoken "Yes, sir?" acknowledgement, which is the
+# slowest part of the two-stage flow. One-breath commands are unaffected.
+ACKNOWLEDGE_WAKE = True
 
 WAKE_WORD = "jarvis"
 
-# Vosk mishears the name in predictable ways; accept the close ones.
+# A second recogniser restricted to this grammar does the real wake detection.
+# When Vosk may only answer "jarvis" or "[unk]", near-misses like "job is"
+# resolve to the wake word instead of an unrelated common word.
+WAKE_GRAMMAR = json.dumps([WAKE_WORD, "[unk]"])
+
+# Kept as a fallback for when grammar mode is unavailable, and to strip the
+# name out of a one-breath command.
 WAKE_VARIANTS = frozenset({
     "jarvis", "jarvas", "jervis", "javis", "jarviss",
-    "jarvace", "charvis", "jarv", "jarvis's",
+    "jarvace", "charvis", "jarv", "jarvis's", "jarvis.",
 })
 
-# Fuzzy threshold for anything not in the variant list above.
 WAKE_RATIO = 0.75
+
+# Words close enough to trip the fuzzy test but clearly not the wake word.
+WAKE_BLOCKLIST = frozenset({
+    "travis", "java", "jarhead", "service", "harvest", "chris",
+    "jarred", "carbis", "marvis", "javan",
+})
 
 # Once woken, JARVIS accepts a bare command for this many seconds.
 ARMED_SECONDS = 10.0
@@ -51,6 +64,9 @@ model = Model(MODEL_PATH)
 
 _armed_until = 0.0
 _wake_listener = None
+
+# Set once we know whether this model supports grammar-constrained recognition.
+_grammar_supported = None
 
 
 def set_wake_listener(listener):
@@ -78,6 +94,30 @@ def _drain_queue():
             break
 
     return dropped
+
+
+def _make_wake_recognizer():
+    """A recogniser that can only report the wake word, or None."""
+    global _grammar_supported
+
+    if _grammar_supported is False:
+        return None
+
+    try:
+        recognizer = KaldiRecognizer(model, SAMPLE_RATE, WAKE_GRAMMAR)
+        _grammar_supported = True
+        return recognizer
+
+    except Exception as error:
+        if _grammar_supported is None:
+            print(
+                f"[JARVIS] grammar wake detection unavailable ({error}); "
+                "falling back to fuzzy matching"
+            )
+
+        _grammar_supported = False
+
+        return None
 
 
 def _confidence(result):
@@ -115,6 +155,9 @@ def _accept(text, result):
 def _is_wake_token(token):
     token = token.strip(".,!?'")
 
+    if token in WAKE_BLOCKLIST:
+        return False
+
     if token in WAKE_VARIANTS:
         return True
 
@@ -127,10 +170,28 @@ def _split_wake(text):
 
     for index, token in enumerate(tokens):
         if _is_wake_token(token):
-            remainder = " ".join(tokens[index + 1:]).strip()
-            return True, remainder
+            return True, " ".join(tokens[index + 1:]).strip()
 
     return False, ""
+
+
+def _strip_wake(text):
+    """Remove a leading wake word when the grammar recogniser found one.
+
+    The full recogniser may have transcribed the name as something else, so if
+    no token matches we drop the first token when more words follow it.
+    """
+    addressed, remainder = _split_wake(text)
+
+    if addressed:
+        return remainder
+
+    tokens = text.split()
+
+    if len(tokens) > 1:
+        return " ".join(tokens[1:]).strip()
+
+    return ""
 
 
 def _armed():
@@ -155,15 +216,16 @@ def listen():
         print("Listening...")
 
     recognizer = KaldiRecognizer(model, SAMPLE_RATE)
-
-    # Ask Vosk for per-word confidence scores so noise can be filtered.
     recognizer.SetWords(True)
+
+    waker = _make_wake_recognizer() if REQUIRE_WAKE_WORD else None
 
     # Anything buffered from before this call is stale -- typically JARVIS's
     # own replies from the previous turn.
     _drain_queue()
 
     epoch = speech_epoch()
+    wake_pending = False
 
     with sd.RawInputStream(
         samplerate=SAMPLE_RATE,
@@ -184,10 +246,23 @@ def listen():
                 time.sleep(SETTLE_SECONDS)
                 _drain_queue()
                 recognizer.Reset()
+
+                if waker:
+                    waker.Reset()
+
+                wake_pending = False
                 epoch = speech_epoch()
                 continue
 
             data = audio_queue.get()
+
+            # The grammar recogniser sees the same audio and is the primary
+            # wake signal, being far harder to confuse than fuzzy matching.
+            if waker and waker.AcceptWaveform(data):
+                heard = json.loads(waker.Result()).get("text", "")
+
+                if WAKE_WORD in heard.split():
+                    wake_pending = True
 
             if not recognizer.AcceptWaveform(data):
                 continue
@@ -196,6 +271,7 @@ def listen():
             text = result.get("text", "").strip()
 
             if not text or not _accept(text, result):
+                wake_pending = False
                 continue
 
             if not REQUIRE_WAKE_WORD:
@@ -205,6 +281,7 @@ def listen():
             # Already woken: treat whatever we hear as the command.
             if _armed():
                 _disarm()
+                wake_pending = False
 
                 addressed, remainder = _split_wake(text)
                 command = remainder if addressed and remainder else text
@@ -213,6 +290,15 @@ def listen():
                 return command
 
             addressed, remainder = _split_wake(text)
+
+            if wake_pending and not addressed:
+                # Grammar caught the name even though the full transcription
+                # rendered it as something else.
+                remainder = _strip_wake(text)
+                addressed = True
+                print(f'[wake] grammar matched on "{text}"')
+
+            wake_pending = False
 
             if not addressed:
                 print(f'[ignored] "{text}" (no wake word)')
@@ -226,18 +312,19 @@ def listen():
             # Bare "Jarvis" -- wake up and wait for the command.
             print("Woken. Awaiting command...")
 
-            if _wake_listener:
+            if ACKNOWLEDGE_WAKE and _wake_listener:
                 try:
                     _wake_listener()
                 except Exception as error:
                     print(f"[JARVIS] wake listener error: {error}")
 
-            # The mic was live while JARVIS spoke, so throw away everything
-            # captured during the acknowledgement plus a short settle window.
-            time.sleep(SETTLE_SECONDS)
-            _drain_queue()
-            recognizer.Reset()
-            epoch = speech_epoch()
+                time.sleep(SETTLE_SECONDS)
+                _drain_queue()
+                recognizer.Reset()
 
-            # Start the armed window only once JARVIS has finished speaking.
+                if waker:
+                    waker.Reset()
+
+                epoch = speech_epoch()
+
             _arm()
