@@ -2,7 +2,7 @@ import json
 import queue
 
 import sounddevice as sd
-from vosk import Model, KaldiRecognizer
+from vosk import KaldiRecognizer, Model
 
 
 MODEL_PATH = "model"

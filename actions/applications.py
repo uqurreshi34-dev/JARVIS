@@ -1,18 +1,72 @@
 from dataclasses import dataclass
+from difflib import SequenceMatcher
+import json
+import os
+import re
 import subprocess
+import time
 
 import psutil
-import pythoncom
+import win32api
 import win32con
 import win32gui
 import win32process
-from win32com.propsys import propsys, pscon
+
+try:
+    import win32com.client as win32com_client
+except ImportError:
+    win32com_client = None
+
+
+_URL_SCHEME = re.compile(r"^[a-z][a-z0-9+.\-]*://", re.IGNORECASE)
+_DRIVE_PATH = re.compile(r"^[a-zA-Z]:[\\/]")
+_TOKEN = re.compile(r"[a-z0-9]+")
+
+_STOP_TOKENS = frozenset({
+    "open", "close", "launch", "start", "run", "quit", "exit",
+    "kill", "shut", "down", "the", "and", "app", "application",
+    "please", "for", "exe", "lnk", "url",
+})
+
+_MIN_TOKEN_LENGTH = 3
+
+_CLOSE_TIMEOUT = 5.0
+_TERMINATE_TIMEOUT = 3.0
+_POLL_INTERVAL = 0.2
+
+
+def _significant_tokens(text):
+    return frozenset(
+        token
+        for token in _TOKEN.findall((text or "").casefold())
+        if len(token) >= _MIN_TOKEN_LENGTH and token not in _STOP_TOKENS
+    )
+
+
+def _classify(app_id):
+    value = (app_id or "").strip()
+
+    if _URL_SCHEME.match(value):
+        return "url", value
+
+    if _DRIVE_PATH.match(value) or value.startswith("\\\\"):
+        lowered = value.casefold()
+        if lowered.endswith(".url"):
+            return "internet_shortcut", value
+        if lowered.endswith(".lnk"):
+            return "shortcut", value
+        return "path", value
+
+    return "aumid", value
 
 
 @dataclass(frozen=True)
 class Application:
     name: str
     app_id: str
+    kind: str
+    target: str
+    tokens: frozenset
 
 
 class ApplicationManager:
@@ -28,30 +82,53 @@ class ApplicationManager:
             [
                 "powershell",
                 "-NoProfile",
+                "-NonInteractive",
                 "-Command",
-                "Get-StartApps | ConvertTo-Csv -NoTypeInformation",
+                "Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress",
             ],
             capture_output=True,
             text=True,
             check=True,
         )
 
+        payload = result.stdout.strip()
+
+        if not payload:
+            return ()
+
+        data = json.loads(payload)
+
+        if isinstance(data, dict):
+            data = [data]
+
         applications = []
 
-        for line in result.stdout.splitlines()[1:]:
-            name, app_id = line.strip('"').split('","', maxsplit=1)
+        for entry in data:
+            name = (entry.get("Name") or "").strip()
+            app_id = (entry.get("AppID") or "").strip()
+
+            if not name or not app_id:
+                continue
+
+            kind, target = _classify(app_id)
 
             applications.append(
                 Application(
                     name=name,
-                    app_id=app_id.rstrip('"'),
+                    app_id=app_id,
+                    kind=kind,
+                    target=target,
+                    tokens=_significant_tokens(name),
                 )
             )
 
-        return applications
+        return tuple(applications)
 
     def find(self, name):
-        query = name.casefold().strip()
+        query = (name or "").casefold().strip()
+
+        if not query:
+            return None
 
         for app in self._applications:
             if app.name.casefold() == query:
@@ -63,22 +140,100 @@ class ApplicationManager:
 
         return None
 
+    def candidates(self, query, limit=5):
+        raw = (query or "").casefold().strip()
+
+        cleaned = " ".join(
+            token
+            for token in _TOKEN.findall(raw)
+            if token not in _STOP_TOKENS
+        ) or raw
+
+        query_tokens = _significant_tokens(raw)
+
+        scored = []
+
+        for application in self._applications:
+            name = application.name.casefold()
+
+            ratio = max(
+                SequenceMatcher(None, cleaned, name).ratio(),
+                SequenceMatcher(None, raw, name).ratio(),
+            )
+
+            overlap = self._token_overlap(query_tokens, application.tokens)
+
+            scored.append((ratio + overlap, application.name))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+
+        seen = set()
+        ordered = []
+
+        for _, name in scored:
+            if name in seen:
+                continue
+
+            seen.add(name)
+            ordered.append(name)
+
+            if len(ordered) == limit:
+                break
+
+        return tuple(ordered)
+
+    @staticmethod
+    def _token_overlap(query_tokens, app_tokens):
+        if not query_tokens or not app_tokens:
+            return 0.0
+
+        hits = 0
+
+        for token in app_tokens:
+            if any(
+                token == other or token in other or other in token
+                for other in query_tokens
+            ):
+                hits += 1
+
+        return float(hits)
+
     def launch(self, name):
         app = self.find(name)
 
         if not app:
             return False
 
+        try:
+            self._activate(app)
+        except OSError as error:
+            print(f"[JARVIS] launch failed for {app.name!r}: {error}")
+            return False
+
+        return True
+
+    def _activate(self, app):
+        if app.kind == "url":
+            os.startfile(app.target)
+            return
+
+        if app.kind == "internet_shortcut":
+            url = self._read_internet_shortcut(app.target)
+            os.startfile(url or app.target)
+            return
+
+        if app.kind in ("shortcut", "path"):
+            os.startfile(app.target)
+            return
+
         subprocess.Popen(
             [
                 "explorer.exe",
-                f"shell:AppsFolder\\{app.app_id}",
+                f"shell:AppsFolder\\{app.target}",
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-
-        return True
 
     def close(self, name):
         app = self.find(name)
@@ -86,79 +241,252 @@ class ApplicationManager:
         if not app:
             return False
 
-        windows = self._find_application_windows(app)
+        matches = self._match_processes(app)
 
-        if not windows:
+        if not matches:
             return False
 
-        for hwnd in windows:
-            win32gui.PostMessage(
-                hwnd,
-                win32con.WM_CLOSE,
-                0,
-                0,
+        for record in matches.values():
+            for hwnd in record["windows"]:
+                self._post_close(hwnd)
+
+        initial = set(matches)
+        remaining = self._wait_for_exit(initial, _CLOSE_TIMEOUT)
+
+        escalated = False
+
+        for pid in list(remaining):
+            if matches[pid]["strong"]:
+                self._terminate_tree(pid)
+                escalated = True
+
+        if escalated:
+            remaining = self._wait_for_exit(remaining, _TERMINATE_TIMEOUT)
+
+        closed = initial - remaining
+
+        return bool(closed) or escalated
+
+    def _match_processes(self, app):
+        windows_by_pid = {}
+        titles_by_pid = {}
+
+        for hwnd, pid, title in self._enumerate_windows():
+            windows_by_pid.setdefault(pid, []).append(hwnd)
+
+            if title:
+                titles_by_pid.setdefault(pid, []).append(title)
+
+        matches = {}
+
+        for pid, hwnds in windows_by_pid.items():
+            titles = titles_by_pid.get(pid, [])
+            strength = self._match_strength(app, pid, titles)
+
+            if strength is None:
+                continue
+
+            titled = [hwnd for hwnd in hwnds if win32gui.GetWindowText(hwnd)]
+
+            matches[pid] = {
+                "windows": titled or hwnds,
+                "strong": strength == "strong",
+            }
+
+        return matches
+
+    def _match_strength(self, app, pid, titles):
+        try:
+            process = psutil.Process(pid)
+            process_name = process.name()
+
+            try:
+                executable = process.exe()
+            except (psutil.AccessDenied, psutil.Error):
+                executable = ""
+
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return None
+
+        stem = os.path.splitext(process_name)[0]
+        name_tokens = _significant_tokens(stem)
+
+        if app.tokens & name_tokens:
+            return "strong"
+
+        target_executable = self._target_executable(app)
+
+        if target_executable and executable and self._same_file(target_executable, executable):
+            return "strong"
+
+        signature = self._product_signature(executable)
+
+        if signature and any(token in signature for token in app.tokens):
+            return "strong"
+
+        for title in titles:
+            lowered = title.casefold()
+
+            if any(
+                re.search(r"\b%s\b" % re.escape(token), lowered)
+                for token in app.tokens
+            ):
+                return "weak"
+
+        return None
+
+    def _target_executable(self, app):
+        if app.kind == "path" and app.target.casefold().endswith(".exe"):
+            return app.target
+
+        if app.kind == "shortcut":
+            return self._resolve_shortcut_target(app.target)
+
+        return None
+
+    @staticmethod
+    def _same_file(first, second):
+        try:
+            return (
+                os.path.normcase(os.path.realpath(first))
+                == os.path.normcase(os.path.realpath(second))
             )
+        except OSError:
+            return False
 
-        return True
+    @staticmethod
+    def _product_signature(path):
+        if not path:
+            return ""
 
-    def _find_application_windows(self, app):
-        windows = []
+        try:
+            translations = win32api.GetFileVersionInfo(
+                path,
+                "\\VarFileInfo\\Translation",
+            )
+        except Exception:
+            return ""
+
+        if not translations:
+            return ""
+
+        language, codepage = translations[0]
+        parts = []
+
+        for field_name in ("ProductName", "FileDescription", "OriginalFilename"):
+            key = "\\StringFileInfo\\%04X%04X\\%s" % (
+                language, codepage, field_name)
+
+            try:
+                value = win32api.GetFileVersionInfo(path, key)
+            except Exception:
+                value = None
+
+            if value:
+                parts.append(value)
+
+        return " ".join(parts).casefold()
+
+    @staticmethod
+    def _resolve_shortcut_target(path):
+        if not win32com_client:
+            return None
+
+        try:
+            shell = win32com_client.Dispatch("WScript.Shell")
+            shortcut = shell.CreateShortcut(path)
+            return shortcut.TargetPath or None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _read_internet_shortcut(path):
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    if line.lower().startswith("url="):
+                        return line.partition("=")[2].strip()
+        except OSError:
+            return None
+
+        return None
+
+    @staticmethod
+    def _enumerate_windows():
+        collected = []
 
         def callback(hwnd, _):
             if not win32gui.IsWindowVisible(hwnd):
                 return
 
-            if self._window_belongs_to_application(hwnd, app):
-                windows.append(hwnd)
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            title = win32gui.GetWindowText(hwnd)
+
+            collected.append((hwnd, pid, title))
 
         win32gui.EnumWindows(callback, None)
 
-        return windows
-
-    def _window_belongs_to_application(self, hwnd, app):
-        window_app_id = self._get_window_app_id(hwnd)
-
-        if window_app_id:
-            return window_app_id.casefold() == app.app_id.casefold()
-
-        return self._window_matches_process(hwnd, app)
+        return collected
 
     @staticmethod
-    def _get_window_app_id(hwnd):
+    def _post_close(hwnd):
         try:
-            pythoncom.CoInitialize()
-
-            store = propsys.SHGetPropertyStoreForWindow(
-                hwnd,
-                propsys.IID_IPropertyStore,
-            )
-
-            value = store.GetValue(pscon.PKEY_AppUserModel_ID)
-
-            return value.GetValue()
-
-        except (OSError, AttributeError, TypeError):
-            return None
-
-        finally:
-            pythoncom.CoUninitialize()
+            win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+        except Exception:
+            pass
 
     @staticmethod
-    def _window_matches_process(hwnd, app):
-        _, process_id = win32process.GetWindowThreadProcessId(hwnd)
+    def _wait_for_exit(pids, timeout):
+        alive = {pid for pid in pids if psutil.pid_exists(pid)}
+        deadline = time.monotonic() + timeout
+
+        while alive and time.monotonic() < deadline:
+            time.sleep(_POLL_INTERVAL)
+            alive = {pid for pid in alive if psutil.pid_exists(pid)}
+
+        return alive
+
+    @staticmethod
+    def _terminate_tree(pid):
+        try:
+            parent = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            return
 
         try:
-            process = psutil.Process(process_id)
-            executable = process.name().casefold()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            return False
+            processes = parent.children(recursive=True)
+        except psutil.Error:
+            processes = []
 
-        executable_name = executable.removesuffix(".exe")
-        app_name = app.name.casefold()
-        app_id = app.app_id.casefold()
+        processes.append(parent)
 
-        return (
-            executable_name == app_name
-            or executable_name in app_id
-            or app_id in executable_name
-        )
+        for process in processes:
+            try:
+                process.terminate()
+            except psutil.Error:
+                pass
+
+        _, alive = psutil.wait_procs(processes, timeout=_TERMINATE_TIMEOUT)
+
+        for process in alive:
+            try:
+                process.kill()
+            except psutil.Error:
+                pass
+
+
+if __name__ == "__main__":
+    import sys
+
+    manager = ApplicationManager()
+    needle = " ".join(sys.argv[1:]).casefold().strip()
+
+    for application in manager._applications:
+        if needle and needle not in application.name.casefold():
+            continue
+
+        print(f"{application.name!r}")
+        print(f"  app_id: {application.app_id!r}")
+        print(f"  kind:   {application.kind}")
+        print(f"  target: {application.target!r}")
+        print()
