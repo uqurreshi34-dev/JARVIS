@@ -2,11 +2,13 @@ import webbrowser
 from urllib.parse import urlparse
 
 from actions.applications import ApplicationManager
+from actions.projects import ProjectManager
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
 
 
 _application_manager = ApplicationManager()
+_project_manager = ProjectManager()
 _interpreter = CommandInterpreter()
 
 
@@ -49,11 +51,13 @@ def handle_command(command):
     result = _interpreter.interpret(
         command,
         candidates,
+        _project_manager.names(),
     )
 
     intent = result["intent"]
     application = result.get("application")
     website = result.get("website")
+    project = result.get("project")
 
     if intent == "open_application" and application:
         return _action(
@@ -75,6 +79,16 @@ def handle_command(command):
             f"Opening {_website_label(website)}, sir.",
             lambda: _open_website(website),
         )
+
+    if intent == "open_project" and project:
+        return _action(
+            intent,
+            f"Opening {project}, sir.",
+            lambda: _project_manager.open(project) is not None,
+        )
+
+    if intent == "list_projects":
+        return _query(intent, _project_manager.describe)
 
     if intent == "get_time":
         return _query(intent, describe_time)
