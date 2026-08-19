@@ -1,6 +1,18 @@
 import time
 
 from commands import _application_manager, handle_command
+from speech import speak
+
+
+# Set to False to test logic quickly without waiting for speech.
+SPEAK = True
+
+
+def say(text):
+    if SPEAK:
+        speak(text)
+    else:
+        print(f"JARVIS: {text}")
 
 
 def run_direct(line):
@@ -20,6 +32,45 @@ def run_direct(line):
         return
 
     print(f"  -> {'success' if ok else 'failed'}")
+
+
+def run_action(result):
+    say(result["response"])
+
+    start = time.monotonic()
+
+    try:
+        success = result["action"]()
+    except Exception as error:
+        print(f"  action error: {error}")
+        success = False
+
+    elapsed = time.monotonic() - start
+
+    if success:
+        say("Done, sir.")
+    elif result["intent"] == "close_application":
+        say("I couldn't close the application, sir.")
+    else:
+        say("I couldn't open that, sir.")
+
+    print(f"  -> {'success' if success else 'failed'} ({elapsed:.1f}s)")
+
+
+def run_query(result):
+    start = time.monotonic()
+
+    try:
+        answer = result["action"]()
+    except Exception as error:
+        print(f"  query error: {error}")
+        answer = None
+
+    elapsed = time.monotonic() - start
+
+    say(answer if answer else "I couldn't find that out, sir.")
+
+    print(f"  -> {'answered' if answer else 'no answer'} ({elapsed:.1f}s)")
 
 
 print("JARVIS console.")
@@ -47,13 +98,10 @@ while True:
     result = handle_command(line)
 
     if not result:
-        print("JARVIS: I don't know how to do that yet.")
+        say("I don't know how to do that yet.")
         continue
 
-    print(f"JARVIS: {result['response']}")
-
-    start = time.monotonic()
-    ok = result["action"]()
-    elapsed = time.monotonic() - start
-
-    print(f"  -> {'success' if ok else 'failed'} ({elapsed:.1f}s)")
+    if result.get("kind") == "query":
+        run_query(result)
+    else:
+        run_action(result)

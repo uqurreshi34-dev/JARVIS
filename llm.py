@@ -36,7 +36,10 @@ Maps, a news or shopping site). Set "website" to a full https URL such as
 For open_application and close_application, leave "website" null.
 For open_website, leave "application" null.
 
-Use unknown for anything that is not an application or website request.
+Use get_time when the user asks for the current time or today's date.
+For get_time, leave both "application" and "website" null.
+
+Use unknown for anything else.
 """
 
 
@@ -64,6 +67,7 @@ class CommandInterpreter:
                                     "open_application",
                                     "close_application",
                                     "open_website",
+                                    "get_time",
                                     "unknown",
                                 ],
                             },

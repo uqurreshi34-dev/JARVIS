@@ -34,6 +34,39 @@ class Assistant:
         self._state(SPEAKING)
         speak(text)
 
+    def _run_action(self, result):
+        """Commands that do something: confirm, act, then report."""
+        self._say(result["response"])
+        self._state(THINKING)
+
+        try:
+            success = result["action"]()
+        except Exception as error:
+            print(f"[JARVIS] action error: {error}")
+            success = False
+
+        if success:
+            self._say("Done, sir.")
+        elif result["intent"] == "close_application":
+            self._say("I couldn't close the application, sir.")
+        else:
+            self._say("I couldn't open that, sir.")
+
+    def _run_query(self, result):
+        """Commands that find something out: the action returns what to say."""
+        self._state(THINKING)
+
+        try:
+            answer = result["action"]()
+        except Exception as error:
+            print(f"[JARVIS] query error: {error}")
+            answer = None
+
+        if answer:
+            self._say(answer)
+        else:
+            self._say("I couldn't find that out, sir.")
+
     def run(self):
         self._say("Good evening. JARVIS is online.")
 
@@ -73,22 +106,10 @@ class Assistant:
                 self._say("I don't know how to do that yet.")
                 continue
 
-            self._say(result["response"])
-
-            self._state(THINKING)
-
-            try:
-                success = result["action"]()
-            except Exception as error:
-                print(f"[JARVIS] action error: {error}")
-                success = False
-
-            if success:
-                self._say("Done, sir.")
-            elif result["intent"] == "close_application":
-                self._say("I couldn't close the application, sir.")
+            if result.get("kind") == "query":
+                self._run_query(result)
             else:
-                self._say("I couldn't open that, sir.")
+                self._run_action(result)
 
             self._state(IDLE)
 
