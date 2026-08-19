@@ -76,6 +76,13 @@ Use get_system_status when the user asks how the machine, PC, or system is
 doing, or about CPU, memory, disk space, or battery.
 For these, leave both "application" and "website" null.
 
+Use answer_question when the user asks a general knowledge or factual
+question that none of the intents above cover, such as "what's the capital of
+Peru", "how far away is the moon", or "explain what an API is". This is a last
+resort: if the command is a request to control the machine, use the matching
+intent above instead. Never use answer_question for opening or closing things,
+for volume or media, or for the time, weather, or system status.
+
 Use unknown for anything else.
 """
 
@@ -127,6 +134,7 @@ class CommandInterpreter:
                                     "get_time",
                                     "get_weather",
                                     "get_system_status",
+                                    "answer_question",
                                     "unknown",
                                 ],
                             },

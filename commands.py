@@ -15,6 +15,7 @@ from actions.desktop import (
     volume_down,
     volume_up,
 )
+from actions.knowledge import answer
 from actions.projects import ProjectManager
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
@@ -178,5 +179,8 @@ def handle_command(command):
 
     if intent == "get_system_status":
         return _query(intent, describe_system)
+
+    if intent == "answer_question":
+        return _query(intent, lambda: answer(command))
 
     return None
