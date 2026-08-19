@@ -81,6 +81,9 @@ null. For "remind me in ten minutes to call mum", amount is 600, unit is
 Use list_reminders when the user asks what timers or reminders are running.
 Use cancel_reminders when the user wants timers or reminders cancelled.
 
+Use take_screenshot when the user wants a screenshot, screen capture, or a
+picture of their screen.
+
 Use get_time when the user asks for the current time or today's date.
 Use get_weather when the user asks about the weather, temperature, or forecast.
 Use get_system_status when the user asks how the machine, PC, or system is
@@ -145,6 +148,7 @@ class CommandInterpreter:
                                     "set_reminder",
                                     "list_reminders",
                                     "cancel_reminders",
+                                    "take_screenshot",
                                     "get_time",
                                     "get_weather",
                                     "get_system_status",

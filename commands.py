@@ -18,6 +18,7 @@ from actions.desktop import (
 from actions.knowledge import answer
 from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
+from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
 
@@ -174,6 +175,9 @@ def handle_command(command):
         response, function = _SIMPLE_ACTIONS[intent]
 
         return _action(intent, response, function)
+
+    if intent == "take_screenshot":
+        return _query(intent, describe_capture)
 
     if intent == "get_time":
         return _query(intent, describe_time)
