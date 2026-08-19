@@ -48,6 +48,8 @@ For open_website, leave "application" null.
 Use open_project when the user wants one of their code projects opened in
 their editor. Set "project" to the matching name from the candidate project
 list. Never invent a project name.
+Use close_project when the user wants one of those project windows closed.
+Set "project" the same way.
 Use list_projects when the user asks what their recent projects are.
 
 Use these for sound and media control:
@@ -108,6 +110,7 @@ class CommandInterpreter:
                                     "close_application",
                                     "open_website",
                                     "open_project",
+                                    "close_project",
                                     "list_projects",
                                     "volume_up",
                                     "volume_down",

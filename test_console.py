@@ -49,8 +49,8 @@ def run_action(result):
 
     if success:
         say("Done, sir.")
-    elif result["intent"] == "close_application":
-        say("I couldn't close the application, sir.")
+    elif result["intent"] in ("close_application", "close_project"):
+        say("I couldn't close that, sir.")
     elif result["intent"] in ("open_application", "open_website", "open_project"):
         say("I couldn't open that, sir.")
     else:

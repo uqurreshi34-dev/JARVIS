@@ -143,6 +143,13 @@ def handle_command(command):
             lambda: _project_manager.open(project) is not None,
         )
 
+    if intent == "close_project" and project:
+        return _action(
+            intent,
+            f"Closing {project}, sir.",
+            lambda: _project_manager.close(project) is not None,
+        )
+
     if intent == "list_projects":
         return _query(intent, _project_manager.describe)
 

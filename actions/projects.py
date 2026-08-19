@@ -3,9 +3,15 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import time
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from urllib.parse import unquote, urlparse
+
+import psutil
+import win32con
+import win32gui
+import win32process
 
 
 _APPDATA = os.environ.get("APPDATA", "")
@@ -27,6 +33,9 @@ _EXE_CANDIDATES = (
 )
 
 _MATCH_RATIO = 0.6
+
+_CLOSE_TIMEOUT = 5.0
+_POLL_INTERVAL = 0.2
 
 
 @dataclass(frozen=True)
@@ -229,6 +238,51 @@ class ProjectManager:
 
         return f"Your recent projects are {listed}."
 
+    def close(self, name):
+        """Close the Cursor window for a project, leaving others open."""
+        project = self.find(name)
+
+        if not project:
+            print(f"[JARVIS] no recent project matching {name!r}")
+            return None
+
+        needle = project.name.casefold()
+
+        targets = [
+            hwnd
+            for hwnd, title in _cursor_windows()
+            if needle in title.casefold()
+        ]
+
+        if not targets:
+            print(f"[JARVIS] no open Cursor window for {project.name!r}")
+            return None
+
+        for hwnd in targets:
+            try:
+                win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+            except Exception as error:
+                print(f"[JARVIS] failed to close window: {error}")
+
+        # Wait for the windows to actually go away. Cursor may hold one open
+        # if there are unsaved changes to confirm.
+        deadline = time.monotonic() + _CLOSE_TIMEOUT
+        alive = list(targets)
+
+        while alive and time.monotonic() < deadline:
+            time.sleep(_POLL_INTERVAL)
+
+            alive = [hwnd for hwnd in alive if win32gui.IsWindow(hwnd)]
+
+        if alive and len(alive) == len(targets):
+            print(
+                f"[JARVIS] {project.name!r} did not close; "
+                "there may be unsaved changes"
+            )
+            return None
+
+        return project
+
     def open(self, name):
         project = self.find(name)
 
@@ -258,6 +312,34 @@ class ProjectManager:
             return None
 
         return project
+
+
+def _cursor_windows():
+    """Visible top-level windows belonging to Cursor, with their titles."""
+    windows = []
+
+    def callback(hwnd, _):
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+
+        title = win32gui.GetWindowText(hwnd)
+
+        if not title:
+            return
+
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+
+        try:
+            name = psutil.Process(pid).name().casefold()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return
+
+        if name.startswith("cursor"):
+            windows.append((hwnd, title))
+
+    win32gui.EnumWindows(callback, None)
+
+    return windows
 
 
 def _cursor_executable():
