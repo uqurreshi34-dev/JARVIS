@@ -50,8 +50,18 @@ their editor. Set "project" to the matching name from the candidate project
 list. Never invent a project name.
 Use list_projects when the user asks what their recent projects are.
 
-Use get_time when the user asks for the current time or today's date.
-Use get_weather when the user asks about the weather, temperature, or forecast.
+Use these for sound and media control:
+volume_up when the user wants the volume raised or something louder.
+volume_down when the user wants the volume lowered or something quieter.
+toggle_mute for mute or unmute.
+media_play_pause for play, pause, or resume.
+media_next to skip forward a track.
+media_previous to go back a track.
+
+Use minimise_all when the user wants all windows minimised or the desktop
+shown. Use restore_all when the user wants those windows brought back.
+
+Use get_time when the user asks for the current time or today's date.Use get_weather when the user asks about the weather, temperature, or forecast.
 Use get_system_status when the user asks how the machine, PC, or system is
 doing, or about CPU, memory, disk space, or battery.
 For these, leave both "application" and "website" null.
@@ -91,6 +101,14 @@ class CommandInterpreter:
                                     "open_website",
                                     "open_project",
                                     "list_projects",
+                                    "volume_up",
+                                    "volume_down",
+                                    "toggle_mute",
+                                    "media_play_pause",
+                                    "media_next",
+                                    "media_previous",
+                                    "minimise_all",
+                                    "restore_all",
                                     "get_time",
                                     "get_weather",
                                     "get_system_status",

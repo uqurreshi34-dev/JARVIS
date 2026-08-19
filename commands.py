@@ -2,6 +2,16 @@ import webbrowser
 from urllib.parse import urlparse
 
 from actions.applications import ApplicationManager
+from actions.desktop import (
+    minimise_all,
+    next_track,
+    play_pause,
+    previous_track,
+    restore_all,
+    toggle_mute,
+    volume_down,
+    volume_up,
+)
 from actions.projects import ProjectManager
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
@@ -43,6 +53,20 @@ def _query(intent, action):
         "response": None,
         "action": action,
     }
+
+
+# Intents that simply run a function and need no argument. Each entry is
+# the spoken confirmation and the function to call.
+_SIMPLE_ACTIONS = {
+    "volume_up": ("Turning it up, sir.", volume_up),
+    "volume_down": ("Turning it down, sir.", volume_down),
+    "toggle_mute": ("Toggling mute, sir.", toggle_mute),
+    "media_play_pause": ("Certainly, sir.", play_pause),
+    "media_next": ("Skipping ahead, sir.", next_track),
+    "media_previous": ("Going back, sir.", previous_track),
+    "minimise_all": ("Clearing the desktop, sir.", minimise_all),
+    "restore_all": ("Bringing them back, sir.", restore_all),
+}
 
 
 def handle_command(command):
@@ -89,6 +113,11 @@ def handle_command(command):
 
     if intent == "list_projects":
         return _query(intent, _project_manager.describe)
+
+    if intent in _SIMPLE_ACTIONS:
+        response, function = _SIMPLE_ACTIONS[intent]
+
+        return _action(intent, response, function)
 
     if intent == "get_time":
         return _query(intent, describe_time)

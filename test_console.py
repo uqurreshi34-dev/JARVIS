@@ -51,8 +51,10 @@ def run_action(result):
         say("Done, sir.")
     elif result["intent"] == "close_application":
         say("I couldn't close the application, sir.")
-    else:
+    elif result["intent"] in ("open_application", "open_website", "open_project"):
         say("I couldn't open that, sir.")
+    else:
+        say("That didn't work, sir.")
 
     print(f"  -> {'success' if success else 'failed'} ({elapsed:.1f}s)")
 

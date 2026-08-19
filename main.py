@@ -49,8 +49,10 @@ class Assistant:
             self._say("Done, sir.")
         elif result["intent"] == "close_application":
             self._say("I couldn't close the application, sir.")
-        else:
+        elif result["intent"] in ("open_application", "open_website", "open_project"):
             self._say("I couldn't open that, sir.")
+        else:
+            self._say("That didn't work, sir.")
 
     def _run_query(self, result):
         """Commands that find something out: the action returns what to say."""
