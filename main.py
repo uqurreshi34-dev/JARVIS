@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import QApplication
 
 from commands import handle_command
 from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
-from speech import speak
+from speech import set_amplitude_listener, speak
 from voice import listen
 
 
@@ -102,6 +102,10 @@ def main():
 
     hud = Hud()
     hud.show()
+
+    # Feed the voice envelope to the ring. Emitting a signal is thread-safe,
+    # which matters because playback runs on the worker/audio thread.
+    set_amplitude_listener(hud.amplitude_changed.emit)
 
     assistant = Assistant(hud)
 

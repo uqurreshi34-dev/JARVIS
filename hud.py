@@ -38,6 +38,14 @@ _MARGIN = 26
 _RING_CENTRE = (70, 105)
 _RING_RADIUS = 34
 
+# Slow faint breathing when JARVIS is not speaking.
+_BREATH_SPEED = 0.022
+_BREATH_DEPTH = 0.22
+
+# How quickly the ring follows the voice envelope. Higher rises faster.
+_ATTACK = 0.55
+_RELEASE = 0.16
+
 
 class Hud(QWidget):
     """Frameless always-on-top JARVIS status overlay."""
@@ -45,6 +53,7 @@ class Hud(QWidget):
     state_changed = pyqtSignal(str)
     heard_changed = pyqtSignal(str)
     reply_changed = pyqtSignal(str)
+    amplitude_changed = pyqtSignal(float)
     shutdown = pyqtSignal()
     closed = pyqtSignal()
 
@@ -57,6 +66,10 @@ class Hud(QWidget):
         self._phase = 0.0
         self._drag_offset = None
 
+        # Target amplitude from the voice, and the smoothed value we draw.
+        self._target = 0.0
+        self._level = 0.0
+
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -68,6 +81,7 @@ class Hud(QWidget):
         self.state_changed.connect(self._on_state)
         self.heard_changed.connect(self._on_heard)
         self.reply_changed.connect(self._on_reply)
+        self.amplitude_changed.connect(self._on_amplitude)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -85,6 +99,10 @@ class Hud(QWidget):
 
     def _on_state(self, state):
         self._state = state if state in _PALETTE else IDLE
+
+        if self._state != SPEAKING:
+            self._target = 0.0
+
         self.update()
 
     def _on_heard(self, text):
@@ -95,10 +113,26 @@ class Hud(QWidget):
         self._reply = text
         self.update()
 
+    def _on_amplitude(self, value):
+        self._target = max(0.0, min(1.0, value))
+
     def _tick(self):
-        speed = 0.10 if self._state == IDLE else 0.045
-        self._phase = (self._phase + speed) % (2 * math.pi)
+        # Ease the drawn level toward the target so the ring never jumps.
+        rate = _ATTACK if self._target > self._level else _RELEASE
+        self._level += (self._target - self._level) * rate
+
+        self._phase = (self._phase + _BREATH_SPEED) % (2 * math.pi)
+
         self.update()
+
+    def _energy(self):
+        """0..1 drive for the ring: voice envelope, or breathing when quiet."""
+        breath = _BREATH_DEPTH * (0.5 + 0.5 * math.sin(self._phase))
+
+        if self._state == SPEAKING:
+            return max(breath * 0.4, self._level)
+
+        return breath
 
     # Let the user drag the HUD anywhere on screen.
     def mousePressEvent(self, event):
@@ -123,9 +157,10 @@ class Hud(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         accent = _PALETTE[self._state]
+        energy = self._energy()
 
         self._paint_panel(painter, accent)
-        self._paint_reactor(painter, accent)
+        self._paint_reactor(painter, accent, energy)
         self._paint_text(painter, accent)
 
         painter.end()
@@ -144,13 +179,14 @@ class Hud(QWidget):
         painter.setPen(QPen(glow, 1.6))
         painter.drawPath(path)
 
-    def _paint_reactor(self, painter, accent):
+    def _paint_reactor(self, painter, accent, energy):
         cx, cy = _RING_CENTRE
-        pulse = 0.5 + 0.5 * math.sin(self._phase)
 
-        halo = QRadialGradient(cx, cy, _RING_RADIUS * 2.0)
+        halo_radius = _RING_RADIUS * (1.55 + 0.75 * energy)
+
+        halo = QRadialGradient(cx, cy, halo_radius)
         centre_glow = QColor(accent)
-        centre_glow.setAlpha(int(70 + 60 * pulse))
+        centre_glow.setAlpha(int(55 + 120 * energy))
         halo.setColorAt(0.0, centre_glow)
         halo.setColorAt(1.0, QColor(
             accent.red(), accent.green(), accent.blue(), 0))
@@ -158,10 +194,8 @@ class Hud(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(halo)
         painter.drawEllipse(
-            int(cx - _RING_RADIUS * 2.0),
-            int(cy - _RING_RADIUS * 2.0),
-            int(_RING_RADIUS * 4.0),
-            int(_RING_RADIUS * 4.0),
+            int(cx - halo_radius), int(cy - halo_radius),
+            int(halo_radius * 2), int(halo_radius * 2),
         )
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
@@ -173,9 +207,19 @@ class Hud(QWidget):
             _RING_RADIUS * 2, _RING_RADIUS * 2,
         )
 
-        # Rotating arc; length reflects how busy JARVIS is.
-        span = 90 if self._state == IDLE else 150
-        start = int(-self._phase * 180 / math.pi * 2) % 360
+        # Outer ring expands with the voice.
+        pulse_radius = _RING_RADIUS + int(10 * energy)
+        pulse = QColor(accent)
+        pulse.setAlpha(int(40 + 150 * energy))
+        painter.setPen(QPen(pulse, 2.0 + 1.5 * energy))
+        painter.drawEllipse(
+            cx - pulse_radius, cy - pulse_radius,
+            pulse_radius * 2, pulse_radius * 2,
+        )
+
+        # Rotating arc keeps a sense of life while thinking/listening.
+        span = 90 if self._state in (IDLE, SPEAKING) else 150
+        start = int(-self._phase * 180 / math.pi * 6) % 360
 
         arc = QColor(accent)
         arc.setAlpha(235)
@@ -187,9 +231,10 @@ class Hud(QWidget):
             start * 16, span * 16,
         )
 
+        # Core swells with the voice.
         inner = QColor(accent)
-        inner.setAlpha(int(120 + 100 * pulse))
-        radius = int(9 + 3 * pulse)
+        inner.setAlpha(int(110 + 130 * energy))
+        radius = int(8 + 9 * energy)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(inner)
         painter.drawEllipse(cx - radius, cy - radius, radius * 2, radius * 2)
