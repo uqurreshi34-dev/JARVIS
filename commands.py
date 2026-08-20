@@ -1,5 +1,6 @@
 import re
 import webbrowser
+from difflib import SequenceMatcher
 from urllib.parse import urlparse
 
 from actions.applications import ApplicationManager
@@ -133,7 +134,12 @@ _FAST_PHRASES = (
     (("bring my windows back", "restore my windows", "bring them back",
       "restore everything"), "restore_all"),
     (("hows my system", "how is my system", "system status",
-      "hows my system doing", "hows my pc", "system report"),
+      "hows my system doing", "how is my system doing", "hows my pc",
+      "how is my pc", "system report", "hows my computer",
+      "how is my computer", "how is my machine", "hows my machine",
+      "how is my laptop", "hows my laptop", "system stats",
+      "how is my memory", "how much memory am i using",
+      "how much battery do i have", "whats my battery"),
      "get_system_status"),
     (("whats on my clipboard", "what is on my clipboard",
       "read my clipboard", "check my clipboard"), "read_clipboard"),
@@ -158,6 +164,37 @@ _FAST_LOOKUP = {
     for phrases, intent in _FAST_PHRASES
     for phrase in phrases
 }
+
+# Speech recognition mangles words ("system" becomes "sister"), so a close
+# match still counts. The threshold is deliberately high: the nearest real
+# command scores around 0.75, so 0.82 leaves a clear margin.
+_FUZZY_THRESHOLD = 0.82
+
+
+def _fuzzy_intent(text):
+    """Find a fast-path intent for a near miss, or None."""
+    if len(text) < 6:
+        return None
+
+    best_score = 0.0
+    best_intent = None
+
+    for phrase, intent in _FAST_LOOKUP.items():
+        # Length filter first; SequenceMatcher on every phrase is wasteful.
+        if abs(len(phrase) - len(text)) > 6:
+            continue
+
+        score = SequenceMatcher(None, text, phrase).ratio()
+
+        if score > best_score:
+            best_score = score
+            best_intent = intent
+
+    if best_score >= _FUZZY_THRESHOLD:
+        return best_intent
+
+    return None
+
 
 _OPEN_PREFIXES = ("open ", "launch ", "start ", "run ")
 _CLOSE_PREFIXES = ("close ", "quit ", "exit ", "shut ")
@@ -497,6 +534,14 @@ def _fast_path(command):
 
         if app:
             return _blank_result(intent, application=app.name)
+
+    # Last resort before the LLM: a near miss on a known phrase, which covers
+    # speech-recognition slips like "how is my sister".
+    fuzzy = _fuzzy_intent(text)
+
+    if fuzzy:
+        print(f'[fast] fuzzy match on "{text}"')
+        return _blank_result(fuzzy)
 
     return None
 
