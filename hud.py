@@ -1,6 +1,8 @@
 import math
 
 import psutil
+from collections import deque
+
 from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
@@ -57,6 +59,10 @@ _RELEASE = 0.16
 
 _TELEMETRY_MS = 1500
 
+# Points across the waveform strip, and its height in pixels.
+_WAVE_POINTS = 56
+_WAVE_HEIGHT = 13
+
 
 class Hud(QWidget):
     """Frameless always-on-top JARVIS overlay in an Iron Man style."""
@@ -65,6 +71,7 @@ class Hud(QWidget):
     heard_changed = pyqtSignal(str)
     reply_changed = pyqtSignal(str)
     amplitude_changed = pyqtSignal(float)
+    level_changed = pyqtSignal(float)
     shutdown = pyqtSignal()
     closed = pyqtSignal()
 
@@ -80,6 +87,9 @@ class Hud(QWidget):
 
         self._target = 0.0
         self._level = 0.0
+
+        # Recent input levels, oldest first, drawn as a live waveform.
+        self._wave = deque([0.0] * _WAVE_POINTS, maxlen=_WAVE_POINTS)
 
         self._cpu = 0.0
         self._ram = 0.0
@@ -98,6 +108,7 @@ class Hud(QWidget):
         self.heard_changed.connect(self._on_heard)
         self.reply_changed.connect(self._on_reply)
         self.amplitude_changed.connect(self._on_amplitude)
+        self.level_changed.connect(self._on_level)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -153,6 +164,18 @@ class Hud(QWidget):
 
     def _on_amplitude(self, value):
         self._target = max(0.0, min(1.0, value))
+
+        # While JARVIS talks, the waveform shows his voice rather than the
+        # microphone, so the strip is never dead.
+        if self._state == SPEAKING:
+            self._wave.append(max(0.0, min(1.0, value)))
+
+    def _on_level(self, value):
+        """Microphone level, ignored while JARVIS is speaking."""
+        if self._state == SPEAKING:
+            return
+
+        self._wave.append(max(0.0, min(1.0, value)))
 
     def _tick(self):
         rate = _ATTACK if self._target > self._level else _RELEASE
@@ -377,8 +400,16 @@ class Hud(QWidget):
         painter.setFont(font)
         painter.drawText(left, 48, _LABEL[self._state])
 
-        painter.setPen(QPen(self._tint(accent, 90), 1.0))
-        painter.drawLine(left, 58, _PANEL_RIGHT, 58)
+        # Sit the meter to the right of the label, on the same line.
+        label_width = QFontMetrics(font).horizontalAdvance(_LABEL[self._state])
+        wave_x = left + label_width + 16
+        wave_width = _PANEL_RIGHT - wave_x
+
+        if wave_width > 40:
+            self._paint_wave(painter, accent, wave_x, 44, wave_width)
+
+        painter.setPen(QPen(self._tint(accent, 70), 1.0))
+        painter.drawLine(left, 60, _PANEL_RIGHT, 60)
 
         painter.setPen(QPen(QColor(232, 243, 252, 240)))
         painter.setFont(QFont("Segoe UI", 10))
@@ -399,6 +430,31 @@ class Hud(QWidget):
 
         painter.setFont(QFont("Segoe UI", size))
         self._draw_wrapped(painter, reply, left, 122, width, lines)
+
+    def _paint_wave(self, painter, accent, x, y, width):
+        """A live level meter: microphone when listening, voice when speaking."""
+        points = list(self._wave)
+
+        if not points:
+            return
+
+        step = width / len(points)
+
+        for index, level in enumerate(points):
+            if level <= 0.02:
+                continue
+
+            # Newer readings sit to the right and are drawn brighter.
+            fade = 90 + int(150 * (index / len(points)))
+            painter.setPen(QPen(self._tint(accent, fade), 1.6))
+
+            height = level * _WAVE_HEIGHT
+            column = x + index * step
+
+            painter.drawLine(
+                QPointF(column, y - height),
+                QPointF(column, y + height),
+            )
 
     def _paint_telemetry(self, painter, accent):
         rows = [

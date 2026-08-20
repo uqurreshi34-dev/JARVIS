@@ -3,6 +3,7 @@ import queue
 import time
 from difflib import SequenceMatcher
 
+import numpy as np
 import sounddevice as sd
 from vosk import KaldiRecognizer, Model
 
@@ -81,7 +82,11 @@ print(f"[JARVIS] speech engine: {engine.name}")
 _armed_until = 0.0
 _wake_listener = None
 _status_listener = None
+_level_listener = None
 _last_status = None
+
+# Readings reported per audio block, so the waveform is smooth.
+_LEVEL_CHUNKS = 4
 
 
 def set_wake_listener(listener):
@@ -99,6 +104,36 @@ def set_status_listener(listener):
     """
     global _status_listener
     _status_listener = listener
+
+
+def set_level_listener(listener):
+    """Register a callable taking a microphone level from 0 to 1."""
+    global _level_listener
+    _level_listener = listener
+
+
+def _report_levels(block):
+    """Report a few levels per audio block, for a smooth waveform."""
+    if not _level_listener:
+        return
+
+    try:
+        samples = np.frombuffer(block, dtype=np.int16)
+
+        if not len(samples):
+            return
+
+        # Several readings per block, so the waveform moves at about 16 fps
+        # rather than 4.
+        for chunk in np.array_split(samples, _LEVEL_CHUNKS):
+            if not len(chunk):
+                continue
+
+            rms = float(np.sqrt(np.mean(np.square(chunk.astype(np.float32)))))
+            _level_listener(min(1.0, rms / 6000.0))
+
+    except Exception:
+        pass
 
 
 def _report_status(force=False):
@@ -315,6 +350,8 @@ def listen():
             # LISTENING long after the window had closed.
             if not getattr(engine, "active", False):
                 _report_status()
+
+            _report_levels(data)
 
             if waker and waker.AcceptWaveform(data):
                 heard = json.loads(waker.Result()).get("text", "")

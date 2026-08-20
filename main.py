@@ -12,6 +12,7 @@ from speech import prewarm, set_amplitude_listener, speak
 from voice import (
     arm_follow_up,
     listen,
+    set_level_listener,
     set_status_listener,
     set_wake_listener,
 )
@@ -225,6 +226,9 @@ def main():
     # Feed the voice envelope to the ring. Emitting a signal is thread-safe,
     # which matters because playback runs on the worker/audio thread.
     set_amplitude_listener(hud.amplitude_changed.emit)
+
+    # Microphone levels drive the waveform when JARVIS is not talking.
+    set_level_listener(hud.level_changed.emit)
 
     assistant = Assistant(hud)
 

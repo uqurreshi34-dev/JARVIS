@@ -629,10 +629,17 @@ def _fast_path(command):
         if not target:
             continue
 
-        # "done without luck" is "done with" + "out luck"; put the "out" back.
+        # "done without luck" is "done with" + "out luck". Whether the "out"
+        # rejoins the next word ("outlook") or stands apart ("out look")
+        # depends on the app, so try both and keep whichever resolves.
         if prefix.endswith("without "):
-            target = f"out{target}" if target.startswith(
-                "look") else f"out {target}"
+            name = _resolve_app(
+                f"out{target}") or _resolve_app(f"out {target}")
+
+            if name:
+                return _blank_result(intent, application=name)
+
+            continue
 
         # A known website, but only for opening; closing a tab is different.
         if intent == "open_application" and target in _WEBSITES:
