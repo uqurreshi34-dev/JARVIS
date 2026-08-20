@@ -484,20 +484,27 @@ def _parse_duration(text):
 # regardless, so the leading verb is treated loosely.
 _ADD_VERBS = r"(?:add|at|and|had|put|save|stick|pop)"
 
+# "to", "onto", "into" and the mishearings "too"/"two" all appear here.
+_TO_WORDS = r"(?:to|onto|into|on|in|too|two)"
+
 _COPY_PATTERNS = (
-    # "copy hello world to my clipboard" / "add hello world to the clipboard"
-    re.compile(rf"^(?:copy|{_ADD_VERBS})\s+(.+?)\s+(?:to|on|in|too|two)\s+"
+    # "copy hello world to my clipboard" / "add hello world onto the clipboard"
+    re.compile(rf"^(?:copy|{_ADD_VERBS})\s+(.+?)\s+{_TO_WORDS}\s+"
                r"(?:my|the)?\s*clipboard$"),
     # "copy hello world"
     re.compile(r"^copy\s+(.+)$"),
 )
+
+# Used to trim a trailing destination the fallback pattern would otherwise
+# capture as part of the text.
+_TRAILING_CLIPBOARD = re.compile(rf"\s+{_TO_WORDS}\s+(?:my|the)?\s*clipboard$")
 
 
 _NOTE_PATTERNS = (
     re.compile(r"^(?:make|take|write|add|at|and|jot)\s+(?:me\s+)?a\s+note\s+"
                r"(?:that\s+|saying\s+|about\s+|to\s+)?(.+)$"),
     # "add dentist appointment to my notes", including "at ... to my notes"
-    re.compile(rf"^{_ADD_VERBS}\s+(.+?)\s+(?:to|on|in|too|two)\s+"
+    re.compile(rf"^{_ADD_VERBS}\s+(.+?)\s+{_TO_WORDS}\s+"
                r"(?:my\s+|the\s+)?notes$"),
     re.compile(r"^note\s+(?:that\s+|down\s+)?(.+)$"),
     re.compile(r"^remember\s+(?:that\s+)?(.+)$"),
@@ -505,7 +512,7 @@ _NOTE_PATTERNS = (
     # filler), but "... to my notes" still says exactly what is wanted.
     # Questions are excluded: "what's in my notes" is a request to read them.
     re.compile(r"^(?!what|whats|which|show|read|check|list|clear|delete|"
-               r"empty|wipe)(.+?)\s+(?:to|too|two)\s+(?:my|the)\s+notes$"),
+               rf"empty|wipe)(.+?)\s+{_TO_WORDS}\s+(?:my|the)\s+notes$"),
 )
 
 
@@ -534,6 +541,10 @@ def _copy_request(text):
             continue
 
         payload = match.group(1).strip()
+
+        # The broad "copy ..." pattern can swallow the destination, so remove
+        # it if it is still attached.
+        payload = _TRAILING_CLIPBOARD.sub("", payload).strip()
 
         # "copy that" and similar need context only the LLM might infer.
         if payload and payload not in ("this", "that", "it", "clipboard"):

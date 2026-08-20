@@ -36,6 +36,16 @@ ENGINE = (os.getenv("STT_ENGINE") or "vosk").strip().casefold()
 WHISPER_MODEL = os.getenv("WHISPER_MODEL") or "base.en"
 
 
+# Whisper guesses proper nouns badly unless told they exist, rendering
+# "Jarvis" as "java's" or "jovis". Naming the expected vocabulary biases
+# decoding and fixes most mishearings at the source rather than afterwards.
+WHISPER_PROMPT = os.getenv("WHISPER_PROMPT") or (
+    "Jarvis. Commands for Jarvis: open, close, launch, volume, mute, "
+    "clipboard, notes, screenshot, timer, reminder, weather, Outlook, "
+    "Chrome, Cursor, pgAdmin, YouTube, minimise, system."
+)
+
+
 @dataclass
 class Result:
     text: str
@@ -286,6 +296,7 @@ class LocalWhisperEngine(SegmentingEngine):
             beam_size=1,
             vad_filter=False,
             condition_on_previous_text=False,
+            initial_prompt=WHISPER_PROMPT,
         )
 
         return " ".join(segment.text.strip() for segment in segments).strip()
@@ -317,6 +328,7 @@ class OpenAIWhisperEngine(SegmentingEngine):
             language="en",
             fp16=False,
             condition_on_previous_text=False,
+            initial_prompt=WHISPER_PROMPT,
         )
 
         return (result.get("text") or "").strip()
@@ -381,6 +393,7 @@ class GroqWhisperEngine(SegmentingEngine):
             model=self._model_name,
             language="en",
             temperature=0,
+            prompt=WHISPER_PROMPT,
         )
 
         return (response.text or "").strip()

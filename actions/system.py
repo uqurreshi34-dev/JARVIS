@@ -64,16 +64,64 @@ def _ordinal(day):
     return f"{day}{_ORDINALS.get(day, 'th')}"
 
 
+_UNITS = (
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+    "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+    "sixteen", "seventeen", "eighteen", "nineteen",
+)
+
+_TENS = (
+    "", "", "twenty", "thirty", "forty", "fifty",
+)
+
+
+def _in_words(number):
+    """Numbers up to 59 as words, for speech that reads naturally."""
+    if number < 20:
+        return _UNITS[number]
+
+    tens, units = divmod(number, 10)
+
+    if units:
+        return f"{_TENS[tens]} {_UNITS[units]}"
+
+    return _TENS[tens]
+
+
+def _spoken_clock(now):
+    """A clock time the speech engine reads correctly.
+
+    "4:43 PM" is mangled by the voice into something like "for four three",
+    so the time is spelled out instead.
+    """
+    hour = now.hour % 12 or 12
+    minute = now.minute
+    meridiem = "AM" if now.hour < 12 else "PM"
+
+    if minute == 0:
+        if now.hour == 0:
+            return "midnight"
+
+        if now.hour == 12:
+            return "midday"
+
+        return f"{_in_words(hour)} {meridiem}"
+
+    if minute < 10:
+        return f"{_in_words(hour)} oh {_in_words(minute)} {meridiem}"
+
+    return f"{_in_words(hour)} {_in_words(minute)} {meridiem}"
+
+
 def describe_time(now=None):
     """A spoken-friendly description of the current time and date."""
     now = now or datetime.now()
 
-    clock = now.strftime("%I:%M %p").lstrip("0")
     weekday = now.strftime("%A")
     month = now.strftime("%B")
 
     return (
-        f"It's {clock} on {weekday}, "
+        f"It's {_spoken_clock(now)} on {weekday}, "
         f"the {_ordinal(now.day)} of {month}."
     )
 

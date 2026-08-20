@@ -1,5 +1,6 @@
 import json
 import queue
+import re
 import time
 from difflib import SequenceMatcher
 
@@ -46,20 +47,41 @@ WAKE_WORD = "jarvis"
 # when the engine supports it.
 WAKE_GRAMMAR = json.dumps([WAKE_WORD, "[unk]"])
 
-WAKE_VARIANTS = frozenset({
-    "jarvis", "jarvas", "jervis", "javis", "jarviss",
-    "jarvace", "charvis", "jarv", "jarvis's", "jarvis.",
-})
+# Speech engines render the name many ways: "jovis", "java's", "jervis".
+# Rather than listing every spelling, compare the consonant skeleton, which
+# is what those all share. "jarvis" reduces to "jrvs"; "jovis" and "java's"
+# both reduce to "jvs", scoring 0.86, while "travis" and "java" fall well
+# short. The first letter must agree, which is what excludes "travis".
+WAKE_SKELETON_RATIO = 0.70
 
-WAKE_RATIO = 0.75
+# Kept only for spellings the skeleton rule cannot reach, such as a leading
+# consonant cluster.
+WAKE_VARIANTS = frozenset({
+    "jarvis", "charvis", "jarv",
+})
 
 # Used only once the wake word is already confirmed, so it can be looser.
 WAKE_STRIP_RATIO = 0.45
 
+# Words that would otherwise slip through and are definitely not the name.
 WAKE_BLOCKLIST = frozenset({
     "travis", "java", "jarhead", "service", "harvest", "chris",
     "jarred", "carbis", "marvis", "javan",
 })
+
+_VOWELS = re.compile(r"[aeiou]")
+_NON_LETTERS = re.compile(r"[^a-z]")
+_DOUBLES = re.compile(r"(.)\1+")
+
+
+def _skeleton(word):
+    """Consonant skeleton of a word, ignoring vowels and repeats."""
+    letters = _NON_LETTERS.sub("", word.casefold())
+
+    return _DOUBLES.sub(r"\1", _VOWELS.sub("", letters))
+
+
+_WAKE_SKELETON = _skeleton(WAKE_WORD)
 
 # Once woken, JARVIS accepts a bare command for this many seconds.
 ARMED_SECONDS = 10.0
@@ -203,7 +225,7 @@ def _accept(result):
 
 
 def _is_wake_token(token):
-    token = token.strip(".,!?'")
+    token = token.strip(".,!?'\"")
 
     if token in WAKE_BLOCKLIST:
         return False
@@ -211,7 +233,15 @@ def _is_wake_token(token):
     if token in WAKE_VARIANTS:
         return True
 
-    return SequenceMatcher(None, token, WAKE_WORD).ratio() >= WAKE_RATIO
+    skeleton = _skeleton(token)
+
+    # The opening sound must agree, which is what keeps "travis" out.
+    if not skeleton or skeleton[0] != _WAKE_SKELETON[0]:
+        return False
+
+    ratio = SequenceMatcher(None, skeleton, _WAKE_SKELETON).ratio()
+
+    return ratio >= WAKE_SKELETON_RATIO
 
 
 def _split_wake(text):

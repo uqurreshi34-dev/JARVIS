@@ -63,6 +63,10 @@ _TELEMETRY_MS = 1500
 _WAVE_POINTS = 56
 _WAVE_HEIGHT = 13
 
+# Frames without a fresh reading before the held level starts decaying.
+_LEVEL_STALE_FRAMES = 3
+_LEVEL_DECAY = 0.72
+
 
 class Hud(QWidget):
     """Frameless always-on-top JARVIS overlay in an Iron Man style."""
@@ -88,8 +92,12 @@ class Hud(QWidget):
         self._target = 0.0
         self._level = 0.0
 
-        # Recent input levels, oldest first, drawn as a live waveform.
+        # Recent input levels, oldest first, drawn as a live waveform. The
+        # strip scrolls on the render clock rather than on audio events, so
+        # it never stalls when one source stops feeding it.
         self._wave = deque([0.0] * _WAVE_POINTS, maxlen=_WAVE_POINTS)
+        self._current_level = 0.0
+        self._level_age = 0
 
         self._cpu = 0.0
         self._ram = 0.0
@@ -168,14 +176,16 @@ class Hud(QWidget):
         # While JARVIS talks, the waveform shows his voice rather than the
         # microphone, so the strip is never dead.
         if self._state == SPEAKING:
-            self._wave.append(max(0.0, min(1.0, value)))
+            self._current_level = max(0.0, min(1.0, value))
+            self._level_age = 0
 
     def _on_level(self, value):
         """Microphone level, ignored while JARVIS is speaking."""
         if self._state == SPEAKING:
             return
 
-        self._wave.append(max(0.0, min(1.0, value)))
+        self._current_level = max(0.0, min(1.0, value))
+        self._level_age = 0
 
     def _tick(self):
         rate = _ATTACK if self._target > self._level else _RELEASE
@@ -183,6 +193,15 @@ class Hud(QWidget):
 
         self._phase = (self._phase + _BREATH_SPEED) % (2 * math.pi)
         self._sweep = (self._sweep + 0.006) % 1.0
+
+        # Scroll the waveform every frame. If no fresh level has arrived the
+        # held value decays, so the strip glides to flat instead of stalling.
+        self._level_age += 1
+
+        if self._level_age > _LEVEL_STALE_FRAMES:
+            self._current_level *= _LEVEL_DECAY
+
+        self._wave.append(self._current_level)
 
         self.update()
 
