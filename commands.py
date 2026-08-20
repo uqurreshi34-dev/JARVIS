@@ -215,7 +215,48 @@ def _fuzzy_intent(text):
 
 
 _OPEN_PREFIXES = ("open ", "launch ", "start ", "run ")
-_CLOSE_PREFIXES = ("close ", "quit ", "exit ", "shut ")
+_CLOSE_PREFIXES = (
+    "close ", "quit ", "exit ", "shut ",
+    "im done with ", "i am done with ", "done with ",
+    # Whisper merges "with outlook" into "without luck", so the split form
+    # is handled and the leading "out" put back on the app name.
+    "im done without ", "i am done without ", "done without ",
+)
+
+# Applied only after an exact application lookup has failed, and only inside
+# an explicit open/close phrase. Real app names score 0.71 and above against
+# this list; unrelated phrases top out around 0.70.
+_APP_FUZZY_THRESHOLD = 0.71
+
+
+def _resolve_app(target):
+    """Find an application, tolerating mangled speech. Returns a name or None."""
+    app = _application_manager.find(target)
+
+    if app:
+        return app.name
+
+    squashed = target.replace(" ", "")
+    best_name = None
+    best_score = 0.0
+
+    for name in _application_manager.applications:
+        lowered = name.casefold()
+
+        score = max(
+            SequenceMatcher(None, target, lowered).ratio(),
+            SequenceMatcher(None, squashed, lowered.replace(" ", "")).ratio(),
+        )
+
+        if score > best_score:
+            best_score = score
+            best_name = name
+
+    if best_score >= _APP_FUZZY_THRESHOLD:
+        return best_name
+
+    return None
+
 
 _LEADING_NOISE = re.compile(
     r"^(jarvis|please|hey|ok|okay|could you|can you|would you)\s+"
@@ -588,16 +629,19 @@ def _fast_path(command):
         if not target:
             continue
 
+        # "done without luck" is "done with" + "out luck"; put the "out" back.
+        if prefix.endswith("without "):
+            target = f"out{target}" if target.startswith(
+                "look") else f"out {target}"
+
         # A known website, but only for opening; closing a tab is different.
         if intent == "open_application" and target in _WEBSITES:
             return _blank_result("open_website", website=_WEBSITES[target])
 
-        # Only take the fast path when the application resolves cleanly.
-        # Anything fuzzy, or a project, goes to the LLM.
-        app = _application_manager.find(target)
+        name = _resolve_app(target)
 
-        if app:
-            return _blank_result(intent, application=app.name)
+        if name:
+            return _blank_result(intent, application=name)
 
     # Last resort before the LLM: a near miss on a known phrase, which covers
     # speech-recognition slips like "how is my sister".
