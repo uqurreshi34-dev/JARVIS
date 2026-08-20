@@ -208,7 +208,7 @@ class Hud(QWidget):
         self._paint_rings(painter, accent, energy)
         self._paint_reticle(painter, accent)
         self._paint_core(painter, accent, energy)
-        self._paint_readout(painter, accent)
+        self._paint_text(painter, accent)
         self._paint_telemetry(painter, accent)
         self._paint_scanline(painter, accent)
 
@@ -367,25 +367,38 @@ class Hud(QWidget):
 
         painter.restore()
 
-    def _paint_readout(self, painter, accent):
+    def _paint_text(self, painter, accent):
+        left = _PANEL_X
         width = _PANEL_RIGHT - _PANEL_X
 
         painter.setPen(QPen(accent))
         font = QFont("Consolas", 11, QFont.Weight.Bold)
         font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2.2)
         painter.setFont(font)
-        painter.drawText(_PANEL_X, 48, _LABEL[self._state])
+        painter.drawText(left, 48, _LABEL[self._state])
 
         painter.setPen(QPen(self._tint(accent, 90), 1.0))
-        painter.drawLine(_PANEL_X, 58, _PANEL_RIGHT, 58)
+        painter.drawLine(left, 58, _PANEL_RIGHT, 58)
 
         painter.setPen(QPen(QColor(232, 243, 252, 240)))
         painter.setFont(QFont("Segoe UI", 10))
-        self._draw_wrapped(painter, self._heard or "—", _PANEL_X, 80, width, 2)
+        self._draw_wrapped(painter, self._heard or "—", left, 80, width, 2)
 
+        # Replies are short by design, so shrink slightly rather than cut a
+        # sentence off half way through.
         painter.setPen(QPen(self._tint(accent, 215)))
-        painter.setFont(QFont("Segoe UI", 9))
-        self._draw_wrapped(painter, self._reply, _PANEL_X, 124, width, 4)
+
+        reply = self._reply or ""
+
+        if len(reply) > 210:
+            size, lines = 7, 7
+        elif len(reply) > 130:
+            size, lines = 8, 6
+        else:
+            size, lines = 9, 5
+
+        painter.setFont(QFont("Segoe UI", size))
+        self._draw_wrapped(painter, reply, left, 122, width, lines)
 
     def _paint_telemetry(self, painter, accent):
         rows = [
@@ -397,7 +410,7 @@ class Hud(QWidget):
             label = "PWR" if self._charging else "BAT"
             rows.append((label, self._battery))
 
-        y = _HEIGHT - 66
+        y = _HEIGHT - 58
         width = _PANEL_RIGHT - _PANEL_X - 72
 
         painter.setFont(QFont("Consolas", 8))

@@ -267,6 +267,105 @@ def _volume_level(text):
     return None
 
 
+_NUMBER_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
+    "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+    "hundred": 100, "a": 1, "an": 1, "half": 0,
+}
+
+_UNIT_TO_SECONDS = {
+    "second": 1, "seconds": 1, "sec": 1, "secs": 1,
+    "minute": 60, "minutes": 60, "min": 60, "mins": 60,
+    "hour": 3600, "hours": 3600, "hr": 3600, "hrs": 3600,
+}
+
+_DURATION = re.compile(
+    r"(?:for|in)?\s*([\w\s]+?)\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b"
+)
+
+_TIMER_PATTERNS = (
+    re.compile(r"^(?:set\s+)?(?:a\s+)?timer\s+(.+)$"),
+    re.compile(r"^remind\s+me\s+(.+)$"),
+)
+
+
+def _spoken_number(text):
+    """Turn '30' or 'thirty five' into a number, or None."""
+    text = text.strip()
+
+    if not text:
+        return None
+
+    digits = re.fullmatch(r"\d+", text)
+
+    if digits:
+        return int(text)
+
+    total = 0
+    matched = False
+
+    for word in text.split():
+        if word not in _NUMBER_WORDS:
+            return None
+
+        value = _NUMBER_WORDS[word]
+
+        # "one hundred" multiplies rather than adds.
+        if value == 100 and total:
+            total *= 100
+        else:
+            total += value
+
+        matched = True
+
+    return total if matched else None
+
+
+def _parse_duration(text):
+    """Return (seconds, message) from a timer phrase, or (None, None)."""
+    match = _DURATION.search(text)
+
+    if not match:
+        return None, None
+
+    count = _spoken_number(match.group(1))
+    unit = _UNIT_TO_SECONDS.get(match.group(2))
+
+    if count is None or not unit or count <= 0:
+        return None, None
+
+    seconds = count * unit
+
+    if not 1 <= seconds <= 24 * 60 * 60:
+        return None, None
+
+    # Anything after "to ..." is what to be reminded about.
+    tail = text[match.end():].strip()
+    message = tail.removeprefix("to ").strip() or None
+
+    return seconds, message
+
+
+def _timer_request(text):
+    """Resolve a timer or reminder locally, or return None."""
+    for pattern in _TIMER_PATTERNS:
+        match = pattern.match(text)
+
+        if not match:
+            continue
+
+        seconds, message = _parse_duration(match.group(1))
+
+        if seconds:
+            return seconds, message
+
+    return None
+
+
 def _blank_result(intent, **fields):
     result = {
         "intent": intent, "application": None, "website": None,
@@ -293,6 +392,15 @@ def _fast_path(command):
 
     if level is not None:
         return _blank_result("set_volume", amount=level)
+
+    timer = _timer_request(text)
+
+    if timer:
+        seconds, message = timer
+
+        return _blank_result(
+            "set_reminder", amount=seconds, unit="seconds", text=message
+        )
 
     for prefix, intent in (
         *((p, "open_application") for p in _OPEN_PREFIXES),

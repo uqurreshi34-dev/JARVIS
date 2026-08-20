@@ -6,12 +6,17 @@ provider with a key present is used automatically as a fallback.
 """
 
 import os
+import time
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
 
 load_dotenv()
+
+# After a provider reports it is out of quota, stop trying it for this long
+# rather than burning a failed request on every command.
+_COOLDOWN_SECONDS = 15 * 60
 
 
 PROVIDERS = {
@@ -82,6 +87,18 @@ class Provider:
             api_key=api_key,
             base_url=config["base_url"],
         )
+
+        self._resting_until = 0.0
+
+    @property
+    def resting(self):
+        return time.monotonic() < self._resting_until
+
+    def rest(self, seconds=_COOLDOWN_SECONDS):
+        self._resting_until = time.monotonic() + seconds
+
+    def wake(self):
+        self._resting_until = 0.0
 
     def chat(self, messages, response_format=None, temperature=0,
              max_tokens=None, reasoning_effort=None):
@@ -191,9 +208,13 @@ def chat(messages, response_format=None, temperature=0, max_tokens=None,
     """Send a chat request, rotating providers when one is unavailable."""
     last_error = None
 
-    for index, provider in enumerate(_pool):
+    # Awake providers first, but a resting one is still better than failing.
+    order = [p for p in _pool if not p.resting] + \
+        [p for p in _pool if p.resting]
+
+    for index, provider in enumerate(order):
         try:
-            return provider.chat(
+            content = provider.chat(
                 messages,
                 response_format=response_format,
                 temperature=temperature,
@@ -201,23 +222,30 @@ def chat(messages, response_format=None, temperature=0, max_tokens=None,
                 reasoning_effort=reasoning_effort,
             )
 
+            # It answered, so it is clearly available again.
+            provider.wake()
+
+            return content
+
         except Exception as error:
             last_error = error
 
             if not should_failover(error):
                 raise
 
+            provider.rest()
+
             reason = (
                 "rate limited" if is_rate_limit(error)
                 else f"model unavailable ({provider.model})"
             )
 
-            remaining = len(_pool) - index - 1
+            remaining = len(order) - index - 1
 
             if remaining:
                 print(
                     f"[JARVIS] {provider.name} {reason}; "
-                    f"switching to {_pool[index + 1].name}"
+                    f"switching to {order[index + 1].name}"
                 )
             else:
                 print(f"[JARVIS] {provider.name} {reason}, no fallback left")
