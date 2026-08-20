@@ -144,7 +144,10 @@ _FAST_PHRASES = (
     (("whats on my clipboard", "what is on my clipboard",
       "read my clipboard", "check my clipboard"), "read_clipboard"),
     (("read my notes", "what are my notes", "read back my notes",
-      "whats on my notes", "check my notes", "my notes"), "read_notes"),
+      "whats on my notes", "check my notes", "my notes",
+      "whats in my notes", "what is in my notes", "whats in my notes file",
+      "what is in my notes file", "show me my notes", "list my notes",
+      "read out my notes"), "read_notes"),
     (("clear my notes", "delete my notes", "wipe my notes",
       "clear all my notes"), "clear_notes"),
     (("clear my clipboard", "empty my clipboard", "clear the clipboard",
@@ -459,7 +462,9 @@ _NOTE_PATTERNS = (
     re.compile(r"^remember\s+(?:that\s+)?(.+)$"),
     # The leading verb is sometimes lost entirely ("and" is stripped as
     # filler), but "... to my notes" still says exactly what is wanted.
-    re.compile(r"^(.+?)\s+(?:to|on|in|too|two)\s+(?:my|the)\s+notes$"),
+    # Questions are excluded: "what's in my notes" is a request to read them.
+    re.compile(r"^(?!what|whats|which|show|read|check|list|clear|delete|"
+               r"empty|wipe)(.+?)\s+(?:to|too|two)\s+(?:my|the)\s+notes$"),
 )
 
 

@@ -101,12 +101,12 @@ def set_status_listener(listener):
     _status_listener = listener
 
 
-def _report_status():
+def _report_status(force=False):
     global _last_status
 
     status = "listening" if _armed() else "standby"
 
-    if status == _last_status:
+    if status == _last_status and not force:
         return
 
     _last_status = status
@@ -260,7 +260,10 @@ def listen():
     waker = _make_wake_recognizer() if REQUIRE_WAKE_WORD else None
 
     _drain_queue()
-    _report_status()
+
+    # The HUD is showing SPEAKING when this is called, so report the state
+    # unconditionally rather than only on a change.
+    _report_status(force=True)
 
     epoch = speech_epoch()
     wake_pending = False
@@ -295,6 +298,9 @@ def listen():
 
                 wake_pending = False
                 epoch = speech_epoch()
+
+                # He has just spoken, so the HUD shows SPEAKING again.
+                _report_status(force=True)
                 continue
 
             try:
