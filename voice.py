@@ -12,6 +12,25 @@ from speech import is_speaking, speech_epoch
 MODEL_PATH = "model"
 SAMPLE_RATE = 16000
 
+# Audio is handed to Vosk in blocks of this many samples. 8000 is half a
+# second, which coarsens endpoint detection; 4000 is a quarter second and
+# makes JARVIS notice you have stopped talking sooner.
+BLOCK_SIZE = 4000
+
+# Endpointing: how long a silence ends an utterance. Vosk's default waits
+# noticeably longer, which is the single biggest source of lag.
+ENDPOINT_SILENCE = 0.6
+ENDPOINT_START_MAX = 3.0
+ENDPOINT_MAX = 20.0
+
+# Many Vosk builds expose no endpointer controls. When the partial transcript
+# stops changing for this long, finalise it ourselves. Audio is still fed to
+# Vosk continuously; only the decision to close the utterance is ours.
+FORCE_ENDPOINT_SILENCE = 0.8
+
+# Set True to print how long Vosk takes to finalise an utterance.
+TIMING = False
+
 # Reject a result when Vosk's own average word confidence is below this.
 MIN_CONFIDENCE = 0.70
 
@@ -120,6 +139,19 @@ def _make_wake_recognizer():
         return None
 
 
+def _tune_endpointing(recognizer):
+    """Shorten Vosk's end-of-speech delay, where the build supports it."""
+    try:
+        recognizer.SetEndpointerDelays(
+            ENDPOINT_START_MAX, ENDPOINT_SILENCE, ENDPOINT_MAX
+        )
+        return True
+
+    except Exception:
+        # Older Vosk builds have no endpointer controls; the defaults apply.
+        return False
+
+
 def _confidence(result):
     """Average confidence across the recognised words, or None if absent."""
     words = result.get("result") or []
@@ -218,7 +250,15 @@ def listen():
     recognizer = KaldiRecognizer(model, SAMPLE_RATE)
     recognizer.SetWords(True)
 
+    tuned = _tune_endpointing(recognizer)
+
     waker = _make_wake_recognizer() if REQUIRE_WAKE_WORD else None
+
+    if waker:
+        _tune_endpointing(waker)
+
+    if TIMING and not tuned:
+        print("[timing] this Vosk build has no endpointer controls")
 
     # Anything buffered from before this call is stale -- typically JARVIS's
     # own replies from the previous turn.
@@ -226,10 +266,13 @@ def listen():
 
     epoch = speech_epoch()
     wake_pending = False
+    speech_started = None
+    last_partial = ""
+    last_change = time.monotonic()
 
     with sd.RawInputStream(
         samplerate=SAMPLE_RATE,
-        blocksize=8000,
+        blocksize=BLOCK_SIZE,
         dtype="int16",
         channels=1,
         callback=audio_callback,
@@ -251,6 +294,9 @@ def listen():
                     waker.Reset()
 
                 wake_pending = False
+                last_partial = ""
+                last_change = time.monotonic()
+                speech_started = None
                 epoch = speech_epoch()
                 continue
 
@@ -264,10 +310,48 @@ def listen():
                 if WAKE_WORD in heard.split():
                     wake_pending = True
 
-            if not recognizer.AcceptWaveform(data):
+            final = None
+
+            if recognizer.AcceptWaveform(data):
+                final = json.loads(recognizer.Result())
+
+            else:
+                partial = json.loads(
+                    recognizer.PartialResult()
+                ).get("partial", "").strip()
+
+                if partial != last_partial:
+                    last_partial = partial
+                    last_change = time.monotonic()
+
+                    if partial and speech_started is None:
+                        speech_started = time.monotonic()
+
+                elif partial and (
+                    time.monotonic() - last_change >= FORCE_ENDPOINT_SILENCE
+                ):
+                    # Vosk has stopped changing its mind, so close the
+                    # utterance rather than waiting for its own endpointer.
+                    final = json.loads(recognizer.Result())
+
+                    if TIMING:
+                        print("[timing] forced endpoint after silence")
+
+            if final is None:
                 continue
 
-            result = json.loads(recognizer.Result())
+            last_partial = ""
+            last_change = time.monotonic()
+
+            if TIMING and speech_started is not None:
+                print(
+                    f"[timing] vosk finalised "
+                    f"{time.monotonic() - speech_started:.2f}s after speech began"
+                )
+
+            speech_started = None
+
+            result = final
             text = result.get("text", "").strip()
 
             if not text or not _accept(text, result):

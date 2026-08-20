@@ -1,7 +1,10 @@
 import asyncio
+import hashlib
 import os
 import tempfile
 import threading
+import time
+from collections import OrderedDict
 
 import edge_tts
 import numpy as np
@@ -18,6 +21,14 @@ _BLOCK = 1024
 
 # Scales raw RMS up to a usable 0..1 range for the HUD.
 _GAIN = 6.0
+
+# Synthesised audio is cached on disk and in memory. JARVIS repeats himself
+# constantly ("Done, sir."), and every fresh synthesis is a network round trip.
+_CACHE_DIR = os.path.join(tempfile.gettempdir(), "jarvis_tts_cache")
+_MEMORY_LIMIT = 48
+
+# Set True to print how long synthesis and playback take.
+TIMING = False
 
 # Incremented after every completed utterance so the listener can tell that
 # JARVIS has spoken, and discard whatever the microphone picked up.
@@ -46,7 +57,7 @@ def _bump_epoch():
 
 
 class SpeechEngine:
-    """Neural text-to-speech with a local SAPI5 fallback.
+    """Neural text-to-speech with caching and a local SAPI5 fallback.
 
     While speaking, the per-block RMS of the audio is reported to an optional
     listener so a UI can pulse in time with the voice.
@@ -59,6 +70,14 @@ class SpeechEngine:
 
         # Reminders fire on their own thread, so utterances must not overlap.
         self._lock = threading.Lock()
+
+        # Decoded audio keyed by phrase, most recently used last.
+        self._memory = OrderedDict()
+
+        try:
+            os.makedirs(_CACHE_DIR, exist_ok=True)
+        except OSError:
+            pass
 
     def set_amplitude_listener(self, listener):
         """Register a callable taking a float 0..1, or None to clear."""
@@ -88,15 +107,62 @@ class SpeechEngine:
                 _speaking.clear()
                 _bump_epoch()
 
-    def _speak_neural(self, text):
-        path = os.path.join(tempfile.gettempdir(), "jarvis_tts.mp3")
+    def prewarm(self, phrases):
+        """Synthesise phrases ahead of time so they play instantly later."""
+        for phrase in phrases:
+            try:
+                self._audio_for(phrase)
+            except Exception as error:
+                print(f"[JARVIS] could not prewarm {phrase!r}: {error}")
 
-        asyncio.run(self._synthesize(text, path))
+    def _cache_key(self, text):
+        digest = hashlib.sha1(
+            f"{self.voice}|{text}".encode("utf-8")
+        ).hexdigest()
+
+        return digest
+
+    def _audio_for(self, text):
+        """Return (samples, samplerate), synthesising only when necessary."""
+        key = self._cache_key(text)
+
+        cached = self._memory.get(key)
+
+        if cached is not None:
+            self._memory.move_to_end(key)
+            return cached
+
+        path = os.path.join(_CACHE_DIR, f"{key}.mp3")
+
+        started = time.monotonic()
+        synthesised = False
+
+        if not os.path.exists(path):
+            asyncio.run(self._synthesize(text, path))
+            synthesised = True
 
         data, samplerate = sf.read(path, dtype="float32")
 
         if data.ndim > 1:
             data = data.mean(axis=1)
+
+        self._memory[key] = (data, samplerate)
+        self._memory.move_to_end(key)
+
+        while len(self._memory) > _MEMORY_LIMIT:
+            self._memory.popitem(last=False)
+
+        if TIMING:
+            source = "synthesised" if synthesised else "disk cache"
+            print(
+                f"[timing] {source} in "
+                f"{time.monotonic() - started:.2f}s: {text[:40]!r}"
+            )
+
+        return data, samplerate
+
+    def _speak_neural(self, text):
+        data, samplerate = self._audio_for(text)
 
         self._play_reactive(data, samplerate)
 
@@ -143,7 +209,14 @@ class SpeechEngine:
 
     async def _synthesize(self, text, path):
         communicate = edge_tts.Communicate(text, self.voice)
-        await communicate.save(path)
+
+        # Write to a temporary name first so an interrupted download cannot
+        # leave a corrupt file in the cache.
+        partial = f"{path}.partial"
+
+        await communicate.save(partial)
+
+        os.replace(partial, path)
 
     def _speak_fallback(self, text):
         engine = pyttsx3.init()
@@ -156,9 +229,33 @@ class SpeechEngine:
 speech = SpeechEngine()
 
 
+# Phrases JARVIS repeats constantly. Synthesised once at startup, then instant.
+COMMON_PHRASES = (
+    "Yes, sir?",
+    "Done, sir.",
+    "Certainly, sir.",
+    "I don't know how to do that yet.",
+    "I couldn't find that out, sir.",
+    "I couldn't open that, sir.",
+    "I couldn't close that, sir.",
+    "That didn't work, sir.",
+    "Muting, sir.",
+    "Unmuting, sir.",
+    "Turning it up, sir.",
+    "Turning it down, sir.",
+    "Clearing the desktop, sir.",
+    "Bringing them back, sir.",
+)
+
+
 def speak(text):
     speech.speak(text)
 
 
 def set_amplitude_listener(listener):
     speech.set_amplitude_listener(listener)
+
+
+def prewarm(phrases=COMMON_PHRASES):
+    """Warm the cache so the most common replies never wait on the network."""
+    speech.prewarm(phrases)

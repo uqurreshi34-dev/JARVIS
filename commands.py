@@ -1,3 +1,4 @@
+import re
 import webbrowser
 from urllib.parse import urlparse
 
@@ -28,6 +29,10 @@ _application_manager = ApplicationManager()
 _project_manager = ProjectManager()
 reminder_manager = ReminderManager()
 _interpreter = CommandInterpreter()
+
+# Every command sends these to the LLM, so keeping the list short directly
+# reduces token use. Recent projects are the ones people actually ask for.
+_PROJECT_CANDIDATES = 8
 
 
 def _open_website(url):
@@ -105,14 +110,257 @@ def _to_number(value):
         return None
 
 
-def handle_command(command):
-    candidates = _application_manager.candidates(command)
+# Commands matched here never reach the LLM. That removes roughly half a
+# second of latency and, just as usefully, spends no API tokens at all.
+_FAST_PHRASES = (
+    (("what time is it", "whats the time", "what is the time",
+      "the time", "time please"), "get_time"),
+    (("whats the weather", "what is the weather", "the weather",
+      "hows the weather", "whats the weather like",
+      "what is the weather like", "the forecast"), "get_weather"),
+    (("take a screenshot", "screenshot", "capture my screen",
+      "take a screen shot", "grab my screen"), "take_screenshot"),
+    (("mute", "mute it", "silence", "be quiet"), "mute"),
+    (("unmute", "un mute", "unmute it", "sound on"), "unmute"),
+    (("turn it up", "volume up", "louder", "turn the volume up"),
+     "volume_up"),
+    (("turn it down", "volume down", "quieter", "turn the volume down"),
+     "volume_down"),
+    (("how loud is it", "whats the volume", "what is the volume"),
+     "get_volume"),
+    (("minimise everything", "minimize everything", "show the desktop",
+      "clear the desktop", "minimise all", "minimize all"), "minimise_all"),
+    (("bring my windows back", "restore my windows", "bring them back",
+      "restore everything"), "restore_all"),
+    (("hows my system", "how is my system", "system status",
+      "hows my system doing", "hows my pc", "system report"),
+     "get_system_status"),
+    (("whats on my clipboard", "what is on my clipboard",
+      "read my clipboard", "check my clipboard"), "read_clipboard"),
+    (("clear my clipboard", "empty my clipboard"), "clear_clipboard"),
+    (("pause", "play", "pause the video", "resume the video",
+      "pause the music", "resume the music", "play the video",
+      "pause it", "resume it"), "media_play_pause"),
+    (("next track", "skip this track", "skip this song", "next song"),
+     "media_next"),
+    (("previous track", "last track", "go back a track"), "media_previous"),
+    (("what timers are running", "what reminders do i have",
+      "list my timers", "list my reminders", "whats pending"),
+     "list_reminders"),
+    (("cancel my reminders", "cancel my timers", "cancel everything"),
+     "cancel_reminders"),
+)
 
-    result = _interpreter.interpret(
-        command,
-        candidates,
-        _project_manager.names(),
-    )
+_FAST_LOOKUP = {
+    phrase: intent
+    for phrases, intent in _FAST_PHRASES
+    for phrase in phrases
+}
+
+_OPEN_PREFIXES = ("open ", "launch ", "start ", "run ")
+_CLOSE_PREFIXES = ("close ", "quit ", "exit ", "shut ")
+
+_LEADING_NOISE = re.compile(
+    r"^(jarvis|please|hey|ok|okay|could you|can you|would you)\s+"
+)
+
+# Vosk frequently tacks these onto an utterance ("the open chrome the"), which
+# would otherwise stop an exact phrase from matching. Deliberately narrow:
+# words like "it" and "is" carry meaning ("what time is it") and must stay.
+_EDGE_FILLER = frozenset({
+    "the", "a", "an", "and", "so", "um", "uh", "er", "eh", "well",
+    "just", "now", "then", "like", "yeah", "okay",
+})
+
+
+def _trim_filler(text):
+    """Drop filler words from both ends, keeping the meaningful middle."""
+    tokens = text.split()
+
+    while tokens and tokens[0] in _EDGE_FILLER:
+        tokens.pop(0)
+
+    while tokens and tokens[-1] in _EDGE_FILLER:
+        tokens.pop()
+
+    return " ".join(tokens)
+
+
+def _normalise(command):
+    """Lowercase, strip punctuation and pleasantries, collapse spaces."""
+    text = (command or "").casefold()
+
+    # Remove apostrophes outright so "what's" matches "whats", rather than
+    # becoming "what s" and missing every phrase.
+    text = text.replace("'", "").replace("\u2019", "")
+
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = " ".join(text.split())
+
+    previous = None
+
+    while previous != text:
+        previous = text
+        text = _LEADING_NOISE.sub("", text).strip()
+
+    return _trim_filler(text)
+
+
+_VOLUME_WORDS = {
+    "half": 50, "full": 100, "max": 100, "maximum": 100,
+    "all the way up": 100, "zero": 0, "nothing": 0,
+    "a quarter": 25, "three quarters": 75,
+}
+
+_VOLUME_PATTERN = re.compile(
+    r"^(?:set\s+)?(?:the\s+)?volume\s+(?:to\s+|at\s+)?(.+)$"
+)
+
+# Sites people ask for by name. Anything not here still goes to the LLM, so
+# this is a shortcut rather than a limit on what JARVIS can open.
+_WEBSITES = {
+    "youtube": "https://www.youtube.com",
+    "you tube": "https://www.youtube.com",
+    "gmail": "https://mail.google.com",
+    "google": "https://www.google.com",
+    "google maps": "https://maps.google.com",
+    "maps": "https://maps.google.com",
+    "github": "https://github.com",
+    "netflix": "https://www.netflix.com",
+    "amazon": "https://www.amazon.co.uk",
+    "reddit": "https://www.reddit.com",
+    "bbc": "https://www.bbc.co.uk",
+    "bbc news": "https://www.bbc.co.uk/news",
+    "sky sports": "https://www.skysports.com",
+    "skysports": "https://www.skysports.com",
+    "linkedin": "https://www.linkedin.com",
+    "spotify": "https://open.spotify.com",
+    "twitter": "https://x.com",
+    "x": "https://x.com",
+    "whatsapp": "https://web.whatsapp.com",
+    "chat gpt": "https://chat.openai.com",
+    "chatgpt": "https://chat.openai.com",
+    "claude": "https://claude.ai",
+    "stack overflow": "https://stackoverflow.com",
+    "wikipedia": "https://www.wikipedia.org",
+}
+
+
+def _volume_level(text):
+    """Extract a target volume percentage from a phrase, or None."""
+    match = _VOLUME_PATTERN.match(text)
+
+    if not match:
+        return None
+
+    tail = match.group(1).strip()
+    tail = tail.removesuffix(" percent").removesuffix("%").strip()
+
+    if tail in _VOLUME_WORDS:
+        return _VOLUME_WORDS[tail]
+
+    digits = re.fullmatch(r"(\d{1,3})", tail)
+
+    if digits:
+        return max(0, min(100, int(digits.group(1))))
+
+    return None
+
+
+def _blank_result(intent, **fields):
+    result = {
+        "intent": intent, "application": None, "website": None,
+        "project": None, "amount": None, "text": None, "unit": None,
+    }
+    result.update(fields)
+
+    return result
+
+
+def _fast_path(command):
+    """Resolve an unambiguous command locally, or return None."""
+    text = _normalise(command)
+
+    if not text:
+        return None
+
+    intent = _FAST_LOOKUP.get(text)
+
+    if intent:
+        return _blank_result(intent)
+
+    level = _volume_level(text)
+
+    if level is not None:
+        return _blank_result("set_volume", amount=level)
+
+    for prefix, intent in (
+        *((p, "open_application") for p in _OPEN_PREFIXES),
+        *((p, "close_application") for p in _CLOSE_PREFIXES),
+    ):
+        if not text.startswith(prefix):
+            continue
+
+        target = text[len(prefix):].strip()
+
+        if not target:
+            continue
+
+        # A known website, but only for opening; closing a tab is different.
+        if intent == "open_application" and target in _WEBSITES:
+            return _blank_result("open_website", website=_WEBSITES[target])
+
+        # Only take the fast path when the application resolves cleanly.
+        # Anything fuzzy, or a project, goes to the LLM.
+        app = _application_manager.find(target)
+
+        if app:
+            return _blank_result(intent, application=app.name)
+
+    return None
+
+
+def _is_rate_limit(error):
+    """True when a Groq error is a quota or rate limit rejection."""
+    name = type(error).__name__.lower()
+
+    if "ratelimit" in name:
+        return True
+
+    text = str(error).lower()
+
+    return "rate_limit" in text or "429" in text
+
+
+def handle_command(command):
+    result = _fast_path(command)
+
+    if result is not None:
+        print(f"[fast] {result['intent']} (no API call)")
+
+    else:
+        candidates = _application_manager.candidates(command)
+
+        try:
+            result = _interpreter.interpret(
+                command,
+                candidates,
+                _project_manager.names(limit=_PROJECT_CANDIDATES),
+            )
+
+        except Exception as error:
+            if _is_rate_limit(error):
+                print(f"[JARVIS] rate limited: {error}")
+
+                return _query(
+                    "rate_limited",
+                    lambda: (
+                        "I've reached my daily language limit, sir. "
+                        "It will reset in a few hours."
+                    ),
+                )
+
+            raise
 
     intent = result["intent"]
     application = result.get("application")

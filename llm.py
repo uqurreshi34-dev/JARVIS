@@ -14,7 +14,10 @@ if not _api_key:
 
 _client = Groq(api_key=_api_key)
 
-_MODEL = "openai/gpt-oss-20b"
+# Groq's daily token limit is per model, so switching models gives a fresh
+# quota. gpt-oss-120b is Groq's recommended model and has its own allowance
+# separate from gpt-oss-20b. Override with GROQ_MODEL in .env.
+_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 _SYSTEM_PROMPT = """
 You are the command interpreter for a Windows voice assistant called JARVIS.

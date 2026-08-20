@@ -1,13 +1,40 @@
 import sys
 import threading
+import time
+from datetime import datetime
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
 from commands import handle_command, reminder_manager
 from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
-from speech import set_amplitude_listener, speak
+from speech import prewarm, set_amplitude_listener, speak
 from voice import listen, set_wake_listener
+
+
+# Set True to print how long each stage takes. Also enable speech.TIMING.
+TIMING = False
+
+# Saying "Done, sir." after every action roughly doubles the talking. The
+# window opening is its own confirmation, so this is off by default.
+CONFIRM_SUCCESS = False
+
+# How long to wait for an action before reporting on it. Closing a stubborn
+# application can take a few seconds.
+ACTION_TIMEOUT = 8.0
+
+
+def _greeting():
+    """Good morning, afternoon, or evening, depending on the actual hour."""
+    hour = datetime.now().hour
+
+    if hour < 12:
+        return "Good morning. JARVIS is online."
+
+    if hour < 18:
+        return "Good afternoon. JARVIS is online."
+
+    return "Good evening. JARVIS is online."
 
 
 class Assistant:
@@ -37,18 +64,30 @@ class Assistant:
         speak(text)
 
     def _run_action(self, result):
-        """Commands that do something: confirm, act, then report."""
-        self._say(result["response"])
-        self._state(THINKING)
+        """Commands that do something: act while the confirmation plays."""
+        outcome = {}
 
-        try:
-            success = result["action"]()
-        except Exception as error:
-            print(f"[JARVIS] action error: {error}")
-            success = False
+        def perform():
+            try:
+                outcome["success"] = result["action"]()
+            except Exception as error:
+                print(f"[JARVIS] action error: {error}")
+                outcome["success"] = False
+
+        # The action runs while JARVIS is still talking, so the window appears
+        # as he finishes rather than a second afterwards.
+        worker = threading.Thread(target=perform, daemon=True)
+        worker.start()
+
+        self._say(result["response"])
+
+        worker.join(timeout=ACTION_TIMEOUT)
+
+        success = outcome.get("success", False)
 
         if success:
-            self._say("Done, sir.")
+            if CONFIRM_SUCCESS:
+                self._say("Done, sir.")
         elif result["intent"] in ("close_application", "close_project"):
             self._say("I couldn't close that, sir.")
         elif result["intent"] in ("open_application", "open_website", "open_project"):
@@ -95,7 +134,11 @@ class Assistant:
         set_wake_listener(self._on_wake)
         reminder_manager.set_alert_listener(self._on_alert)
 
-        self._say("Good evening. JARVIS is online.")
+        self._say(_greeting())
+
+        # Warm the cache for stock replies while the greeting plays, so the
+        # first "Done, sir." does not wait on a network round trip.
+        threading.Thread(target=prewarm, daemon=True).start()
 
         while not self._stop.is_set():
             # STANDBY until the wake word is heard.
@@ -124,7 +167,13 @@ class Assistant:
             self._state(THINKING)
 
             try:
+                started = time.monotonic()
                 result = handle_command(command)
+
+                if TIMING:
+                    print(
+                        f"[timing] interpret {time.monotonic() - started:.2f}s"
+                    )
             except Exception as error:
                 print(f"[JARVIS] command error: {error}")
                 self._say("Something went wrong, sir.")

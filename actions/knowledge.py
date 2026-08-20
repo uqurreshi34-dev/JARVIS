@@ -14,9 +14,8 @@ if not _api_key:
 
 _client = Groq(api_key=_api_key)
 
-# Swap for a larger model if you want richer answers, e.g.
-# "llama-3.3-70b-versatile". This one is known to work in this project.
-_MODEL = "openai/gpt-oss-20b"
+# Shares the GROQ_MODEL setting with the command interpreter.
+_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 _MAX_TOKENS = 220
 

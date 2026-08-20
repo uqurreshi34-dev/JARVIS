@@ -168,8 +168,10 @@ class ProjectManager:
 
         return self._projects
 
-    def names(self):
-        return tuple(project.name for project in self.projects())
+    def names(self, limit=None):
+        names = tuple(project.name for project in self.projects())
+
+        return names[:limit] if limit else names
 
     def _load(self):
         paths = _read_state_db() or _read_storage_json()
