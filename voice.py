@@ -26,8 +26,27 @@ ENDPOINT_MAX = 20.0
 # Many Vosk builds expose no endpointer controls. When the partial transcript
 # stops changing for this long, finalise it ourselves. Audio is still fed to
 # Vosk continuously; only the decision to close the utterance is ours.
-# Lower is snappier; too low and it cuts you off mid-sentence.
+#
+# The wait scales with how much has been said: one word is very likely the
+# start of something longer ("clear..." before "my clipboard"), so it gets
+# more patience, while a full phrase can be closed quickly.
 FORCE_ENDPOINT_SILENCE = 0.45
+SHORT_UTTERANCE_SILENCE = 1.0
+PARTIAL_UTTERANCE_SILENCE = 0.7
+
+
+def _endpoint_delay(partial):
+    """How long to wait before closing an utterance of this length."""
+    words = len(partial.split())
+
+    if words <= 1:
+        return SHORT_UTTERANCE_SILENCE
+
+    if words == 2:
+        return PARTIAL_UTTERANCE_SILENCE
+
+    return FORCE_ENDPOINT_SILENCE
+
 
 # Set True to print how long Vosk takes to finalise an utterance.
 TIMING = False
@@ -329,7 +348,7 @@ def listen():
                         speech_started = time.monotonic()
 
                 elif partial and (
-                    time.monotonic() - last_change >= FORCE_ENDPOINT_SILENCE
+                    time.monotonic() - last_change >= _endpoint_delay(partial)
                 ):
                     # Vosk has stopped changing its mind, so close the
                     # utterance rather than waiting for its own endpointer.
