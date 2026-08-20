@@ -285,8 +285,17 @@ _UNIT_TO_SECONDS = {
     "hour": 3600, "hours": 3600, "hr": 3600, "hrs": 3600,
 }
 
+# The count must be digits or number words only. Allowing any words here
+# makes the pattern swallow the message ("to call that in ten seconds").
+_NUMBER_TOKEN = (
+    r"(?:\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|"
+    r"twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|"
+    r"twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|an?)"
+)
+
 _DURATION = re.compile(
-    r"(?:for|in)?\s*([\w\s]+?)\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b"
+    rf"\b({_NUMBER_TOKEN}(?:\s+{_NUMBER_TOKEN})*)\s+"
+    r"(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b"
 )
 
 _TIMER_PATTERNS = (
@@ -327,8 +336,28 @@ def _spoken_number(text):
     return total if matched else None
 
 
+_CONNECTORS = ("in", "for", "after", "to", "and", "me")
+
+
+def _strip_connectors(text):
+    """Remove joining words left behind when the duration is cut out."""
+    tokens = text.split()
+
+    while tokens and tokens[0] in _CONNECTORS:
+        tokens.pop(0)
+
+    while tokens and tokens[-1] in _CONNECTORS:
+        tokens.pop()
+
+    return " ".join(tokens)
+
+
 def _parse_duration(text):
-    """Return (seconds, message) from a timer phrase, or (None, None)."""
+    """Return (seconds, message) from a timer phrase, or (None, None).
+
+    The duration may come before the message ("in ten seconds to stretch") or
+    after it ("to call mum in ten seconds"); both are handled.
+    """
     match = _DURATION.search(text)
 
     if not match:
@@ -345,11 +374,39 @@ def _parse_duration(text):
     if not 1 <= seconds <= 24 * 60 * 60:
         return None, None
 
-    # Anything after "to ..." is what to be reminded about.
-    tail = text[match.end():].strip()
-    message = tail.removeprefix("to ").strip() or None
+    # Whatever sits either side of the duration is the message.
+    before = _strip_connectors(text[:match.start()].strip())
+    after = _strip_connectors(text[match.end():].strip())
 
-    return seconds, message
+    message = " ".join(part for part in (before, after) if part).strip()
+
+    return seconds, message or None
+
+
+_COPY_PATTERNS = (
+    # "copy hello world to my clipboard" / "add hello world to the clipboard"
+    re.compile(r"^(?:copy|add|put|save)\s+(.+?)\s+(?:to|on|in)\s+"
+               r"(?:my|the)?\s*clipboard$"),
+    # "copy hello world"
+    re.compile(r"^copy\s+(.+)$"),
+)
+
+
+def _copy_request(text):
+    """Extract text to place on the clipboard, or None."""
+    for pattern in _COPY_PATTERNS:
+        match = pattern.match(text)
+
+        if not match:
+            continue
+
+        payload = match.group(1).strip()
+
+        # "copy that" and similar need context only the LLM might infer.
+        if payload and payload not in ("this", "that", "it", "clipboard"):
+            return payload
+
+    return None
 
 
 def _timer_request(text):
@@ -403,6 +460,20 @@ def _fast_path(command):
         return _blank_result(
             "set_reminder", amount=seconds, unit="seconds", text=message
         )
+
+    payload = _copy_request(text)
+
+    if payload:
+        # Recover the user's original casing from the raw command, since the
+        # normalised text is lowercased.
+        original = (command or "").strip()
+        lowered = original.casefold()
+        start = lowered.find(payload)
+
+        if start != -1:
+            payload = original[start:start + len(payload)]
+
+        return _blank_result("copy_to_clipboard", text=payload)
 
     for prefix, intent in (
         *((p, "open_application") for p in _OPEN_PREFIXES),
