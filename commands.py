@@ -435,9 +435,14 @@ def _parse_duration(text):
     return seconds, message or None
 
 
+# Speech recognition routinely confuses short function words: "add" becomes
+# "at", "and" or "had". The trailing "to my notes" makes the intent clear
+# regardless, so the leading verb is treated loosely.
+_ADD_VERBS = r"(?:add|at|and|had|put|save|stick|pop)"
+
 _COPY_PATTERNS = (
     # "copy hello world to my clipboard" / "add hello world to the clipboard"
-    re.compile(r"^(?:copy|add|put|save)\s+(.+?)\s+(?:to|on|in)\s+"
+    re.compile(rf"^(?:copy|{_ADD_VERBS})\s+(.+?)\s+(?:to|on|in|too|two)\s+"
                r"(?:my|the)?\s*clipboard$"),
     # "copy hello world"
     re.compile(r"^copy\s+(.+)$"),
@@ -445,13 +450,16 @@ _COPY_PATTERNS = (
 
 
 _NOTE_PATTERNS = (
-    re.compile(r"^(?:make|take|write|add|jot)\s+(?:me\s+)?a\s+note\s+"
+    re.compile(r"^(?:make|take|write|add|at|and|jot)\s+(?:me\s+)?a\s+note\s+"
                r"(?:that\s+|saying\s+|about\s+|to\s+)?(.+)$"),
-    # "add dentist appointment to my notes"
-    re.compile(r"^(?:add|put|save)\s+(.+?)\s+(?:to|on|in)\s+"
+    # "add dentist appointment to my notes", including "at ... to my notes"
+    re.compile(rf"^{_ADD_VERBS}\s+(.+?)\s+(?:to|on|in|too|two)\s+"
                r"(?:my\s+|the\s+)?notes$"),
     re.compile(r"^note\s+(?:that\s+|down\s+)?(.+)$"),
     re.compile(r"^remember\s+(?:that\s+)?(.+)$"),
+    # The leading verb is sometimes lost entirely ("and" is stripped as
+    # filler), but "... to my notes" still says exactly what is wanted.
+    re.compile(r"^(.+?)\s+(?:to|on|in|too|two)\s+(?:my|the)\s+notes$"),
 )
 
 

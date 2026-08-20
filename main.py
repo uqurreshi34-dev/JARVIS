@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QApplication
 from commands import handle_command, reminder_manager
 from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
 from speech import prewarm, set_amplitude_listener, speak
-from voice import listen, set_wake_listener
+from voice import arm_follow_up, is_armed, listen, set_wake_listener
 
 
 # Set True to print how long each stage takes. Also enable speech.TIMING.
@@ -22,6 +22,11 @@ CONFIRM_SUCCESS = False
 # How long to wait for an action before reporting on it. Closing a stubborn
 # application can take a few seconds.
 ACTION_TIMEOUT = 8.0
+
+# Keep listening for a short follow-up after each command, so you need only
+# say "Jarvis" once for a run of instructions. Set False to require the wake
+# word every time.
+FOLLOW_UP = True
 
 
 def _greeting():
@@ -141,8 +146,9 @@ class Assistant:
         threading.Thread(target=prewarm, daemon=True).start()
 
         while not self._stop.is_set():
-            # STANDBY until the wake word is heard.
-            self._state(IDLE)
+            # LISTENING while a follow-up is still accepted, STANDBY once the
+            # window closes and the wake word is needed again.
+            self._state(LISTENING if is_armed() else IDLE)
             self._heard("")
             self._reply("")
 
@@ -187,6 +193,10 @@ class Assistant:
                 self._run_query(result)
             else:
                 self._run_action(result)
+
+            # Stay listening briefly so a follow-up needs no wake word.
+            if FOLLOW_UP:
+                arm_follow_up()
 
             self._state(IDLE)
 

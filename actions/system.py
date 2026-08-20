@@ -1,13 +1,26 @@
 from datetime import datetime
+import os
 
 import psutil
 import requests
+from dotenv import load_dotenv
 
 
-# Change these to your location. Defaults to London.
-LATITUDE = 51.5074
-LONGITUDE = -0.1278
-LOCATION_NAME = "London"
+load_dotenv()
+
+
+def _env_float(name, default):
+    try:
+        return float(os.getenv(name) or default)
+    except ValueError:
+        return default
+
+
+# Set WEATHER_LATITUDE, WEATHER_LONGITUDE and WEATHER_LOCATION in .env to
+# report somewhere other than London.
+LATITUDE = _env_float("WEATHER_LATITUDE", 51.5074)
+LONGITUDE = _env_float("WEATHER_LONGITUDE", -0.1278)
+LOCATION_NAME = os.getenv("WEATHER_LOCATION") or "London"
 
 _WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
 _TIMEOUT = 8
@@ -21,17 +34,17 @@ _CONDITIONS = {
     2: "partly cloudy",
     3: "overcast",
     45: "foggy",
-    48: "foggy",
+    48: "freezing fog",
     51: "drizzling lightly",
     53: "drizzling",
     55: "drizzling heavily",
-    56: "freezing drizzle",
-    57: "freezing drizzle",
+    56: "with freezing drizzle",
+    57: "with heavy freezing drizzle",
     61: "raining lightly",
     63: "raining",
     65: "raining heavily",
-    66: "freezing rain",
-    67: "freezing rain",
+    66: "with freezing rain",
+    67: "with heavy freezing rain",
     71: "snowing lightly",
     73: "snowing",
     75: "snowing heavily",
@@ -43,7 +56,7 @@ _CONDITIONS = {
     86: "with heavy snow showers",
     95: "thundery",
     96: "thundery with hail",
-    99: "thundery with hail",
+    99: "thundery with heavy hail",
 }
 
 

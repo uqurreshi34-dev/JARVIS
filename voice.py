@@ -54,7 +54,10 @@ def _endpoint_delay(partial):
 TIMING = False
 
 # Reject a result when Vosk's own average word confidence is below this.
-MIN_CONFIDENCE = 0.70
+# The wake word is what guards against stray speech now, so this only needs
+# to catch outright noise (typically 0.2 to 0.3). Setting it high discards
+# real but softly-spoken commands.
+MIN_CONFIDENCE = 0.45
 
 # Single short words that noise commonly decodes into. These are only
 # rejected when they arrive ALONE -- "the" inside a real command is fine.
@@ -100,6 +103,11 @@ WAKE_BLOCKLIST = frozenset({
 
 # Once woken, JARVIS accepts a bare command for this many seconds.
 ARMED_SECONDS = 10.0
+
+# After acting on a command he stays listening for this long, so a follow-up
+# needs no wake word. This keeps the gate against stray speech while removing
+# most of the friction of saying the name every single time.
+FOLLOW_UP_SECONDS = 8.0
 
 # Audio captured in this window after JARVIS speaks is discarded, so he
 # never mistakes his own voice for a command.
@@ -296,12 +304,25 @@ def _disarm():
     _armed_until = 0.0
 
 
+def is_armed():
+    """True while a bare follow-up command will be accepted."""
+    return _armed()
+
+
+def arm_follow_up(seconds=FOLLOW_UP_SECONDS):
+    """Listen for a bare follow-up command without the wake word."""
+    global _armed_until
+    _armed_until = time.monotonic() + seconds
+
+
 def listen():
     """Block until an addressed command is heard, then return it."""
-    if REQUIRE_WAKE_WORD:
-        print("Waiting for wake word...")
-    else:
+    if not REQUIRE_WAKE_WORD:
         print("Listening...")
+    elif _armed():
+        print("Listening for a follow-up...")
+    else:
+        print("Waiting for wake word...")
 
     recognizer = KaldiRecognizer(model, SAMPLE_RATE)
     recognizer.SetWords(True)
