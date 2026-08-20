@@ -68,6 +68,11 @@ null. For "remind me in ten minutes to call mum", amount is 600, unit is
 Use list_reminders when the user asks what timers or reminders are running.
 Use cancel_reminders when the user wants timers or reminders cancelled.
 
+Use make_note when the user wants something written down or remembered as a
+note, and put the note itself in "text".
+Use read_notes when the user asks what their notes say.
+Use clear_notes when the user wants their notes deleted.
+
 Use read_clipboard when the user asks what is on their clipboard.
 Use copy_to_clipboard when the user wants something put on the clipboard, and
 put the exact wording to copy in "text".
@@ -123,6 +128,9 @@ _SCHEMA = {
                 "read_clipboard",
                 "copy_to_clipboard",
                 "clear_clipboard",
+                "make_note",
+                "read_notes",
+                "clear_notes",
                 "get_time",
                 "get_weather",
                 "get_system_status",

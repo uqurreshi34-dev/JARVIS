@@ -20,7 +20,7 @@ from actions.desktop import (
 from actions.knowledge import answer
 from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
-from actions import clipboard
+from actions import clipboard, notes
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
@@ -143,6 +143,10 @@ _FAST_PHRASES = (
      "get_system_status"),
     (("whats on my clipboard", "what is on my clipboard",
       "read my clipboard", "check my clipboard"), "read_clipboard"),
+    (("read my notes", "what are my notes", "read back my notes",
+      "whats on my notes", "check my notes", "my notes"), "read_notes"),
+    (("clear my notes", "delete my notes", "wipe my notes",
+      "clear all my notes"), "clear_notes"),
     (("clear my clipboard", "empty my clipboard", "clear the clipboard",
       "empty the clipboard", "wipe my clipboard", "clear clipboard"),
      "clear_clipboard"),
@@ -429,6 +433,30 @@ _COPY_PATTERNS = (
 )
 
 
+_NOTE_PATTERNS = (
+    re.compile(r"^(?:make|take|write|add|jot)\s+(?:me\s+)?a\s+note\s+"
+               r"(?:that\s+|saying\s+|about\s+|to\s+)?(.+)$"),
+    re.compile(r"^note\s+(?:that\s+|down\s+)?(.+)$"),
+    re.compile(r"^remember\s+(?:that\s+)?(.+)$"),
+)
+
+
+def _note_request(text):
+    """Extract a note to save, or None."""
+    for pattern in _NOTE_PATTERNS:
+        match = pattern.match(text)
+
+        if not match:
+            continue
+
+        note = match.group(1).strip()
+
+        if note and note not in ("this", "that", "it"):
+            return note
+
+    return None
+
+
 def _copy_request(text):
     """Extract text to place on the clipboard, or None."""
     for pattern in _COPY_PATTERNS:
@@ -460,6 +488,17 @@ def _timer_request(text):
             return seconds, message
 
     return None
+
+
+def _original_case(command, payload):
+    """Recover the user's original casing, since the matched text is lowercased."""
+    original = (command or "").strip()
+    start = original.casefold().find(payload)
+
+    if start == -1:
+        return payload
+
+    return original[start:start + len(payload)]
 
 
 def _blank_result(intent, **fields):
@@ -498,19 +537,17 @@ def _fast_path(command):
             "set_reminder", amount=seconds, unit="seconds", text=message
         )
 
+    note = _note_request(text)
+
+    if note:
+        return _blank_result("make_note", text=_original_case(command, note))
+
     payload = _copy_request(text)
 
     if payload:
-        # Recover the user's original casing from the raw command, since the
-        # normalised text is lowercased.
-        original = (command or "").strip()
-        lowered = original.casefold()
-        start = lowered.find(payload)
-
-        if start != -1:
-            payload = original[start:start + len(payload)]
-
-        return _blank_result("copy_to_clipboard", text=payload)
+        return _blank_result(
+            "copy_to_clipboard", text=_original_case(command, payload)
+        )
 
     for prefix, intent in (
         *((p, "open_application") for p in _OPEN_PREFIXES),
@@ -650,6 +687,23 @@ def handle_command(command):
         response, function = _SIMPLE_ACTIONS[intent]
 
         return _action(intent, response, function)
+
+    if intent == "make_note" and text:
+        return _action(
+            intent,
+            "Noted, sir.",
+            lambda: notes.add(text),
+        )
+
+    if intent == "read_notes":
+        return _query(intent, notes.describe)
+
+    if intent == "clear_notes":
+        return _action(
+            intent,
+            "Clearing your notes, sir.",
+            lambda: notes.clear() >= 0,
+        )
 
     if intent == "read_clipboard":
         return _query(intent, clipboard.describe)
