@@ -169,10 +169,18 @@ _FAST_LOOKUP = {
     for phrase in phrases
 }
 
-# Speech recognition mangles words ("system" becomes "sister"), so a close
-# match still counts. The threshold is deliberately high: the nearest real
-# command scores around 0.75, so 0.82 leaves a clear margin.
-_FUZZY_THRESHOLD = 0.82
+# Speech recognition mangles words ("notes" becomes "know"), so a close
+# match still counts.
+_FUZZY_THRESHOLD = 0.78
+
+# These delete something, and near misses are dangerous: "read my clipboard"
+# and "clear my clipboard" score 0.86 against each other. They must be said
+# clearly enough to match exactly.
+_NEVER_FUZZY = frozenset({
+    "clear_clipboard",
+    "clear_notes",
+    "cancel_reminders",
+})
 
 
 def _fuzzy_intent(text):
@@ -184,6 +192,9 @@ def _fuzzy_intent(text):
     best_intent = None
 
     for phrase, intent in _FAST_LOOKUP.items():
+        if intent in _NEVER_FUZZY:
+            continue
+
         # Length filter first; SequenceMatcher on every phrase is wasteful.
         if abs(len(phrase) - len(text)) > 6:
             continue
@@ -436,6 +447,9 @@ _COPY_PATTERNS = (
 _NOTE_PATTERNS = (
     re.compile(r"^(?:make|take|write|add|jot)\s+(?:me\s+)?a\s+note\s+"
                r"(?:that\s+|saying\s+|about\s+|to\s+)?(.+)$"),
+    # "add dentist appointment to my notes"
+    re.compile(r"^(?:add|put|save)\s+(.+?)\s+(?:to|on|in)\s+"
+               r"(?:my\s+|the\s+)?notes$"),
     re.compile(r"^note\s+(?:that\s+|down\s+)?(.+)$"),
     re.compile(r"^remember\s+(?:that\s+)?(.+)$"),
 )

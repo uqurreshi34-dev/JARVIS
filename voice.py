@@ -39,10 +39,12 @@ def _endpoint_delay(partial):
     """How long to wait before closing an utterance of this length."""
     words = len(partial.split())
 
-    if words <= 1:
+    # One or two words is very often the start of something longer
+    # ("clear my..." before "notes"), so wait properly.
+    if words <= 2:
         return SHORT_UTTERANCE_SILENCE
 
-    if words == 2:
+    if words == 3:
         return PARTIAL_UTTERANCE_SILENCE
 
     return FORCE_ENDPOINT_SILENCE
@@ -84,6 +86,11 @@ WAKE_VARIANTS = frozenset({
 })
 
 WAKE_RATIO = 0.75
+
+# Used only once grammar mode has already confirmed the name was spoken, so
+# it can be far looser: "job is" scores 0.50, while a real word like
+# "dentist" scores 0.31 and must survive.
+WAKE_STRIP_RATIO = 0.45
 
 # Words close enough to trip the fuzzy test but clearly not the wake word.
 WAKE_BLOCKLIST = frozenset({
@@ -228,10 +235,12 @@ def _split_wake(text):
 
 
 def _strip_wake(text):
-    """Remove a leading wake word when the grammar recogniser found one.
+    """Remove the wake word when the grammar recogniser found one.
 
-    The full recogniser may have transcribed the name as something else, so if
-    no token matches we drop the first token when more words follow it.
+    The full recogniser often transcribes the name as something else, and
+    sometimes as two words ("job is"). Since grammar has already confirmed
+    the name was said, a loose match is safe here -- but only loose enough
+    to catch a mangled name, never a real word like "dentist".
     """
     addressed, remainder = _split_wake(text)
 
@@ -240,10 +249,37 @@ def _strip_wake(text):
 
     tokens = text.split()
 
-    if len(tokens) > 1:
-        return " ".join(tokens[1:]).strip()
+    if len(tokens) < 2:
+        return ""
 
-    return ""
+    best = None
+    best_score = 0.0
+
+    # The name leads the sentence, so only look near the start.
+    for start in range(min(3, len(tokens))):
+        for length in (2, 1):
+            end = start + length
+
+            if end > len(tokens):
+                continue
+
+            candidate = " ".join(tokens[start:end])
+            score = SequenceMatcher(None, candidate, WAKE_WORD).ratio()
+
+            # Prefer the better match, and a two-word span when tied, since
+            # "job is" beats "is" for the same score.
+            if score > best_score or (
+                score == best_score and best and length > best[1] - best[0]
+            ):
+                best_score = score
+                best = (start, end)
+
+    if best and best_score >= WAKE_STRIP_RATIO:
+        start, end = best
+        return " ".join(tokens[:start] + tokens[end:]).strip()
+
+    # Nothing resembled the name, so the whole utterance is the command.
+    return text
 
 
 def _armed():
