@@ -63,8 +63,10 @@ WAKE_BLOCKLIST = frozenset({
 # Once woken, JARVIS accepts a bare command for this many seconds.
 ARMED_SECONDS = 10.0
 
-# After acting he stays listening this long, so a follow-up needs no wake word.
-FOLLOW_UP_SECONDS = 8.0
+# After acting he stays listening this long, so a follow-up needs no wake
+# word. Measured from when he stops speaking to when you start; transcription
+# time afterwards does not count against it.
+FOLLOW_UP_SECONDS = 12.0
 
 # Audio captured in this window after JARVIS speaks is discarded.
 SETTLE_SECONDS = 0.35
@@ -263,6 +265,11 @@ def listen():
     epoch = speech_epoch()
     wake_pending = False
 
+    # Whisper transcribes only after you stop talking, which can take a few
+    # seconds. Judging the follow-up window when the text finally arrives
+    # would let it expire mid-transcription, so freeze it when speech starts.
+    armed_at_start = _armed()
+
     with sd.RawInputStream(
         samplerate=SAMPLE_RATE,
         blocksize=BLOCK_SIZE,
@@ -305,6 +312,11 @@ def listen():
 
             started = time.monotonic() if TIMING else None
 
+            # Until an utterance is under way, keep the latch current. Once
+            # speech begins it holds, so transcription time cannot expire it.
+            if not getattr(engine, "active", False):
+                armed_at_start = _armed()
+
             result = engine.feed(data)
 
             if result is None:
@@ -324,9 +336,10 @@ def listen():
                 print(f"You said: {text}")
                 return text
 
-            if _armed():
+            if armed_at_start or _armed():
                 _disarm()
                 wake_pending = False
+                armed_at_start = False
 
                 addressed, remainder = _split_wake(text)
                 command = remainder if addressed and remainder else text

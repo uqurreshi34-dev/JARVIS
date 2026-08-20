@@ -82,6 +82,11 @@ class VoskEngine:
         self._last_partial = ""
         self._quiet_blocks = 0
 
+    @property
+    def active(self):
+        """True while part-way through hearing something."""
+        return bool(self._last_partial)
+
     def _delay_for(self, partial):
         words = len(partial.split())
 
@@ -181,6 +186,11 @@ class SegmentingEngine:
         self._buffer = []
         self._speaking = False
         self._quiet_blocks = 0
+
+    @property
+    def active(self):
+        """True while capturing an utterance, before transcription runs."""
+        return self._speaking
 
     @staticmethod
     def _to_float(block):
