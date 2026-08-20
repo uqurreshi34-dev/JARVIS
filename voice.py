@@ -304,6 +304,12 @@ def listen():
                 _report_status()
                 continue
 
+            # Audio arrives continuously, so the queue rarely runs dry. Check
+            # the window on every block instead, or the HUD would sit on
+            # LISTENING long after the window had closed.
+            if not getattr(engine, "active", False):
+                _report_status()
+
             if waker and waker.AcceptWaveform(data):
                 heard = json.loads(waker.Result()).get("text", "")
 
