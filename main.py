@@ -9,7 +9,12 @@ from PyQt6.QtWidgets import QApplication
 from commands import handle_command, reminder_manager
 from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
 from speech import prewarm, set_amplitude_listener, speak
-from voice import arm_follow_up, is_armed, listen, set_wake_listener
+from voice import (
+    arm_follow_up,
+    listen,
+    set_status_listener,
+    set_wake_listener,
+)
 
 
 # Set True to print how long each stage takes. Also enable speech.TIMING.
@@ -128,6 +133,11 @@ class Assistant:
         speak(text)
         self._state(previous)
 
+    def _on_status(self, status):
+        """Called by the listener when it starts or stops accepting a
+        follow-up, including when the window expires mid-wait."""
+        self._state(LISTENING if status == "listening" else IDLE)
+
     def _on_wake(self):
         """Called when JARVIS hears his name with no command attached."""
         self._state(LISTENING)
@@ -137,6 +147,7 @@ class Assistant:
 
     def run(self):
         set_wake_listener(self._on_wake)
+        set_status_listener(self._on_status)
         reminder_manager.set_alert_listener(self._on_alert)
 
         self._say(_greeting())
@@ -146,9 +157,8 @@ class Assistant:
         threading.Thread(target=prewarm, daemon=True).start()
 
         while not self._stop.is_set():
-            # LISTENING while a follow-up is still accepted, STANDBY once the
-            # window closes and the wake word is needed again.
-            self._state(LISTENING if is_armed() else IDLE)
+            # The HUD state is driven by voice.set_status_listener, which
+            # fires when the follow-up window actually opens or expires.
             self._heard("")
             self._reply("")
 
