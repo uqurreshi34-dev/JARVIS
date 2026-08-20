@@ -1,23 +1,11 @@
-import os
 import re
 
-from dotenv import load_dotenv
-from groq import Groq
+from providers import chat
 
 
-load_dotenv()
-
-_api_key = os.getenv("GROQ_API_KEY")
-
-if not _api_key:
-    raise RuntimeError("GROQ_API_KEY is not configured.")
-
-_client = Groq(api_key=_api_key)
-
-# Shares the GROQ_MODEL setting with the command interpreter.
-_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
-
-_MAX_TOKENS = 220
+# Thinking models spend part of this budget on internal reasoning before
+# writing anything, so it needs headroom well beyond the spoken answer.
+_MAX_TOKENS = 900
 
 _SYSTEM_PROMPT = """
 You are JARVIS, a British AI assistant answering a spoken question.
@@ -50,23 +38,18 @@ def answer(question):
         return None
 
     try:
-        response = _client.chat.completions.create(
-            model=_MODEL,
-            temperature=0.3,
-            max_tokens=_MAX_TOKENS,
+        raw = chat(
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": question.strip()},
             ],
+            temperature=0.3,
+            max_tokens=_MAX_TOKENS,
+            reasoning_effort="low",
         )
 
     except Exception as error:
         print(f"[JARVIS] question lookup failed: {error}")
-        return None
-
-    try:
-        raw = response.choices[0].message.content or ""
-    except (AttributeError, IndexError):
         return None
 
     spoken = _for_speech(raw)

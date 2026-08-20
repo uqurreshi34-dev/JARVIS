@@ -26,7 +26,8 @@ ENDPOINT_MAX = 20.0
 # Many Vosk builds expose no endpointer controls. When the partial transcript
 # stops changing for this long, finalise it ourselves. Audio is still fed to
 # Vosk continuously; only the decision to close the utterance is ours.
-FORCE_ENDPOINT_SILENCE = 0.8
+# Lower is snappier; too low and it cuts you off mid-sentence.
+FORCE_ENDPOINT_SILENCE = 0.45
 
 # Set True to print how long Vosk takes to finalise an utterance.
 TIMING = False

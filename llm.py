@@ -1,23 +1,7 @@
 import json
-import os
 
-from dotenv import load_dotenv
-from groq import Groq
+from providers import chat
 
-
-load_dotenv()
-
-_api_key = os.getenv("GROQ_API_KEY")
-
-if not _api_key:
-    raise RuntimeError("GROQ_API_KEY is not configured.")
-
-_client = Groq(api_key=_api_key)
-
-# Groq's daily token limit is per model, so switching models gives a fresh
-# quota. gpt-oss-120b is Groq's recommended model and has its own allowance
-# separate from gpt-oss-20b. Override with GROQ_MODEL in .env.
-_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 _SYSTEM_PROMPT = """
 You are the command interpreter for a Windows voice assistant called JARVIS.
@@ -108,6 +92,94 @@ for volume or media, or for the time, weather, or system status.
 Use unknown for anything else.
 """
 
+_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "intent": {
+            "type": "string",
+            "enum": [
+                "open_application",
+                "close_application",
+                "open_website",
+                "open_project",
+                "close_project",
+                "list_projects",
+                "volume_up",
+                "volume_down",
+                "set_volume",
+                "get_volume",
+                "mute",
+                "unmute",
+                "toggle_mute",
+                "media_play_pause",
+                "media_next",
+                "media_previous",
+                "minimise_all",
+                "restore_all",
+                "set_reminder",
+                "list_reminders",
+                "cancel_reminders",
+                "take_screenshot",
+                "read_clipboard",
+                "copy_to_clipboard",
+                "clear_clipboard",
+                "get_time",
+                "get_weather",
+                "get_system_status",
+                "answer_question",
+                "unknown",
+            ],
+        },
+        "application": {"type": ["string", "null"]},
+        "website": {"type": ["string", "null"]},
+        "project": {"type": ["string", "null"]},
+        "amount": {"type": ["string", "number", "null"]},
+        "text": {"type": ["string", "null"]},
+        "unit": {"type": ["string", "null"]},
+    },
+    "required": [
+        "intent",
+        "application",
+        "website",
+        "project",
+        "amount",
+        "text",
+        "unit",
+    ],
+    "additionalProperties": False,
+}
+
+_FIELDS = ("intent", "application", "website", "project", "amount",
+           "text", "unit")
+
+
+def _parse(content):
+    """Turn the model's reply into a complete result dictionary."""
+    text = (content or "").strip()
+
+    # Some providers wrap JSON in markdown fences.
+    if text.startswith("```"):
+        text = text.strip("`")
+        text = text.split("\n", 1)[-1] if "\n" in text else text
+        text = text.removeprefix("json").strip()
+
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        print(f"[JARVIS] could not parse model reply: {text[:120]!r}")
+        return {field: None for field in _FIELDS} | {"intent": "unknown"}
+
+    if not isinstance(data, dict):
+        return {field: None for field in _FIELDS} | {"intent": "unknown"}
+
+    # Guarantee every field exists, whichever provider answered.
+    result = {field: data.get(field) for field in _FIELDS}
+
+    if not result["intent"]:
+        result["intent"] = "unknown"
+
+    return result
+
 
 class CommandInterpreter:
     def interpret(self, command, applications, projects=()):
@@ -121,84 +193,7 @@ class CommandInterpreter:
             for project in projects
         ) or "- (none found)"
 
-        response = _client.chat.completions.create(
-            model=_MODEL,
-            temperature=0,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "jarvis_command",
-                    "strict": True,
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "intent": {
-                                "type": "string",
-                                "enum": [
-                                    "open_application",
-                                    "close_application",
-                                    "open_website",
-                                    "open_project",
-                                    "close_project",
-                                    "list_projects",
-                                    "volume_up",
-                                    "volume_down",
-                                    "set_volume",
-                                    "get_volume",
-                                    "mute",
-                                    "unmute",
-                                    "toggle_mute",
-                                    "media_play_pause",
-                                    "media_next",
-                                    "media_previous",
-                                    "minimise_all",
-                                    "restore_all",
-                                    "set_reminder",
-                                    "list_reminders",
-                                    "cancel_reminders",
-                                    "take_screenshot",
-                                    "read_clipboard",
-                                    "copy_to_clipboard",
-                                    "clear_clipboard",
-                                    "get_time",
-                                    "get_weather",
-                                    "get_system_status",
-                                    "answer_question",
-                                    "unknown",
-                                ],
-                            },
-                            "application": {
-                                "type": ["string", "null"],
-                            },
-                            "website": {
-                                "type": ["string", "null"],
-                            },
-                            "project": {
-                                "type": ["string", "null"],
-                            },
-                            "amount": {
-                                "type": ["string", "number", "null"],
-                            },
-                            "text": {
-                                "type": ["string", "null"],
-                            },
-                            "unit": {
-                                "type": ["string", "null"],
-                            },
-                        },
-                        "required": [
-                            "intent",
-                            "application",
-                            "website",
-                            "project",
-                            "amount",
-                            "text",
-                            "unit",
-                        ],
-                        "additionalProperties": False,
-                    },
-                },
-            },
+        content = chat(
             messages=[
                 {
                     "role": "system",
@@ -216,8 +211,16 @@ class CommandInterpreter:
                     ),
                 },
             ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "jarvis_command",
+                    "strict": True,
+                    "schema": _SCHEMA,
+                },
+            },
+            temperature=0,
+            reasoning_effort="low",
         )
 
-        return json.loads(
-            response.choices[0].message.content
-        )
+        return _parse(content)

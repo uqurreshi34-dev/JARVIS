@@ -14,12 +14,8 @@ _FOLDER_NAME = "JARVIS"
 
 
 def _target_folder():
-    pictures = os.path.join(os.path.expanduser("~"), "Pictures")
-
-    if not os.path.isdir(pictures):
-        pictures = os.path.expanduser("~")
-
-    folder = os.path.join(pictures, _FOLDER_NAME)
+    """Screenshots live in a JARVIS folder in the user's home directory."""
+    folder = os.path.join(os.path.expanduser("~"), _FOLDER_NAME)
 
     try:
         os.makedirs(folder, exist_ok=True)
@@ -70,4 +66,4 @@ def describe_capture():
     if not path:
         return None
 
-    return "Screenshot saved to your Pictures folder, sir."
+    return "Screenshot saved to your JARVIS folder, sir."

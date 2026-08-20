@@ -367,7 +367,7 @@ def handle_command(command):
     website = result.get("website")
     project = result.get("project")
     amount = _to_number(result.get("amount"))
-    text = result.get("text")
+    text = _trim_filler(_normalise(result.get("text") or "")) or None
     unit = result.get("unit")
 
     if intent == "open_application" and application:
