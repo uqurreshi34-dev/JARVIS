@@ -30,7 +30,6 @@ except ImportError:
 FOLDER_NAME = "JARVIS"
 
 TEXT_SUFFIXES = (".txt", ".md", ".csv", ".log", ".json")
-READABLE_SUFFIXES = TEXT_SUFFIXES + (".docx",)
 
 # Spoken format words mapped to a file extension.
 FORMATS = {

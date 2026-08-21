@@ -28,7 +28,7 @@ _CACHE_DIR = os.path.join(tempfile.gettempdir(), "jarvis_tts_cache")
 _MEMORY_LIMIT = 48
 
 # Set True to print how long synthesis and playback take.
-TIMING = True
+TIMING = False
 
 # Incremented after every completed utterance so the listener can tell that
 # JARVIS has spoken, and discard whatever the microphone picked up.
@@ -98,7 +98,7 @@ class SpeechEngine:
                 pass
 
     def speak(self, text):
-        print(f"JARVIS: {text}")
+        print(f"JARVIS: {text}", flush=True)
 
         _priority.set()
 
@@ -179,7 +179,8 @@ class SpeechEngine:
             source = "synthesised" if synthesised else "disk cache"
             print(
                 f"[timing] {source} in "
-                f"{time.monotonic() - started:.2f}s: {text[:40]!r}"
+                f"{time.monotonic() - started:.2f}s: {text[:40]!r}",
+                flush=True,
             )
 
         return data, samplerate
@@ -233,7 +234,8 @@ class SpeechEngine:
                 print(
                     f"[timing] audio device opened in "
                     f"{time.monotonic() - opening:.2f}s, "
-                    f"playing {total / samplerate:.2f}s of speech"
+                    f"playing {total / samplerate:.2f}s of speech",
+                    flush=True,
                 )
 
             playing = time.monotonic()

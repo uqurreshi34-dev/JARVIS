@@ -598,17 +598,6 @@ _CREATE_FILE_PLAIN = re.compile(
     r"(?:called|named|for)\s+(.+)$"
 )
 
-_READ_FILE = re.compile(
-    r"^(?:read|open|show me|whats in|what is in)\s+"
-    r"(?:my\s+|the\s+)?(?:file\s+)?(?:called\s+|named\s+)?(.+?)"
-    r"(?:\s+file)?$"
-)
-
-_COPY_FILE = re.compile(
-    r"^(?:copy|duplicate)\s+(?:my\s+|the\s+)?(?:file\s+)?(.+?)"
-    r"(?:\s+(?:to|into|as)\s+(.+))?$"
-)
-
 _ADD_TO_FILE = re.compile(
     rf"^{_ADD_VERBS}\s+(.+?)\s+{_TO_WORDS}\s+(?:my\s+|the\s+)?(.+?)\s+file$"
 )

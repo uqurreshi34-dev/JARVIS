@@ -20,7 +20,7 @@ SAMPLE_RATE = transcriber.SAMPLE_RATE
 BLOCK_SIZE = 4000
 
 # Set True to print how long transcription takes.
-TIMING = True
+TIMING = False
 
 # Reject a Vosk result below this average word confidence. The wake word is
 # what guards against stray speech, so this only needs to catch outright

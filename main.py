@@ -19,8 +19,9 @@ from voice import (
 )
 
 
-# Set True to print how long each stage takes. Also enable speech.TIMING.
-TIMING = True
+# Set True to print how long each stage takes. Also enable the TIMING flags
+# in speech.py, voice.py and transcriber.py.
+TIMING = False
 
 # Saying "Done, sir." after every action roughly doubles the talking. The
 # window opening is its own confirmation, so this is off by default.
@@ -254,8 +255,6 @@ def main():
     set_level_listener(hud.level_changed.emit)
 
     assistant = Assistant(hud)
-
-    # Reminders fire on their own thread and speak through the assistant.
 
     hud.shutdown.connect(lambda: QTimer.singleShot(400, app.quit))
     hud.closed.connect(assistant.stop)

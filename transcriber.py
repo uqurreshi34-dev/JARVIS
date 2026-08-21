@@ -15,11 +15,20 @@ does not report one.
 
 import json
 import os
+import time
 from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
 from dotenv import load_dotenv
+
+import io
+import wave
+
+from openai import OpenAI
+from vosk import KaldiRecognizer
+import whisper
+from faster_whisper import WhisperModel
 
 
 load_dotenv()
@@ -34,6 +43,9 @@ ENGINE = (os.getenv("STT_ENGINE") or "vosk").strip().casefold()
 # base.en is a good balance. small.en is more accurate and roughly twice the
 # work; tiny.en is faster and noticeably worse.
 WHISPER_MODEL = os.getenv("WHISPER_MODEL") or "base.en"
+
+# Set True to report how long each utterance took to capture.
+TIMING = False
 
 
 # Whisper guesses proper nouns badly unless told they exist, rendering
@@ -62,16 +74,12 @@ FORCE_ENDPOINT_SILENCE = 0.45
 SHORT_UTTERANCE_SILENCE = 1.0
 PARTIAL_UTTERANCE_SILENCE = 0.7
 
-# Seconds of audio per block, used to convert block counts into time.
-_BLOCK_SECONDS = None
-
 
 class VoskEngine:
     name = "vosk"
     supports_grammar = True
 
     def __init__(self, model, block_seconds):
-        from vosk import KaldiRecognizer
 
         self._model = model
         self._make = KaldiRecognizer
@@ -169,7 +177,19 @@ _PRE_ROLL_BLOCKS = 3
 # Silence that ends an utterance, and a ceiling so a noisy room cannot buffer
 # forever. Shorter silence means less waiting before transcription starts.
 _END_SILENCE_SECONDS = 0.55
-_MAX_UTTERANCE_SECONDS = 15.0
+
+# An utterance is over when the level falls to this fraction of its own peak.
+# Judging against the peak rather than a fixed threshold means background
+# noise cannot keep the recording open indefinitely.
+_END_FRACTION = 0.30
+
+# How quickly the room's noise floor is learned, and how much the level is
+# smoothed. Both trade responsiveness against stability.
+_FLOOR_ALPHA = 0.25
+_LEVEL_ALPHA = 0.45
+# Commands are short. If the end of speech is somehow missed, this caps how
+# long JARVIS can sit recording before giving up and transcribing what it has.
+_MAX_UTTERANCE_SECONDS = 7.0
 _MIN_UTTERANCE_SECONDS = 0.3
 
 
@@ -190,12 +210,17 @@ class SegmentingEngine:
         self._speaking = False
         self._quiet_blocks = 0
         self._noise_floor = _MIN_THRESHOLD
+        self._peak = 0.0
+        self._started = None
+        self._smoothed = 0.0
 
     def reset(self):
         self._pre_roll.clear()
         self._buffer = []
         self._speaking = False
         self._quiet_blocks = 0
+        self._peak = 0.0
+        self._started = None
 
     @property
     def active(self):
@@ -208,30 +233,49 @@ class SegmentingEngine:
 
     def feed(self, block):
         samples = self._to_float(block)
-        level = float(np.sqrt(np.mean(np.square(samples)))
-                      ) if len(samples) else 0.0
+        raw = float(np.sqrt(np.mean(np.square(samples)))
+                    ) if len(samples) else 0.0
+
+        # Smooth the level: a single loud block of background noise should
+        # not reset the silence counter and hold the recording open.
+        self._smoothed = (
+            (1 - _LEVEL_ALPHA) * self._smoothed + _LEVEL_ALPHA * raw
+        )
+        level = self._smoothed
 
         threshold = max(self._noise_floor * _NOISE_MARGIN, _MIN_THRESHOLD)
-        loud = level > threshold
 
         if not self._speaking:
             # Track the room while nothing is being said.
-            self._noise_floor = 0.95 * self._noise_floor + 0.05 * level
+            self._noise_floor = (
+                (1 - _FLOOR_ALPHA) * self._noise_floor + _FLOOR_ALPHA * level
+            )
             self._pre_roll.append(samples)
 
-            if loud:
+            if level > threshold:
                 self._speaking = True
                 self._quiet_blocks = 0
+                self._peak = level
+                self._started = time.monotonic()
                 self._buffer = list(self._pre_roll)
 
             return None
 
         self._buffer.append(samples)
+        self._peak = max(self._peak, level)
 
-        if loud:
-            self._quiet_blocks = 0
-        else:
+        # Ending on a fixed threshold fails in a noisy room: the level never
+        # returns below it, so the utterance runs to the ceiling and JARVIS
+        # sits recording in silence. Instead, close when the level falls back
+        # most of the way from this utterance's peak toward the room's own
+        # noise floor, which works at any background level.
+        floor = self._noise_floor
+        quiet = level < floor + (self._peak - floor) * _END_FRACTION
+
+        if quiet:
             self._quiet_blocks += 1
+        else:
+            self._quiet_blocks = 0
 
         quiet_seconds = self._quiet_blocks * self._block_seconds
         spoken_seconds = len(self._buffer) * self._block_seconds
@@ -240,12 +284,20 @@ class SegmentingEngine:
             return self._finish()
 
         if spoken_seconds >= _MAX_UTTERANCE_SECONDS:
+            print("[JARVIS] utterance hit the length limit")
             return self._finish()
 
         return None
 
     def _finish(self):
         audio = np.concatenate(self._buffer) if self._buffer else np.array([])
+
+        if TIMING and self._started:
+            print(
+                f"[timing] captured {len(audio) / SAMPLE_RATE:.2f}s of audio "
+                f"over {time.monotonic() - self._started:.2f}s",
+                flush=True,
+            )
 
         self.reset()
 
@@ -279,8 +331,6 @@ class LocalWhisperEngine(SegmentingEngine):
     def __init__(self, block_seconds):
         super().__init__(block_seconds)
 
-        from faster_whisper import WhisperModel
-
         print(f"[JARVIS] loading Whisper model {WHISPER_MODEL}...")
 
         self._model = WhisperModel(
@@ -313,8 +363,6 @@ class OpenAIWhisperEngine(SegmentingEngine):
 
     def __init__(self, block_seconds):
         super().__init__(block_seconds)
-
-        import whisper
 
         print(f"[JARVIS] loading local Whisper model {WHISPER_MODEL}...")
 
@@ -355,11 +403,6 @@ class GroqWhisperEngine(SegmentingEngine):
 
     def __init__(self, block_seconds):
         super().__init__(block_seconds)
-
-        import io
-        import wave
-
-        from openai import OpenAI
 
         self._io = io
         self._wave = wave

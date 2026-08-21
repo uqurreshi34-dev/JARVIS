@@ -52,9 +52,8 @@ media_play_pause for play, pause, or resume.
 media_next to skip forward a track.
 media_previous to go back a track.
 
-Leave "amount" null for every intent except set_volume and set_timer. When you
-do set it, give plain digits only, such as 40. Never write the word null as
-text. Leave "text" null for every intent except set_timer.
+Leave "amount" null except for set_volume and set_reminder. When you do set
+it, give plain digits only, such as 40. Never write the word null as text.
 
 Use minimise_all when the user wants all windows minimised or the desktop
 shown. Use restore_all when the user wants those windows brought back.
@@ -75,7 +74,8 @@ Use append_file to add a line to an existing file: the line goes in "text"
 and the file name in "project".
 Use read_file when the user wants a file read back, name in "text".
 Use copy_file to duplicate a file: source in "text", new name in "project".
-Use list_files when the user asks what files they have.
+Use count_files when the user asks how many files they have.
+Use list_files when they want the names read out.
 All files live in one JARVIS folder, so never include a path.
 
 Use make_note when the user wants something written down or remembered as a
@@ -143,6 +143,7 @@ _SCHEMA = {
                 "read_file",
                 "copy_file",
                 "list_files",
+                "count_files",
                 "make_note",
                 "read_notes",
                 "clear_notes",
