@@ -373,6 +373,47 @@ def describe_listing_named(limit=4):
     return describe_listing(limit=limit, names=True)
 
 
+# Signals that on their own strongly imply code.
+_CODE_STRONG = (
+    "function ", "const ", "=>", "def ", "class ", "#include", "<?php",
+    "console.log", "return ", "import ", "async ", "await ", "public ",
+    "private ", "};", "();", "()", "SELECT ", "INSERT ", "UPDATE ",
+)
+
+# Weaker signals, which need company to count.
+_CODE_WEAK = (
+    "let ", "var ", "if (", "for (", "while (", "print(", "{", "}",
+    "==", "!=", "&&", "||", "self.", "this.", "FROM ", "WHERE ",
+)
+
+# Above this share of symbols the file is treated as code regardless.
+_SYMBOL_SHARE = 0.12
+
+
+def looks_like_code(text):
+    """True when reading this aloud would be gibberish."""
+    sample = text[:2000]
+    stripped = sample.strip()
+
+    if not stripped:
+        return False
+
+    # JSON has few keywords but unmistakable structure.
+    if stripped[0] in "{[" and stripped[-1] in "}]" and '":' in sample:
+        return True
+
+    strong = sum(1 for hint in _CODE_STRONG if hint in sample)
+    weak = sum(1 for hint in _CODE_WEAK if hint in sample)
+
+    # One strong signal plus any support, or several weak ones together.
+    if strong >= 2 or (strong and weak) or weak >= 4:
+        return True
+
+    symbols = sum(1 for ch in sample if ch in "{}[]()<>;=/\\|*&^%$#@~`_")
+
+    return symbols / len(sample) > _SYMBOL_SHARE
+
+
 def describe_read(name):
     """Spoken rendering of a file's contents."""
     content = read(name)
@@ -385,6 +426,15 @@ def describe_read(name):
 
     if not tidied:
         return f"{label} is empty, sir."
+
+    if looks_like_code(content):
+        lines = len(content.splitlines())
+        words = len(tidied.split())
+
+        return (
+            f"{label} looks like code, sir: {lines} lines, "
+            f"{words} words. I won't read it aloud."
+        )
 
     if len(tidied) <= _SPEAK_LIMIT:
         return f"{label} says: {tidied}"
