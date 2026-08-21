@@ -96,9 +96,13 @@ def resolve(name, default_suffix=".txt"):
 
 
 def exists(name, default_suffix=".txt"):
+    """True when a file of this name exists, whatever its extension."""
     path = resolve(name, default_suffix)
 
-    return bool(path and os.path.exists(path))
+    if path and os.path.exists(path):
+        return True
+
+    return find_existing(name) is not None
 
 
 def unique_path(path):
@@ -175,23 +179,53 @@ def write(name, content="", default_suffix=".txt", overwrite=False):
     return path
 
 
+KNOWN_SUFFIXES = (".txt", ".md", ".docx", ".pdf", ".csv", ".log", ".json")
+
+
+def find_existing(name):
+    """Path of a file matching this spoken name, whatever its extension.
+
+    "business" should find business.docx rather than inventing business.txt.
+    """
+    exact = resolve(name)
+
+    if exact and os.path.exists(exact):
+        return exact
+
+    stem = os.path.splitext(safe_name(name) or "")[0]
+
+    if not stem:
+        return None
+
+    for suffix in KNOWN_SUFFIXES:
+        candidate = resolve(f"{stem}{suffix}")
+
+        if candidate and os.path.exists(candidate):
+            return candidate
+
+    return None
+
+
 def append(name, content, default_suffix=".txt"):
-    """Add a line to an existing text file, creating it if needed."""
-    path = resolve(name, default_suffix)
+    """Add a line to an existing file, creating a text file if none exists."""
+    path = find_existing(name) or resolve(name, default_suffix)
 
     if not path:
         return None
 
-    if os.path.splitext(path)[1].casefold() not in TEXT_SUFFIXES:
-        print("[JARVIS] can only append to plain text files")
+    suffix = os.path.splitext(path)[1].casefold()
+
+    if suffix == ".docx":
+        return _append_docx(path, content)
+
+    if suffix not in TEXT_SUFFIXES:
+        print(f"[JARVIS] cannot append to {suffix} files")
         return None
 
     try:
         # Existing content may not end with a newline, which would run the
         # two lines together.
-        needs_break = (
-            os.path.exists(path) and os.path.getsize(path) > 0
-        )
+        needs_break = os.path.exists(path) and os.path.getsize(path) > 0
 
         if needs_break:
             with open(path, "rb") as handle:
@@ -211,11 +245,29 @@ def append(name, content, default_suffix=".txt"):
     return path
 
 
+def _append_docx(path, content):
+    """Add a paragraph to an existing Word document."""
+    if not _DOCX:
+        print("[JARVIS] python-docx is not installed")
+        return None
+
+    try:
+        document = Document(path)
+        document.add_paragraph(content)
+        document.save(path)
+
+    except Exception as error:
+        print(f"[JARVIS] could not append to {path}: {error}")
+        return None
+
+    return path
+
+
 def read(name):
     """Return a file's text, or None if it cannot be read."""
-    path = resolve(name)
+    path = find_existing(name)
 
-    if not path or not os.path.exists(path):
+    if not path:
         return None
 
     suffix = os.path.splitext(path)[1].casefold()
@@ -244,9 +296,9 @@ def read(name):
 
 def copy(source, destination=None):
     """Copy a file within the folder. Returns the new path, or None."""
-    source_path = resolve(source)
+    source_path = find_existing(source)
 
-    if not source_path or not os.path.exists(source_path):
+    if not source_path:
         print(f"[JARVIS] no file named {source!r}")
         return None
 
