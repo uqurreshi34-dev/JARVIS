@@ -68,6 +68,16 @@ null. For "remind me in ten minutes to call mum", amount is 600, unit is
 Use list_reminders when the user asks what timers or reminders are running.
 Use cancel_reminders when the user wants timers or reminders cancelled.
 
+Use create_file when the user wants a new file made. Put the file name in
+"text" and the extension in "unit" (".txt", ".md", ".docx", ".pdf", ".csv").
+If they also say what it should contain, put that in "website".
+Use append_file to add a line to an existing file: the line goes in "text"
+and the file name in "project".
+Use read_file when the user wants a file read back, name in "text".
+Use copy_file to duplicate a file: source in "text", new name in "project".
+Use list_files when the user asks what files they have.
+All files live in one JARVIS folder, so never include a path.
+
 Use make_note when the user wants something written down or remembered as a
 note, and put the note itself in "text".
 Use read_notes when the user asks what their notes say.
@@ -128,6 +138,11 @@ _SCHEMA = {
                 "read_clipboard",
                 "copy_to_clipboard",
                 "clear_clipboard",
+                "create_file",
+                "append_file",
+                "read_file",
+                "copy_file",
+                "list_files",
                 "make_note",
                 "read_notes",
                 "clear_notes",

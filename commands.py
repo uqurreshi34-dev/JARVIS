@@ -20,7 +20,7 @@ from actions.desktop import (
 from actions.knowledge import answer
 from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
-from actions import clipboard, notes
+from actions import clipboard, files, notes
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
@@ -143,6 +143,9 @@ _FAST_PHRASES = (
      "get_system_status"),
     (("whats on my clipboard", "what is on my clipboard",
       "read my clipboard", "check my clipboard"), "read_clipboard"),
+    (("list my files", "what files do i have", "whats in my folder",
+      "what is in my jarvis folder", "show me my files",
+      "whats in my jarvis folder"), "list_files"),
     (("read my notes", "what are my notes", "read back my notes",
       "whats on my notes", "check my notes", "my notes",
       "whats in my notes", "what is in my notes", "whats in my notes file",
@@ -580,6 +583,56 @@ def _original_case(command, payload):
     return original[start:start + len(payload)]
 
 
+_FILE_FORMAT = r"(?:a\s+|an\s+)?(text|txt|plain text|markdown|md|word|word document|word doc|doc|docx|pdf|pdf document|csv|spreadsheet)\s*(?:file|document)?"
+
+_CREATE_FILE = re.compile(
+    rf"^(?:create|make|new|start)\s+{_FILE_FORMAT}\s+"
+    r"(?:called|named|for)\s+(.+)$"
+)
+
+_CREATE_FILE_PLAIN = re.compile(
+    r"^(?:create|make|new|start)\s+(?:a\s+|an\s+)?file\s+"
+    r"(?:called|named|for)\s+(.+)$"
+)
+
+_READ_FILE = re.compile(
+    r"^(?:read|open|show me|whats in|what is in)\s+"
+    r"(?:my\s+|the\s+)?(?:file\s+)?(?:called\s+|named\s+)?(.+?)"
+    r"(?:\s+file)?$"
+)
+
+_COPY_FILE = re.compile(
+    r"^(?:copy|duplicate)\s+(?:my\s+|the\s+)?(?:file\s+)?(.+?)"
+    r"(?:\s+(?:to|into|as)\s+(.+))?$"
+)
+
+_ADD_TO_FILE = re.compile(
+    rf"^{_ADD_VERBS}\s+(.+?)\s+{_TO_WORDS}\s+(?:my\s+|the\s+)?(.+?)\s+file$"
+)
+
+
+def _file_request(text):
+    """Resolve a file command locally, or return None."""
+    match = _CREATE_FILE.match(text)
+
+    if match:
+        suffix = files.FORMATS.get(match.group(1), ".txt")
+
+        return ("create", match.group(2).strip(), suffix, None)
+
+    match = _CREATE_FILE_PLAIN.match(text)
+
+    if match:
+        return ("create", match.group(1).strip(), ".txt", None)
+
+    match = _ADD_TO_FILE.match(text)
+
+    if match:
+        return ("append", match.group(2).strip(), None, match.group(1).strip())
+
+    return None
+
+
 def _blank_result(intent, **fields):
     result = {
         "intent": intent, "application": None, "website": None,
@@ -620,6 +673,22 @@ def _fast_path(command):
 
     if note:
         return _blank_result("make_note", text=_original_case(command, note))
+
+    request = _file_request(text)
+
+    if request:
+        kind, name, suffix, content = request
+
+        if kind == "create":
+            return _blank_result(
+                "create_file", text=_original_case(command, name),
+                unit=suffix,
+            )
+
+        return _blank_result(
+            "append_file", text=_original_case(command, content),
+            project=_original_case(command, name),
+        )
 
     payload = _copy_request(text)
 
@@ -684,7 +753,72 @@ def _is_rate_limit(error):
     return "rate_limit" in text or "429" in text
 
 
+_YES = frozenset({
+    "yes", "yeah", "yep", "yes please", "go ahead", "do it", "confirm",
+    "confirmed", "affirmative", "sure", "ok", "okay", "please do",
+    "overwrite", "replace it", "yes do it",
+})
+
+_NO = frozenset({
+    "no", "nope", "cancel", "stop", "forget it", "never mind",
+    "no thanks", "dont", "do not", "leave it", "negative", "abort",
+})
+
+# An action waiting on a spoken yes or no.
+_pending = None
+
+
+def _confirm(intent, question, action):
+    """Ask before doing something, and remember what to do if approved."""
+    global _pending
+
+    _pending = {"intent": intent, "action": action}
+
+    return {
+        "kind": "query",
+        "intent": intent,
+        "response": None,
+        "action": lambda: question,
+    }
+
+
+def _resolve_pending(text):
+    """Handle a yes or no reply to an earlier question, or return None."""
+    global _pending
+
+    if not _pending:
+        return None
+
+    answer = _normalise(text)
+
+    if answer in _YES:
+        pending = _pending
+        _pending = None
+
+        return {
+            "kind": "action",
+            "intent": pending["intent"],
+            "response": "Very good, sir.",
+            "action": pending["action"],
+        }
+
+    if answer in _NO:
+        _pending = None
+
+        return _query("cancelled", lambda: "Cancelled, sir.")
+
+    # Anything else is a new command, so the question lapses.
+    _pending = None
+
+    return None
+
+
 def handle_command(command):
+    answered = _resolve_pending(command)
+
+    if answered is not None:
+        return answered
+
     result = _fast_path(command)
 
     if result is not None:
@@ -793,6 +927,47 @@ def handle_command(command):
             "Clearing your notes, sir.",
             lambda: notes.clear() >= 0,
         )
+
+    if intent == "create_file" and text:
+        suffix = unit or ".txt"
+        body = result.get("website") or ""
+
+        if files.exists(text, suffix):
+            name = files.safe_name(text, suffix)
+
+            return _confirm(
+                intent,
+                f"{name} already exists, sir. Shall I overwrite it?",
+                lambda: files.write(
+                    text, body, default_suffix=suffix, overwrite=True
+                ) is not None,
+            )
+
+        return _action(
+            intent,
+            f"Creating {files.safe_name(text, suffix)}, sir.",
+            lambda: files.write(text, body, default_suffix=suffix) is not None,
+        )
+
+    if intent == "append_file" and text and project:
+        return _action(
+            intent,
+            "Added, sir.",
+            lambda: files.append(project, text) is not None,
+        )
+
+    if intent == "read_file" and text:
+        return _query(intent, lambda: files.describe_read(text))
+
+    if intent == "copy_file" and text:
+        return _action(
+            intent,
+            "Copying, sir.",
+            lambda: files.copy(text, project) is not None,
+        )
+
+    if intent == "list_files":
+        return _query(intent, files.describe_listing)
 
     if intent == "read_clipboard":
         return _query(intent, clipboard.describe)
