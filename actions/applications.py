@@ -253,26 +253,47 @@ class ApplicationManager:
         if not matches:
             return False
 
-        for record in matches.values():
-            for hwnd in record["windows"]:
-                self._post_close(hwnd)
+        targets = [
+            hwnd for record in matches.values() for hwnd in record["windows"]
+        ]
 
-        initial = set(matches)
-        remaining = self._wait_for_exit(initial, _CLOSE_TIMEOUT)
+        for hwnd in targets:
+            self._post_close(hwnd)
 
+        # Success is the window going away, not the process exiting. Packaged
+        # apps run inside a shared host that outlives them, so waiting for
+        # the process would report failure on every UWP application.
+        gone = self._wait_for_windows(targets, _CLOSE_TIMEOUT)
+
+        if gone:
+            return True
+
+        # The windows are still there, so fall back to ending the processes
+        # that matched on identity rather than on a window title.
         escalated = False
 
-        for pid in list(remaining):
-            if matches[pid]["strong"]:
+        for pid, record in matches.items():
+            if record["strong"] and psutil.pid_exists(pid):
                 self._terminate_tree(pid)
                 escalated = True
 
-        if escalated:
-            remaining = self._wait_for_exit(remaining, _TERMINATE_TIMEOUT)
+        if not escalated:
+            return False
 
-        closed = initial - remaining
+        return self._wait_for_windows(targets, _TERMINATE_TIMEOUT)
 
-        return bool(closed) or escalated
+    @staticmethod
+    def _wait_for_windows(handles, timeout):
+        """True once every window has closed, or False on timeout."""
+        deadline = time.monotonic() + timeout
+
+        while time.monotonic() < deadline:
+            if not any(win32gui.IsWindow(hwnd) for hwnd in handles):
+                return True
+
+            time.sleep(_POLL_INTERVAL)
+
+        return not any(win32gui.IsWindow(hwnd) for hwnd in handles)
 
     def _match_processes(self, app):
         windows_by_pid = {}

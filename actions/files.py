@@ -388,11 +388,11 @@ def spoken_name(filename):
     return f"{spoken} {kind}".strip() if kind else spoken
 
 
-def describe_listing(limit=4, names=False):
+def describe_listing(limit=4, names=True):
     """Spoken summary of what is in the folder.
 
-    Terse by default: reading filenames aloud takes several seconds, so the
-    count is given and the names only on request.
+    The true total is always given. Names are read for the most recent few,
+    since reading fifty filenames aloud would be unbearable.
     """
     entries = listing()
 
@@ -401,7 +401,7 @@ def describe_listing(limit=4, names=False):
 
     if not names:
         if len(entries) == 1:
-            return f"One file, sir: {spoken_name(entries[0])}."
+            return "One file, sir."
 
         return f"You have {len(entries)} files, sir."
 
@@ -415,9 +415,14 @@ def describe_listing(limit=4, names=False):
         return f"You have {len(entries)} files, sir: {listed}."
 
     return (
-        f"You have {len(entries)} files, sir. The {len(shown)} most recent "
-        f"are {listed}."
+        f"You have {len(entries)} files, sir. I won't list them all, but "
+        f"your {len(shown)} most recent are {listed}."
     )
+
+
+def describe_listing_count():
+    """Just the number, for "how many files do I have"."""
+    return describe_listing(names=False)
 
 
 def describe_listing_named(limit=4):
