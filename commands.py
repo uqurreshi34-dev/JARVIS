@@ -601,7 +601,8 @@ _CREATE_FILE_PLAIN = re.compile(
 )
 
 _ADD_TO_FILE = re.compile(
-    rf"^{_ADD_VERBS}\s+(.+?)\s+{_TO_WORDS}\s+(?:my\s+|the\s+)?(.+?)\s+file$"
+    rf"^{_ADD_VERBS}\s+(.+?)\s+{_TO_WORDS}\s+(?:my\s+|the\s+)?(.+?)"
+    r"(?:\s+file)?$"
 )
 
 
@@ -645,13 +646,32 @@ def _file_target(name):
 
 
 def _read_file_request(text):
-    """Resolve a request to read a file, or None."""
+    """Resolve a request to read a file.
+
+    Returns a name, or None. When the phrase says "file" outright the name is
+    returned even if no such file exists, so JARVIS says it cannot find it
+    rather than fuzzy-matching to some other command.
+    """
     match = _READ_FILE_EXPLICIT.match(text)
 
     if not match:
         return None
 
-    return _file_target(match.group(1))
+    name = (match.group(1) or "").strip()
+
+    if not name or name in _NOT_FILENAMES:
+        return None
+
+    existing = _file_target(name)
+
+    if existing:
+        return existing
+
+    # "read my bugs file" is unambiguous even when bugs does not exist.
+    if re.search(r"\bfiles?\b", text) and not text.endswith("my files"):
+        return name
+
+    return None
 
 
 def _copy_file_request(text):
@@ -686,7 +706,14 @@ def _file_request(text):
     match = _ADD_TO_FILE.match(text)
 
     if match:
-        return ("append", match.group(2).strip(), None, match.group(1).strip())
+        name = match.group(2).strip()
+
+        # Saying "file" makes it explicit; otherwise the name has to match a
+        # real file, so "add milk to my notes" still goes to the notes skill.
+        explicit = text.endswith(" file")
+
+        if explicit or _file_target(name):
+            return ("append", name, None, match.group(1).strip())
 
     return None
 
