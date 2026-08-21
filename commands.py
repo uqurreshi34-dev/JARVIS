@@ -553,8 +553,10 @@ def _copy_request(text):
         payload = _TRAILING_CLIPBOARD.sub("", payload).strip()
 
         # "copy that" and similar need context only the LLM might infer.
-        if payload and payload not in ("this", "that", "it", "clipboard"):
-            return payload
+        if not payload or payload in ("this", "that", "it", "clipboard"):
+            continue
+
+        return payload
 
     return None
 
@@ -601,6 +603,70 @@ _CREATE_FILE_PLAIN = re.compile(
 _ADD_TO_FILE = re.compile(
     rf"^{_ADD_VERBS}\s+(.+?)\s+{_TO_WORDS}\s+(?:my\s+|the\s+)?(.+?)\s+file$"
 )
+
+
+# Reading and copying are gated on the file existing, so "read my notes" and
+# "open chrome" can never be mistaken for a file request. The word "file"
+# makes it explicit; without it, the name must match something on disk.
+_READ_FILE_EXPLICIT = re.compile(
+    r"^(?:read|show me|open|display)\s+(?:me\s+)?(?:my|the)?\s*"
+    r"(?:file\s+)?(?:called\s+|named\s+)?(.+?)(?:\s+file)?$"
+)
+
+_COPY_FILE = re.compile(
+    r"^(?:copy|duplicate|back up|backup)\s+(?:my|the)?\s*"
+    r"(?:file\s+)?(.+?)(?:\s+file)?"
+    r"(?:\s+(?:to|as|into)\s+(?:a\s+)?(?:file\s+)?(?:called\s+|named\s+)?(.+?))?$"
+)
+
+# Never treated as filenames, since they belong to other skills.
+_NOT_FILENAMES = frozenset({
+    "notes", "note", "clipboard", "files", "file", "my notes",
+    "my clipboard", "my files", "them", "it", "this", "that",
+})
+
+
+def _file_target(name):
+    """A filename that exists in the folder, or None."""
+    name = (name or "").strip()
+
+    if not name or name in _NOT_FILENAMES:
+        return None
+
+    if files.exists(name):
+        return name
+
+    # Spoken names lose their extension, so try the known formats too.
+    for suffix in (".txt", ".md", ".docx", ".pdf", ".csv"):
+        if files.exists(name, suffix):
+            return name
+
+    return None
+
+
+def _read_file_request(text):
+    """Resolve a request to read a file, or None."""
+    match = _READ_FILE_EXPLICIT.match(text)
+
+    if not match:
+        return None
+
+    return _file_target(match.group(1))
+
+
+def _copy_file_request(text):
+    """Resolve a request to copy a file, returning (source, target) or None."""
+    match = _COPY_FILE.match(text)
+
+    if not match:
+        return None
+
+    source = _file_target(match.group(1))
+
+    if not source:
+        return None
+
+    return source, (match.group(2) or "").strip() or None
 
 
 def _file_request(text):
@@ -660,6 +726,18 @@ def _fast_path(command):
         return _blank_result(
             "set_reminder", amount=seconds, unit="seconds", text=message
         )
+
+    target = _read_file_request(text)
+
+    if target:
+        return _blank_result("read_file", text=target)
+
+    copy_request = _copy_file_request(text)
+
+    if copy_request:
+        source, destination = copy_request
+
+        return _blank_result("copy_file", text=source, project=destination)
 
     note = _note_request(text)
 

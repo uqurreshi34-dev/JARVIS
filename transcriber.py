@@ -22,14 +22,6 @@ from dataclasses import dataclass
 import numpy as np
 from dotenv import load_dotenv
 
-import io
-import wave
-
-from openai import OpenAI
-from vosk import KaldiRecognizer
-import whisper
-from faster_whisper import WhisperModel
-
 
 load_dotenv()
 
@@ -80,6 +72,7 @@ class VoskEngine:
     supports_grammar = True
 
     def __init__(self, model, block_seconds):
+        from vosk import KaldiRecognizer
 
         self._model = model
         self._make = KaldiRecognizer
@@ -331,6 +324,8 @@ class LocalWhisperEngine(SegmentingEngine):
     def __init__(self, block_seconds):
         super().__init__(block_seconds)
 
+        from faster_whisper import WhisperModel
+
         print(f"[JARVIS] loading Whisper model {WHISPER_MODEL}...")
 
         self._model = WhisperModel(
@@ -363,6 +358,8 @@ class OpenAIWhisperEngine(SegmentingEngine):
 
     def __init__(self, block_seconds):
         super().__init__(block_seconds)
+
+        import whisper
 
         print(f"[JARVIS] loading local Whisper model {WHISPER_MODEL}...")
 
@@ -403,6 +400,11 @@ class GroqWhisperEngine(SegmentingEngine):
 
     def __init__(self, block_seconds):
         super().__init__(block_seconds)
+
+        import io
+        import wave
+
+        from openai import OpenAI
 
         self._io = io
         self._wave = wave
