@@ -30,12 +30,6 @@ _STOP_TOKENS = frozenset({
 
 _MIN_TOKEN_LENGTH = 3
 
-# Browsers show the current page in their title, so the title can never be
-# used to decide which application a window belongs to.
-_BROWSER_PROCESSES = frozenset({
-    "chrome", "msedge", "firefox", "opera", "brave", "vivaldi",
-    "iexplore", "safari", "chromium", "duckduckgo",
-})
 
 _CLOSE_TIMEOUT = 5.0
 _TERMINATE_TIMEOUT = 3.0
@@ -300,40 +294,61 @@ class ApplicationManager:
         titles_by_pid = {}
 
         for hwnd, pid, title in self._enumerate_windows():
-            windows_by_pid.setdefault(pid, []).append(hwnd)
+            windows_by_pid.setdefault(pid, []).append((hwnd, title))
 
             if title:
                 titles_by_pid.setdefault(pid, []).append(title)
 
         matches = {}
 
-        for pid, hwnds in windows_by_pid.items():
+        for pid, entries in windows_by_pid.items():
             titles = titles_by_pid.get(pid, [])
-            strength = self._match_strength(app, pid, titles)
+            identity = self._identity_match(app, pid)
 
-            if strength is None:
+            if identity:
+                titled = [hwnd for hwnd, title in entries if title]
+
+                matches[pid] = {
+                    "windows": titled or [hwnd for hwnd, _ in entries],
+                    "strong": True,
+                }
+
                 continue
 
-            titled = [hwnd for hwnd in hwnds if win32gui.GetWindowText(hwnd)]
+            # No identity match, so fall back to window titles. Only the
+            # windows that actually match are closed, never the whole
+            # process, which is what makes this safe for a browser hosting
+            # an installed web app alongside ordinary tabs.
+            titled = [
+                hwnd for hwnd, title in entries
+                if title and self._title_matches(app, title)
+            ]
 
-            matches[pid] = {
-                "windows": titled or hwnds,
-                "strong": strength == "strong",
-            }
+            if titled:
+                matches[pid] = {"windows": titled, "strong": False}
 
-        # A window title is weak evidence: a browser tab called "Netflix"
-        # would otherwise close the whole browser. If anything matched on
-        # process identity, discard the title matches entirely.
+        # An identity match is better evidence than a title, so if any exists
+        # the title matches are discarded.
         strong = {
             pid: record for pid, record in matches.items() if record["strong"]
         }
 
-        if strong:
-            return strong
+        return strong or matches
 
-        return matches
+    def _title_matches(self, app, title):
+        lowered = title.casefold()
 
-    def _match_strength(self, app, pid, titles):
+        return any(
+            re.search(r"\b%s\b" % re.escape(token), lowered)
+            for token in app.tokens
+        )
+
+    def _identity_match(self, app, pid):
+        """True when the process itself is this application.
+
+        Judged on the executable name, its path, or its version metadata --
+        never on a window title, which says nothing reliable about identity.
+        """
         try:
             process = psutil.Process(pid)
             process_name = process.name()
@@ -344,36 +359,34 @@ class ApplicationManager:
                 executable = ""
 
         except (psutil.NoSuchProcess, psutil.AccessDenied):
-            return None
+            return False
 
         stem = os.path.splitext(process_name)[0]
-        name_tokens = _significant_tokens(stem)
 
-        if app.tokens & name_tokens:
-            return "strong"
+        if app.tokens & _significant_tokens(stem):
+            return True
 
         target_executable = self._target_executable(app)
 
-        if target_executable and executable and self._same_file(target_executable, executable):
-            return "strong"
+        if target_executable and executable and self._same_file(
+            target_executable, executable
+        ):
+            return True
 
         signature = self._product_signature(executable)
 
         if signature and any(token in signature for token in app.tokens):
+            return True
+
+        return False
+
+    def _match_strength(self, app, pid, titles):
+        """Diagnostics only: "strong", "weak", or None."""
+        if self._identity_match(app, pid):
             return "strong"
 
         for title in titles:
-            lowered = title.casefold()
-
-            if any(
-                re.search(r"\b%s\b" % re.escape(token), lowered)
-                for token in app.tokens
-            ):
-                # A browser's title is whatever page is open, so "Netflix" in
-                # the title says nothing about which application this is.
-                if stem.casefold() in _BROWSER_PROCESSES:
-                    return None
-
+            if self._title_matches(app, title):
                 return "weak"
 
         return None
