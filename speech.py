@@ -28,7 +28,7 @@ _CACHE_DIR = os.path.join(tempfile.gettempdir(), "jarvis_tts_cache")
 _MEMORY_LIMIT = 48
 
 # Set True to print how long synthesis and playback take.
-TIMING = False
+TIMING = True
 
 # Incremented after every completed utterance so the listener can tell that
 # JARVIS has spoken, and discard whatever the microphone picked up.

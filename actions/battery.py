@@ -86,11 +86,26 @@ class BatteryMonitor:
             self._stop.set()
             return
 
+        first_look = self._was_plugged is None
+
         # Plugging in or unplugging starts a fresh set of announcements.
-        if self._was_plugged is not None and plugged != self._was_plugged:
+        if not first_look and plugged != self._was_plugged:
             self._announced.clear()
 
         self._was_plugged = plugged
+
+        if first_look:
+            # On startup, record where the battery already is without
+            # saying anything. Only crossing a threshold afterwards speaks.
+            for threshold in DISCHARGE_THRESHOLDS:
+                if percent <= threshold:
+                    self._announced.add(threshold)
+
+            if plugged and percent >= CHARGE_CEILING:
+                self._announced.add(CHARGE_CEILING)
+
+            self._last_percent = percent
+            return
 
         message = self._message_for(percent, plugged)
 

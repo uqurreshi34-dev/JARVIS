@@ -143,9 +143,12 @@ _FAST_PHRASES = (
      "get_system_status"),
     (("whats on my clipboard", "what is on my clipboard",
       "read my clipboard", "check my clipboard"), "read_clipboard"),
-    (("list my files", "what files do i have", "whats in my folder",
-      "what is in my jarvis folder", "show me my files",
-      "whats in my jarvis folder"), "list_files"),
+    (("list my files", "what files do i have", "show me my files",
+      "how many files do i have", "whats in my folder",
+      "what is in my jarvis folder", "whats in my jarvis folder"),
+     "count_files"),
+    (("name my files", "read my files", "read out my files",
+      "what are my files called", "what are they called"), "list_files"),
     (("read my notes", "what are my notes", "read back my notes",
       "whats on my notes", "check my notes", "my notes",
       "whats in my notes", "what is in my notes", "whats in my notes file",
@@ -967,8 +970,11 @@ def handle_command(command):
             lambda: files.copy(text, project) is not None,
         )
 
-    if intent == "list_files":
+    if intent == "count_files":
         return _query(intent, files.describe_listing)
+
+    if intent == "list_files":
+        return _query(intent, files.describe_listing_named)
 
     if intent == "read_clipboard":
         return _query(intent, clipboard.describe)

@@ -337,16 +337,22 @@ def spoken_name(filename):
     return f"{spoken} {kind}".strip() if kind else spoken
 
 
-def describe_listing(limit=4):
+def describe_listing(limit=4, names=False):
     """Spoken summary of what is in the folder.
 
-    Always states the true total, then reads out the most recent few, since
-    reading every filename aloud takes far too long.
+    Terse by default: reading filenames aloud takes several seconds, so the
+    count is given and the names only on request.
     """
     entries = listing()
 
     if not entries:
         return "Your JARVIS folder is empty, sir."
+
+    if not names:
+        if len(entries) == 1:
+            return f"One file, sir: {spoken_name(entries[0])}."
+
+        return f"You have {len(entries)} files, sir."
 
     if len(entries) == 1:
         return f"One file, sir: {spoken_name(entries[0])}."
@@ -361,6 +367,11 @@ def describe_listing(limit=4):
         f"You have {len(entries)} files, sir. The {len(shown)} most recent "
         f"are {listed}."
     )
+
+
+def describe_listing_named(limit=4):
+    """The full version, with filenames read out."""
+    return describe_listing(limit=limit, names=True)
 
 
 def describe_read(name):
