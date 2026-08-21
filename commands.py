@@ -862,14 +862,16 @@ def _fast_path(command):
 
             continue
 
-        # A known website, but only for opening; closing a tab is different.
-        if intent == "open_application" and target in _WEBSITES:
-            return _blank_result("open_website", website=_WEBSITES[target])
-
+        # An installed application always wins over a website of the same
+        # name: "open netflix" should launch the Netflix app if it is
+        # installed, and only fall back to the site if it is not.
         name = _resolve_app(target)
 
         if name:
             return _blank_result(intent, application=name)
+
+        if intent == "open_application" and target in _WEBSITES:
+            return _blank_result("open_website", website=_WEBSITES[target])
 
     # Last resort before the LLM: a near miss on a known phrase, which covers
     # speech-recognition slips like "how is my sister".

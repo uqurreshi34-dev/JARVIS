@@ -30,6 +30,13 @@ _STOP_TOKENS = frozenset({
 
 _MIN_TOKEN_LENGTH = 3
 
+# Browsers show the current page in their title, so the title can never be
+# used to decide which application a window belongs to.
+_BROWSER_PROCESSES = frozenset({
+    "chrome", "msedge", "firefox", "opera", "brave", "vivaldi",
+    "iexplore", "safari", "chromium", "duckduckgo",
+})
+
 _CLOSE_TIMEOUT = 5.0
 _TERMINATE_TIMEOUT = 3.0
 _POLL_INTERVAL = 0.2
@@ -293,6 +300,16 @@ class ApplicationManager:
                 "strong": strength == "strong",
             }
 
+        # A window title is weak evidence: a browser tab called "Netflix"
+        # would otherwise close the whole browser. If anything matched on
+        # process identity, discard the title matches entirely.
+        strong = {
+            pid: record for pid, record in matches.items() if record["strong"]
+        }
+
+        if strong:
+            return strong
+
         return matches
 
     def _match_strength(self, app, pid, titles):
@@ -331,6 +348,11 @@ class ApplicationManager:
                 re.search(r"\b%s\b" % re.escape(token), lowered)
                 for token in app.tokens
             ):
+                # A browser's title is whatever page is open, so "Netflix" in
+                # the title says nothing about which application this is.
+                if stem.casefold() in _BROWSER_PROCESSES:
+                    return None
+
                 return "weak"
 
         return None

@@ -36,7 +36,7 @@ _LABEL = {
 }
 
 _WIDTH = 460
-_HEIGHT = 270
+_HEIGHT = 292
 
 _CENTRE = QPointF(132.0, 135.0)
 _R_OUTER = 108.0
@@ -48,6 +48,14 @@ _R_CORE = 30.0
 
 _PANEL_X = 258
 _PANEL_RIGHT = _WIDTH - 26
+
+# Vertical layout of the right-hand column. Defined together so the reply can
+# be clamped to exactly the room above the telemetry.
+_REPLY_TOP = 122
+_TELEMETRY_TOP = _HEIGHT - 84
+
+# Gap kept between the last line of the reply and the telemetry.
+_TEXT_GAP = 10
 
 # Slow faint breathing when JARVIS is not speaking.
 _BREATH_SPEED = 0.022
@@ -434,21 +442,26 @@ class Hud(QWidget):
         painter.setFont(QFont("Segoe UI", 10))
         self._draw_wrapped(painter, self._heard or "—", left, 80, width, 2)
 
-        # Replies are short by design, so shrink slightly rather than cut a
-        # sentence off half way through.
+        # Shrink long replies, then clamp to the room left above the
+        # telemetry. Text must never run into it, however long the reply.
         painter.setPen(QPen(self._tint(accent, 215)))
 
         reply = self._reply or ""
 
         if len(reply) > 210:
-            size, lines = 7, 7
+            size = 7
         elif len(reply) > 130:
-            size, lines = 8, 6
+            size = 8
         else:
-            size, lines = 9, 5
+            size = 9
 
         painter.setFont(QFont("Segoe UI", size))
-        self._draw_wrapped(painter, reply, left, 122, width, lines)
+
+        spacing = QFontMetrics(painter.font()).height() + 2
+        available = _TELEMETRY_TOP - _TEXT_GAP - _REPLY_TOP
+        lines = max(1, available // spacing)
+
+        self._draw_wrapped(painter, reply, left, _REPLY_TOP, width, lines)
 
     def _paint_wave(self, painter, accent, x, y, width):
         """A live level meter: microphone when listening, voice when speaking."""
@@ -487,7 +500,7 @@ class Hud(QWidget):
 
         # The corner brackets occupy roughly 22px in from each corner, so the
         # last row and its percentage have to finish above and left of them.
-        y = _HEIGHT - 84
+        y = _TELEMETRY_TOP
         width = _PANEL_RIGHT - _PANEL_X - 92
 
         painter.setFont(QFont("Consolas", 8))
@@ -543,8 +556,9 @@ class Hud(QWidget):
         words = text.split()
         lines = []
         current = ""
+        remaining = []
 
-        for word in words:
+        for position, word in enumerate(words):
             trial = f"{current} {word}".strip()
 
             if metrics.horizontalAdvance(trial) <= width or not current:
@@ -554,14 +568,20 @@ class Hud(QWidget):
                 current = word
 
                 if len(lines) == max_lines:
+                    remaining = words[position:]
                     break
 
         if current and len(lines) < max_lines:
             lines.append(current)
 
-        for index, line in enumerate(lines[:max_lines]):
-            if index == max_lines - 1 and len(lines) >= max_lines:
+        shown = lines[:max_lines]
+        truncated = len(lines) > max_lines or bool(remaining)
+
+        for index, line in enumerate(shown):
+            if index == len(shown) - 1 and truncated:
+                # Mark the cut so a clipped reply is obvious.
                 line = metrics.elidedText(
-                    line, Qt.TextElideMode.ElideRight, width)
+                    f"{line}\u2026", Qt.TextElideMode.ElideRight, width
+                )
 
             painter.drawText(x, y + index * spacing, line)
