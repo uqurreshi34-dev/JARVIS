@@ -20,7 +20,7 @@ SAMPLE_RATE = transcriber.SAMPLE_RATE
 BLOCK_SIZE = 4000
 
 # Set True to print how long transcription takes.
-TIMING = False
+TIMING = True
 
 # Reject a Vosk result below this average word confidence. The wake word is
 # what guards against stray speech, so this only needs to catch outright
@@ -29,10 +29,11 @@ MIN_CONFIDENCE = 0.45
 
 # Single short words that noise commonly decodes into. These are only
 # rejected when they arrive ALONE -- "the" inside a real command is fine.
+# "yes" and "no" are deliberately absent: they answer confirmations.
 FILLERS = frozenset({
     "huh", "but", "a", "the", "oh", "uh", "um", "eh", "hm", "hmm",
-    "and", "i", "it", "he", "she", "you", "to", "so", "no", "yeah",
-    "yes", "what", "who", "that", "this", "of", "or", "on", "in",
+    "and", "i", "it", "he", "she", "you", "to", "so",
+    "who", "that", "this", "of", "or", "on", "in",
 })
 
 # Set REQUIRE_WAKE_WORD to False to act on everything heard.

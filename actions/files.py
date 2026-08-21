@@ -299,44 +299,87 @@ def listing():
     return entries
 
 
-def describe_listing(limit=6):
-    """Spoken summary of what is in the folder."""
+_SCREENSHOT = re.compile(r"^jarvis-\d{4}-\d{2}-\d{2}-\d{6}$", re.IGNORECASE)
+
+_TYPE_WORDS = {
+    ".pdf": "PDF",
+    ".docx": "Word document",
+    ".doc": "Word document",
+    ".csv": "spreadsheet",
+    ".png": "image",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".md": "markdown file",
+    ".txt": "",
+    ".log": "log",
+    ".json": "JSON file",
+}
+
+
+def spoken_name(filename):
+    """A filename a voice can say quickly.
+
+    Timestamped names are read digit by digit otherwise, which takes about
+    fifteen seconds each.
+    """
+    stem, suffix = os.path.splitext(filename)
+    suffix = suffix.casefold()
+
+    if _SCREENSHOT.match(stem):
+        return "a screenshot"
+
+    kind = _TYPE_WORDS.get(suffix, suffix.lstrip(".") or "")
+
+    # Underscores and hyphens are spoken aloud, so replace them.
+    spoken = stem.replace("_", " ").replace("-", " ")
+    spoken = " ".join(spoken.split())
+
+    return f"{spoken} {kind}".strip() if kind else spoken
+
+
+def describe_listing(limit=4):
+    """Spoken summary of what is in the folder.
+
+    Always states the true total, then reads out the most recent few, since
+    reading every filename aloud takes far too long.
+    """
     entries = listing()
 
     if not entries:
         return "Your JARVIS folder is empty, sir."
 
-    shown = entries[:limit]
-    listed = ", ".join(shown[:-1]) + \
-        f", and {shown[-1]}" if len(shown) > 1 else shown[0]
-
-    if len(entries) > len(shown):
-        return (
-            f"You have {len(entries)} files, sir. The most recent: {listed}."
-        )
-
     if len(entries) == 1:
-        return f"One file, sir: {listed}."
+        return f"One file, sir: {spoken_name(entries[0])}."
 
-    return f"You have {len(entries)} files, sir: {listed}."
+    shown = [spoken_name(entry) for entry in entries[:limit]]
+    listed = ", ".join(shown[:-1]) + f", and {shown[-1]}"
+
+    if len(entries) <= limit:
+        return f"You have {len(entries)} files, sir: {listed}."
+
+    return (
+        f"You have {len(entries)} files, sir. The {len(shown)} most recent "
+        f"are {listed}."
+    )
 
 
 def describe_read(name):
     """Spoken rendering of a file's contents."""
     content = read(name)
+    label = spoken_name(safe_name(name) or name)
 
     if content is None:
-        return f"I couldn't find a file called {name}, sir."
+        return f"I couldn't find a file called {label}, sir."
 
     tidied = " ".join(content.split())
 
     if not tidied:
-        return f"{name} is empty, sir."
+        return f"{label} is empty, sir."
 
     if len(tidied) <= _SPEAK_LIMIT:
-        return f"{name} says: {tidied}"
+        return f"{label} says: {tidied}"
 
     words = len(tidied.split())
     opening = tidied[:_SPEAK_LIMIT].rsplit(" ", 1)[0]
 
-    return f"{name} holds {words} words, sir. It begins: {opening}..."
+    return f"{label} holds {words} words, sir. It begins: {opening}..."

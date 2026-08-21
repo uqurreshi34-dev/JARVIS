@@ -167,9 +167,9 @@ _MIN_THRESHOLD = 0.004
 _PRE_ROLL_BLOCKS = 3
 
 # Silence that ends an utterance, and a ceiling so a noisy room cannot buffer
-# forever.
-_END_SILENCE_SECONDS = 0.7
-_MAX_UTTERANCE_SECONDS = 20.0
+# forever. Shorter silence means less waiting before transcription starts.
+_END_SILENCE_SECONDS = 0.55
+_MAX_UTTERANCE_SECONDS = 15.0
 _MIN_UTTERANCE_SECONDS = 0.3
 
 
@@ -329,6 +329,15 @@ class OpenAIWhisperEngine(SegmentingEngine):
             fp16=False,
             condition_on_previous_text=False,
             initial_prompt=WHISPER_PROMPT,
+            # A single temperature stops Whisper retrying the decode up to
+            # six times when its quality thresholds fail, which is the main
+            # source of multi-second delays on short commands.
+            temperature=0.0,
+            without_timestamps=True,
+            # These thresholds trigger those retries, so they are disabled.
+            compression_ratio_threshold=None,
+            logprob_threshold=None,
+            no_speech_threshold=None,
         )
 
         return (result.get("text") or "").strip()

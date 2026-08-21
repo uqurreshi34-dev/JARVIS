@@ -20,7 +20,7 @@ from voice import (
 
 
 # Set True to print how long each stage takes. Also enable speech.TIMING.
-TIMING = False
+TIMING = True
 
 # Saying "Done, sir." after every action roughly doubles the talking. The
 # window opening is its own confirmation, so this is off by default.
@@ -169,11 +169,15 @@ class Assistant:
             self._heard("")
             self._reply("")
 
+            _listen_started = time.monotonic()
+
             try:
                 command = listen()
             except Exception as error:
                 print(f"[JARVIS] listener error: {error}")
                 continue
+
+            _heard_at = time.monotonic()
 
             if self._stop.is_set():
                 break
@@ -206,10 +210,22 @@ class Assistant:
                 self._say("I don't know how to do that yet.")
                 continue
 
+            _handled_at = time.monotonic()
+
             if result.get("kind") == "query":
                 self._run_query(result)
             else:
                 self._run_action(result)
+
+            if TIMING:
+                _done_at = time.monotonic()
+                print(
+                    "[turn] listen+transcribe "
+                    f"{_heard_at - _listen_started:.2f}s | "
+                    f"decide {_handled_at - _heard_at:.2f}s | "
+                    f"respond {_done_at - _handled_at:.2f}s | "
+                    f"total after speaking {_done_at - _heard_at:.2f}s"
+                )
 
             # Stay listening briefly so a follow-up needs no wake word.
             if FOLLOW_UP:

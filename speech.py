@@ -37,6 +37,13 @@ _epoch_lock = threading.Lock()
 
 _speaking = threading.Event()
 
+# Set while a real reply is being prepared, so background cache warming
+# stands aside rather than making the reply queue behind it.
+_priority = threading.Event()
+
+# Pause between warmed phrases, leaving the connection free for real replies.
+_PREWARM_GAP = 0.4
+
 
 def speech_epoch():
     """A counter that changes each time JARVIS finishes speaking."""
@@ -93,6 +100,8 @@ class SpeechEngine:
     def speak(self, text):
         print(f"JARVIS: {text}")
 
+        _priority.set()
+
         with self._lock:
             _speaking.set()
 
@@ -105,15 +114,29 @@ class SpeechEngine:
             finally:
                 self._report(0.0)
                 _speaking.clear()
+                _priority.clear()
                 _bump_epoch()
 
     def prewarm(self, phrases):
-        """Synthesise phrases ahead of time so they play instantly later."""
+        """Synthesise phrases ahead of time so they play instantly later.
+
+        This runs in the background at startup and must never delay a real
+        reply, so it waits whenever JARVIS is actually speaking and pauses
+        between phrases to leave the connection free.
+        """
         for phrase in phrases:
+            # A real utterance takes priority; wait for it to finish.
+            while _priority.is_set():
+                time.sleep(0.05)
+
             try:
                 self._audio_for(phrase)
             except Exception as error:
                 print(f"[JARVIS] could not prewarm {phrase!r}: {error}")
+
+            # Leave a gap so a command arriving now is not stuck behind a
+            # run of back-to-back requests.
+            time.sleep(_PREWARM_GAP)
 
     def _cache_key(self, text):
         digest = hashlib.sha1(
@@ -195,6 +218,8 @@ class SpeechEngine:
             if position >= total:
                 raise sd.CallbackStop
 
+        opening = time.monotonic()
+
         stream = sd.OutputStream(
             samplerate=samplerate,
             channels=1,
@@ -204,8 +229,23 @@ class SpeechEngine:
         )
 
         with stream:
+            if TIMING:
+                print(
+                    f"[timing] audio device opened in "
+                    f"{time.monotonic() - opening:.2f}s, "
+                    f"playing {total / samplerate:.2f}s of speech"
+                )
+
+            playing = time.monotonic()
+
             while stream.active:
                 sd.sleep(20)
+
+            if TIMING:
+                print(
+                    f"[timing] playback took "
+                    f"{time.monotonic() - playing:.2f}s"
+                )
 
     async def _synthesize(self, text, path):
         communicate = edge_tts.Communicate(text, self.voice)
@@ -245,6 +285,12 @@ COMMON_PHRASES = (
     "Turning it down, sir.",
     "Clearing the desktop, sir.",
     "Bringing them back, sir.",
+    "That file exists. Overwrite it, sir?",
+    "Very good, sir.",
+    "Cancelled, sir.",
+    "Noted, sir.",
+    "Copied, sir.",
+    "Added, sir.",
 )
 
 

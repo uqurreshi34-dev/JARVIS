@@ -933,11 +933,12 @@ def handle_command(command):
         body = result.get("website") or ""
 
         if files.exists(text, suffix):
-            name = files.safe_name(text, suffix)
-
+            # Kept short and identical every time, so it plays from cache
+            # rather than needing fresh synthesis, and leaves the microphone
+            # deaf for a fraction of the time.
             return _confirm(
                 intent,
-                f"{name} already exists, sir. Shall I overwrite it?",
+                "That file exists. Overwrite it, sir?",
                 lambda: files.write(
                     text, body, default_suffix=suffix, overwrite=True
                 ) is not None,
@@ -945,7 +946,7 @@ def handle_command(command):
 
         return _action(
             intent,
-            f"Creating {files.safe_name(text, suffix)}, sir.",
+            f"Creating {files.spoken_name(files.safe_name(text, suffix))}, sir.",
             lambda: files.write(text, body, default_suffix=suffix) is not None,
         )
 
