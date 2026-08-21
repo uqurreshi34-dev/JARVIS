@@ -639,10 +639,13 @@ _COPY_FILE = re.compile(
     r"(?:\s+(?:to|as|into)\s+(?:a\s+)?(?:file\s+)?(?:called\s+|named\s+)?(.+?))?$"
 )
 
-# Never treated as filenames, since they belong to other skills.
+# Never treated as filenames, since they name another skill outright rather
+# than a file. "notes" is deliberately absent: the notes phrases are matched
+# exactly before any file lookup runs, so "copy my notes" can still copy
+# notes.txt while "read my notes" still reaches the notes skill.
 _NOT_FILENAMES = frozenset({
-    "notes", "note", "clipboard", "files", "file", "my notes",
-    "my clipboard", "my files", "them", "it", "this", "that",
+    "clipboard", "files", "file", "my clipboard", "my files",
+    "them", "it", "this", "that",
 })
 
 
