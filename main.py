@@ -6,6 +6,7 @@ from datetime import datetime
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
+from actions.battery import battery_monitor
 from commands import handle_command, reminder_manager
 from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
 from speech import prewarm, set_amplitude_listener, speak
@@ -151,6 +152,11 @@ class Assistant:
         set_status_listener(self._on_status)
         reminder_manager.set_alert_listener(self._on_alert)
 
+        # Battery warnings share the reminder announcer, so they queue
+        # behind whatever JARVIS is already saying.
+        battery_monitor.set_alert_listener(self._on_alert)
+        battery_monitor.start()
+
         self._say(_greeting())
 
         # Warm the cache for stock replies while the greeting plays, so the
@@ -213,6 +219,7 @@ class Assistant:
 
         self._state(IDLE)
         reminder_manager.cancel_all()
+        battery_monitor.stop()
         self._hud.shutdown.emit()
 
 
