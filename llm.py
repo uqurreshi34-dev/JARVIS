@@ -143,6 +143,7 @@ _SCHEMA = {
                 "read_file",
                 "copy_file",
                 "list_files",
+                "file_to_clipboard",
                 "count_files",
                 "make_note",
                 "read_notes",

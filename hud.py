@@ -485,8 +485,10 @@ class Hud(QWidget):
             label = "PWR" if self._charging else "BAT"
             rows.append((label, self._battery))
 
-        y = _HEIGHT - 58
-        width = _PANEL_RIGHT - _PANEL_X - 72
+        # The corner brackets occupy roughly 22px in from each corner, so the
+        # last row and its percentage have to finish above and left of them.
+        y = _HEIGHT - 84
+        width = _PANEL_RIGHT - _PANEL_X - 92
 
         painter.setFont(QFont("Consolas", 8))
 
@@ -512,7 +514,7 @@ class Hud(QWidget):
                 int(track.right() + 8), y + 4, f"{round(value):3d}%"
             )
 
-            y += 18
+            y += 16
 
     def _paint_scanline(self, painter, accent):
         body = QRectF(self.rect().adjusted(6, 6, -6, -6))

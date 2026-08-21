@@ -577,6 +577,25 @@ def _timer_request(text):
     return None
 
 
+def _copy_file_to_clipboard(name):
+    """Put a whole file's contents on the clipboard, and report the size."""
+    content = files.read(name)
+
+    if content is None:
+        return f"I couldn't find a file called {name}, sir."
+
+    if not content.strip():
+        return f"{files.spoken_name(name)} is empty, sir."
+
+    if not clipboard.write(content):
+        return "I couldn't reach the clipboard, sir."
+
+    words = len(content.split())
+    label = files.spoken_name(files.safe_name(name) or name)
+
+    return f"Copied {label} to your clipboard, sir. {words} words."
+
+
 def _original_case(command, payload):
     """Recover the user's original casing, since the matched text is lowercased."""
     original = (command or "").strip()
@@ -643,6 +662,23 @@ def _file_target(name):
             return name
 
     return None
+
+
+_FILE_TO_CLIPBOARD = re.compile(
+    rf"^(?:copy|put|send)\s+(?:the\s+)?(?:contents?\s+of\s+)?"
+    rf"(?:my|the)?\s*(.+?)(?:\s+file)?\s+{_TO_WORDS}\s+"
+    r"(?:my|the)?\s*clipboard$"
+)
+
+
+def _file_to_clipboard_request(text):
+    """Resolve copying a whole file to the clipboard, or None."""
+    match = _FILE_TO_CLIPBOARD.match(text)
+
+    if not match:
+        return None
+
+    return _file_target(match.group(1))
 
 
 def _read_file_request(text):
@@ -753,6 +789,11 @@ def _fast_path(command):
         return _blank_result(
             "set_reminder", amount=seconds, unit="seconds", text=message
         )
+
+    to_clipboard = _file_to_clipboard_request(text)
+
+    if to_clipboard:
+        return _blank_result("file_to_clipboard", text=to_clipboard)
 
     target = _read_file_request(text)
 
@@ -1053,6 +1094,9 @@ def handle_command(command):
             "Added, sir.",
             lambda: files.append(project, text) is not None,
         )
+
+    if intent == "file_to_clipboard" and text:
+        return _query(intent, lambda: _copy_file_to_clipboard(text))
 
     if intent == "read_file" and text:
         return _query(intent, lambda: files.describe_read(text))
