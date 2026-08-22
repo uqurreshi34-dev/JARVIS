@@ -96,6 +96,8 @@ region or topic, put it in "text" as one of: uk, world, america, europe,
 technology, business, sport, science, politics, health. Otherwise leave
 "text" null.
 Use hide_news when they want the news panel closed.
+Use expand_story when they ask about a numbered story already on screen,
+such as "tell me more about story five". Put the number in "amount".
 
 Use get_time when the user asks for the current time or today's date.
 Use get_weather when the user asks about the weather, temperature, or forecast.
@@ -156,6 +158,7 @@ _SCHEMA = {
                 "clear_notes",
                 "show_news",
                 "hide_news",
+                "expand_story",
                 "get_time",
                 "get_weather",
                 "get_system_status",

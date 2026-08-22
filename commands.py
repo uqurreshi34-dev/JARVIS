@@ -145,8 +145,10 @@ _FAST_PHRASES = (
       "read my clipboard", "check my clipboard"), "read_clipboard"),
     (("show me the news", "whats the news", "what is the news",
       "read me the news", "the news", "news", "any news",
+      "open the news", "open news", "bring up the news",
       "whats happening", "what is happening", "top stories",
-      "headlines", "the headlines"), "show_news"),
+      "headlines", "the headlines", "show me the headlines"),
+     "show_news"),
     (("close the news", "hide the news", "close news", "hide news",
       "dismiss the news", "get rid of the news"), "hide_news"),
     (("how many files do i have", "how many files are there",
@@ -196,6 +198,9 @@ _NEVER_FUZZY = frozenset({
     "clear_clipboard",
     "clear_notes",
     "cancel_reminders",
+    # "open the news" and "close the news" differ by one word and score 0.85
+    # against each other, so closing must be said exactly.
+    "hide_news",
 })
 
 
@@ -585,6 +590,11 @@ def _timer_request(text):
 
 
 _news_listener = None
+_highlight_listener = None
+
+# Whatever the panel is currently showing, so a story can be referred to by
+# its number without fetching again.
+_on_screen = []
 
 
 def set_news_listener(listener):
@@ -593,9 +603,18 @@ def set_news_listener(listener):
     _news_listener = listener
 
 
+def set_highlight_listener(listener):
+    """Register a callable taking a story number to emphasise, or None."""
+    global _highlight_listener
+    _highlight_listener = listener
+
+
 def _show_news(region):
     """Fetch headlines, hand them to the panel, and say a short summary."""
+    global _on_screen
+
     items = news.headlines(region)
+    _on_screen = items
 
     if _news_listener:
         try:
@@ -607,6 +626,10 @@ def _show_news(region):
 
 
 def _hide_news():
+    global _on_screen
+
+    _on_screen = []
+
     if _news_listener:
         try:
             _news_listener(None, None)
@@ -614,6 +637,36 @@ def _hide_news():
             print(f"[JARVIS] could not hide the news: {error}")
 
     return True
+
+
+def _expand_story(number):
+    """Read out a story that is currently on screen."""
+    if not _on_screen:
+        return "There is no news on screen, sir."
+
+    try:
+        index = int(number) - 1
+    except (TypeError, ValueError):
+        return "Which story, sir?"
+
+    if not 0 <= index < len(_on_screen):
+        return f"There are only {len(_on_screen)} stories, sir."
+
+    item = _on_screen[index]
+
+    if _highlight_listener:
+        try:
+            _highlight_listener(index)
+        except Exception as error:
+            print(f"[JARVIS] could not highlight the story: {error}")
+
+    summary = (item.get("summary") or "").strip()
+    source = item.get("source") or "the wire"
+
+    if not summary:
+        return f"Story {index + 1}, from {source}: {item['title']}."
+
+    return f"{item['title']}. From {source}: {summary}"
 
 
 def _copy_file_to_clipboard(name):
@@ -796,6 +849,52 @@ def _file_request(text):
     return None
 
 
+_STORY_WORDS = {
+    "one": 1, "won": 1, "two": 2, "to": 2, "too": 2, "three": 3, "four": 4,
+    "for": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "ate": 8,
+    "nine": 9, "ten": 10, "first": 1, "second": 2, "third": 3, "fourth": 4,
+    "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9,
+    "tenth": 10, "last": 10,
+}
+
+_EXPAND_STORY = re.compile(
+    r"^(?:expand|open|read|tell me|show me)?\s*"
+    r"(?:me\s+)?(?:more\s+(?:on|about)\s+|about\s+)?"
+    r"(?:the\s+)?(?:story|headline|article|number|item)\s*"
+    r"(?:number\s*)?(\w+)$"
+)
+
+_EXPAND_SHORT = re.compile(
+    r"^(?:expand|read|open)\s+(\w+)$"
+)
+
+
+def _story_number(word):
+    """A story number from digits or words, or None."""
+    word = (word or "").strip()
+
+    if word.isdigit():
+        return int(word)
+
+    return _STORY_WORDS.get(word.casefold())
+
+
+def _expand_request(text):
+    """The story number the user is asking about, or None."""
+    for pattern in (_EXPAND_STORY, _EXPAND_SHORT):
+        match = pattern.match(text)
+
+        if not match:
+            continue
+
+        number = _story_number(match.group(1))
+
+        if number:
+            return number
+
+    return None
+
+
 _NEWS_REQUEST = re.compile(
     r"^(?:show me|read me|give me|whats|what is|tell me)?\s*"
     r"(?:the\s+)?(.+?)\s+"
@@ -942,6 +1041,12 @@ def _fast_path(command):
 
         if intent == "open_application" and target in _WEBSITES:
             return _blank_result("open_website", website=_WEBSITES[target])
+
+    if _on_screen:
+        number = _expand_request(text)
+
+        if number:
+            return _blank_result("expand_story", amount=number)
 
     region = _news_request(text)
 
@@ -1192,6 +1297,9 @@ def handle_command(command):
         region = text if text in news.FEEDS else news.DEFAULT_REGION
 
         return _query(intent, lambda: _show_news(region))
+
+    if intent == "expand_story" and amount is not None:
+        return _query(intent, lambda: _expand_story(amount))
 
     if intent == "hide_news":
         return _action(intent, "Closing the news, sir.", _hide_news)

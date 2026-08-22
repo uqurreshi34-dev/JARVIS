@@ -27,6 +27,7 @@ class NewsPanel(QWidget):
 
     show_news = pyqtSignal(str, list)
     hide_news = pyqtSignal()
+    highlight = pyqtSignal(int)
 
     def __init__(self):
         super().__init__()
@@ -35,6 +36,7 @@ class NewsPanel(QWidget):
         self._items = []
         self._revealed = 0
         self._sweep = 0.0
+        self._highlight = -1
         self._drag_offset = None
 
         self.setWindowFlags(
@@ -47,6 +49,7 @@ class NewsPanel(QWidget):
 
         self.show_news.connect(self._on_show)
         self.hide_news.connect(self._on_hide)
+        self.highlight.connect(self._on_highlight)
 
         self._reveal = QTimer(self)
         self._reveal.timeout.connect(self._advance)
@@ -59,6 +62,7 @@ class NewsPanel(QWidget):
         self._region = region or ""
         self._items = items or []
         self._revealed = 0
+        self._highlight = -1
 
         self._position()
         self.show()
@@ -67,6 +71,11 @@ class NewsPanel(QWidget):
         self._reveal.start(_REVEAL_MS)
         self._animate.start(_FRAME_MS)
 
+        self.update()
+
+    def _on_highlight(self, index):
+        """Emphasise the story JARVIS is reading out."""
+        self._highlight = index
         self.update()
 
     def _on_hide(self):
@@ -189,19 +198,39 @@ class NewsPanel(QWidget):
             if y > _HEIGHT - 40:
                 break
 
-            painter.setPen(QPen(self._tint(150)))
+            chosen = index == self._highlight
+            lines = self._wrap(metrics, item.get("title", ""), width, 2)
+
+            if chosen:
+                # A soft bar behind the story being read out, sized to the
+                # headline so it never bleeds into the next one.
+                band = QRectF(
+                    _MARGIN - 8, y - 13,
+                    _WIDTH - _MARGIN * 2 + 16,
+                    17 * len(lines) + 5,
+                )
+                painter.fillPath(self._rounded(band), self._tint(30))
+
+            painter.setPen(QPen(self._tint(230 if chosen else 150)))
             painter.setFont(number_font)
             painter.drawText(_MARGIN, y, f"{index + 1:02d}")
 
-            painter.setPen(QPen(QColor(228, 240, 250, 240)))
+            painter.setPen(
+                QPen(QColor(255, 255, 255, 255) if chosen
+                     else QColor(228, 240, 250, 240))
+            )
             painter.setFont(title_font)
-
-            lines = self._wrap(metrics, item.get("title", ""), width, 2)
 
             for offset, line in enumerate(lines):
                 painter.drawText(_MARGIN + 30, y + offset * 17, line)
 
             y += 17 * len(lines) + 15
+
+    @staticmethod
+    def _rounded(rect, radius=8):
+        path = QPainterPath()
+        path.addRoundedRect(rect, radius, radius)
+        return path
 
     @staticmethod
     def _wrap(metrics, text, width, max_lines):

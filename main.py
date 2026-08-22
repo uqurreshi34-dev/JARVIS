@@ -7,7 +7,12 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
 from actions.battery import battery_monitor
-from commands import handle_command, reminder_manager, set_news_listener
+from commands import (
+    handle_command,
+    reminder_manager,
+    set_highlight_listener,
+    set_news_listener,
+)
 from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
 from news_panel import NewsPanel
 from speech import prewarm, set_amplitude_listener, speak
@@ -260,6 +265,7 @@ def main():
             panel.show_news.emit(region, items or [])
 
     set_news_listener(news_update)
+    set_highlight_listener(panel.highlight.emit)
 
     # Feed the voice envelope to the ring. Emitting a signal is thread-safe,
     # which matters because playback runs on the worker/audio thread.
