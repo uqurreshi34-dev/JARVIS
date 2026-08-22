@@ -7,6 +7,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
 from actions.battery import battery_monitor
+from actions.markets import market_monitor
 from commands import (
     handle_command,
     reminder_manager,
@@ -243,6 +244,7 @@ class Assistant:
         self._state(IDLE)
         reminder_manager.cancel_all()
         battery_monitor.stop()
+        market_monitor.stop()
         self._hud.shutdown.emit()
 
 
@@ -266,6 +268,11 @@ def main():
 
     set_news_listener(news_update)
     set_highlight_listener(panel.highlight.emit)
+
+    # Prices refresh in the background and appear along the foot of the news
+    # panel, so the HUD itself stays uncluttered.
+    market_monitor.set_listener(panel.markets.emit)
+    market_monitor.start()
 
     # Feed the voice envelope to the ring. Emitting a signal is thread-safe,
     # which matters because playback runs on the worker/audio thread.

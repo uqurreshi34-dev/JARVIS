@@ -17,6 +17,14 @@ _MARGIN = 26
 _BACKDROP = QColor(8, 14, 21, 232)
 _ACCENT = QColor(95, 200, 245)
 
+# The market strip along the bottom.
+_MARKET_TOP = _HEIGHT - 26
+_ITEMS_BOTTOM = _MARKET_TOP - 26
+
+_UP = QColor(95, 235, 160)
+_DOWN = QColor(255, 110, 110)
+_FLAT = QColor(170, 190, 205)
+
 # Headlines fade in one after another, which reads as the panel filling up.
 _REVEAL_MS = 90
 _FRAME_MS = 33
@@ -28,6 +36,7 @@ class NewsPanel(QWidget):
     show_news = pyqtSignal(str, list)
     hide_news = pyqtSignal()
     highlight = pyqtSignal(int)
+    markets = pyqtSignal(list)
 
     def __init__(self):
         super().__init__()
@@ -37,6 +46,7 @@ class NewsPanel(QWidget):
         self._revealed = 0
         self._sweep = 0.0
         self._highlight = -1
+        self._market_rows = []
         self._drag_offset = None
 
         self.setWindowFlags(
@@ -50,6 +60,7 @@ class NewsPanel(QWidget):
         self.show_news.connect(self._on_show)
         self.hide_news.connect(self._on_hide)
         self.highlight.connect(self._on_highlight)
+        self.markets.connect(self._on_markets)
 
         self._reveal = QTimer(self)
         self._reveal.timeout.connect(self._advance)
@@ -71,6 +82,11 @@ class NewsPanel(QWidget):
         self._reveal.start(_REVEAL_MS)
         self._animate.start(_FRAME_MS)
 
+        self.update()
+
+    def _on_markets(self, rows):
+        """Latest prices, as (label, text, percent change)."""
+        self._market_rows = list(rows or [])
         self.update()
 
     def _on_highlight(self, index):
@@ -138,6 +154,7 @@ class NewsPanel(QWidget):
         self._paint_corners(painter, body)
         self._paint_heading(painter)
         self._paint_items(painter)
+        self._paint_markets(painter)
         self._paint_scanline(painter, body)
 
         painter.end()
@@ -195,7 +212,7 @@ class NewsPanel(QWidget):
             if index >= self._revealed:
                 break
 
-            if y > _HEIGHT - 40:
+            if y > _ITEMS_BOTTOM:
                 break
 
             chosen = index == self._highlight
@@ -262,6 +279,42 @@ class NewsPanel(QWidget):
             )
 
         return lines
+
+    def _paint_markets(self, painter):
+        """A live price strip along the foot of the panel."""
+        if not self._market_rows:
+            return
+
+        painter.setPen(QPen(self._tint(70), 1.0))
+        painter.drawLine(
+            _MARGIN, _MARKET_TOP - 16, _WIDTH - _MARGIN, _MARKET_TOP - 16
+        )
+
+        font = QFont("Consolas", 9)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+
+        x = _MARGIN
+
+        for label, text, change in self._market_rows[:4]:
+            if change > 0.05:
+                colour, mark = _UP, "\u25b2"
+            elif change < -0.05:
+                colour, mark = _DOWN, "\u25bc"
+            else:
+                colour, mark = _FLAT, "\u2013"
+
+            painter.setPen(QPen(self._tint(150)))
+            painter.drawText(x, _MARKET_TOP, label)
+            x += metrics.horizontalAdvance(label) + 6
+
+            piece = f"{mark} {text}"
+            painter.setPen(QPen(colour))
+            painter.drawText(x, _MARKET_TOP, piece)
+            x += metrics.horizontalAdvance(piece) + 20
+
+            if x > _WIDTH - _MARGIN - 40:
+                break
 
     def _paint_scanline(self, painter, body):
         y = body.top() + body.height() * self._sweep
