@@ -14,7 +14,13 @@ import soundfile as sf
 import pyttsx3
 
 
-VOICE = "en-GB-RyanNeural"
+VOICE = os.getenv("JARVIS_VOICE") or "en-GB-RyanNeural"
+
+# The film's JARVIS is measured and slightly clipped. Slowing the delivery a
+# little and dropping the pitch gets closer to that than the stock reading.
+# Both accept forms like "-8%" and "-6Hz"; set them empty for the default.
+VOICE_RATE = os.getenv("JARVIS_VOICE_RATE", "-7%")
+VOICE_PITCH = os.getenv("JARVIS_VOICE_PITCH", "-4Hz")
 
 # Playback chunk size; smaller means the HUD reacts more finely.
 _BLOCK = 1024
@@ -140,7 +146,7 @@ class SpeechEngine:
 
     def _cache_key(self, text):
         digest = hashlib.sha1(
-            f"{self.voice}|{text}".encode("utf-8")
+            f"{self.voice}|{VOICE_RATE}|{VOICE_PITCH}|{text}".encode("utf-8")
         ).hexdigest()
 
         return digest
@@ -250,7 +256,15 @@ class SpeechEngine:
                 )
 
     async def _synthesize(self, text, path):
-        communicate = edge_tts.Communicate(text, self.voice)
+        options = {}
+
+        if VOICE_RATE:
+            options["rate"] = VOICE_RATE
+
+        if VOICE_PITCH:
+            options["pitch"] = VOICE_PITCH
+
+        communicate = edge_tts.Communicate(text, self.voice, **options)
 
         # Write to a temporary name first so an interrupted download cannot
         # leave a corrupt file in the cache.
@@ -304,6 +318,17 @@ def set_amplitude_listener(listener):
     speech.set_amplitude_listener(listener)
 
 
-def prewarm(phrases=COMMON_PHRASES):
+def prewarm(lines=None):
     """Warm the cache so the most common replies never wait on the network."""
-    speech.prewarm(phrases)
+    if lines is None:
+        lines = list(COMMON_PHRASES)
+
+        # Every wording variant, so no phrasing is slow the first time.
+        try:
+            import phrases as phrasebook
+
+            lines.extend(phrasebook.every_fixed_line())
+        except Exception as error:
+            print(f"[JARVIS] could not list phrase variants: {error}")
+
+    speech.prewarm(tuple(dict.fromkeys(lines)))

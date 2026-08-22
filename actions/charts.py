@@ -189,6 +189,13 @@ def plot(name, x_index, y_index, title=None):
     # If the x column is numeric too, a line chart reads better than bars.
     numeric_x = all(_as_number(label) is not None for label in labels)
 
+    if numeric_x:
+        # Points have to be in order along the axis, or the line zigzags
+        # back on itself and tells you nothing.
+        pairs = sorted(pairs, key=lambda pair: _as_number(pair[0]))
+        labels = [pair[0] for pair in pairs]
+        values = [pair[1] for pair in pairs]
+
     figure, axes = plt.subplots(figsize=(7.2, 4.4), dpi=110)
 
     figure.patch.set_facecolor(_BACKDROP)

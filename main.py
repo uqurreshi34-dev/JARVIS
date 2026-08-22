@@ -7,6 +7,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
 from actions.battery import battery_monitor
+import phrases
 from actions.markets import market_monitor
 from beam import Beam
 from chart_panel import ChartPanel
@@ -111,13 +112,13 @@ class Assistant:
 
         if success:
             if CONFIRM_SUCCESS:
-                self._say("Done, sir.")
+                self._say(phrases.pick("done"))
         elif result["intent"] in ("close_application", "close_project"):
-            self._say("I couldn't close that, sir.")
+            self._say(phrases.pick("cannot_close"))
         elif result["intent"] in ("open_application", "open_website", "open_project"):
-            self._say("I couldn't open that, sir.")
+            self._say(phrases.pick("cannot_open"))
         else:
-            self._say("That didn't work, sir.")
+            self._say(phrases.pick("failed"))
 
     def _run_query(self, result):
         """Commands that find something out: the action returns what to say."""
@@ -132,7 +133,7 @@ class Assistant:
         if answer:
             self._say(answer)
         else:
-            self._say("I couldn't find that out, sir.")
+            self._say(phrases.pick("cannot_find"))
 
     def _on_alert(self, text):
         """Called from a reminder's own thread when one falls due.
@@ -156,7 +157,7 @@ class Assistant:
         """Called when JARVIS hears his name with no command attached."""
         self._state(LISTENING)
         self._heard("")
-        self._say("Yes, sir?")
+        self._say(phrases.pick("wake"))
         self._state(LISTENING)
 
     def run(self):
@@ -215,11 +216,11 @@ class Assistant:
                     )
             except Exception as error:
                 print(f"[JARVIS] command error: {error}")
-                self._say("Something went wrong, sir.")
+                self._say(phrases.pick("wrong"))
                 continue
 
             if not result:
-                self._say("I don't know how to do that yet.")
+                self._say(phrases.pick("unknown"))
                 continue
 
             _handled_at = time.monotonic()

@@ -20,6 +20,7 @@ from actions.desktop import (
 from actions.knowledge import answer
 from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
+import phrases
 from actions import charts, clipboard, files, news, notes
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
@@ -77,7 +78,7 @@ _SIMPLE_ACTIONS = {
     "toggle_mute": ("Toggling mute, sir.", toggle_mute),
     "mute": ("Muting, sir.", lambda: set_mute(True)),
     "unmute": ("Unmuting, sir.", lambda: set_mute(False)),
-    "media_play_pause": ("Certainly, sir.", play_pause),
+    "media_play_pause": (phrases.pick("acknowledge"), play_pause),
     "media_next": ("Skipping ahead, sir.", next_track),
     "media_previous": ("Going back, sir.", previous_track),
     "minimise_all": ("Clearing the desktop, sir.", minimise_all),
@@ -666,8 +667,8 @@ def _offer_to_save(data, title):
         "save_chart",
         "Shall I save it to your JARVIS folder, sir?",
         lambda: charts.save(data, title) is not None,
-        yes_text="Saved, sir.",
-        no_text="Very well, sir. I'll leave it to you.",
+        yes_text=phrases.pick("saved"),
+        no_text=phrases.pick("declined"),
     )
 
 
@@ -904,7 +905,8 @@ _ADD_TO_FILE = re.compile(
 # "open chrome" can never be mistaken for a file request. The word "file"
 # makes it explicit; without it, the name must match something on disk.
 _READ_FILE_EXPLICIT = re.compile(
-    r"^(?:read|show me|open|display)\s+(?:me\s+)?(?:my|the)?\s*"
+    r"^(?:read|show me|open|display|whats in|what is in|whats on|"
+    r"what is on|read out|read me)\s+(?:me\s+)?(?:my|the)?\s*"
     r"(?:file\s+)?(?:called\s+|named\s+)?(.+?)(?:\s+file)?$"
 )
 
@@ -1386,8 +1388,8 @@ def _confirm(intent, question, action, yes_text=None, no_text=None):
     _pending = {
         "intent": intent,
         "action": action,
-        "yes": yes_text or "Very good, sir.",
-        "no": no_text or "Cancelled, sir.",
+        "yes": yes_text or phrases.pick("acknowledge"),
+        "no": no_text or phrases.pick("cancelled"),
     }
 
     return {
@@ -1481,35 +1483,35 @@ def handle_command(command):
     if intent == "open_application" and application:
         return _action(
             intent,
-            f"Opening {application}, sir.",
+            phrases.pick("opening", name=application),
             lambda: _application_manager.launch(application),
         )
 
     if intent == "close_application" and application:
         return _action(
             intent,
-            f"Closing {application}, sir.",
+            phrases.pick("closing", name=application),
             lambda: _application_manager.close(application),
         )
 
     if intent == "open_website" and website:
         return _action(
             intent,
-            f"Opening {_website_label(website)}, sir.",
+            phrases.pick("opening", name=_website_label(website)),
             lambda: _open_website(website),
         )
 
     if intent == "open_project" and project:
         return _action(
             intent,
-            f"Opening {project}, sir.",
+            phrases.pick("opening", name=project),
             lambda: _project_manager.open(project) is not None,
         )
 
     if intent == "close_project" and project:
         return _action(
             intent,
-            f"Closing {project}, sir.",
+            phrases.pick("closing", name=project),
             lambda: _project_manager.close(project) is not None,
         )
 
@@ -1536,7 +1538,7 @@ def handle_command(command):
     if intent == "make_note" and text:
         return _action(
             intent,
-            "Noted, sir.",
+            phrases.pick("acknowledge"),
             lambda: notes.add(text),
         )
 
@@ -1568,14 +1570,17 @@ def handle_command(command):
 
         return _action(
             intent,
-            f"Creating {files.spoken_name(files.safe_name(text, suffix))}, sir.",
+            phrases.pick(
+                "creating",
+                name=files.spoken_name(files.safe_name(text, suffix)),
+            ),
             lambda: files.write(text, body, default_suffix=suffix) is not None,
         )
 
     if intent == "append_file" and text and project:
         return _action(
             intent,
-            "Added, sir.",
+            phrases.pick("added"),
             lambda: files.append(project, text) is not None,
         )
 
@@ -1627,7 +1632,7 @@ def handle_command(command):
     if intent == "copy_to_clipboard" and text:
         return _action(
             intent,
-            "Copied, sir.",
+            phrases.pick("copied"),
             lambda: clipboard.write(text),
         )
 
