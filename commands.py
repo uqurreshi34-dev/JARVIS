@@ -20,7 +20,7 @@ from actions.desktop import (
 from actions.knowledge import answer
 from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
-from actions import clipboard, files, news, notes
+from actions import charts, clipboard, files, news, notes
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
@@ -592,6 +592,7 @@ def _timer_request(text):
 _news_listener = None
 _highlight_listener = None
 _picture_listener = None
+_chart_listener = None
 
 # Whatever the panel is currently showing, so a story can be referred to by
 # its number without fetching again.
@@ -614,6 +615,129 @@ def set_picture_listener(listener):
     """Register a callable taking (image bytes, caption)."""
     global _picture_listener
     _picture_listener = listener
+
+
+def set_chart_listener(listener):
+    """Register a callable taking (png bytes, title) to show a chart."""
+    global _chart_listener
+    _chart_listener = listener
+
+
+_AXIS_SPLIT = re.compile(
+    r"^(.+?)\s+(?:on|as|for)?\s*(?:the\s+)?x(?:\s*axis)?\s*"
+    r"(?:and|,|then)?\s*(?:and\s+)?(.+?)\s+"
+    r"(?:on|as|for)?\s*(?:the\s+)?y(?:\s*axis)?$"
+)
+
+_PLAIN_PAIR = re.compile(r"^(.+?)\s+(?:and|against|versus|vs|by)\s+(.+)$")
+
+
+def _columns_from_answer(text, headers):
+    """Work out which two columns were asked for, or return None."""
+    answer = _normalise(text)
+
+    if not answer:
+        return None
+
+    match = _AXIS_SPLIT.match(answer)
+
+    if match:
+        first, second = match.group(1), match.group(2)
+    else:
+        match = _PLAIN_PAIR.match(answer)
+
+        if not match:
+            return None
+
+        first, second = match.group(1), match.group(2)
+
+    x_index = charts.match_column(headers, first)
+    y_index = charts.match_column(headers, second)
+
+    if x_index is None or y_index is None or x_index == y_index:
+        return None
+
+    return x_index, y_index
+
+
+def _offer_to_save(data, title):
+    """Ask whether to keep the chart, and remember the answer."""
+    return _confirm(
+        "save_chart",
+        "Shall I save it to your JARVIS folder, sir?",
+        lambda: charts.save(data, title) is not None,
+        yes_text="Saved, sir.",
+        no_text="Very well, sir. I'll leave it to you.",
+    )
+
+
+def _plot_columns(name, headers, text):
+    """Handle the answer to which columns to plot."""
+    chosen = _columns_from_answer(text, headers)
+
+    if not chosen:
+        return _query(
+            "plot_chart",
+            lambda: (
+                "I didn't catch which columns, sir. "
+                f"The file has {charts.describe_columns(headers)}."
+            ),
+        )
+
+    x_index, y_index = chosen
+    data, spoken = charts.plot(name, x_index, y_index)
+
+    if not data:
+        return _query("plot_chart", lambda: spoken)
+
+    title = f"{headers[y_index]} by {headers[x_index]}"
+
+    if _chart_listener:
+        try:
+            _chart_listener(data, title)
+        except Exception as error:
+            print(f"[JARVIS] could not show the chart: {error}")
+
+    # The chart is on screen, so now offer to keep it.
+    offer = _offer_to_save(data, f"{name} {headers[y_index]}")
+    question = offer["action"]()
+
+    return _query("plot_chart", lambda: f"{spoken} {question}")
+
+
+def _start_plot(name):
+    """Read the file and ask which two columns to plot."""
+    headers, rows = charts.read_columns(name)
+
+    if not headers:
+        return _query(
+            "plot_chart",
+            lambda: f"I couldn't read a spreadsheet called {name}, sir.",
+        )
+
+    if not rows:
+        return _query("plot_chart", lambda: f"{name} has no data, sir.")
+
+    question = (
+        f"That has {charts.describe_columns(headers)}. "
+        "Which two shall I plot, sir?"
+    )
+
+    return _ask(
+        "plot_chart",
+        question,
+        lambda answer: _plot_columns(name, headers, answer),
+    )
+
+
+def _hide_chart():
+    if _chart_listener:
+        try:
+            _chart_listener(b"", "")
+        except Exception:
+            pass
+
+    return True
 
 
 def _show_picture(number):
@@ -978,6 +1102,33 @@ def _expand_request(text):
     return None
 
 
+_PLOT_REQUEST = re.compile(
+    r"^(?:plot|chart|graph|draw a chart of|draw a graph of|visualise|"
+    r"visualize)\s+(?:my\s+|the\s+)?(.+?)"
+    r"(?:\s+(?:csv|file|spreadsheet|data))?$"
+)
+
+_HIDE_CHART = frozenset({
+    "close the chart", "hide the chart", "close chart", "hide chart",
+    "close the graph", "hide the graph", "dismiss the chart",
+})
+
+
+def _plot_request(text):
+    """The spreadsheet to plot, or None."""
+    match = _PLOT_REQUEST.match(text)
+
+    if not match:
+        return None
+
+    name = match.group(1).strip()
+
+    if not name or name in _NOT_FILENAMES:
+        return None
+
+    return name
+
+
 _NEWS_REQUEST = re.compile(
     r"^(?:show me|read me|give me|whats|what is|tell me)?\s*"
     r"(?:the\s+)?(.+?)\s+"
@@ -1139,6 +1290,14 @@ def _fast_path(command):
         if number:
             return _blank_result("expand_story", amount=number)
 
+    if text in _HIDE_CHART:
+        return _blank_result("hide_chart")
+
+    plot = _plot_request(text)
+
+    if plot:
+        return _blank_result("plot_chart", text=plot)
+
     region = _news_request(text)
 
     if region:
@@ -1181,12 +1340,55 @@ _NO = frozenset({
 # An action waiting on a spoken yes or no.
 _pending = None
 
+# A question waiting on a spoken answer, such as which columns to plot. The
+# handler is given the next thing said and returns a result, or None to give
+# up and let the command be treated normally.
+_awaiting = None
 
-def _confirm(intent, question, action):
+
+def _ask(intent, question, handler):
+    """Ask something and hand the next utterance to the handler."""
+    global _awaiting, _pending
+
+    _pending = None
+    _awaiting = {"intent": intent, "handler": handler}
+
+    return {
+        "kind": "query",
+        "intent": intent,
+        "response": None,
+        "action": lambda: question,
+    }
+
+
+def _resolve_awaiting(text):
+    """Give the answer to whatever asked the question, or return None."""
+    global _awaiting
+
+    if not _awaiting:
+        return None
+
+    handler = _awaiting["handler"]
+    _awaiting = None
+
+    try:
+        return handler(text)
+    except Exception as error:
+        print(f"[JARVIS] could not use that answer: {error}")
+        return None
+
+
+def _confirm(intent, question, action, yes_text=None, no_text=None):
     """Ask before doing something, and remember what to do if approved."""
-    global _pending
+    global _pending, _awaiting
 
-    _pending = {"intent": intent, "action": action}
+    _awaiting = None
+    _pending = {
+        "intent": intent,
+        "action": action,
+        "yes": yes_text or "Very good, sir.",
+        "no": no_text or "Cancelled, sir.",
+    }
 
     return {
         "kind": "query",
@@ -1212,14 +1414,15 @@ def _resolve_pending(text):
         return {
             "kind": "action",
             "intent": pending["intent"],
-            "response": "Very good, sir.",
+            "response": pending.get("yes", "Very good, sir."),
             "action": pending["action"],
         }
 
     if answer in _NO:
+        message = _pending.get("no", "Cancelled, sir.")
         _pending = None
 
-        return _query("cancelled", lambda: "Cancelled, sir.")
+        return _query("cancelled", lambda: message)
 
     # Anything else is a new command, so the question lapses.
     _pending = None
@@ -1228,6 +1431,11 @@ def _resolve_pending(text):
 
 
 def handle_command(command):
+    answered = _resolve_awaiting(command)
+
+    if answered is not None:
+        return answered
+
     answered = _resolve_pending(command)
 
     if answered is not None:
@@ -1383,6 +1591,12 @@ def handle_command(command):
             "Copying, sir.",
             lambda: files.copy(text, project) is not None,
         )
+
+    if intent == "plot_chart" and text:
+        return _start_plot(text)
+
+    if intent == "hide_chart":
+        return _action(intent, "Closing the chart, sir.", _hide_chart)
 
     if intent == "show_news":
         region = text if text in news.FEEDS else news.DEFAULT_REGION

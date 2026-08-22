@@ -9,9 +9,11 @@ from PyQt6.QtWidgets import QApplication
 from actions.battery import battery_monitor
 from actions.markets import market_monitor
 from beam import Beam
+from chart_panel import ChartPanel
 from commands import (
     handle_command,
     reminder_manager,
+    set_chart_listener,
     set_highlight_listener,
     set_news_listener,
     set_picture_listener,
@@ -267,6 +269,21 @@ def main():
     # nothing can be drawn in the gap between them otherwise.
     beam = Beam(panel, hud)
 
+    # Charts get their own panel, projected the same way.
+    chart = ChartPanel()
+    chart.set_anchor(hud)
+    chart_beam = Beam(chart, hud)
+
+    def chart_update(data, title):
+        if data:
+            chart.show_chart.emit(data, title)
+            chart_beam.shown.emit()
+        else:
+            chart.hide_chart.emit()
+            chart_beam.hidden.emit()
+
+    set_chart_listener(chart_update)
+
     def news_update(region, items):
         if region is None:
             panel.hide_news.emit()
@@ -295,6 +312,8 @@ def main():
 
     hud.shutdown.connect(panel.hide_news.emit)
     hud.shutdown.connect(beam.hidden.emit)
+    hud.shutdown.connect(chart.hide_chart.emit)
+    hud.shutdown.connect(chart_beam.hidden.emit)
     hud.shutdown.connect(lambda: QTimer.singleShot(400, app.quit))
     hud.closed.connect(assistant.stop)
 

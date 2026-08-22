@@ -91,6 +91,9 @@ Use clear_clipboard when the user wants the clipboard emptied.
 Use take_screenshot when the user wants a screenshot, screen capture, or a
 picture of their screen.
 
+Use plot_chart when the user wants a chart or graph from a spreadsheet, and
+put the file name in "text". Use hide_chart to close it.
+
 Use show_news when the user asks for news or headlines. If they name a
 region or topic, put it in "text" as one of: uk, world, america, europe,
 technology, business, sport, science, politics, health. Otherwise leave
@@ -158,6 +161,8 @@ _SCHEMA = {
                 "make_note",
                 "read_notes",
                 "clear_notes",
+                "plot_chart",
+                "hide_chart",
                 "show_news",
                 "hide_news",
                 "expand_story",
