@@ -263,6 +263,119 @@ def _append_docx(path, content):
     return path
 
 
+def _remove_docx_lines(path, wanted):
+    """Delete matching paragraphs from a Word document."""
+    if not _DOCX:
+        print("[JARVIS] python-docx is not installed")
+        return None
+
+    try:
+        document = Document(path)
+
+        removed = 0
+        remaining = 0
+
+        for paragraph in list(document.paragraphs):
+            if wanted in paragraph.text.casefold():
+                # A paragraph is removed by detaching its XML element; there
+                # is no delete method on the object itself.
+                element = paragraph._element
+                element.getparent().remove(element)
+                removed += 1
+            elif paragraph.text.strip():
+                remaining += 1
+
+        if removed:
+            document.save(path)
+            print(f"[JARVIS] removed {removed} paragraph(s) from {path}")
+
+        return removed, remaining
+
+    except Exception as error:
+        print(f"[JARVIS] could not update {path}: {error}")
+        return None
+
+
+def remove_line(name, text):
+    """Delete lines containing this text. Returns (removed, remaining).
+
+    Returns None when the file exists but cannot be edited, so the caller can
+    say why rather than claiming the text was not found.
+    """
+    wanted = " ".join((text or "").split()).casefold()
+
+    if not wanted:
+        return 0, 0
+
+    path = find_existing(name)
+
+    if not path:
+        return None
+
+    suffix = os.path.splitext(path)[1].casefold()
+
+    if suffix == ".docx":
+        return _remove_docx_lines(path, wanted)
+
+    if suffix not in TEXT_SUFFIXES:
+        print(f"[JARVIS] cannot edit {suffix} files")
+        return None
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+            lines = handle.read().splitlines()
+
+    except OSError as error:
+        print(f"[JARVIS] could not read {path}: {error}")
+        return 0, 0
+
+    kept = [line for line in lines if wanted not in line.casefold()]
+    removed = len(lines) - len(kept)
+
+    if not removed:
+        return 0, len([line for line in lines if line.strip()])
+
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            for line in kept:
+                handle.write(f"{line}\n")
+
+    except OSError as error:
+        print(f"[JARVIS] could not update {path}: {error}")
+        return 0, len(lines)
+
+    print(f"[JARVIS] removed {removed} line(s) from {path}")
+
+    return removed, len([line for line in kept if line.strip()])
+
+
+def describe_removal(name, text):
+    """Remove lines from a file and report what happened."""
+    path = find_existing(name)
+    label = spoken_name(safe_name(name) or name)
+
+    if not path:
+        return f"I couldn't find a file called {name}, sir."
+
+    result = remove_line(name, text)
+
+    if result is None:
+        suffix = os.path.splitext(path)[1].lstrip(
+            ".").upper() or "that kind of"
+
+        return f"I can't edit {suffix} files, sir."
+
+    removed, remaining = result
+
+    if not removed:
+        return f"I couldn't find {text} in {label}, sir."
+
+    if removed == 1:
+        return f"Removed {text} from {label}, sir. {remaining} lines left."
+
+    return f"Removed {removed} lines mentioning {text} from {label}, sir."
+
+
 def read(name):
     """Return a file's text, or None if it cannot be read."""
     path = find_existing(name)

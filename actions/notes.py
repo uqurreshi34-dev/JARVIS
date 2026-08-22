@@ -100,6 +100,64 @@ def describe():
     )
 
 
+def remove(text):
+    """Delete notes containing this text. Returns (removed, remaining)."""
+    wanted = " ".join((text or "").split()).casefold()
+
+    if not wanted:
+        return 0, count()
+
+    lines = _read_lines()
+
+    if not lines:
+        return 0, 0
+
+    kept = []
+    removed = []
+
+    for line in lines:
+        if wanted in _without_stamp(line).casefold():
+            removed.append(line)
+        else:
+            kept.append(line)
+
+    if not removed:
+        return 0, len(kept)
+
+    path = _notes_path()
+
+    if not path:
+        return 0, len(lines)
+
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            for line in kept:
+                handle.write(f"{line}\n")
+
+    except OSError as error:
+        print(f"[JARVIS] could not update your notes: {error}")
+        return 0, len(lines)
+
+    print(f"[JARVIS] removed {len(removed)} note(s) mentioning {text!r}")
+
+    return len(removed), len(kept)
+
+
+def describe_removal(text):
+    """Remove notes and report what happened."""
+    removed, remaining = remove(text)
+
+    if not removed:
+        return f"I couldn't find a note mentioning {text}, sir."
+
+    if removed == 1:
+        left = "none left" if not remaining else f"{remaining} left"
+
+        return f"Removed {text} from your notes, sir. {left.capitalize()}."
+
+    return f"Removed {removed} notes mentioning {text}, sir."
+
+
 def clear():
     """Delete every note. Returns how many were removed."""
     lines = _read_lines()

@@ -519,6 +519,32 @@ _COPY_PATTERNS = (
 _TRAILING_CLIPBOARD = re.compile(rf"\s+{_TO_WORDS}\s+(?:my|the)?\s*clipboard$")
 
 
+# "remove juice from my notes" used to reach the language model, which read
+# it as an instruction to clear the lot. It is handled locally now.
+_REMOVE_FROM = re.compile(
+    r"^(?:remove|delete|take out|get rid of|drop|erase)\s+(.+?)\s+"
+    r"(?:from|out of|off)\s+(?:my\s+|the\s+)?(.+?)(?:\s+file)?$"
+)
+
+_NOTE_TARGETS = frozenset({"notes", "note", "note list", "notes list"})
+
+
+def _remove_request(text):
+    """Return (what, where) for a removal, or None."""
+    match = _REMOVE_FROM.match(text)
+
+    if not match:
+        return None
+
+    what = match.group(1).strip()
+    where = match.group(2).strip()
+
+    if not what or not where:
+        return None
+
+    return what, where
+
+
 _NOTE_PATTERNS = (
     re.compile(r"^(?:make|take|write|add|at|and|jot)\s+(?:me\s+)?a\s+note\s+"
                r"(?:that\s+|saying\s+|about\s+|to\s+)?(.+)$"),
@@ -1215,6 +1241,17 @@ def _fast_path(command):
 
         return _blank_result("copy_file", text=source, project=destination)
 
+    removal = _remove_request(text)
+
+    if removal:
+        what, where = removal
+
+        if where in _NOTE_TARGETS:
+            return _blank_result("remove_note", text=what)
+
+        if _file_target(where):
+            return _blank_result("remove_line", text=what, project=where)
+
     note = _note_request(text)
 
     if note:
@@ -1540,6 +1577,14 @@ def handle_command(command):
             intent,
             phrases.pick("acknowledge"),
             lambda: notes.add(text),
+        )
+
+    if intent == "remove_note" and text:
+        return _query(intent, lambda: notes.describe_removal(text))
+
+    if intent == "remove_line" and text and project:
+        return _query(
+            intent, lambda: files.describe_removal(project, text)
         )
 
     if intent == "read_notes":
