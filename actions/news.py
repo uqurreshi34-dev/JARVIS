@@ -94,6 +94,28 @@ def _clean(text):
     return " ".join(unescape(_TAGS.sub(" ", text)).split())
 
 
+_IMAGE_TYPES = ("image/jpeg", "image/jpg", "image/png", "image/webp")
+
+
+def _image_from(name, element):
+    """An image URL from a feed element, or an empty string."""
+    if name not in ("thumbnail", "content", "enclosure", "image"):
+        return ""
+
+    url = (element.get("url") or element.get("href") or "").strip()
+
+    if not url.startswith(("http://", "https://")):
+        return ""
+
+    kind = (element.get("type") or "").casefold()
+
+    # An enclosure can be audio or video, so its type has to be checked.
+    if name == "enclosure" and kind and kind not in _IMAGE_TYPES:
+        return ""
+
+    return url
+
+
 def _parse(xml_text, source):
     """Turn feed XML into a list of headline dictionaries."""
     try:
@@ -113,6 +135,7 @@ def _parse(xml_text, source):
 
         title = ""
         summary = ""
+        image = ""
 
         for child in item:
             name = child.tag.rsplit("}", 1)[-1]
@@ -121,12 +144,17 @@ def _parse(xml_text, source):
                 title = _clean(child.text)
             elif name in ("description", "summary") and not summary:
                 summary = _clean(child.text)
+            elif not image:
+                # Feeds carry pictures as media:thumbnail, media:content or
+                # an enclosure, depending on the publisher.
+                image = _image_from(name, child)
 
         if title:
             items.append({
                 "title": title,
                 "summary": summary,
                 "source": source,
+                "image": image,
             })
 
     return items
@@ -177,6 +205,52 @@ def headlines(region=DEFAULT_REGION, limit=HEADLINE_COUNT, refresh=False):
         return cached[1][:limit]
 
     return collected[:limit]
+
+
+# Pictures are only fetched when a story is expanded, and only once.
+MAX_IMAGE_BYTES = 3_000_000
+
+_images = {}
+
+
+def image_bytes(url):
+    """Download a headline picture, or return None."""
+    if not url:
+        return None
+
+    if url in _images:
+        return _images[url]
+
+    try:
+        response = requests.get(
+            url,
+            timeout=TIMEOUT,
+            headers={"User-Agent": "JARVIS/1.0"},
+            stream=True,
+        )
+        response.raise_for_status()
+
+        kind = (response.headers.get("Content-Type") or "").casefold()
+
+        if not kind.startswith("image/"):
+            print(f"[JARVIS] {url} is not an image")
+            _images[url] = None
+            return None
+
+        data = response.raw.read(MAX_IMAGE_BYTES + 1, decode_content=True)
+
+        if len(data) > MAX_IMAGE_BYTES:
+            print("[JARVIS] headline picture is too large")
+            _images[url] = None
+            return None
+
+    except requests.RequestException as error:
+        print(f"[JARVIS] could not fetch the picture: {error}")
+        return None
+
+    _images[url] = data
+
+    return data
 
 
 def describe(region=DEFAULT_REGION, spoken=2):

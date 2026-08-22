@@ -1,6 +1,7 @@
 from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
+    QImage,
     QFont,
     QFontMetrics,
     QPainter,
@@ -21,6 +22,13 @@ _ACCENT = QColor(95, 200, 245)
 _MARKET_TOP = _HEIGHT - 26
 _ITEMS_BOTTOM = _MARKET_TOP - 26
 
+# A headline picture, when one is showing, takes the lower part of the panel.
+_IMAGE_HEIGHT = 150
+_IMAGE_TOP = _MARKET_TOP - 34 - _IMAGE_HEIGHT
+
+# Space left between this panel and the HUD, for the beam to cross.
+_BEAM_GAP = 74
+
 _UP = QColor(95, 235, 160)
 _DOWN = QColor(255, 110, 110)
 _FLAT = QColor(170, 190, 205)
@@ -37,6 +45,7 @@ class NewsPanel(QWidget):
     hide_news = pyqtSignal()
     highlight = pyqtSignal(int)
     markets = pyqtSignal(list)
+    picture = pyqtSignal(bytes, str)
 
     def __init__(self):
         super().__init__()
@@ -47,6 +56,8 @@ class NewsPanel(QWidget):
         self._sweep = 0.0
         self._highlight = -1
         self._market_rows = []
+        self._picture = None
+        self._caption = ""
         self._drag_offset = None
 
         self.setWindowFlags(
@@ -61,6 +72,7 @@ class NewsPanel(QWidget):
         self.hide_news.connect(self._on_hide)
         self.highlight.connect(self._on_highlight)
         self.markets.connect(self._on_markets)
+        self.picture.connect(self._on_picture)
 
         self._reveal = QTimer(self)
         self._reveal.timeout.connect(self._advance)
@@ -74,6 +86,8 @@ class NewsPanel(QWidget):
         self._items = items or []
         self._revealed = 0
         self._highlight = -1
+        self._picture = None
+        self._caption = ""
 
         self._position()
         self.show()
@@ -81,6 +95,25 @@ class NewsPanel(QWidget):
 
         self._reveal.start(_REVEAL_MS)
         self._animate.start(_FRAME_MS)
+
+        self.update()
+
+    def _on_picture(self, data, caption):
+        """Show a headline picture, or clear it when given nothing."""
+        if not data:
+            self._picture = None
+            self._caption = ""
+            self.update()
+            return
+
+        image = QImage()
+
+        if not image.loadFromData(data):
+            print("[JARVIS] could not decode the headline picture")
+            self._picture = None
+        else:
+            self._picture = image
+            self._caption = caption or ""
 
         self.update()
 
@@ -99,10 +132,29 @@ class NewsPanel(QWidget):
         self._animate.stop()
         self.hide()
 
+    def set_anchor(self, widget):
+        """Sit alongside another window, joined by the beam."""
+        self._anchor = widget
+
     def _position(self):
         screen = self.screen().availableGeometry()
 
-        # Sits left of the HUD, which lives in the bottom right corner.
+        anchor = getattr(self, "_anchor", None)
+
+        if anchor is not None and anchor.isVisible():
+            frame = anchor.frameGeometry()
+
+            # To the left of the HUD, with a gap for the beam, and centred
+            # on it so the two read as one instrument.
+            x = frame.left() - _WIDTH - _BEAM_GAP
+            y = frame.center().y() - _HEIGHT // 2
+
+            x = max(screen.left() + 12, x)
+            y = max(screen.top() + 12, min(y, screen.bottom() - _HEIGHT - 12))
+
+            self.move(int(x), int(y))
+            return
+
         self.move(
             screen.right() - _WIDTH - 500,
             screen.bottom() - _HEIGHT - 24,
@@ -154,6 +206,7 @@ class NewsPanel(QWidget):
         self._paint_corners(painter, body)
         self._paint_heading(painter)
         self._paint_items(painter)
+        self._paint_picture(painter)
         self._paint_markets(painter)
         self._paint_scanline(painter, body)
 
@@ -212,7 +265,7 @@ class NewsPanel(QWidget):
             if index >= self._revealed:
                 break
 
-            if y > _ITEMS_BOTTOM:
+            if y > self._items_bottom():
                 break
 
             chosen = index == self._highlight
@@ -279,6 +332,48 @@ class NewsPanel(QWidget):
             )
 
         return lines
+
+    def _items_bottom(self):
+        """Headlines stop higher up when a picture is showing."""
+        return _IMAGE_TOP - 12 if self._picture else _ITEMS_BOTTOM
+
+    def _paint_picture(self, painter):
+        """The headline picture, fitted without distortion."""
+        if not self._picture:
+            return
+
+        available = QRectF(
+            _MARGIN, _IMAGE_TOP,
+            _WIDTH - _MARGIN * 2, _IMAGE_HEIGHT,
+        )
+
+        scaled = self._picture.scaled(
+            int(available.width()), int(available.height()),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+        x = available.left() + (available.width() - scaled.width()) / 2
+        target = QRectF(x, available.top(), scaled.width(), scaled.height())
+
+        painter.save()
+        painter.setClipPath(self._rounded(target, 10))
+        painter.drawImage(target.topLeft(), scaled)
+        painter.restore()
+
+        painter.setPen(QPen(self._tint(110), 1.2))
+        painter.drawPath(self._rounded(target, 10))
+
+        if self._caption:
+            painter.setPen(QPen(self._tint(170)))
+            painter.setFont(QFont("Segoe UI", 8))
+
+            metrics = QFontMetrics(painter.font())
+            text = metrics.elidedText(
+                self._caption, Qt.TextElideMode.ElideRight,
+                _WIDTH - _MARGIN * 2,
+            )
+            painter.drawText(_MARGIN, int(target.bottom()) + 15, text)
 
     def _paint_markets(self, painter):
         """A live price strip along the foot of the panel."""

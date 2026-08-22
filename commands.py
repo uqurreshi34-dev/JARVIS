@@ -591,6 +591,7 @@ def _timer_request(text):
 
 _news_listener = None
 _highlight_listener = None
+_picture_listener = None
 
 # Whatever the panel is currently showing, so a story can be referred to by
 # its number without fetching again.
@@ -609,12 +610,70 @@ def set_highlight_listener(listener):
     _highlight_listener = listener
 
 
+def set_picture_listener(listener):
+    """Register a callable taking (image bytes, caption)."""
+    global _picture_listener
+    _picture_listener = listener
+
+
+def _show_picture(number):
+    """Show the picture for a story on screen, if it has one."""
+    if not _on_screen:
+        return "There is no news on screen, sir."
+
+    try:
+        index = int(number) - 1
+    except (TypeError, ValueError):
+        return "Which story, sir?"
+
+    if not 0 <= index < len(_on_screen):
+        return f"There are only {len(_on_screen)} stories, sir."
+
+    item = _on_screen[index]
+    url = item.get("image")
+
+    if not url:
+        return f"There's no picture with story {index + 1}, sir."
+
+    data = news.image_bytes(url)
+
+    if not data:
+        return "I couldn't fetch that picture, sir."
+
+    if _highlight_listener:
+        try:
+            _highlight_listener(index)
+        except Exception:
+            pass
+
+    if _picture_listener:
+        try:
+            _picture_listener(data, item.get("title", ""))
+        except Exception as error:
+            print(f"[JARVIS] could not show the picture: {error}")
+            return "I couldn't show that picture, sir."
+
+    return f"Here's the picture for story {index + 1}, sir."
+
+
+def _clear_picture():
+    if _picture_listener:
+        try:
+            _picture_listener(b"", "")
+        except Exception:
+            pass
+
+    return True
+
+
 def _show_news(region):
     """Fetch headlines, hand them to the panel, and say a short summary."""
     global _on_screen
 
     items = news.headlines(region)
     _on_screen = items
+
+    _clear_picture()
 
     if _news_listener:
         try:
@@ -857,6 +916,30 @@ _STORY_WORDS = {
     "tenth": 10, "last": 10,
 }
 
+_SHOW_PICTURE = re.compile(
+    r"^(?:expand|show|show me|open|display)\s+(?:the\s+)?"
+    r"(?:image|picture|photo|photograph|pic)\s*"
+    r"(?:on|of|for|from)?\s*(?:the\s+)?"
+    r"(?:story|headline|article|number|item)?\s*"
+    r"(?:number\s*)?(\w+)$"
+)
+
+_HIDE_PICTURE = frozenset({
+    "hide the image", "close the image", "hide the picture",
+    "close the picture", "hide image", "close image",
+})
+
+
+def _picture_request(text):
+    """The story number whose picture is wanted, or None."""
+    match = _SHOW_PICTURE.match(text)
+
+    if not match:
+        return None
+
+    return _story_number(match.group(1))
+
+
 _EXPAND_STORY = re.compile(
     r"^(?:expand|open|read|tell me|show me)?\s*"
     r"(?:me\s+)?(?:more\s+(?:on|about)\s+|about\s+)?"
@@ -1043,6 +1126,14 @@ def _fast_path(command):
             return _blank_result("open_website", website=_WEBSITES[target])
 
     if _on_screen:
+        if text in _HIDE_PICTURE:
+            return _blank_result("hide_picture")
+
+        picture = _picture_request(text)
+
+        if picture:
+            return _blank_result("show_picture", amount=picture)
+
         number = _expand_request(text)
 
         if number:
@@ -1297,6 +1388,12 @@ def handle_command(command):
         region = text if text in news.FEEDS else news.DEFAULT_REGION
 
         return _query(intent, lambda: _show_news(region))
+
+    if intent == "show_picture" and amount is not None:
+        return _query(intent, lambda: _show_picture(amount))
+
+    if intent == "hide_picture":
+        return _action(intent, "Closing the picture, sir.", _clear_picture)
 
     if intent == "expand_story" and amount is not None:
         return _query(intent, lambda: _expand_story(amount))

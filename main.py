@@ -8,11 +8,13 @@ from PyQt6.QtWidgets import QApplication
 
 from actions.battery import battery_monitor
 from actions.markets import market_monitor
+from beam import Beam
 from commands import (
     handle_command,
     reminder_manager,
     set_highlight_listener,
     set_news_listener,
+    set_picture_listener,
 )
 from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
 from news_panel import NewsPanel
@@ -259,15 +261,23 @@ def main():
     # ever emits signals to it, which is the one thread-safe way to drive a
     # Qt widget from elsewhere.
     panel = NewsPanel()
+    panel.set_anchor(hud)
+
+    # A ray of light joining the two panels, in its own window because
+    # nothing can be drawn in the gap between them otherwise.
+    beam = Beam(panel, hud)
 
     def news_update(region, items):
         if region is None:
             panel.hide_news.emit()
+            beam.hidden.emit()
         else:
             panel.show_news.emit(region, items or [])
+            beam.shown.emit()
 
     set_news_listener(news_update)
     set_highlight_listener(panel.highlight.emit)
+    set_picture_listener(panel.picture.emit)
 
     # Prices refresh in the background and appear along the foot of the news
     # panel, so the HUD itself stays uncluttered.
@@ -284,6 +294,7 @@ def main():
     assistant = Assistant(hud)
 
     hud.shutdown.connect(panel.hide_news.emit)
+    hud.shutdown.connect(beam.hidden.emit)
     hud.shutdown.connect(lambda: QTimer.singleShot(400, app.quit))
     hud.closed.connect(assistant.stop)
 

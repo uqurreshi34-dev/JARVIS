@@ -98,6 +98,8 @@ technology, business, sport, science, politics, health. Otherwise leave
 Use hide_news when they want the news panel closed.
 Use expand_story when they ask about a numbered story already on screen,
 such as "tell me more about story five". Put the number in "amount".
+Use show_picture when they want the picture for a numbered story, and put
+the number in "amount". Use hide_picture to remove it.
 
 Use get_time when the user asks for the current time or today's date.
 Use get_weather when the user asks about the weather, temperature, or forecast.
@@ -159,6 +161,8 @@ _SCHEMA = {
                 "show_news",
                 "hide_news",
                 "expand_story",
+                "show_picture",
+                "hide_picture",
                 "get_time",
                 "get_weather",
                 "get_system_status",
