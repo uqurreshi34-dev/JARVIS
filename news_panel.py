@@ -1,0 +1,241 @@
+from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QPainter,
+    QPainterPath,
+    QPen,
+)
+from PyQt6.QtWidgets import QWidget
+
+
+_WIDTH = 520
+_HEIGHT = 470
+_MARGIN = 26
+
+_BACKDROP = QColor(8, 14, 21, 232)
+_ACCENT = QColor(95, 200, 245)
+
+# Headlines fade in one after another, which reads as the panel filling up.
+_REVEAL_MS = 90
+_FRAME_MS = 33
+
+
+class NewsPanel(QWidget):
+    """A translucent panel listing headlines, in the HUD's style."""
+
+    show_news = pyqtSignal(str, list)
+    hide_news = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+
+        self._region = ""
+        self._items = []
+        self._revealed = 0
+        self._sweep = 0.0
+        self._drag_offset = None
+
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(_WIDTH, _HEIGHT)
+
+        self.show_news.connect(self._on_show)
+        self.hide_news.connect(self._on_hide)
+
+        self._reveal = QTimer(self)
+        self._reveal.timeout.connect(self._advance)
+
+        self._animate = QTimer(self)
+        self._animate.timeout.connect(self._tick)
+
+    def _on_show(self, region, items):
+        """Fill the panel, whether or not it is already open."""
+        self._region = region or ""
+        self._items = items or []
+        self._revealed = 0
+
+        self._position()
+        self.show()
+        self.raise_()
+
+        self._reveal.start(_REVEAL_MS)
+        self._animate.start(_FRAME_MS)
+
+        self.update()
+
+    def _on_hide(self):
+        self._reveal.stop()
+        self._animate.stop()
+        self.hide()
+
+    def _position(self):
+        screen = self.screen().availableGeometry()
+
+        # Sits left of the HUD, which lives in the bottom right corner.
+        self.move(
+            screen.right() - _WIDTH - 500,
+            screen.bottom() - _HEIGHT - 24,
+        )
+
+    def _advance(self):
+        if self._revealed >= len(self._items):
+            self._reveal.stop()
+            return
+
+        self._revealed += 1
+        self.update()
+
+    def _tick(self):
+        self._sweep = (self._sweep + 0.004) % 1.0
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_offset = (
+                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            )
+
+    def mouseMoveEvent(self, event):
+        if self._drag_offset is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_offset)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_offset = None
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        body = QRectF(self.rect()).adjusted(5, 5, -5, -5)
+
+        path = QPainterPath()
+        path.addRoundedRect(body, 18, 18)
+
+        painter.fillPath(path, _BACKDROP)
+
+        glow = QColor(_ACCENT)
+        glow.setAlpha(95)
+        painter.setPen(QPen(glow, 1.5))
+        painter.drawPath(path)
+
+        painter.setClipPath(path)
+
+        self._paint_corners(painter, body)
+        self._paint_heading(painter)
+        self._paint_items(painter)
+        self._paint_scanline(painter, body)
+
+        painter.end()
+
+    def _tint(self, alpha):
+        colour = QColor(_ACCENT)
+        colour.setAlpha(alpha)
+        return colour
+
+    def _paint_corners(self, painter, body):
+        painter.setPen(QPen(self._tint(155), 2.0))
+
+        span = 20
+
+        for x, y, dx, dy in (
+            (body.left() + 12, body.top() + 12, 1, 1),
+            (body.right() - 12, body.top() + 12, -1, 1),
+            (body.left() + 12, body.bottom() - 12, 1, -1),
+            (body.right() - 12, body.bottom() - 12, -1, -1),
+        ):
+            painter.drawLine(int(x), int(y), int(x + span * dx), int(y))
+            painter.drawLine(int(x), int(y), int(x), int(y + span * dy))
+
+    def _paint_heading(self, painter):
+        heading = (self._region or "").upper() or "NEWS"
+
+        if heading != "NEWS":
+            heading = f"{heading} NEWS"
+
+        painter.setPen(QPen(_ACCENT))
+
+        font = QFont("Consolas", 12, QFont.Weight.Bold)
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 3.0)
+        painter.setFont(font)
+        painter.drawText(_MARGIN, 48, heading)
+
+        painter.setPen(QPen(self._tint(80), 1.0))
+        painter.drawLine(_MARGIN, 58, _WIDTH - _MARGIN, 58)
+
+    def _paint_items(self, painter):
+        if not self._items:
+            painter.setPen(QPen(self._tint(170)))
+            painter.setFont(QFont("Segoe UI", 10))
+            painter.drawText(_MARGIN, 96, "No headlines available, sir.")
+            return
+
+        number_font = QFont("Consolas", 9)
+        title_font = QFont("Segoe UI", 10)
+        metrics = QFontMetrics(title_font)
+
+        y = 88
+        width = _WIDTH - _MARGIN * 2 - 30
+
+        for index, item in enumerate(self._items):
+            if index >= self._revealed:
+                break
+
+            if y > _HEIGHT - 40:
+                break
+
+            painter.setPen(QPen(self._tint(150)))
+            painter.setFont(number_font)
+            painter.drawText(_MARGIN, y, f"{index + 1:02d}")
+
+            painter.setPen(QPen(QColor(228, 240, 250, 240)))
+            painter.setFont(title_font)
+
+            lines = self._wrap(metrics, item.get("title", ""), width, 2)
+
+            for offset, line in enumerate(lines):
+                painter.drawText(_MARGIN + 30, y + offset * 17, line)
+
+            y += 17 * len(lines) + 15
+
+    @staticmethod
+    def _wrap(metrics, text, width, max_lines):
+        words = (text or "").split()
+        lines = []
+        current = ""
+
+        for word in words:
+            trial = f"{current} {word}".strip()
+
+            if metrics.horizontalAdvance(trial) <= width or not current:
+                current = trial
+            else:
+                lines.append(current)
+                current = word
+
+                if len(lines) == max_lines:
+                    break
+
+        if current and len(lines) < max_lines:
+            lines.append(current)
+
+        if not lines:
+            return [""]
+
+        if len(lines) == max_lines:
+            lines[-1] = metrics.elidedText(
+                lines[-1], Qt.TextElideMode.ElideRight, width
+            )
+
+        return lines
+
+    def _paint_scanline(self, painter, body):
+        y = body.top() + body.height() * self._sweep
+
+        painter.setPen(QPen(self._tint(26), 1.0))
+        painter.drawLine(int(body.left()), int(y), int(body.right()), int(y))

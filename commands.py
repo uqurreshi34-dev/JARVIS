@@ -20,7 +20,7 @@ from actions.desktop import (
 from actions.knowledge import answer
 from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
-from actions import clipboard, files, notes
+from actions import clipboard, files, news, notes
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
@@ -143,6 +143,12 @@ _FAST_PHRASES = (
      "get_system_status"),
     (("whats on my clipboard", "what is on my clipboard",
       "read my clipboard", "check my clipboard"), "read_clipboard"),
+    (("show me the news", "whats the news", "what is the news",
+      "read me the news", "the news", "news", "any news",
+      "whats happening", "what is happening", "top stories",
+      "headlines", "the headlines"), "show_news"),
+    (("close the news", "hide the news", "close news", "hide news",
+      "dismiss the news", "get rid of the news"), "hide_news"),
     (("how many files do i have", "how many files are there",
       "how many files"), "count_files"),
     (("list my files", "name my files", "read my files", "show me my files",
@@ -578,6 +584,38 @@ def _timer_request(text):
     return None
 
 
+_news_listener = None
+
+
+def set_news_listener(listener):
+    """Register a callable taking (region, headlines) to show the panel."""
+    global _news_listener
+    _news_listener = listener
+
+
+def _show_news(region):
+    """Fetch headlines, hand them to the panel, and say a short summary."""
+    items = news.headlines(region)
+
+    if _news_listener:
+        try:
+            _news_listener(region, items)
+        except Exception as error:
+            print(f"[JARVIS] could not show the news: {error}")
+
+    return news.describe(region)
+
+
+def _hide_news():
+    if _news_listener:
+        try:
+            _news_listener(None, None)
+        except Exception as error:
+            print(f"[JARVIS] could not hide the news: {error}")
+
+    return True
+
+
 def _copy_file_to_clipboard(name):
     """Put a whole file's contents on the clipboard, and report the size."""
     content = files.read(name)
@@ -758,6 +796,37 @@ def _file_request(text):
     return None
 
 
+_NEWS_REQUEST = re.compile(
+    r"^(?:show me|read me|give me|whats|what is|tell me)?\s*"
+    r"(?:the\s+)?(.+?)\s+"
+    r"(?:news|headlines|stories)$"
+)
+
+
+def _news_request(text):
+    """A news request naming a region, returning the region or None."""
+    match = _NEWS_REQUEST.match(text)
+
+    if not match:
+        return None
+
+    words = match.group(1).strip()
+
+    # Try the whole phrase first, so "united states" beats "states".
+    region = news.region_for(words)
+
+    if region:
+        return region
+
+    for word in reversed(words.split()):
+        region = news.region_for(word)
+
+        if region:
+            return region
+
+    return None
+
+
 def _blank_result(intent, **fields):
     result = {
         "intent": intent, "application": None, "website": None,
@@ -873,6 +942,11 @@ def _fast_path(command):
 
         if intent == "open_application" and target in _WEBSITES:
             return _blank_result("open_website", website=_WEBSITES[target])
+
+    region = _news_request(text)
+
+    if region:
+        return _blank_result("show_news", text=region)
 
     # Last resort before the LLM: a near miss on a known phrase, which covers
     # speech-recognition slips like "how is my sister".
@@ -1113,6 +1187,14 @@ def handle_command(command):
             "Copying, sir.",
             lambda: files.copy(text, project) is not None,
         )
+
+    if intent == "show_news":
+        region = text if text in news.FEEDS else news.DEFAULT_REGION
+
+        return _query(intent, lambda: _show_news(region))
+
+    if intent == "hide_news":
+        return _action(intent, "Closing the news, sir.", _hide_news)
 
     if intent == "count_files":
         return _query(intent, files.describe_listing_count)

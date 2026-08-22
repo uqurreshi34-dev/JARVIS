@@ -7,8 +7,9 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
 from actions.battery import battery_monitor
-from commands import handle_command, reminder_manager
+from commands import handle_command, reminder_manager, set_news_listener
 from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
+from news_panel import NewsPanel
 from speech import prewarm, set_amplitude_listener, speak
 from voice import (
     arm_follow_up,
@@ -247,6 +248,19 @@ def main():
     hud = Hud()
     hud.show()
 
+    # The news panel lives on the main thread with the HUD. The worker only
+    # ever emits signals to it, which is the one thread-safe way to drive a
+    # Qt widget from elsewhere.
+    panel = NewsPanel()
+
+    def news_update(region, items):
+        if region is None:
+            panel.hide_news.emit()
+        else:
+            panel.show_news.emit(region, items or [])
+
+    set_news_listener(news_update)
+
     # Feed the voice envelope to the ring. Emitting a signal is thread-safe,
     # which matters because playback runs on the worker/audio thread.
     set_amplitude_listener(hud.amplitude_changed.emit)
@@ -256,6 +270,7 @@ def main():
 
     assistant = Assistant(hud)
 
+    hud.shutdown.connect(panel.hide_news.emit)
     hud.shutdown.connect(lambda: QTimer.singleShot(400, app.quit))
     hud.closed.connect(assistant.stop)
 

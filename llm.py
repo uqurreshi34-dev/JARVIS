@@ -91,6 +91,12 @@ Use clear_clipboard when the user wants the clipboard emptied.
 Use take_screenshot when the user wants a screenshot, screen capture, or a
 picture of their screen.
 
+Use show_news when the user asks for news or headlines. If they name a
+region or topic, put it in "text" as one of: uk, world, america, europe,
+technology, business, sport, science, politics, health. Otherwise leave
+"text" null.
+Use hide_news when they want the news panel closed.
+
 Use get_time when the user asks for the current time or today's date.
 Use get_weather when the user asks about the weather, temperature, or forecast.
 Use get_system_status when the user asks how the machine, PC, or system is
@@ -148,6 +154,8 @@ _SCHEMA = {
                 "make_note",
                 "read_notes",
                 "clear_notes",
+                "show_news",
+                "hide_news",
                 "get_time",
                 "get_weather",
                 "get_system_status",
