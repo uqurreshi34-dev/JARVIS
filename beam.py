@@ -1,20 +1,31 @@
 import math
 
 from PyQt6.QtCore import QPointF, QRect, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPen
+from PyQt6.QtGui import (
+    QColor,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+)
 from PyQt6.QtWidgets import QWidget
 
 
 _COLOUR = QColor(120, 210, 250)
 
-# Height of the window the beam is drawn inside.
-_THICKNESS = 46
-
 _FRAME_MS = 33
 
-# Pulses of light that travel along the beam.
-_PULSES = 3
-_PULSE_SPEED = 0.006
+# Each end of the projection is pulled in from its window's edge by this
+# much, so the light sits inside the frame rather than against it.
+_EDGE_INSET = 14
+
+# Bands of light travelling out along the cone.
+_BANDS = 4
+_BAND_SPEED = 0.0055
+
+# Fine horizontal lines across the cone, which is what makes it read as a
+# projection rather than a painted shape.
+_SCANLINE_GAP = 7
 
 
 class Beam(QWidget):
@@ -33,12 +44,15 @@ class Beam(QWidget):
     shown = pyqtSignal()
     hidden = pyqtSignal()
 
-    def __init__(self, left, right):
+    def __init__(self, panel, hud):
         super().__init__()
 
-        self._left = left
-        self._right = right
+        self._panel = panel
+        self._hud = hud
         self._phase = 0.0
+        self._hud_on_right = True
+        self._hud_edge = (0.0, 0.0)
+        self._panel_edge = (0.0, 0.0)
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -71,7 +85,7 @@ class Beam(QWidget):
         self.hide()
 
     def _tick(self):
-        self._phase = (self._phase + _PULSE_SPEED) % 1.0
+        self._phase = (self._phase + _BAND_SPEED) % 1.0
 
         self._reposition()
 
@@ -79,33 +93,44 @@ class Beam(QWidget):
             self.update()
 
     def _reposition(self):
-        """Sit in the gap between the two panels, whichever way round."""
-        if not self._left.isVisible() or not self._right.isVisible():
+        """Span the gap, with each end anchored to the window it touches.
+
+        The narrow end matches the HUD's height exactly and the wide end
+        matches the panel's, so the light can never spill past either.
+        """
+        if not self._panel.isVisible() or not self._hud.isVisible():
             self.hide()
             return
 
-        left = self._left.frameGeometry()
-        right = self._right.frameGeometry()
+        panel = self._panel.frameGeometry()
+        hud = self._hud.frameGeometry()
 
-        # Work out which panel is actually on the left.
-        if left.center().x() > right.center().x():
-            left, right = right, left
+        hud_on_right = hud.center().x() > panel.center().x()
 
-        start = left.right()
-        end = right.left()
+        if hud_on_right:
+            start_x, end_x = panel.right(), hud.left()
+        else:
+            start_x, end_x = hud.right(), panel.left()
 
-        width = end - start
+        width = end_x - start_x
 
         if width < 12:
-            # They overlap or touch, so there is no gap to bridge.
+            # They overlap, so there is no gap to project across.
             self.hide()
             return
 
-        centre = (left.center().y() + right.center().y()) // 2
+        # Tall enough to hold both windows' vertical extents.
+        top = min(panel.top(), hud.top())
+        bottom = max(panel.bottom(), hud.bottom())
 
-        self.setGeometry(
-            QRect(start, centre - _THICKNESS // 2, width, _THICKNESS)
-        )
+        self.setGeometry(QRect(start_x, top, width, bottom - top))
+
+        # Edges in this window's own coordinates, clamped to each window.
+        self._hud_on_right = hud_on_right
+        self._hud_edge = (hud.top() - top + _EDGE_INSET,
+                          hud.bottom() - top - _EDGE_INSET)
+        self._panel_edge = (panel.top() - top + _EDGE_INSET,
+                            panel.bottom() - top - _EDGE_INSET)
 
         if not self.isVisible():
             self.show()
@@ -115,52 +140,104 @@ class Beam(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         width = self.width()
-        middle = self.height() / 2
+        height = self.height()
 
-        if width <= 0:
+        if width <= 0 or height <= 0:
             painter.end()
             return
 
-        # A soft band that fades in at both ends, so it reads as light
-        # rather than a drawn line.
-        gradient = QLinearGradient(0.0, 0.0, float(width), 0.0)
+        # The light leaves the HUD and opens out to the panel, so the narrow
+        # end is always the HUD's edge.
+        if self._hud_on_right:
+            apex_x, far_x = float(width), 0.0
+        else:
+            apex_x, far_x = 0.0, float(width)
 
-        faint = QColor(_COLOUR)
-        faint.setAlpha(0)
+        apex_top, apex_bottom = self._hud_edge
+        far_top, far_bottom = self._panel_edge
 
-        soft = QColor(_COLOUR)
-        soft.setAlpha(70)
+        cone = QPainterPath()
+        cone.moveTo(apex_x, apex_top)
+        cone.lineTo(far_x, far_top)
+        cone.lineTo(far_x, far_bottom)
+        cone.lineTo(apex_x, apex_bottom)
+        cone.closeSubpath()
 
-        gradient.setColorAt(0.0, faint)
-        gradient.setColorAt(0.18, soft)
-        gradient.setColorAt(0.82, soft)
-        gradient.setColorAt(1.0, faint)
+        # Brightest at the lens, fading as the light spreads out.
+        gradient = QLinearGradient(apex_x, 0.0, far_x, 0.0)
 
-        painter.setPen(QPen(gradient, 2.0))
+        near = QColor(_COLOUR)
+        near.setAlpha(150)
+
+        mid = QColor(_COLOUR)
+        mid.setAlpha(78)
+
+        far = QColor(_COLOUR)
+        far.setAlpha(38)
+
+        gradient.setColorAt(0.0, near)
+        gradient.setColorAt(0.45, mid)
+        gradient.setColorAt(1.0, far)
+
+        painter.fillPath(cone, gradient)
+
+        painter.save()
+        painter.setClipPath(cone)
+
+        self._paint_scanlines(painter, width, height)
+        self._paint_bands(painter, apex_x, far_x,
+                          apex_top, apex_bottom, far_top, far_bottom)
+
+        painter.restore()
+
+        # Crisp edges, which is what stops it looking like a smudge.
+        edge = QColor(_COLOUR)
+        edge.setAlpha(205)
+        painter.setPen(QPen(edge, 1.8))
+        painter.drawLine(QPointF(apex_x, apex_top), QPointF(far_x, far_top))
         painter.drawLine(
-            QPointF(0.0, middle), QPointF(float(width), middle)
+            QPointF(apex_x, apex_bottom), QPointF(far_x, far_bottom)
         )
 
-        halo = QColor(_COLOUR)
-        halo.setAlpha(22)
-        painter.setPen(QPen(halo, 7.0))
+        # A bright core where the light leaves the HUD.
+        glow = QColor(_COLOUR)
+        glow.setAlpha(210)
+        painter.setPen(QPen(glow, 2.6, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap))
         painter.drawLine(
-            QPointF(0.0, middle), QPointF(float(width), middle)
+            QPointF(apex_x, apex_top + 4), QPointF(apex_x, apex_bottom - 4)
         )
-
-        # Pulses of light travelling along the beam.
-        for index in range(_PULSES):
-            position = (self._phase + index / _PULSES) % 1.0
-            x = position * width
-
-            glow = QColor(_COLOUR)
-            glow.setAlpha(int(150 * math.sin(position * math.pi)))
-
-            painter.setPen(QPen(glow, 3.0, Qt.PenStyle.SolidLine,
-                                Qt.PenCapStyle.RoundCap))
-            painter.drawLine(
-                QPointF(max(0.0, x - 9), middle),
-                QPointF(min(float(width), x + 9), middle),
-            )
 
         painter.end()
+
+    def _paint_scanlines(self, painter, width, height):
+        """Fine horizontal lines, the giveaway of a projected image."""
+        line = QColor(_COLOUR)
+        line.setAlpha(34)
+        painter.setPen(QPen(line, 1.0))
+
+        offset = int(self._phase * _SCANLINE_GAP)
+
+        for y in range(offset, height, _SCANLINE_GAP):
+            painter.drawLine(0, y, width, y)
+
+    def _paint_bands(self, painter, apex_x, far_x,
+                     apex_top, apex_bottom, far_top, far_bottom):
+        """Bands of light travelling from the lens out to the panel."""
+        for index in range(_BANDS):
+            position = (self._phase + index / _BANDS) % 1.0
+
+            x = apex_x + (far_x - apex_x) * position
+
+            top = apex_top + (far_top - apex_top) * position
+            bottom = apex_bottom + (far_bottom - apex_bottom) * position
+
+            # Brightest in the middle of its journey, so bands appear to
+            # travel rather than blink at the ends.
+            strength = math.sin(position * math.pi)
+
+            band = QColor(_COLOUR)
+            band.setAlpha(int(140 * strength))
+
+            painter.setPen(QPen(band, 2.4))
+            painter.drawLine(QPointF(x, top), QPointF(x, bottom))
