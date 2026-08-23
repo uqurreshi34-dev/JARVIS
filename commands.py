@@ -1881,11 +1881,11 @@ def handle_command(command):
 
         return _action(intent, response, function)
 
-    if intent == "make_note" and text:
+    if intent == "make_note" and (verbatim_text or text):
         return _action(
             intent,
             phrases.pick("acknowledge"),
-            lambda: notes.add(text),
+            lambda: notes.add(verbatim_text or text),
         )
 
     if intent == "remove_note" and text:
@@ -1931,11 +1931,11 @@ def handle_command(command):
             lambda: files.write(text, body, default_suffix=suffix) is not None,
         )
 
-    if intent == "append_file" and text and project:
+    if intent == "append_file" and (verbatim_text or text) and project:
         return _action(
             intent,
             phrases.pick("added"),
-            lambda: files.append(project, text) is not None,
+            lambda: files.append(project, verbatim_text or text) is not None,
         )
 
     if intent == "file_to_clipboard" and text:
@@ -1958,7 +1958,7 @@ def handle_command(command):
         return _action(intent, "Closing the chart, sir.", _hide_chart)
 
     if intent == "look":
-        question = (text or "").strip() or None
+        question = (verbatim_text or text or "").strip() or None
 
         return _query(intent, lambda: _look(question))
 
