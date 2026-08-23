@@ -5,7 +5,9 @@ drives either. Set LLM_PROVIDER in .env to choose the primary; any other
 provider with a key present is used automatically as a fallback.
 """
 
+import base64
 import os
+import re
 import time
 
 from dotenv import load_dotenv
@@ -25,12 +27,19 @@ PROVIDERS = {
         "key_env": "GROQ_API_KEY",
         "model_env": "GROQ_MODEL",
         "default_model": "openai/gpt-oss-20b",
+        # Vision needs a model that accepts images; the text default does not.
+        "vision_env": "GROQ_VISION_MODEL",
+        "default_vision_model": "qwen/qwen3.6-27b",
+        # Qwen narrates its thinking unless told to hide it.
+        "vision_reasoning": True,
     },
     "gemini": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "key_env": "GEMINI_API_KEY",
         "model_env": "GEMINI_MODEL",
         "default_model": "gemini-3.6-flash",
+        "vision_env": "GEMINI_VISION_MODEL",
+        "default_vision_model": "gemini-3.6-flash",
         "reasoning": True,
     },
 }
@@ -73,8 +82,35 @@ def is_model_unavailable(error):
     )
 
 
+def is_permission_error(error):
+    """True when the account/key lacks access to the model or endpoint.
+
+    This is distinct from a rate limit: it will not clear on its own, but
+    the *next* provider may well have that access, so it should still move
+    the request along rather than failing the command outright.
+    """
+    name = type(error).__name__.casefold()
+
+    if "permissiondenied" in name or "authenticationerror" in name:
+        return True
+
+    text = str(error).casefold()
+
+    return (
+        "403" in text
+        or "401" in text
+        or "permission" in text
+        or "forbidden" in text
+        or "unauthorized" in text
+    )
+
+
 def should_failover(error):
-    return is_rate_limit(error) or is_model_unavailable(error)
+    return (
+        is_rate_limit(error)
+        or is_model_unavailable(error)
+        or is_permission_error(error)
+    )
 
 
 class Provider:
@@ -82,6 +118,13 @@ class Provider:
         self.name = name
         self.model = os.getenv(config["model_env"]) or config["default_model"]
         self.reasoning = config.get("reasoning", False)
+
+        vision_env = config.get("vision_env")
+        self.vision_model = (
+            (os.getenv(vision_env) if vision_env else None)
+            or config.get("default_vision_model")
+        )
+        self.vision_reasoning = config.get("vision_reasoning", False)
 
         self._client = OpenAI(
             api_key=api_key,
@@ -154,7 +197,11 @@ class Provider:
 def _is_parameter_error(error):
     text = str(error).casefold()
 
-    return "reasoning_effort" in text or "unknown parameter" in text
+    return (
+        "reasoning_effort" in text
+        or "reasoning_format" in text
+        or "unknown parameter" in text
+    )
 
 
 def _is_format_error(error):
@@ -235,10 +282,12 @@ def chat(messages, response_format=None, temperature=0, max_tokens=None,
 
             provider.rest()
 
-            reason = (
-                "rate limited" if is_rate_limit(error)
-                else f"model unavailable ({provider.model})"
-            )
+            if is_rate_limit(error):
+                reason = "rate limited"
+            elif is_permission_error(error):
+                reason = f"access denied ({provider.model})"
+            else:
+                reason = f"model unavailable ({provider.model})"
 
             remaining = len(order) - index - 1
 
@@ -251,6 +300,123 @@ def chat(messages, response_format=None, temperature=0, max_tokens=None,
                 print(f"[JARVIS] {provider.name} {reason}, no fallback left")
 
     raise last_error
+
+
+_THINK_TAGS = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+
+
+def _strip_reasoning(text):
+    """Remove any chain-of-thought a reasoning model didn't actually hide."""
+    cleaned = _THINK_TAGS.sub("", text).strip()
+
+    # Only trust the stripped version if something sensible is left; an
+    # empty result means the whole reply was inside the tags, which is
+    # a stranger failure than leaked reasoning and worth seeing raw.
+    return cleaned or text
+
+
+def _describe_image(provider, prompt, image_bytes, mime, max_tokens):
+    """One vision request to a single provider."""
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+
+    kwargs = {
+        "model": provider.vision_model,
+        "max_tokens": max_tokens,
+        "temperature": 0.2,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime};base64,{encoded}"
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+
+    # Reasoning models narrate their thinking into the answer unless told
+    # not to. Groq accepts reasoning_format for these, but it isn't a
+    # parameter the SDK knows by name, so it has to travel via extra_body
+    # or the client rejects it locally before any request is sent.
+    if provider.vision_reasoning:
+        kwargs["extra_body"] = {"reasoning_format": "hidden"}
+
+    try:
+        response = provider._client.chat.completions.create(**kwargs)
+    except Exception as error:
+        if "reasoning_format" in kwargs.get("extra_body", {}) and _is_parameter_error(error):
+            print(
+                f"[JARVIS] {provider.name} rejected reasoning_format; "
+                "retrying without it"
+            )
+            kwargs.pop("extra_body", None)
+            response = provider._client.chat.completions.create(**kwargs)
+        else:
+            raise
+
+    content = (response.choices[0].message.content or "").strip()
+
+    return _strip_reasoning(content)
+
+
+def vision(prompt, image_bytes, mime="image/png", max_tokens=300):
+    """Ask about an image, rotating providers exactly as chat does."""
+    if not image_bytes:
+        return None
+
+    capable = [p for p in _pool if p.vision_model]
+
+    if not capable:
+        print("[JARVIS] no provider is configured for vision")
+        return None
+
+    order = [p for p in capable if not p.resting] + [
+        p for p in capable if p.resting
+    ]
+
+    last_error = None
+
+    for index, provider in enumerate(order):
+        try:
+            answer = _describe_image(
+                provider, prompt, image_bytes, mime, max_tokens
+            )
+
+            provider.wake()
+
+            return answer
+
+        except Exception as error:
+            last_error = error
+
+            if not should_failover(error):
+                print(
+                    f"[JARVIS] {provider.name} could not see the image: {error}")
+                return None
+
+            provider.rest()
+
+            if is_rate_limit(error):
+                reason = "rate limited"
+            elif is_permission_error(error):
+                reason = f"access denied ({provider.vision_model})"
+            else:
+                reason = f"model unavailable ({provider.vision_model})"
+
+            if len(order) - index - 1:
+                print(
+                    f"[JARVIS] {provider.name} {reason} for vision; "
+                    f"trying {order[index + 1].name}"
+                )
+
+    print(f"[JARVIS] no provider could see the image: {last_error}")
+
+    return None
 
 
 def active_provider():

@@ -81,7 +81,13 @@ All files live in one JARVIS folder, so never include a path.
 Use make_note when the user wants something written down or remembered as a
 note, and put the note itself in "text".
 Use read_notes when the user asks what their notes say.
-Use clear_notes when the user wants their notes deleted.
+Use clear_notes ONLY when the user wants every note deleted, such as "clear
+my notes" or "delete all my notes".
+Use remove_note when they want one thing taken out, such as "remove juice
+from my notes": put the thing to remove in "text". Never use clear_notes for
+that, since it would destroy everything else.
+Use remove_line to take a line out of a file: the text in "text" and the file
+name in "project".
 
 Use read_clipboard when the user asks what is on their clipboard.
 Use copy_to_clipboard when the user wants something put on the clipboard, and
@@ -93,6 +99,11 @@ picture of their screen.
 
 Use plot_chart when the user wants a chart or graph from a spreadsheet, and
 put the file name in "text". Use hide_chart to close it.
+
+Use look when the user wants JARVIS to see something through the camera,
+such as "what am I holding" or "what do you see". Put their question in
+"text" so it can be answered about the picture. Use stop_looking to turn
+the camera off.
 
 Use show_news when the user asks for news or headlines. If they name a
 region or topic, put it in "text" as one of: uk, world, america, europe,
@@ -161,8 +172,12 @@ _SCHEMA = {
                 "make_note",
                 "read_notes",
                 "clear_notes",
+                "remove_note",
+                "remove_line",
                 "plot_chart",
                 "hide_chart",
+                "look",
+                "stop_looking",
                 "show_news",
                 "hide_news",
                 "expand_story",

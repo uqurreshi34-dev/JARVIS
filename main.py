@@ -6,14 +6,17 @@ from datetime import datetime
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
+from actions import camera
 from actions.battery import battery_monitor
 import phrases
 from actions.markets import market_monitor
 from beam import Beam
+from camera_panel import CameraPanel
 from chart_panel import ChartPanel
 from commands import (
     handle_command,
     reminder_manager,
+    set_camera_listener,
     set_chart_listener,
     set_highlight_listener,
     set_news_listener,
@@ -249,6 +252,7 @@ class Assistant:
         self._state(IDLE)
         reminder_manager.cancel_all()
         battery_monitor.stop()
+        camera.release()
         market_monitor.stop()
         self._hud.shutdown.emit()
 
@@ -285,6 +289,21 @@ def main():
 
     set_chart_listener(chart_update)
 
+    # The camera view gets its own panel, projected like the others.
+    view = CameraPanel()
+    view.set_anchor(hud)
+    view_beam = Beam(view, hud)
+
+    def camera_update(data, caption):
+        if data:
+            view.show_view.emit(data, caption)
+            view_beam.shown.emit()
+        else:
+            view.hide_view.emit()
+            view_beam.hidden.emit()
+
+    set_camera_listener(camera_update)
+
     def news_update(region, items):
         if region is None:
             panel.hide_news.emit()
@@ -315,6 +334,8 @@ def main():
     hud.shutdown.connect(beam.hidden.emit)
     hud.shutdown.connect(chart.hide_chart.emit)
     hud.shutdown.connect(chart_beam.hidden.emit)
+    hud.shutdown.connect(view.hide_view.emit)
+    hud.shutdown.connect(view_beam.hidden.emit)
     hud.shutdown.connect(lambda: QTimer.singleShot(400, app.quit))
     hud.closed.connect(assistant.stop)
 

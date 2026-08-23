@@ -22,7 +22,7 @@ from actions.knowledge import answer
 from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
 import phrases
-from actions import charts, clipboard, files, news, notes
+from actions import camera, charts, clipboard, files, news, notes
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
@@ -151,6 +151,14 @@ _FAST_PHRASES = (
       "whats happening", "what is happening", "top stories",
       "headlines", "the headlines", "show me the headlines"),
      "show_news"),
+    (("what do you see", "what can you see", "look at this",
+      "take a look", "have a look", "what is this", "whats this",
+      "look through the camera", "access camera", "access the camera",
+      "use the camera", "open the camera", "what am i holding",
+      "what am i holding in my hand", "how about now", "and now",
+      "what about now", "look again"), "look"),
+    (("close the camera", "stop looking", "camera off",
+      "turn the camera off", "hide the camera"), "stop_looking"),
     (("close the news", "hide the news", "close news", "hide news",
       "dismiss the news", "get rid of the news"), "hide_news"),
     (("how many files do i have", "how many files are there",
@@ -652,6 +660,40 @@ def set_picture_listener(listener):
     """Register a callable taking (image bytes, caption)."""
     global _picture_listener
     _picture_listener = listener
+
+
+_camera_listener = None
+
+
+def set_camera_listener(listener):
+    """Register a callable taking (png bytes, caption)."""
+    global _camera_listener
+    _camera_listener = listener
+
+
+def _look(question=None):
+    """Glance through the camera and say what is there."""
+    answer, image = camera.look(question)
+
+    if image and _camera_listener:
+        try:
+            _camera_listener(image, question or "Camera")
+        except Exception as error:
+            print(f"[JARVIS] could not show the picture: {error}")
+
+    return answer
+
+
+def _stop_looking():
+    camera.release()
+
+    if _camera_listener:
+        try:
+            _camera_listener(b"", "")
+        except Exception:
+            pass
+
+    return True
 
 
 def set_chart_listener(listener):
@@ -1770,6 +1812,14 @@ def handle_command(command):
 
     if intent == "hide_chart":
         return _action(intent, "Closing the chart, sir.", _hide_chart)
+
+    if intent == "look":
+        question = (text or "").strip() or None
+
+        return _query(intent, lambda: _look(question))
+
+    if intent == "stop_looking":
+        return _action(intent, "Camera off, sir.", _stop_looking)
 
     if intent == "show_news":
         region = text if text in news.FEEDS else news.DEFAULT_REGION
