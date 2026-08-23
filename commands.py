@@ -1,3 +1,4 @@
+import os
 import re
 import time
 import webbrowser
@@ -768,10 +769,25 @@ def _save_picture():
     image = camera.last_image()
 
     if not image:
+        journal.action("save_picture", "no picture available", False)
         return "There's no picture to save yet, sir."
 
-    if not charts.save(image, "photo"):
+    saved = charts.save(image, "photo")
+
+    if not saved:
+        journal.action("save_picture", "photo", False)
         return "I couldn't save that picture, sir."
+
+    if isinstance(saved, str):
+        # charts.save returns the path it wrote to; speak just the
+        # filename rather than the full path.
+        filename = files.spoken_name(os.path.basename(saved))
+        spoken = f"save a picture as {filename}"
+    else:
+        filename = "a picture"
+        spoken = None  # falls back to journal's own "save a picture" wording
+
+    journal.action("save_picture", filename, True, spoken=spoken)
 
     return phrases.pick("saved")
 
@@ -788,9 +804,14 @@ def _click_now(name):
 
     if not element:
         print(f"[JARVIS] {name!r} is no longer on screen")
+        journal.action("click_thing", name, False)
+
         return False
 
-    return bool(screen_control.click(element))
+    success = bool(screen_control.click(element))
+    journal.action("click_thing", label, success)
+
+    return success
 
 
 def _click_thing(name):
@@ -799,6 +820,8 @@ def _click_thing(name):
     element, label, risky = screen_control.find_clickable(name)
 
     if not element:
+        journal.action("click_thing", name, False)
+
         return _query(
             "click_thing",
             lambda: f"I can't find anything called {name} on screen, sir.",
@@ -811,21 +834,26 @@ def _click_thing(name):
             lambda: _click_now(name),
         )
 
-    return _query(
-        "click_thing",
-        lambda: (
-            f"Clicking {label}, sir." if screen_control.click(element)
+    def click_it():
+        success = screen_control.click(element)
+        journal.action("click_thing", label, bool(success))
+
+        return (
+            f"Clicking {label}, sir." if success
             else f"I found {label}, sir, but couldn't click it."
-        ),
-    )
+        )
+
+    return _query("click_thing", click_it)
 
 
 def _type_text(text):
-    return _action(
-        "type_text",
-        phrases.pick("acknowledge"),
-        lambda: screen_control.type_text(text),
-    )
+    def type_now():
+        success = bool(screen_control.type_text(text))
+        journal.action("type_text", text, success)
+
+        return success
+
+    return _action("type_text", phrases.pick("acknowledge"), type_now)
 
 
 def set_chart_listener(listener):
@@ -1868,17 +1896,26 @@ def handle_command(command):
     unit = result.get("unit")
 
     if intent == "open_application" and application:
+        def open_application():
+            success = _application_manager.launch(application)
+            journal.action("open_application", application, success)
+
+            return success
+
         return _action(
-            intent,
-            phrases.pick("opening", name=application),
-            lambda: _application_manager.launch(application),
+            intent, phrases.pick("opening", name=application), open_application
         )
 
     if intent == "close_application" and application:
+        def close_application():
+            success = _application_manager.close(application)
+            journal.action("close_application", application, success)
+
+            return success
+
         return _action(
-            intent,
-            phrases.pick("closing", name=application),
-            lambda: _application_manager.close(application),
+            intent, phrases.pick(
+                "closing", name=application), close_application
         )
 
     if intent == "open_website" and website:
@@ -1923,11 +1960,14 @@ def handle_command(command):
         return _action(intent, response, function)
 
     if intent == "make_note" and (verbatim_text or text):
-        return _action(
-            intent,
-            phrases.pick("acknowledge"),
-            lambda: notes.add(verbatim_text or text),
-        )
+        def make_note():
+            content = verbatim_text or text
+            success = notes.add(content)
+            journal.action("make_note", content, success)
+
+            return success
+
+        return _action(intent, phrases.pick("acknowledge"), make_note)
 
     if intent == "remove_note" and text:
         def remove_note():
@@ -1962,47 +2002,63 @@ def handle_command(command):
     if intent == "create_file" and text:
         suffix = unit or ".txt"
         body = result.get("website") or ""
+        label = files.spoken_name(files.safe_name(text, suffix))
 
         if files.exists(text, suffix):
+            def overwrite_file():
+                success = files.write(
+                    text, body, default_suffix=suffix, overwrite=True
+                ) is not None
+                journal.action("create_file", label, success)
+
+                return success
+
             # Kept short and identical every time, so it plays from cache
             # rather than needing fresh synthesis, and leaves the microphone
             # deaf for a fraction of the time.
             return _confirm(
-                intent,
-                "That file exists. Overwrite it, sir?",
-                lambda: files.write(
-                    text, body, default_suffix=suffix, overwrite=True
-                ) is not None,
+                intent, "That file exists. Overwrite it, sir?", overwrite_file
             )
 
-        return _action(
-            intent,
-            phrases.pick(
-                "creating",
-                name=files.spoken_name(files.safe_name(text, suffix)),
-            ),
-            lambda: files.write(text, body, default_suffix=suffix) is not None,
-        )
+        def create_file():
+            success = files.write(
+                text, body, default_suffix=suffix) is not None
+            journal.action("create_file", label, success)
+
+            return success
+
+        return _action(intent, phrases.pick("creating", name=label), create_file)
 
     if intent == "append_file" and (verbatim_text or text) and project:
-        return _action(
-            intent,
-            phrases.pick("added"),
-            lambda: files.append(project, verbatim_text or text) is not None,
-        )
+        def append_file():
+            success = files.append(project, verbatim_text or text) is not None
+            journal.action("append_file", project, success)
+
+            return success
+
+        return _action(intent, phrases.pick("added"), append_file)
 
     if intent == "file_to_clipboard" and text:
-        return _query(intent, lambda: _copy_file_to_clipboard(text))
+        def file_to_clipboard():
+            spoken = _copy_file_to_clipboard(text)
+            journal.action("file_to_clipboard", text,
+                           spoken.startswith("Copied"))
+
+            return spoken
+
+        return _query(intent, file_to_clipboard)
 
     if intent == "read_file" and text:
         return _query(intent, lambda: files.describe_read(text))
 
     if intent == "copy_file" and text:
-        return _action(
-            intent,
-            "Copying, sir.",
-            lambda: files.copy(text, project) is not None,
-        )
+        def copy_file():
+            success = files.copy(text, project) is not None
+            journal.action("copy_file", text, success)
+
+            return success
+
+        return _action(intent, "Copying, sir.", copy_file)
 
     if intent == "plot_chart" and text:
         return _start_plot(text)
@@ -2060,18 +2116,23 @@ def handle_command(command):
         return _query(intent, clipboard.describe)
 
     if intent == "copy_to_clipboard" and (verbatim_text or text):
-        return _action(
-            intent,
-            phrases.pick("copied"),
-            lambda: clipboard.write(verbatim_text or text),
-        )
+        def copy_to_clipboard():
+            content = verbatim_text or text
+            success = clipboard.write(content)
+            journal.action("copy_to_clipboard", content, success)
+
+            return success
+
+        return _action(intent, phrases.pick("copied"), copy_to_clipboard)
 
     if intent == "clear_clipboard":
-        return _action(
-            intent,
-            "Clearing your clipboard, sir.",
-            clipboard.clear,
-        )
+        def clear_clipboard():
+            success = clipboard.clear()
+            journal.action("clear_clipboard", "clipboard", bool(success))
+
+            return success
+
+        return _action(intent, "Clearing your clipboard, sir.", clear_clipboard)
 
     if intent == "take_screenshot":
         return _query(intent, describe_capture)
