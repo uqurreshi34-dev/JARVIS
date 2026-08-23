@@ -1050,14 +1050,32 @@ def _copy_file_to_clipboard(name):
 
 
 def _original_case(command, payload):
-    """Recover the user's original casing, since the matched text is lowercased."""
+    """Recover the user's original wording, since matching runs against
+    heavily normalised text — lowercased, with punctuation stripped
+    (see _normalise). That means a payload like "50 off" no longer
+    matches its own source literally: the original command has "50%
+    off", not "50 off", so an exact substring search fails and any
+    symbol the payload lost stays lost. Instead, search for the
+    payload's words in order, allowing any run of stripped punctuation
+    between them, and return the real substring — that recovers "50%
+    off" from a payload of "50 off" because the gap between "50" and
+    "off" in the original is exactly the kind of non-word run this
+    allows for.
+    """
     original = (command or "").strip()
-    start = original.casefold().find(payload)
 
-    if start == -1:
+    words = payload.split()
+
+    if not words:
         return payload
 
-    return original[start:start + len(payload)]
+    pattern = r"\b" + r"\W*".join(re.escape(word) for word in words) + r"\b"
+    match = re.search(pattern, original, re.IGNORECASE)
+
+    if not match:
+        return payload
+
+    return match.group(0)
 
 
 _FILE_FORMAT = r"(?:a\s+|an\s+)?(text|txt|plain text|markdown|md|word|word document|word doc|doc|docx|pdf|pdf document|csv|spreadsheet)\s*(?:file|document)?"

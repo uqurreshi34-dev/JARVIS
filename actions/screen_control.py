@@ -23,6 +23,8 @@ Known limits, worth knowing before relying on this:
   describe() (read-only) before trying click().
 """
 
+import threading
+import time
 from difflib import SequenceMatcher
 
 try:
@@ -39,6 +41,21 @@ try:
 except ImportError:
     send_keys = None
 
+try:
+    import win32clipboard
+    import win32con
+
+    _CLIPBOARD_AVAILABLE = True
+except ImportError:
+    _CLIPBOARD_AVAILABLE = False
+
+# Only one type_text() call may be sending keystrokes at a time. Without
+# this, two calls fired close together (e.g. back-to-back dictated
+# phrases) can interleave mid-word — one call's tail landing inside the
+# next call's stream — which is what produced garbled output like
+# "world" coming out as "oorld" or "rrrld".
+_TYPE_LOCK = threading.Lock()
+
 
 # Control types worth offering as something to click. UIA has many more
 # (Text, Pane, Image...) but those aren't things a person clicks.
@@ -51,11 +68,15 @@ _CLICKABLE_TYPES = frozenset({
 # clicking the closest-sounding thing on screen.
 _MATCH_THRESHOLD = 0.6
 
+# Characters send_keys treats as modifiers or grouping syntax rather than
+# literal text. Only used by the send_keys fallback path in type_text —
+# the primary clipboard-paste path doesn't need this at all, since a
+# paste event carries the string verbatim with no key-combo parsing.
+_SEND_KEYS_SPECIAL = frozenset("+^%~(){}")
+
 # Words that mean a click shouldn't happen without asking first. Matched
 # against the control's own name, so "Delete Account" is caught whether the
 # user said "delete", "account", or the whole phrase.
-_SEND_KEYS_SPECIAL = frozenset("+^%~(){}")
-
 _RISKY_WORDS = (
     "delete", "remove", "uninstall", "format", "erase", "wipe",
     "send", "submit", "pay", "purchase", "buy", "checkout", "order",
@@ -186,6 +207,85 @@ def click(element):
         return False
 
 
+def _get_clipboard_text():
+    """Current clipboard text, or None if it isn't text (or is empty)."""
+    win32clipboard.OpenClipboard()
+
+    try:
+        if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+            return win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+
+        return None
+
+    finally:
+        win32clipboard.CloseClipboard()
+
+
+def _set_clipboard_text(text):
+    win32clipboard.OpenClipboard()
+
+    try:
+        win32clipboard.EmptyClipboard()
+        win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
+
+    finally:
+        win32clipboard.CloseClipboard()
+
+
+def _type_via_paste(text):
+    """Type by pasting, so no character is ever interpreted as a key
+    combination. This is the reliable path: send_keys has to parse
+    +^%~(){} as modifiers/grouping even when each is individually
+    escaped, and back-to-back send_keys calls can still catch a
+    modifier mid-release from the previous call (this is what produced
+    garbled output like "world" typing as "oorld" or "rrrld" — a stray
+    Alt state from an escaped "%" bleeding into the next call). A paste
+    event carries the string as one block with no key parsing at all.
+    """
+    previous = None
+    had_previous = False
+
+    try:
+        previous = _get_clipboard_text()
+        had_previous = True
+    except Exception:
+        pass  # nothing usable on the clipboard yet; nothing to restore
+
+    try:
+        _set_clipboard_text(text)
+        send_keys("^v", pause=0.05)
+        # let the paste land before we touch the clipboard again
+        time.sleep(0.05)
+
+        return True
+
+    finally:
+        if had_previous and previous is not None:
+            try:
+                _set_clipboard_text(previous)
+            except Exception as error:
+                print(f"[JARVIS] could not restore clipboard: {error}")
+
+
+def _type_via_send_keys(text):
+    """Fallback for when the clipboard isn't reachable. Escapes every
+    character send_keys treats as special (+^%~(){}) so it types
+    literally rather than firing as a modifier or grouping — done in
+    one pass over the original text, since chaining separate .replace()
+    calls would let an earlier substitution's output (e.g. the braces
+    inserted while escaping a brace) get re-matched and mangled by a
+    later one.
+    """
+    escaped = "".join(
+        f"{{{char}}}" if char in _SEND_KEYS_SPECIAL else char
+        for char in text
+    )
+
+    send_keys(escaped, with_spaces=True, pause=0.01)
+
+    return True
+
+
 def type_text(text):
     """Type into whatever currently has keyboard focus."""
     if not _AVAILABLE or send_keys is None:
@@ -195,26 +295,16 @@ def type_text(text):
     if not text:
         return False
 
-    try:
-        # send_keys treats + ^ % ~ ( ) { } as special (modifiers and
-        # grouping). Wrapping each in its own braces is how pywinauto
-        # spells "type this literally". Done as one pass over the
-        # original text — chaining separate .replace() calls would let
-        # an earlier substitution's output (e.g. the { and } inserted
-        # while escaping a brace) get re-matched and mangled by a later
-        # one, which is exactly what the old two-call version did.
-        escaped = "".join(
-            f"{{{char}}}" if char in _SEND_KEYS_SPECIAL else char
-            for char in text
-        )
+    with _TYPE_LOCK:
+        try:
+            if _CLIPBOARD_AVAILABLE:
+                return _type_via_paste(text)
 
-        send_keys(escaped, with_spaces=True, pause=0.01)
+            return _type_via_send_keys(text)
 
-        return True
-
-    except Exception as error:
-        print(f"[JARVIS] could not type: {error}")
-        return False
+        except Exception as error:
+            print(f"[JARVIS] could not type: {error}")
+            return False
 
 
 def describe():
@@ -228,9 +318,18 @@ def describe():
         return "I can't reach the active window, sir."
 
     try:
-        title = window.window_text().strip() or "an untitled window"
+        raw_title = window.window_text().strip() or "an untitled window"
     except Exception:
-        title = "an untitled window"
+        raw_title = "an untitled window"
+
+    # Windows prefixes a title with "*" to mean unsaved changes (e.g.
+    # "*documents.txt - Notepad"). Left in, that symbol gets read aloud
+    # literally as "asterisk" — strip it and say what it means instead.
+    unsaved = raw_title.startswith("*")
+    title = raw_title.lstrip("*").strip() or "an untitled window"
+
+    if unsaved:
+        title = f"{title}, with unsaved changes"
 
     seen = set()
     names = []
