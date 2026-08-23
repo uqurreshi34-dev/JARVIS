@@ -44,6 +44,12 @@ WARMUP_FRAMES = 6
 # objects and keeps the request small.
 SEND_WIDTH = 768
 
+# Some capture devices deliver frames upside down (bottom-up DIB rows) and
+# some don't; pygrabber doesn't expose which. Your ACER HD User Facing came
+# out upside down WITH the flip on, so it's off by default — flip it back
+# on here if a different camera needs it.
+FLIP_VERTICAL = False
+
 _lock = threading.Lock()
 _graph = None
 _opened_at = 0.0
@@ -109,7 +115,7 @@ def _open():
 
 def release():
     """Close the camera so its light goes off."""
-    global _graph, _opened_at
+    global _graph, _opened_at, _last_image
 
     with _lock:
         if _graph is None:
@@ -122,6 +128,7 @@ def release():
 
         _graph = None
         _opened_at = 0.0
+        _last_image = None
 
         print("[JARVIS] camera released")
 
@@ -185,9 +192,11 @@ def _to_png(frame):
             print("[JARVIS] unexpected image from the camera")
             return None
 
-        # pygrabber hands back BGR, and often upside down.
+        # pygrabber hands back BGR.
         array = array[:, :, ::-1]
-        array = np.flipud(array)
+
+        if FLIP_VERTICAL:
+            array = np.flipud(array)
 
         if not _PIL:
             print("[JARVIS] Pillow is needed to encode the picture")
@@ -225,6 +234,15 @@ _SYSTEM_PROMPT = (
 # What was asked last, so "how about now?" repeats the same question.
 _last_question = "What am I holding?"
 
+# The last picture captured, so a "save the picture" command has something
+# to write without triggering a fresh capture (and a fresh camera light).
+_last_image = None
+
+
+def last_image():
+    """The most recent picture captured, or None if nothing has been seen."""
+    return _last_image
+
 
 def look(question=None):
     """Take a picture and answer a question about it.
@@ -232,7 +250,7 @@ def look(question=None):
     Returns (answer, image bytes). The image is returned even when the
     answer fails, so the panel can still show what was seen.
     """
-    global _last_question
+    global _last_question, _last_image
 
     if not _AVAILABLE:
         return permission_hint(), None
@@ -248,6 +266,8 @@ def look(question=None):
             "The camera opened but sent no picture, sir. "
             "Something else may be using it."
         ), None
+
+    _last_image = image
 
     # Imported here so a missing provider cannot stop the rest of JARVIS
     # from loading.

@@ -159,6 +159,10 @@ _FAST_PHRASES = (
       "what about now", "look again"), "look"),
     (("close the camera", "stop looking", "camera off",
       "turn the camera off", "hide the camera"), "stop_looking"),
+    (("save the picture", "save that picture", "save this picture",
+      "save the photo", "save that photo", "save this photo",
+      "keep that picture", "keep that photo", "save the image",
+      "save that image", "keep the picture"), "save_picture"),
     (("close the news", "hide the news", "close news", "hide news",
       "dismiss the news", "get rid of the news"), "hide_news"),
     (("how many files do i have", "how many files are there",
@@ -694,6 +698,19 @@ def _stop_looking():
             pass
 
     return True
+
+
+def _save_picture():
+    """Save the camera's last picture to the JARVIS folder."""
+    image = camera.last_image()
+
+    if not image:
+        return "There's no picture to save yet, sir."
+
+    if not charts.save(image, "photo"):
+        return "I couldn't save that picture, sir."
+
+    return phrases.pick("saved")
 
 
 def set_chart_listener(listener):
@@ -1820,6 +1837,9 @@ def handle_command(command):
 
     if intent == "stop_looking":
         return _action(intent, "Camera off, sir.", _stop_looking)
+
+    if intent == "save_picture":
+        return _query(intent, _save_picture)
 
     if intent == "show_news":
         region = text if text in news.FEEDS else news.DEFAULT_REGION

@@ -104,6 +104,10 @@ Use look when the user wants JARVIS to see something through the camera,
 such as "what am I holding" or "what do you see". Put their question in
 "text" so it can be answered about the picture. Use stop_looking to turn
 the camera off.
+Use save_picture when the user wants the picture currently shown by the
+camera saved as a file, such as "save the picture", "save that image", or
+"keep that photo". This is different from take_screenshot, which captures
+the whole screen — save_picture is only for the camera's own picture.
 
 Use show_news when the user asks for news or headlines. If they name a
 region or topic, put it in "text" as one of: uk, world, america, europe,
@@ -178,6 +182,7 @@ _SCHEMA = {
                 "hide_chart",
                 "look",
                 "stop_looking",
+                "save_picture",
                 "show_news",
                 "hide_news",
                 "expand_story",
