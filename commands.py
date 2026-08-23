@@ -901,10 +901,16 @@ def _columns_from_answer(text, headers):
 
 def _offer_to_save(data, title):
     """Ask whether to keep the chart, and remember the answer."""
+    def save_chart():
+        success = charts.save(data, title) is not None
+        journal.action("save_chart", title, success)
+
+        return success
+
     return _confirm(
         "save_chart",
         "Shall I save it to your JARVIS folder, sir?",
-        lambda: charts.save(data, title) is not None,
+        save_chart,
         yes_text=phrases.pick("saved"),
         no_text=phrases.pick("declined"),
     )
@@ -927,6 +933,8 @@ def _plot_columns(name, headers, text):
     data, spoken = charts.plot(name, x_index, y_index)
 
     if not data:
+        journal.action("plot_chart", name, False)
+
         return _query("plot_chart", lambda: spoken)
 
     title = f"{headers[y_index]} by {headers[x_index]}"
@@ -936,6 +944,8 @@ def _plot_columns(name, headers, text):
             _chart_listener(data, title)
         except Exception as error:
             print(f"[JARVIS] could not show the chart: {error}")
+
+    journal.action("plot_chart", title, True)
 
     # The chart is on screen, so now offer to keep it.
     offer = _offer_to_save(data, f"{name} {headers[y_index]}")
@@ -949,12 +959,16 @@ def _start_plot(name):
     headers, rows = charts.read_columns(name)
 
     if not headers:
+        journal.action("plot_chart", name, False)
+
         return _query(
             "plot_chart",
             lambda: f"I couldn't read a spreadsheet called {name}, sir.",
         )
 
     if not rows:
+        journal.action("plot_chart", name, False)
+
         return _query("plot_chart", lambda: f"{name} has no data, sir.")
 
     question = (
@@ -2064,7 +2078,13 @@ def handle_command(command):
         return _start_plot(text)
 
     if intent == "hide_chart":
-        return _action(intent, "Closing the chart, sir.", _hide_chart)
+        def hide_chart():
+            success = _hide_chart()
+            journal.action("hide_chart", "chart", success)
+
+            return success
+
+        return _action(intent, "Closing the chart, sir.", hide_chart)
 
     if intent == "read_log":
         return _query(intent, journal.describe)
@@ -2135,7 +2155,13 @@ def handle_command(command):
         return _action(intent, "Clearing your clipboard, sir.", clear_clipboard)
 
     if intent == "take_screenshot":
-        return _query(intent, describe_capture)
+        def take_screenshot():
+            spoken = describe_capture()
+            journal.action("take_screenshot", "screenshot", bool(spoken))
+
+            return spoken
+
+        return _query(intent, take_screenshot)
 
     if intent == "get_time":
         return _query(intent, describe_time)
