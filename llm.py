@@ -109,6 +109,26 @@ camera saved as a file, such as "save the picture", "save that image", or
 "keep that photo". This is different from take_screenshot, which captures
 the whole screen — save_picture is only for the camera's own picture.
 
+Use click_thing when the user wants to click, press, select, or activate
+something already visible on screen in the application that is currently
+open, such as "click submit", "press ok", "select the file menu", or
+"go to settings". Put the name of the thing to click in "text". This is
+different from open_application, which launches a whole new program:
+click_thing never launches anything, it only interacts with something
+already open and visible.
+
+Use type_text when the user wants words typed into whatever currently has
+keyboard focus, such as "type hello world" or "dictate my address". Put the
+exact words to type in "text". This is different from copy_to_clipboard,
+which stages text to paste later rather than typing it immediately, and
+different from make_note, which writes to JARVIS's own notes rather than
+into another application.
+
+Use describe_screen when the user asks what is on their screen or what they
+are currently looking at, such as "what's on my screen" or "describe my
+screen". This is different from look, which uses the camera to see the
+physical world, not the screen.
+
 Use show_news when the user asks for news or headlines. If they name a
 region or topic, put it in "text" as one of: uk, world, america, europe,
 technology, business, sport, science, politics, health. Otherwise leave
@@ -183,6 +203,9 @@ _SCHEMA = {
                 "look",
                 "stop_looking",
                 "save_picture",
+                "click_thing",
+                "type_text",
+                "describe_screen",
                 "show_news",
                 "hide_news",
                 "expand_story",

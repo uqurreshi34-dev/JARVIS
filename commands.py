@@ -22,7 +22,7 @@ from actions.knowledge import answer
 from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
 import phrases
-from actions import camera, charts, clipboard, files, news, notes
+from actions import camera, charts, clipboard, files, news, notes, screen_control
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
@@ -163,6 +163,10 @@ _FAST_PHRASES = (
       "save the photo", "save that photo", "save this photo",
       "keep that picture", "keep that photo", "save the image",
       "save that image", "keep the picture"), "save_picture"),
+    (("whats on my screen", "what is on my screen", "whats on the screen",
+      "what is on the screen", "what am i looking at", "describe my screen",
+      "describe the screen", "tell me whats on my screen"),
+     "describe_screen"),
     (("close the news", "hide the news", "close news", "hide news",
       "dismiss the news", "get rid of the news"), "hide_news"),
     (("how many files do i have", "how many files are there",
@@ -622,6 +626,49 @@ def _copy_request(text):
     return None
 
 
+# "on"/"the" are optional filler ("click on the submit button" vs "click
+# submit"); the trailing "button"/"link"/"icon" is stripped since UIA names
+# rarely include it. "go to" is included because it's how people phrase
+# navigating to a menu item or section, not just literal buttons.
+_CLICK_PATTERNS = (
+    re.compile(
+        r"^(?:click|press|select|tap|hit|choose)(?:\s+on)?\s+"
+        r"(?:the\s+)?(.+?)(?:\s+(?:button|link|icon|option))?$"
+    ),
+    re.compile(r"^go\s+(?:to|into)\s+(?:the\s+)?(.+)$"),
+)
+
+_TYPE_PATTERN = re.compile(r"^(?:type|dictate)\s+(.+)$")
+
+
+def _click_request(text):
+    """Extract what to click, or None."""
+    for pattern in _CLICK_PATTERNS:
+        match = pattern.match(text)
+
+        if not match:
+            continue
+
+        target = match.group(1).strip()
+
+        if target and target not in ("this", "that", "it"):
+            return target
+
+    return None
+
+
+def _type_request(text):
+    """Extract what to type, or None."""
+    match = _TYPE_PATTERN.match(text)
+
+    if not match:
+        return None
+
+    payload = match.group(1).strip()
+
+    return payload or None
+
+
 def _timer_request(text):
     """Resolve a timer or reminder locally, or return None."""
     for pattern in _TIMER_PATTERNS:
@@ -711,6 +758,41 @@ def _save_picture():
         return "I couldn't save that picture, sir."
 
     return phrases.pick("saved")
+
+
+def _click_thing(name):
+    """Find something on the active window and click it, asking first if
+    its name suggests something hard to undo."""
+    element, label, risky = screen_control.find_clickable(name)
+
+    if not element:
+        return _query(
+            "click_thing",
+            lambda: f"I can't find anything called {name} on screen, sir.",
+        )
+
+    if risky:
+        return _confirm(
+            "click_thing",
+            f"That looks like it might {label}, sir. Go ahead?",
+            lambda: screen_control.click(element),
+        )
+
+    return _query(
+        "click_thing",
+        lambda: (
+            f"Clicking {label}, sir." if screen_control.click(element)
+            else f"I found {label}, sir, but couldn't click it."
+        ),
+    )
+
+
+def _type_text(text):
+    return _action(
+        "type_text",
+        phrases.pick("acknowledge"),
+        lambda: screen_control.type_text(text),
+    )
 
 
 def set_chart_listener(listener):
@@ -1337,6 +1419,20 @@ def _fast_path(command):
     if note:
         return _blank_result("make_note", text=_original_case(command, note))
 
+    click_target = _click_request(text)
+
+    if click_target:
+        return _blank_result(
+            "click_thing", text=_original_case(command, click_target)
+        )
+
+    type_payload = _type_request(text)
+
+    if type_payload:
+        return _blank_result(
+            "type_text", text=_original_case(command, type_payload)
+        )
+
     request = _file_request(text)
 
     if request:
@@ -1840,6 +1936,15 @@ def handle_command(command):
 
     if intent == "save_picture":
         return _query(intent, _save_picture)
+
+    if intent == "click_thing" and text:
+        return _click_thing(text)
+
+    if intent == "type_text" and text:
+        return _type_text(text)
+
+    if intent == "describe_screen":
+        return _query(intent, screen_control.describe)
 
     if intent == "show_news":
         region = text if text in news.FEEDS else news.DEFAULT_REGION

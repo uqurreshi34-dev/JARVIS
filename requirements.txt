@@ -66,6 +66,7 @@ python-docx==1.2.0
 python-dotenv==1.2.3
 pyttsx3==2.99
 pywin32==312
+pywinauto==0.6.9
 PyYAML==6.0.3
 regex==2026.7.19
 reportlab==5.0.1
