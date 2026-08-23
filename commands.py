@@ -1810,7 +1810,20 @@ def handle_command(command):
     website = result.get("website")
     project = result.get("project")
     amount = _to_number(result.get("amount"))
-    text = _trim_filler(_normalise(result.get("text") or "")) or None
+    # Two versions of the same text: `text` is normalised (lowercased,
+    # punctuation stripped) because most intents below use it for
+    # matching — filenames, note lookups, removal targets. But that
+    # normalisation is exactly what was eating the "%" out of "50% off"
+    # for type_text and copy_to_clipboard: those two don't match
+    # anything, they just need to reproduce what was said, verbatim.
+    # result.get("text") already carries the recovered original wording
+    # (see _original_case) for the fast path, or the LLM's own text for
+    # the interpreter path — either way it's what should actually be
+    # typed or copied, so it's kept alongside rather than only using
+    # the flattened version.
+    raw_text = (result.get("text") or "").strip()
+    text = _trim_filler(_normalise(raw_text)) or None
+    verbatim_text = raw_text or None
     unit = result.get("unit")
 
     if intent == "open_application" and application:
@@ -1958,8 +1971,8 @@ def handle_command(command):
     if intent == "click_thing" and text:
         return _click_thing(text)
 
-    if intent == "type_text" and text:
-        return _type_text(text)
+    if intent == "type_text" and (verbatim_text or text):
+        return _type_text(verbatim_text or text)
 
     if intent == "describe_screen":
         return _query(intent, screen_control.describe)
@@ -1990,11 +2003,11 @@ def handle_command(command):
     if intent == "read_clipboard":
         return _query(intent, clipboard.describe)
 
-    if intent == "copy_to_clipboard" and text:
+    if intent == "copy_to_clipboard" and (verbatim_text or text):
         return _action(
             intent,
             phrases.pick("copied"),
-            lambda: clipboard.write(text),
+            lambda: clipboard.write(verbatim_text or text),
         )
 
     if intent == "clear_clipboard":
