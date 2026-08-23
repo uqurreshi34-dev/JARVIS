@@ -232,6 +232,9 @@ _NEVER_FUZZY = frozenset({
     # "open the news" and "close the news" differ by one word and score 0.85
     # against each other, so closing must be said exactly.
     "hide_news",
+    # "close the picture" and "save the picture" differ by one word too, and
+    # a near miss there writes a file the user did not ask for.
+    "save_picture",
 })
 
 
@@ -1539,10 +1542,15 @@ def _fast_path(command):
         if intent == "open_application" and target in _WEBSITES:
             return _blank_result("open_website", website=_WEBSITES[target])
 
-    if _on_screen:
-        if text in _HIDE_PICTURE:
+    if text in _HIDE_PICTURE:
+        # A headline picture belongs to the news panel; otherwise the thing
+        # on screen is the camera view.
+        if _on_screen:
             return _blank_result("hide_picture")
 
+        return _blank_result("stop_looking")
+
+    if _on_screen:
         picture = _picture_request(text)
 
         if picture:

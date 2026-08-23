@@ -118,9 +118,67 @@ def command(spoken, intent, free_path):
     write("command", f"{spoken!r} -> {intent} ({route})")
 
 
-def action(intent, detail, succeeded):
-    """Record something that changed the machine or a file."""
+def action(intent, detail, succeeded, spoken=None):
+    """Record something that changed the machine or a file.
+
+    `detail` is for the file, `spoken` is how it should be read aloud. When
+    no spoken form is given one is worked out from the intent, so the log is
+    never read back as "remove underscore note".
+    """
     write("action", f"{intent}: {detail}", "ok" if succeeded else "failed")
+
+    _last_spoken["text"] = spoken or _phrase_for(intent, detail)
+    _last_spoken["ok"] = succeeded
+
+
+# How the most recent action should be said aloud.
+_last_spoken = {"text": None, "ok": True}
+
+# Turning an intent name into something a person would say.
+_VERBS = {
+    "remove_note": "remove {detail} from your notes",
+    "remove_line": "remove {detail}",
+    "clear_notes": "clear your notes",
+    "make_note": "make a note",
+    "append_file": "add to {detail}",
+    "create_file": "create {detail}",
+    "copy_file": "copy {detail}",
+    "file_to_clipboard": "copy {detail} to your clipboard",
+    "clear_clipboard": "clear your clipboard",
+    "copy_to_clipboard": "copy something to your clipboard",
+    "save_picture": "save a picture",
+    "save_chart": "save a chart",
+    "click_thing": "click {detail}",
+    "type_text": "type something",
+    "open_application": "open {detail}",
+    "close_application": "close {detail}",
+}
+
+
+def _tidy(detail):
+    """Strip the quoting and file wording out of a logged detail."""
+    text = str(detail or "").strip()
+
+    text = text.replace("'", "").replace('"', "")
+
+    for noise in (" from notes", " from your notes"):
+        text = text.replace(noise, "")
+
+    return text.strip()
+
+
+def _phrase_for(intent, detail):
+    """A spoken phrase for an intent, falling back to plain words."""
+    template = _VERBS.get(intent)
+    tidy = _tidy(detail)
+
+    if template:
+        return template.format(detail=tidy) if "{detail}" in template else template
+
+    # Unknown intent: at least say it as words rather than an identifier.
+    words = intent.replace("_", " ")
+
+    return f"{words} {tidy}".strip()
 
 
 def refused(reason, detail):
@@ -157,15 +215,24 @@ def describe(count=5):
     if not lines:
         return "There's nothing in the log yet, sir."
 
-    actions = [line for line in lines if "  action" in line]
+    spoken = _last_spoken.get("text")
 
-    if not actions:
-        return f"The log has {len(recent(MAX_LINES))} entries, sir."
+    if not spoken:
+        # Nothing recorded this session, so read the file instead.
+        actions = [line for line in lines if "  action" in line]
 
-    latest = actions[-1]
-    detail = latest.split("action", 1)[-1].strip()
+        if not actions:
+            return "I haven't changed anything yet, sir."
+
+        body = actions[-1].split("action", 1)[-1].strip()
+        intent, _, detail = body.partition(":")
+        detail = detail.split("->")[0]
+        spoken = _phrase_for(intent.strip(), detail)
+
+    lead = "The last thing I did was" if _last_spoken.get("ok", True) else (
+        "The last thing I tried was"
+    )
 
     return (
-        f"The last thing I did was {detail}, sir. "
-        f"The full log is in your JARVIS folder."
+        f"{lead} {spoken}, sir. The full log is in your JARVIS folder."
     )
