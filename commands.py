@@ -1,4 +1,5 @@
 import re
+import time
 import webbrowser
 from difflib import SequenceMatcher
 from urllib.parse import urlparse
@@ -516,6 +517,10 @@ _COPY_PATTERNS = (
 
 # Used to trim a trailing destination the fallback pattern would otherwise
 # capture as part of the text.
+_DESTINATION_ONLY = re.compile(
+    rf"^{_TO_WORDS}\s+(?:my|the)?\s*\w+$"
+)
+
 _TRAILING_CLIPBOARD = re.compile(rf"\s+{_TO_WORDS}\s+(?:my|the)?\s*clipboard$")
 
 
@@ -593,6 +598,11 @@ def _copy_request(text):
 
         # "copy that" and similar need context only the LLM might infer.
         if not payload or payload in ("this", "that", "it", "clipboard"):
+            continue
+
+        # "copy to my clipboard" leaves only the destination behind, which is
+        # not something to put on the clipboard.
+        if _DESTINATION_ONLY.match(payload):
             continue
 
         return payload
@@ -970,6 +980,10 @@ def _file_target(name):
     return None
 
 
+_BARE_TO_CLIPBOARD = re.compile(
+    rf"^(?:copy|put|send|save)\s+{_TO_WORDS}\s+(?:my|the)?\s*clipboard$"
+)
+
 _FILE_TO_CLIPBOARD = re.compile(
     rf"^(?:copy|put|send)\s+(?:the\s+)?(?:contents?\s+of\s+)?"
     rf"(?:my|the)?\s*(.+?)(?:\s+file)?\s+{_TO_WORDS}\s+"
@@ -979,6 +993,13 @@ _FILE_TO_CLIPBOARD = re.compile(
 
 def _file_to_clipboard_request(text):
     """Resolve copying a whole file to the clipboard, or None."""
+    # Speech often drops the small word: "copy it to my clipboard" arrives as
+    # "copy to my clipboard". With something remembered, that is unambiguous.
+    if _BARE_TO_CLIPBOARD.match(text):
+        subject = _current_subject()
+
+        return _file_target(subject) if subject else None
+
     match = _FILE_TO_CLIPBOARD.match(text)
 
     if not match:
@@ -1376,6 +1397,96 @@ _NO = frozenset({
     "no thanks", "dont", "do not", "leave it", "negative", "abort",
 })
 
+# What the last command was about, so a follow-up can say "it" instead of
+# naming the thing again. Deliberately narrow: only an explicit pronoun
+# resolves, it lapses after a minute, and it never applies to anything
+# destructive, where a wrong guess costs data.
+_CONTEXT_SECONDS = 60.0
+
+_PRONOUNS = frozenset({"it", "that", "this"})
+_PRONOUN_PHRASES = ("that one", "the same one", "the same")
+
+# A misread pronoun here would delete something, so these never resolve.
+_DESTRUCTIVE_OPENERS = (
+    "remove", "delete", "clear", "wipe", "erase", "take out",
+    "get rid", "drop", "cancel",
+)
+
+# Intents whose "text" field names a thing worth remembering. Notes and
+# clipboard text are content, not subjects, so they are excluded.
+_SUBJECT_INTENTS = frozenset({
+    "read_file", "append_file", "copy_file", "create_file",
+    "file_to_clipboard", "plot_chart", "open_project", "close_project",
+})
+
+_context = {"subject": None, "at": 0.0}
+
+
+def _remember(subject):
+    """Note what the last command was about."""
+    subject = (subject or "").strip()
+
+    if subject:
+        _context["subject"] = subject
+        _context["at"] = time.monotonic()
+
+
+def _forget():
+    _context["subject"] = None
+    _context["at"] = 0.0
+
+
+def _current_subject():
+    """What "it" currently refers to, or None."""
+    subject = _context.get("subject")
+
+    if not subject:
+        return None
+
+    if time.monotonic() - _context.get("at", 0.0) > _CONTEXT_SECONDS:
+        return None
+
+    return subject
+
+
+def _resolve_pronouns(text):
+    """Replace a standalone pronoun with the last subject.
+
+    Returns the text unchanged when there is nothing to resolve, so the
+    command is then handled exactly as it would have been anyway.
+    """
+    subject = _current_subject()
+
+    if not subject:
+        return text
+
+    lowered = text.strip()
+
+    if lowered.startswith(_DESTRUCTIVE_OPENERS):
+        return text
+
+    for phrase in _PRONOUN_PHRASES:
+        if f" {phrase}" in f" {lowered} " or lowered.endswith(f" {phrase}"):
+            return lowered.replace(phrase, subject, 1)
+
+    tokens = lowered.split()
+
+    if not any(token in _PRONOUNS for token in tokens):
+        return text
+
+    replaced = []
+    done = False
+
+    for token in tokens:
+        if not done and token in _PRONOUNS:
+            replaced.append(subject)
+            done = True
+        else:
+            replaced.append(token)
+
+    return " ".join(replaced)
+
+
 # An action waiting on a spoken yes or no.
 _pending = None
 
@@ -1470,6 +1581,8 @@ def _resolve_pending(text):
 
 
 def handle_command(command):
+    command = _resolve_pronouns(command)
+
     answered = _resolve_awaiting(command)
 
     if answered is not None:
@@ -1509,8 +1622,18 @@ def handle_command(command):
 
             raise
 
+    if not result:
+        return None
+
     intent = result["intent"]
     application = result.get("application")
+
+    # Whatever this command was about becomes what "it" means next.
+    _remember(
+        result.get("application")
+        or result.get("project")
+        or (result.get("text") if intent in _SUBJECT_INTENTS else None)
+    )
     website = result.get("website")
     project = result.get("project")
     amount = _to_number(result.get("amount"))
