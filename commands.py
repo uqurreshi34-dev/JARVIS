@@ -22,7 +22,17 @@ from actions.knowledge import answer
 from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
 import phrases
-from actions import camera, charts, clipboard, files, news, notes, screen_control
+from actions import (
+    camera,
+    charts,
+    clipboard,
+    files,
+    journal,
+    news,
+    notes,
+    safety,
+    screen_control,
+)
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
@@ -157,6 +167,9 @@ _FAST_PHRASES = (
       "use the camera", "open the camera", "what am i holding",
       "what am i holding in my hand", "how about now", "and now",
       "what about now", "look again"), "look"),
+    (("what have you done", "whats in the log", "what is in the log",
+      "read the log", "show me the log", "what did you do",
+      "whats your log", "activity log"), "read_log"),
     (("close the camera", "stop looking", "camera off",
       "turn the camera off", "hide the camera"), "stop_looking"),
     (("save the picture", "save that picture", "save this picture",
@@ -760,6 +773,23 @@ def _save_picture():
     return phrases.pick("saved")
 
 
+def _click_now(name):
+    """Find the control again and click it.
+
+    Used by the confirmation path: between JARVIS asking and the answer
+    arriving, a dialog can close or a page can navigate, which would leave
+    the stored element pointing at something else. Finding it again at the
+    moment of the click means the thing clicked is the thing described.
+    """
+    element, label, _ = screen_control.find_clickable(name)
+
+    if not element:
+        print(f"[JARVIS] {name!r} is no longer on screen")
+        return False
+
+    return bool(screen_control.click(element))
+
+
 def _click_thing(name):
     """Find something on the active window and click it, asking first if
     its name suggests something hard to undo."""
@@ -774,8 +804,8 @@ def _click_thing(name):
     if risky:
         return _confirm(
             "click_thing",
-            f"That looks like it might {label}, sir. Go ahead?",
-            lambda: screen_control.click(element),
+            f"{label} looks hard to undo, sir. Go ahead?",
+            lambda: _click_now(name),
         )
 
     return _query(
@@ -1770,11 +1800,14 @@ def handle_command(command):
 
     if result is not None:
         print(f"[fast] {result['intent']} (no API call)")
+        journal.command(command, result["intent"], True)
 
     else:
         candidates = _application_manager.candidates(command)
 
         try:
+            journal.write("model", f"asking about {command!r}")
+
             result = _interpreter.interpret(
                 command,
                 candidates,
@@ -1889,22 +1922,34 @@ def handle_command(command):
         )
 
     if intent == "remove_note" and text:
-        return _query(intent, lambda: notes.describe_removal(text))
+        def remove_note():
+            spoken = notes.describe_removal(text)
+            journal.action(
+                "remove_note", f"{text!r} from notes", "Removed" in spoken)
+            return spoken
+
+        return _query(intent, remove_note)
 
     if intent == "remove_line" and text and project:
-        return _query(
-            intent, lambda: files.describe_removal(project, text)
-        )
+        def remove_line():
+            spoken = files.describe_removal(project, text)
+            journal.action(
+                "remove_line", f"{text!r} from {project!r}", "Removed" in spoken
+            )
+            return spoken
+
+        return _query(intent, remove_line)
 
     if intent == "read_notes":
         return _query(intent, notes.describe)
 
     if intent == "clear_notes":
-        return _action(
-            intent,
-            "Clearing your notes, sir.",
-            lambda: notes.clear() >= 0,
-        )
+        def clear_notes():
+            removed = notes.clear()
+            journal.action("clear_notes", f"deleted {removed} note(s)", True)
+            return removed >= 0
+
+        return _action(intent, "Clearing your notes, sir.", clear_notes)
 
     if intent == "create_file" and text:
         suffix = unit or ".txt"
@@ -1956,6 +2001,9 @@ def handle_command(command):
 
     if intent == "hide_chart":
         return _action(intent, "Closing the chart, sir.", _hide_chart)
+
+    if intent == "read_log":
+        return _query(intent, journal.describe)
 
     if intent == "look":
         question = (verbatim_text or text or "").strip() or None

@@ -1,5 +1,7 @@
 import json
 
+from actions import safety
+
 from providers import chat
 
 
@@ -99,6 +101,9 @@ picture of their screen.
 
 Use plot_chart when the user wants a chart or graph from a spreadsheet, and
 put the file name in "text". Use hide_chart to close it.
+
+Use read_log when the user asks what JARVIS has been doing or wants the
+activity log.
 
 Use look when the user wants JARVIS to see something through the camera,
 such as "what am I holding" or "what do you see". Put their question in
@@ -200,6 +205,7 @@ _SCHEMA = {
                 "remove_line",
                 "plot_chart",
                 "hide_chart",
+                "read_log",
                 "look",
                 "stop_looking",
                 "save_picture",
@@ -271,6 +277,12 @@ def _parse(content):
 
 class CommandInterpreter:
     def interpret(self, command, applications, projects=()):
+        # These names come from the machine, not from the user speaking, so
+        # anything shaped like an instruction is dropped before it can be
+        # interpolated into the prompt.
+        applications = safety.safe_names(applications)
+        projects = safety.safe_names(projects)
+
         candidates = "\n".join(
             f"- {application}"
             for application in applications
