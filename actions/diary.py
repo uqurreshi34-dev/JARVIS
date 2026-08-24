@@ -269,6 +269,71 @@ def _stored(moment):
     return moment.strftime("%Y-%m-%d")
 
 
+# Outlook's own constants, so the module works without importing its type
+# library: an appointment item, and a busy free/busy status.
+_OL_APPOINTMENT = 1
+_OL_BUSY = 2
+
+
+def add_to_outlook(title, moment):
+    """Put the appointment straight into Outlook. Returns True on success.
+
+    Only classic desktop Outlook exposes COM; the newer one does not, so
+    this fails quietly and the .ics file remains the way in.
+    """
+    try:
+        import pythoncom
+        import win32com.client
+
+    except ImportError:
+        return False
+
+    if isinstance(moment, datetime):
+        start = moment
+        all_day = False
+    else:
+        start = datetime.combine(moment, datetime.min.time()).replace(hour=9)
+        all_day = True
+
+    try:
+        # The worker thread needs COM initialised before Outlook is asked
+        # for anything, or the call fails with an obscure error.
+        pythoncom.CoInitialize()
+
+    except Exception:
+        pass
+
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application")
+        appointment = outlook.CreateItem(_OL_APPOINTMENT)
+
+        appointment.Subject = title
+        appointment.Start = start.strftime("%Y-%m-%d %H:%M")
+        appointment.AllDayEvent = all_day
+
+        if not all_day:
+            appointment.Duration = 60
+
+        appointment.BusyStatus = _OL_BUSY
+        appointment.ReminderSet = True
+        appointment.ReminderMinutesBeforeStart = 15
+        appointment.Save()
+
+        print(f"[JARVIS] added to Outlook: {title}")
+
+        return True
+
+    except Exception as error:
+        print(f"[JARVIS] could not reach Outlook ({error})")
+        return False
+
+    finally:
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+
 def add(title, when, at=None):
     """Add an event. Returns the .ics path, or None."""
     title = safety.clean(title, 120)
@@ -294,7 +359,34 @@ def add(title, when, at=None):
             if not _write(existing):
                 return None
 
-    return write_invite(title, moment)
+    # The .ics is always written, whether or not Outlook took it: it is the
+    # record, and the way in for any other calendar.
+    invite = write_invite(title, moment)
+
+    if _wants_outlook():
+        add_to_outlook(title, moment)
+
+    return invite
+
+
+def _wants_outlook():
+    """Whether to try putting appointments into Outlook directly.
+
+    Controlled by memory, so "remember my calendar is local" turns it off
+    without touching any code.
+    """
+    try:
+        from actions import memory
+
+        preference = (memory.get("calendar") or "").strip().casefold()
+
+    except Exception:
+        return True
+
+    if preference in ("local", "jarvis", "none", "off", "file", "ics"):
+        return False
+
+    return True
 
 
 def remove(title, when=None):
@@ -437,6 +529,39 @@ def describe(limit=SPOKEN_LIMIT):
     return (
         f"You have {len(ahead)} events coming up, sir. "
         f"The next {len(shown)} are: {listed}."
+    )
+
+
+def briefing(days=2):
+    """What is coming up in the next day or two, or None.
+
+    Said when JARVIS starts, so the calendar is something he brings to you
+    rather than something you have to remember to ask about.
+    """
+    horizon = date.today() + timedelta(days=days - 1)
+
+    soon = []
+
+    for moment, title in upcoming():
+        day = moment.date() if isinstance(moment, datetime) else moment
+
+        if day <= horizon:
+            soon.append((moment, title))
+
+    if not soon:
+        return None
+
+    parts = [f"{title}, {spoken_when(moment)}" for moment, title in soon[:3]]
+    listed = ". ".join(parts)
+
+    if len(soon) == 1:
+        return f"One thing in the diary, sir. {listed}."
+
+    if len(soon) <= 3:
+        return f"{len(soon)} things in the diary, sir. {listed}."
+
+    return (
+        f"{len(soon)} things in the diary, sir. The first three: {listed}."
     )
 
 

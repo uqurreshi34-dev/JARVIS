@@ -6,7 +6,7 @@ from datetime import datetime
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
-from actions import camera, memory
+from actions import camera, diary, memory
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
 import phrases
@@ -201,6 +201,17 @@ class Assistant:
 
         except Exception as error:
             print(f"[JARVIS] could not catch up: {error}")
+
+        # The calendar is JARVIS's own, so it is read back whether or not
+        # any calendar application exists on the machine.
+        try:
+            ahead = diary.briefing()
+
+            if ahead:
+                self._say(ahead)
+
+        except Exception as error:
+            print(f"[JARVIS] could not read the diary: {error}")
 
         # Warm the cache for stock replies while the greeting plays, so the
         # first "Done, sir." does not wait on a network round trip.

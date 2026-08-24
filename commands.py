@@ -1850,6 +1850,7 @@ _BARE_FACT = re.compile(
     r"^(?:my name is|call me|i live in|"
     r"i(?:m|'m| am)?\s*based in|i(?:m|'m| am) in|"
     r"my (?:default|main|current) project is|"
+    r"my calendar is|"
     r"my location is|i work (?:at|for))\s+.+$",
     re.I,
 )

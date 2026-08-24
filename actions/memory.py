@@ -31,6 +31,8 @@ KNOWN_KEYS = (
     # Preferences that change what JARVIS actually does, rather than facts
     # he can only recite back.
     "reply length", "latitude", "longitude",
+    # Where new appointments should go: "outlook" or "local".
+    "calendar",
 )
 
 # How long an answer should be. Anything else is treated as medium.
@@ -190,6 +192,11 @@ _KEYED_PATTERNS = (
         r"^(?:my (?:default|main|current) project is|"
         r"i(?:'m| am) working on)\s+(.+)$", re.I),
      "project"),
+    (re.compile(
+        r"^(?:my calendar is|use|put (?:my )?(?:events|appointments) in)\s+"
+        r"(outlook|local|jarvis|the local calendar|"
+        r"outlook calendar)(?:\s+(?:for|as)\s+my\s+calendar)?$", re.I),
+     "calendar"),
     (re.compile(r"^(?:my name is|i am called|call me|im called)\s+(.+)$", re.I),
      "name"),
     (re.compile(
@@ -277,6 +284,17 @@ def set_coordinates(latitude, longitude):
 def default_project():
     """The project to open when none is named."""
     return get("project")
+
+
+def calendar_target():
+    """Where appointments should go: "outlook" or "local"."""
+    stored = (get("calendar") or "").strip().casefold()
+
+    if stored in ("local", "jarvis", "none", "off", "file", "ics",
+                  "the local calendar"):
+        return "local"
+
+    return "outlook"
 
 
 def describe():

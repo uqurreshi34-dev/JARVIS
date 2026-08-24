@@ -8,6 +8,22 @@ from providers import chat
 # writing anything, so it needs headroom well beyond the spoken answer.
 _MAX_TOKENS = 900
 
+# How long an answer should be, by preference. Spoken aloud, "long" is
+# already quite a lot, so even that stays bounded.
+_LENGTH_BUDGET = {"short": 350, "medium": 900, "long": 1600}
+
+_LENGTH_GUIDANCE = {
+    "short": (
+        "Answer in one or two sentences. The user prefers brevity: give "
+        "the answer and stop."
+    ),
+    "medium": "",
+    "long": (
+        "The user is happy with a fuller answer, so explain properly, "
+        "but stay conversational since this is read aloud."
+    ),
+}
+
 _SYSTEM_PROMPT = """
 You are JARVIS, a British AI assistant answering a spoken question.
 
@@ -45,10 +61,25 @@ def _system_prompt():
         print(f"[JARVIS] could not read memory: {error}")
         background = ""
 
-    if not background:
-        return _SYSTEM_PROMPT
+    parts = [_SYSTEM_PROMPT]
 
-    return f"{_SYSTEM_PROMPT}\n\n{background}"
+    guidance = _LENGTH_GUIDANCE.get(_preferred_length())
+
+    if guidance:
+        parts.append(guidance)
+
+    if background:
+        parts.append(background)
+
+    return "\n\n".join(parts)
+
+
+def _preferred_length():
+    """How long the user wants answers, defaulting to medium."""
+    try:
+        return memory.reply_length()
+    except Exception:
+        return "medium"
 
 
 def answer(question):
@@ -63,7 +94,9 @@ def answer(question):
                 {"role": "user", "content": question.strip()},
             ],
             temperature=0.3,
-            max_tokens=_MAX_TOKENS,
+            max_tokens=_LENGTH_BUDGET.get(
+                _preferred_length(), _MAX_TOKENS
+            ),
             reasoning_effort="low",
         )
 
