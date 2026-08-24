@@ -359,7 +359,18 @@ def _describe_image(provider, prompt, image_bytes, mime, max_tokens):
         else:
             raise
 
-    content = (response.choices[0].message.content or "").strip()
+    message = response.choices[0].message
+    content = (message.content or "").strip()
+
+    if not content:
+        # With reasoning hidden, some models return the answer in a separate
+        # field and leave content empty.
+        for field in ("reasoning", "reasoning_content"):
+            spare = getattr(message, field, None)
+
+            if spare and str(spare).strip():
+                content = str(spare).strip()
+                break
 
     return _strip_reasoning(content)
 
@@ -386,6 +397,20 @@ def vision(prompt, image_bytes, mime="image/png", max_tokens=300):
             answer = _describe_image(
                 provider, prompt, image_bytes, mime, max_tokens
             )
+
+            if not (answer or "").strip():
+                # No exception, but nothing said either. Treated as a
+                # failure so the next provider is tried, rather than
+                # returning empty and looking like the picture was
+                # unreadable.
+                print(
+                    f"[JARVIS] {provider.name} returned nothing for the image"
+                )
+
+                if len(order) - index - 1:
+                    print(f"[JARVIS] trying {order[index + 1].name}")
+
+                continue
 
             provider.wake()
 

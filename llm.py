@@ -109,6 +109,10 @@ Use look when the user wants JARVIS to see something through the camera,
 such as "what am I holding" or "what do you see". Put their question in
 "text" so it can be answered about the picture. Use stop_looking to turn
 the camera off.
+Use save_chart when the user wants the chart currently on screen saved,
+such as "save the chart" or "save the graph". This works even if the offer
+to save it has already passed.
+
 Use save_picture when the user wants the picture currently shown by the
 camera saved as a file, such as "save the picture", "save that image", or
 "keep that photo". This is different from take_screenshot, which captures
@@ -209,6 +213,7 @@ _SCHEMA = {
                 "look",
                 "stop_looking",
                 "save_picture",
+                "save_chart",
                 "click_thing",
                 "type_text",
                 "describe_screen",

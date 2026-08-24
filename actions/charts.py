@@ -145,6 +145,26 @@ def _series(rows, index):
     return [row[index].strip() if index < len(row) else "" for row in rows]
 
 
+# The chart most recently drawn, so it can still be saved after the offer
+# to save it has lapsed.
+_last_chart = {"data": None, "name": None}
+
+
+def last_chart():
+    """The most recent chart as (png bytes, suggested name)."""
+    return _last_chart.get("data"), _last_chart.get("name")
+
+
+def save_last():
+    """Save the chart currently on screen. Returns the path, or None."""
+    data, name = last_chart()
+
+    if not data:
+        return None
+
+    return save(data, name or "chart")
+
+
 def plot(name, x_index, y_index, title=None):
     """Draw a chart and return (png bytes, description), or (None, reason)."""
     headers, rows = read_columns(name)
@@ -243,7 +263,14 @@ def plot(name, x_index, y_index, title=None):
     if trimmed:
         spoken += f" Showing the first {MAX_CATEGORIES} rows."
 
-    return buffer.getvalue(), spoken
+    data = buffer.getvalue()
+
+    # Remembered so "save the chart" works later, even if the offer to save
+    # it was interrupted by another command.
+    _last_chart["data"] = data
+    _last_chart["name"] = f"{name} {y_label} by {x_label}"
+
+    return data, spoken
 
 
 def save(data, name):

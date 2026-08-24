@@ -50,6 +50,11 @@ SEND_WIDTH = 768
 # on here if a different camera needs it.
 FLIP_VERTICAL = False
 
+# Average brightness, 0 to 255, below which a picture is too dark to
+# recognise anything in. Checked before spending an API call, since asking a
+# vision model about a black frame costs credit and answers nothing.
+DARK_THRESHOLD = 34
+
 _lock = threading.Lock()
 _graph = None
 _opened_at = 0.0
@@ -57,6 +62,10 @@ _device_index = 0
 
 # Frames arrive on DirectShow's own thread, into this holder.
 _latest = {"frame": None}
+
+# Brightness of the last frame, so darkness can be reported without
+# decoding the picture twice.
+_brightness = {"value": None}
 _arrived = threading.Event()
 
 
@@ -192,6 +201,12 @@ def _to_png(frame):
             print("[JARVIS] unexpected image from the camera")
             return None
 
+        # How lit the scene is, before any resizing.
+        try:
+            _brightness["value"] = float(array.mean())
+        except Exception:
+            _brightness["value"] = None
+
         # pygrabber hands back BGR.
         array = array[:, :, ::-1]
 
@@ -241,6 +256,18 @@ _last_question = "What am I holding?"
 _last_image = None
 
 
+def brightness():
+    """Average brightness of the last frame, or None."""
+    return _brightness.get("value")
+
+
+def too_dark():
+    """True when the last frame was too dark to make anything out."""
+    value = _brightness.get("value")
+
+    return value is not None and value < DARK_THRESHOLD
+
+
 def last_image():
     """The most recent picture captured, or None if nothing has been seen."""
     return _last_image
@@ -271,6 +298,17 @@ def look(question=None):
 
     _last_image = image
 
+    # A black frame tells a vision model nothing, so say so rather than
+    # paying for an answer that cannot exist.
+    if too_dark():
+        level = brightness()
+        print(f"[JARVIS] the picture is too dark (brightness {level:.0f})")
+
+        return (
+            "It's too dark for me to see anything, sir. "
+            "A light would help."
+        ), image
+
     # Imported here so a missing provider cannot stop the rest of JARVIS
     # from loading.
     try:
@@ -285,7 +323,11 @@ def look(question=None):
     answer = vision(f"{_SYSTEM_PROMPT}\n\nQuestion: {asked}", image)
 
     if not answer:
-        return "I couldn't make sense of that, sir.", image
+        # The console will carry the provider's own reason, if it gave one.
+        return (
+            "I took the picture, sir, but couldn't get a description. "
+            "The console has the detail."
+        ), image
 
     return answer, image
 
