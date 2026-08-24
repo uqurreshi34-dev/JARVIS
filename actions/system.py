@@ -243,7 +243,13 @@ def _where():
 
         print(f"[JARVIS] found {proper} at {latitude:.3f}, {longitude:.3f}")
 
-        # Remembered so the lookup happens once, not on every forecast.
+        # Spoken words arrive lowercased, so "madrid" is stored. The
+        # geocoder knows the real spelling, so it is written back before
+        # the coordinates -- setting the location clears them, so the
+        # order matters.
+        if proper and proper != place:
+            memory.set_fact("location", proper)
+
         memory.set_coordinates(latitude, longitude)
 
         return latitude, longitude, proper

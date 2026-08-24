@@ -1911,8 +1911,9 @@ _BARE_PREFERENCE = re.compile(
 _BARE_FACT = re.compile(
     r"^(?:my name is|call me|i live in|"
     r"i(?:m|'m| am)?\s*based in|i(?:m|'m| am) in|"
+    r"i(?:m|'m| am) from|i come from|"
     r"my (?:default|main|current) project is|"
-    r"my calendar is|"
+    r"my calendar is|my home is|my city is|"
     r"my location is|i work (?:at|for))\s+.+$",
     re.I,
 )
@@ -2829,12 +2830,15 @@ def handle_command(command):
 
             return False
 
-        return _action(
-            intent,
-            f"I'll remember that, sir.",
-            store,
-            detail=text,
-        )
+        keyed = memory.classify(verbatim_text or text)
+
+        if keyed:
+            key, value = keyed
+            spoken = f"Noted, sir. Your {key} is {value}."
+        else:
+            spoken = "I'll remember that, sir."
+
+        return _action(intent, spoken, store, detail=text)
 
     if intent == "forget" and text:
         def drop():
