@@ -269,69 +269,16 @@ def _stored(moment):
     return moment.strftime("%Y-%m-%d")
 
 
-# Outlook's own constants, so the module works without importing its type
-# library: an appointment item, and a busy free/busy status.
-_OL_APPOINTMENT = 1
-_OL_BUSY = 2
-
-
 def add_to_outlook(title, moment):
-    """Put the appointment straight into Outlook. Returns True on success.
+    """Add the event to the user's Microsoft Outlook calendar."""
 
-    Only classic desktop Outlook exposes COM; the newer one does not, so
-    this fails quietly and the .ics file remains the way in.
-    """
     try:
-        import pythoncom
-        import win32com.client
-
-    except ImportError:
+        from outlook import create_event
+    except ImportError as error:
+        print(f"[JARVIS] Outlook integration unavailable: {error}")
         return False
 
-    if isinstance(moment, datetime):
-        start = moment
-        all_day = False
-    else:
-        start = datetime.combine(moment, datetime.min.time()).replace(hour=9)
-        all_day = True
-
-    try:
-        # The worker thread needs COM initialised before Outlook is asked
-        # for anything, or the call fails with an obscure error.
-        pythoncom.CoInitialize()
-
-    except Exception:
-        pass
-
-    try:
-        outlook = win32com.client.Dispatch("Outlook.Application")
-        appointment = outlook.CreateItem(_OL_APPOINTMENT)
-
-        appointment.Subject = title
-        appointment.Start = start.strftime("%Y-%m-%d %H:%M")
-        appointment.AllDayEvent = all_day
-
-        if not all_day:
-            appointment.Duration = 60
-
-        appointment.BusyStatus = _OL_BUSY
-        appointment.ReminderSet = True
-        appointment.ReminderMinutesBeforeStart = 15
-        appointment.Save()
-
-        print(f"[JARVIS] added to Outlook: {title}")
-
-        return True
-
-    except Exception as error:
-        print(f"[JARVIS] could not reach Outlook ({error})")
-        return False
-
-    finally:
-        try:
-            pythoncom.CoUninitialize()
-        except Exception:
-            pass
+    return create_event(title, moment)
 
 
 def add(title, when, at=None):
