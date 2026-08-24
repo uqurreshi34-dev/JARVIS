@@ -226,22 +226,51 @@ def parse_time(text):
     return hour, minute
 
 
+def _split(line):
+    """A stored line as (when, title, event id). The id may be empty."""
+    parts = line.split("\t")
+
+    when = parts[0].strip() if parts else ""
+    title = parts[1].strip() if len(parts) > 1 else ""
+    event_id = parts[2].strip() if len(parts) > 2 else ""
+
+    return when, title, event_id
+
+
 def events():
     """Every event as (datetime or date, title), soonest first."""
     entries = []
 
     for line in _read():
-        when, _, title = line.partition("\t")
+        when, title, _ = _split(line)
 
-        if not title.strip():
+        if not title:
             continue
 
-        moment = _to_moment(when.strip())
+        moment = _to_moment(when)
 
         if moment:
-            entries.append((moment, title.strip()))
+            entries.append((moment, title))
 
     return sorted(entries, key=lambda pair: _sort_key(pair[0]))
+
+
+def entries():
+    """Every stored line as (moment, title, event id)."""
+    found = []
+
+    for line in _read():
+        when, title, event_id = _split(line)
+
+        if not title:
+            continue
+
+        moment = _to_moment(when)
+
+        if moment:
+            found.append((moment, title, event_id))
+
+    return sorted(found, key=lambda item: _sort_key(item[0]))
 
 
 def _to_moment(text):
@@ -271,15 +300,51 @@ def _stored(moment):
 
 
 def add_to_outlook(title, moment):
-    """Add the event to the user's Microsoft Outlook calendar."""
+    """Add the event to the Microsoft calendar.
 
+    Returns the event's identifier when Outlook gives one back, True when
+    it succeeded without one, or False on failure. The identifier is what
+    makes deletion exact rather than a search by title.
+    """
     try:
         from outlook import create_event
     except ImportError as error:
         print(f"[JARVIS] Outlook integration unavailable: {error}")
         return False
 
-    return create_event(title, moment)
+    try:
+        outcome = create_event(title, moment)
+
+    except Exception as error:
+        print(f"[JARVIS] could not add to Outlook: {error}")
+        return False
+
+    # create_event may return an id, a dictionary from Graph, or a bool.
+    if isinstance(outcome, dict):
+        return outcome.get("id") or True
+
+    return outcome
+
+
+def remove_from_outlook(event_id):
+    """Delete one event from the Microsoft calendar by its identifier."""
+    if not event_id:
+        return False
+
+    try:
+        from outlook import delete_event
+    except ImportError:
+        # Deleting is newer than creating, so an older outlook.py may not
+        # have it. The local removal still stands.
+        print("[JARVIS] outlook.py has no delete_event; removed locally only")
+        return False
+
+    try:
+        return bool(delete_event(event_id))
+
+    except Exception as error:
+        print(f"[JARVIS] could not remove from Outlook: {error}")
+        return False
 
 
 def add(title, when, at=None):
@@ -297,22 +362,36 @@ def add(title, when, at=None):
             hour=hour, minute=minute
         )
 
-    with _lock:
-        existing = _read()
-        line = f"{_stored(moment)}\t{title}"
-
-        if line not in existing:
-            existing.append(line)
-
-            if not _write(existing):
-                return None
-
     # The .ics is always written, whether or not Outlook took it: it is the
     # record, and the way in for any other calendar.
     invite = write_invite(title, moment)
 
+    event_id = ""
+
     if _wants_outlook():
-        add_to_outlook(title, moment)
+        outcome = add_to_outlook(title, moment)
+
+        if isinstance(outcome, str):
+            event_id = outcome
+
+    with _lock:
+        existing = _read()
+        line = f"{_stored(moment)}\t{title}"
+
+        if event_id:
+            line += f"\t{event_id}"
+
+        # An entry for the same moment and title is replaced, so the id is
+        # not lost if the event is added twice.
+        kept = [
+            other for other in existing
+            if _split(other)[:2] != (_stored(moment), title)
+        ]
+
+        kept.append(line)
+
+        if not _write(kept):
+            return None
 
     return invite
 
@@ -338,7 +417,12 @@ def _wants_outlook():
 
 
 def remove(title, when=None):
-    """Remove matching events. Returns how many went."""
+    """Remove matching events everywhere. Returns how many went.
+
+    Removal is symmetrical with adding: the Outlook appointment, the local
+    line and the .ics all go. Outlook is told by identifier, so the right
+    appointment is deleted rather than the first one with a similar name.
+    """
     wanted = safety.clean(title).casefold()
 
     if not wanted:
@@ -349,34 +433,83 @@ def remove(title, when=None):
     with _lock:
         existing = _read()
         kept = []
-        removed = 0
+        going = []
 
         for line in existing:
-            stored_when, _, stored_title = line.partition("\t")
+            stored_when, stored_title, event_id = _split(line)
 
             matches_title = wanted in stored_title.casefold()
             matches_date = stamp is None or stored_when.startswith(stamp[:10])
 
             if matches_title and matches_date:
-                removed += 1
+                going.append((stored_when, stored_title, event_id))
             else:
                 kept.append(line)
 
-        if removed:
+        if going:
             _write(kept)
 
-        return removed
+    # Outside the lock: these reach the network and the file system, and
+    # holding the lock across them would block everything else.
+    for stored_when, stored_title, event_id in going:
+        if event_id:
+            remove_from_outlook(event_id)
+
+        _delete_invite(stored_title, _to_moment(stored_when))
+
+    return len(going)
 
 
 def clear():
-    """Remove every event. Returns how many there were."""
+    """Remove every event everywhere. Returns how many there were."""
     with _lock:
         existing = _read()
 
         if existing:
             _write([])
 
-        return len(existing)
+    for line in existing:
+        stored_when, stored_title, event_id = _split(line)
+
+        if event_id:
+            remove_from_outlook(event_id)
+
+        _delete_invite(stored_title, _to_moment(stored_when))
+
+    return len(existing)
+
+
+def _delete_invite(title, moment):
+    """Remove the .ics written for an event, if it is still there."""
+    if not moment:
+        return False
+
+    folder = _invite_folder()
+
+    if not folder:
+        return False
+
+    if isinstance(moment, datetime):
+        start = moment.strftime("%Y%m%dT%H%M%S")
+    else:
+        start = moment.strftime("%Y%m%d")
+
+    safe = re.sub(r"[^\w \-]", "", title).strip() or "event"
+    path = os.path.join(folder, f"{safe} {start}.ics")
+
+    if not os.path.exists(path):
+        return False
+
+    try:
+        os.remove(path)
+
+        print(f"[JARVIS] removed {os.path.basename(path)}")
+
+        return True
+
+    except OSError as error:
+        print(f"[JARVIS] could not remove the invite: {error}")
+        return False
 
 
 def upcoming(limit=None):
