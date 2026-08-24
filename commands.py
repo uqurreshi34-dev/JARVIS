@@ -214,6 +214,9 @@ _FAST_PHRASES = (
     (("what have you done", "whats in the log", "what is in the log",
       "read the log", "show me the log", "what did you do",
       "whats your log", "activity log"), "read_log"),
+    (("what have you done today", "how busy have you been",
+      "whats your day been like", "summarise the log",
+      "summarise your log", "log summary"), "log_summary"),
     (("close the camera", "stop looking", "camera off",
       "turn the camera off", "hide the camera"), "stop_looking"),
     (("fix them", "fix the mistakes", "fix the spelling", "correct them",
@@ -2324,6 +2327,9 @@ def handle_command(command):
 
     if intent == "read_log":
         return _query(intent, journal.describe)
+
+    if intent == "log_summary":
+        return _query(intent, journal.summary)
 
     if intent == "look":
         question = (verbatim_text or text or "").strip() or None

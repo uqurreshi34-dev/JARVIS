@@ -149,6 +149,9 @@ _VERBS = {
     "save_picture": "save a picture",
     "save_chart": "save a chart",
     "click_thing": "click {detail}",
+    "proofread_fix": "correct the spelling in {detail}",
+    "proofread_report": "write a spelling report for {detail}",
+    "ignore_word": "add {detail} to the ignore list",
     "type_text": "type something",
     "open_application": "open {detail}",
     "close_application": "close {detail}",
@@ -186,6 +189,14 @@ def _phrase_for(intent, detail):
 
             return bare or intent.replace("_", " ")
 
+        # The detail sometimes already carries the preposition ("bread to
+        # shopping list"), which would otherwise read "add to bread to...".
+        for word in (" to", " from", " in", " on"):
+            if template.endswith(f"{word} {{detail}}") and (
+                f"{word.strip()} " in tidy
+            ):
+                return f"{template.split(word + ' {detail}')[0]} {tidy}".strip()
+
         return template.format(detail=tidy)
 
     # Unknown intent: at least say it as words rather than an identifier.
@@ -219,6 +230,57 @@ def recent(count=12):
         return []
 
     return lines[-count:]
+
+
+def summary():
+    """How much has happened today, without reading it all out."""
+    path = _path()
+
+    if not path or not os.path.exists(path):
+        return "There's nothing in the log yet, sir."
+
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    commands = 0
+    actions = 0
+    refusals = 0
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if not line.startswith(today):
+                    continue
+
+                if "  command " in line:
+                    commands += 1
+                elif "  action " in line:
+                    actions += 1
+                elif "  refused " in line:
+                    refusals += 1
+
+    except OSError:
+        return "I couldn't read the log, sir."
+
+    if not commands and not actions:
+        return "Nothing so far today, sir."
+
+    parts = [f"{commands} commands today, sir"]
+
+    if actions:
+        word = "change" if actions == 1 else "changes"
+        parts.append(f"{actions} {word}")
+
+    if refusals:
+        parts.append(f"{refusals} declined")
+
+    spoken = ", ".join(parts)
+
+    last = _last_spoken.get("text")
+
+    if last:
+        return f"{spoken}. The last was to {last}."
+
+    return f"{spoken}."
 
 
 def describe(count=5):

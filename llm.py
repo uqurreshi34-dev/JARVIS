@@ -108,6 +108,8 @@ such as "add Qurreshi to the ignore list". Put the word in "text".
 Use plot_chart when the user wants a chart or graph from a spreadsheet, and
 put the file name in "text". Use hide_chart to close it.
 
+Use log_summary when the user asks how much JARVIS has done today or wants
+the log summarised.
 Use read_log when the user asks what JARVIS has been doing or wants the
 activity log.
 
@@ -220,6 +222,7 @@ _SCHEMA = {
                 "plot_chart",
                 "hide_chart",
                 "read_log",
+                "log_summary",
                 "look",
                 "stop_looking",
                 "save_picture",
