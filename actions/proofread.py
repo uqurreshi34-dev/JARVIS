@@ -273,6 +273,25 @@ def spoken_list(findings, limit=SPOKEN_LIMIT):
     )
 
 
+def corrected_text(content, findings):
+    """The text with each flagged word replaced by its best suggestion.
+
+    Used for text on screen, where JARVIS cannot edit the application
+    directly: the corrected version goes on the clipboard for you to paste.
+    """
+    if not content:
+        return ""
+
+    for finding in findings or ():
+        if not finding["suggestions"]:
+            continue
+
+        pattern = re.compile(rf"\b{re.escape(finding['word'])}\b")
+        content = pattern.sub(finding["suggestions"][0], content)
+
+    return content
+
+
 def report(name, findings, total):
     """Write the findings to a file. Returns the path, or None."""
     label = files.safe_name(name) or name

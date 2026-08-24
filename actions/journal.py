@@ -151,6 +151,7 @@ _VERBS = {
     "click_thing": "click {detail}",
     "proofread_fix": "correct the spelling in {detail}",
     "proofread_report": "write a spelling report for {detail}",
+    "proofread_copy": "copy a corrected version of {detail}",
     "ignore_word": "add {detail} to the ignore list",
     "type_text": "type something",
     "open_application": "open {detail}",

@@ -102,6 +102,11 @@ picture of their screen.
 Use proofread when the user wants a file checked for spelling mistakes,
 such as "proofread my letter" or "check my report for spelling". Put the
 file name in "text".
+Use proofread_screen when the user wants the spelling checked in whatever
+they are currently writing on screen, rather than in a file. JARVIS cannot
+edit another application, so corrections are offered on the clipboard.
+Use proofread_copy when they want the corrected version copied.
+
 Use ignore_word when they want a word left alone in future spell checks,
 such as "add Qurreshi to the ignore list". Put the word in "text".
 
@@ -218,6 +223,8 @@ _SCHEMA = {
                 "proofread",
                 "proofread_which",
                 "proofread_followup",
+                "proofread_screen",
+                "proofread_copy",
                 "ignore_word",
                 "plot_chart",
                 "hide_chart",

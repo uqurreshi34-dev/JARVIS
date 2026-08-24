@@ -307,6 +307,122 @@ def type_text(text):
             return False
 
 
+# Controls a person actually types into. "Text" is deliberately absent: it
+# is the type used for labels, and including it swept up Notepad's status
+# bar ("Ln 1, Col 67", "UTF-8") as though it were part of the document.
+_TEXT_TYPES = ("Edit", "Document")
+
+# Reading everything on a busy screen would produce nonsense, so only this
+# much is taken.
+MAX_SCREEN_CHARS = 20_000
+
+
+def _element_text(element):
+    """Whatever text a control holds, or an empty string."""
+    # A value pattern is how an edit control exposes what is typed in it;
+    # the accessible name is only a label.
+    try:
+        value = element.get_value()
+
+        if value and str(value).strip():
+            return str(value)
+
+    except Exception:
+        pass
+
+    try:
+        text = element.window_text()
+
+        if text and text.strip():
+            return text
+
+    except Exception:
+        pass
+
+    return ""
+
+
+def _focused_among(elements):
+    """The element with keyboard focus, or None."""
+    for element in elements:
+        try:
+            if element.has_keyboard_focus():
+                return element
+        except Exception:
+            continue
+
+    return None
+
+
+def read_text():
+    """The text of whatever is being written in the active window.
+
+    Returns (text, window title). The text is empty when nothing readable
+    was found, which is common in applications that draw their own text
+    rather than using a standard control.
+    """
+    window = _foreground_window()
+
+    if not window:
+        return "", None
+
+    try:
+        title = window.window_text().strip().lstrip("*").strip()
+    except Exception:
+        title = None
+
+    collected = []
+    seen = set()
+    candidates = []
+
+    try:
+        for element in window.descendants():
+            try:
+                control_type = element.element_info.control_type
+            except Exception:
+                continue
+
+            if control_type not in _TEXT_TYPES:
+                continue
+
+            candidates.append(element)
+
+    except Exception as error:
+        print(f"[JARVIS] could not read the screen text: {error}")
+        return "", title
+
+    # If something has the cursor, that is the thing being written in, and
+    # nothing else in the window should be included.
+    focused = _focused_among(candidates)
+
+    if focused is not None:
+        candidates = [focused]
+
+    try:
+        for element in candidates:
+            text = _element_text(element)
+
+            if not text:
+                continue
+
+            key = text.strip()[:120]
+
+            # The same text often appears at several levels of the tree.
+            if key in seen:
+                continue
+
+            seen.add(key)
+            collected.append(text)
+
+            if sum(len(part) for part in collected) > MAX_SCREEN_CHARS:
+                break
+
+    except Exception as error:
+        print(f"[JARVIS] could not read the screen text: {error}")
+
+    return "\n".join(collected).strip(), title
+
+
 def describe():
     """Spoken summary of the active window, built from its own UI text.
 

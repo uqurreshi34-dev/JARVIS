@@ -224,7 +224,15 @@ _FAST_PHRASES = (
       "list them", "read them", "read them out", "list the mistakes",
       "tell me them", "what are they", "list to them",
       "write a report", "write the report", "save a report",
-      "write me a report"), "proofread_followup"),
+      "write me a report",
+      "copy the corrected text", "copy the corrections",
+      "copy the corrected version", "put it on my clipboard",
+      "copy the fixed text"), "proofread_followup"),
+    (("proofread my screen", "proofread the screen", "check my screen",
+      "check the spelling on screen", "check my spelling",
+      "spell check my screen", "proofread this", "check this",
+      "proofread what im writing", "check what im writing",
+      "proofread my writing"), "proofread_screen"),
     (("save the chart", "save that chart", "save this chart",
       "save the graph", "save that graph", "save this graph",
       "keep the chart", "keep that chart", "keep the graph",
@@ -975,7 +983,14 @@ def _plot_columns(name, headers, text):
 
 # What was last proofread, so a follow-up can act on it without checking
 # the whole file again.
-_last_check = {"name": None, "findings": None, "total": 0}
+_last_check = {
+    "name": None,
+    "findings": None,
+    "total": 0,
+    # Set when the text came from the screen rather than a file, since it
+    # cannot be corrected in place.
+    "screen_text": None,
+}
 
 
 def _proofread_answer(text):
@@ -990,7 +1005,15 @@ def _proofread_answer(text):
 
     words = set(answer.split())
 
+    if words & {"copy", "clipboard", "paste"}:
+        return _query("proofread_copy", _copy_corrected, detail=name)
+
     if words & {"fix", "correct", "repair", "sort", "amend"}:
+        # Screen text belongs to another application, so it is offered on
+        # the clipboard rather than typed over the top of someone's work.
+        if _last_check.get("screen_text"):
+            return _query("proofread_copy", _copy_corrected, detail=name)
+
         usable = [f for f in findings if f["suggestions"]]
 
         if not usable:
@@ -1076,6 +1099,81 @@ def _proofread_named(text):
     return _start_proofread(name)
 
 
+def _start_screen_proofread():
+    """Check whatever is being written on screen."""
+    if not proofread.available():
+        return _query(
+            "proofread",
+            lambda: (
+                "I don't have a dictionary installed, sir. "
+                "Pyspellchecker would give me one."
+            ),
+        )
+
+    content, title = screen_control.read_text()
+
+    if not content:
+        return _query(
+            "proofread",
+            lambda: (
+                "I can't read any text from that window, sir. "
+                "Some applications draw their own."
+            ),
+        )
+
+    findings, total = proofread.check_text(content)
+
+    label = title or "the screen"
+
+    _last_check.update({
+        "name": label,
+        "findings": findings,
+        "total": total,
+        "screen_text": content,
+    })
+
+    if not findings:
+        return _query(
+            "proofread",
+            lambda: f"{label} looks clean, sir. I checked {total} words.",
+        )
+
+    count = len(findings)
+    word = "mistake" if count == 1 else "mistakes"
+
+    question = (
+        f"I found {count} possible spelling {word} in {label}, sir, "
+        f"out of {total} words. Shall I list them, copy a corrected "
+        "version, or write a report?"
+    )
+
+    return _ask("proofread", question, _proofread_answer)
+
+
+def _copy_corrected():
+    """Put the corrected text on the clipboard for pasting."""
+    content = _last_check.get("screen_text")
+    findings = _last_check.get("findings")
+
+    if not content:
+        return "There's no screen text to correct, sir."
+
+    fixed = proofread.corrected_text(content, findings)
+
+    if fixed == content:
+        return "Nothing there I can correct with confidence, sir."
+
+    if not clipboard.write(fixed):
+        return "I couldn't reach the clipboard, sir."
+
+    changed = sum(1 for f in findings or () if f["suggestions"])
+
+    return (
+        f"The corrected text is on your clipboard, sir. "
+        f"{changed} words changed. Paste it over the original."
+    )
+
+
 def _start_proofread(name):
     """Check a file and ask what to do about what was found."""
     if not proofread.available():
@@ -1089,7 +1187,12 @@ def _start_proofread(name):
 
     findings, total = proofread.check(name)
 
-    _last_check.update({"name": name, "findings": findings, "total": total})
+    _last_check.update({
+        "name": name,
+        "findings": findings,
+        "total": total,
+        "screen_text": None,
+    })
 
     if findings is None:
         return _query(
@@ -1887,7 +1990,7 @@ _WRITE_INTENTS = frozenset({
     "open_website", "open_project", "close_project", "set_reminder",
     "cancel_reminders", "set_volume", "mute", "unmute", "toggle_mute",
     "minimise_all", "restore_all", "stop_looking",
-    "proofread_fix", "proofread_report", "ignore_word",
+    "proofread_fix", "proofread_report", "proofread_copy", "ignore_word",
 })
 
 
@@ -2284,6 +2387,12 @@ def handle_command(command):
             )
 
         return _proofread_answer(command)
+
+    if intent == "proofread_copy":
+        return _query(intent, _copy_corrected, detail=_last_check.get("name"))
+
+    if intent == "proofread_screen":
+        return _start_screen_proofread()
 
     if intent == "proofread_which":
         return _ask(
