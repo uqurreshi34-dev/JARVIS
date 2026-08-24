@@ -393,7 +393,18 @@ def read(name):
 
             document = Document(path)
 
-            return "\n".join(p.text for p in document.paragraphs)
+            parts = [p.text for p in document.paragraphs]
+
+            # Text in tables is easy to overlook and common in real
+            # documents, so it is read too.
+            for table in document.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for paragraph in cell.paragraphs:
+                            if paragraph.text.strip():
+                                parts.append(paragraph.text)
+
+            return "\n".join(parts)
 
         if suffix in TEXT_SUFFIXES:
             with open(path, "r", encoding="utf-8", errors="ignore") as handle:

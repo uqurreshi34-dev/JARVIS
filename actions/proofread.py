@@ -134,18 +134,26 @@ def _strip_noise(line):
 
 
 def check(name):
-    """Find possible spelling mistakes.
+    """Find possible spelling mistakes in a file.
 
     Returns (findings, total_words) where each finding is a dictionary with
     the line number, the word, and up to three suggestions. Returns
     (None, 0) when the file cannot be read.
     """
-    if not _AVAILABLE:
-        return None, 0
-
     content = files.read(name)
 
     if content is None:
+        return None, 0
+
+    return check_text(content)
+
+
+def check_text(content):
+    """Find possible spelling mistakes in a block of text.
+
+    Used for files and for whatever is on screen, so both behave the same.
+    """
+    if not _AVAILABLE or content is None:
         return None, 0
 
     checker = _spell()
@@ -296,6 +304,72 @@ def report(name, findings, total):
     )
 
 
+def _fix_docx(path, findings):
+    """Correct words inside a Word document, keeping its formatting.
+
+    Replacements happen run by run rather than paragraph by paragraph:
+    setting a paragraph's text wholesale would discard the bold, italics
+    and styling of everything in it.
+    """
+    try:
+        from docx import Document
+    except ImportError:
+        print("[JARVIS] python-docx is not installed")
+        return None
+
+    try:
+        document = Document(path)
+    except Exception as error:
+        print(f"[JARVIS] could not open {path}: {error}")
+        return None
+
+    changed = 0
+
+    def mend(runs):
+        nonlocal changed
+
+        for run in runs:
+            if not run.text:
+                continue
+
+            updated = run.text
+
+            for finding in findings:
+                pattern = re.compile(rf"\b{re.escape(finding['word'])}\b")
+                updated, count = pattern.subn(
+                    finding["suggestions"][0], updated
+                )
+                changed += count
+
+            if updated != run.text:
+                run.text = updated
+
+    for paragraph in document.paragraphs:
+        mend(paragraph.runs)
+
+    # Text inside tables is easy to forget and common in real documents.
+    for table in document.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    mend(paragraph.runs)
+
+    if not changed:
+        # A word split across two runs is not visible to this approach.
+        print("[JARVIS] nothing matched inside the document")
+        return 0
+
+    try:
+        document.save(path)
+    except Exception as error:
+        print(f"[JARVIS] could not save {path}: {error}")
+        return None
+
+    print(f"[JARVIS] corrected {changed} word(s) in {path}")
+
+    return changed
+
+
 def apply_fixes(name, findings):
     """Replace each flagged word with its first suggestion.
 
@@ -330,8 +404,7 @@ def apply_fixes(name, findings):
     suffix = os.path.splitext(path)[1].casefold()
 
     if suffix == ".docx":
-        print("[JARVIS] cannot rewrite a Word document in place yet")
-        return None
+        return _fix_docx(path, usable)
 
     try:
         with open(path, "w", encoding="utf-8") as handle:
