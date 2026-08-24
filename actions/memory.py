@@ -28,7 +28,13 @@ MAX_FACTS = 120
 KNOWN_KEYS = (
     "name", "job", "location", "timezone", "birthday",
     "email", "employer", "project",
+    # Preferences that change what JARVIS actually does, rather than facts
+    # he can only recite back.
+    "reply length", "latitude", "longitude",
 )
+
+# How long an answer should be. Anything else is treated as medium.
+REPLY_LENGTHS = ("short", "medium", "long")
 
 _lock = threading.Lock()
 
@@ -123,14 +129,21 @@ def set_fact(key, value):
         print(f"[JARVIS] refusing to store an instruction: {value[:60]!r}")
         return False
 
+    drop = {key}
+
+    if key == "location":
+        drop |= {"latitude", "longitude"}
+
     with _lock:
-        kept = [
-            line for line in _read()
-            if not (
-                _LINE.match(line)
-                and _LINE.match(line).group(1).strip().casefold() == key
-            )
-        ]
+        kept = []
+
+        for line in _read():
+            match = _LINE.match(line)
+
+            if match and match.group(1).strip().casefold() in drop:
+                continue
+
+            kept.append(line)
 
         kept.append(f"{key}: {value}")
 
@@ -168,9 +181,20 @@ def remember(text):
 
 
 _KEYED_PATTERNS = (
+    (re.compile(
+        r"^(?:i (?:prefer|like|want)|give me|keep)\s+"
+        r"(short|brief|concise|medium|normal|long|detailed|full)\s+"
+        r"(?:answers|replies|responses)$", re.I),
+     "reply length"),
+    (re.compile(
+        r"^(?:my (?:default|main|current) project is|"
+        r"i(?:'m| am) working on)\s+(.+)$", re.I),
+     "project"),
     (re.compile(r"^(?:my name is|i am called|call me|im called)\s+(.+)$", re.I),
      "name"),
-    (re.compile(r"^(?:i live in|im based in|i am based in|my location is)\s+(.+)$", re.I),
+    (re.compile(
+        r"^(?:i live in|i(?:m|'m| am)?\s*based in|i(?:m|'m| am) in|"
+        r"my location is)\s+(.+)$", re.I),
      "location"),
     (re.compile(r"^(?:i work (?:at|for)|my employer is)\s+(.+)$", re.I),
      "employer"),
@@ -216,6 +240,43 @@ def forget(text):
 def name():
     """What to call you, or None."""
     return get("name")
+
+
+def reply_length():
+    """How long answers should be: short, medium or long."""
+    stored = (get("reply length") or "").strip().casefold()
+
+    if stored in ("short", "brief", "concise"):
+        return "short"
+
+    if stored in ("long", "detailed", "full"):
+        return "long"
+
+    return "medium"
+
+
+def location():
+    """Where you are, or None."""
+    return get("location")
+
+
+def coordinates():
+    """Stored latitude and longitude, or (None, None)."""
+    try:
+        return float(get("latitude")), float(get("longitude"))
+    except (TypeError, ValueError):
+        return None, None
+
+
+def set_coordinates(latitude, longitude):
+    """Remember where a place is, so it is only looked up once."""
+    set_fact("latitude", f"{latitude:.4f}")
+    set_fact("longitude", f"{longitude:.4f}")
+
+
+def default_project():
+    """The project to open when none is named."""
+    return get("project")
 
 
 def describe():

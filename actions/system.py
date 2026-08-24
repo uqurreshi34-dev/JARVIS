@@ -34,17 +34,17 @@ _CONDITIONS = {
     2: "partly cloudy",
     3: "overcast",
     45: "foggy",
-    48: "freezing fog",
+    48: "foggy",
     51: "drizzling lightly",
     53: "drizzling",
     55: "drizzling heavily",
-    56: "with freezing drizzle",
-    57: "with heavy freezing drizzle",
+    56: "freezing drizzle",
+    57: "freezing drizzle",
     61: "raining lightly",
     63: "raining",
     65: "raining heavily",
-    66: "with freezing rain",
-    67: "with heavy freezing rain",
+    66: "freezing rain",
+    67: "freezing rain",
     71: "snowing lightly",
     73: "snowing",
     75: "snowing heavily",
@@ -56,7 +56,7 @@ _CONDITIONS = {
     86: "with heavy snow showers",
     95: "thundery",
     96: "thundery with hail",
-    99: "thundery with heavy hail",
+    99: "thundery with hail",
 }
 
 
@@ -169,14 +169,100 @@ def _format_weather(payload, location=LOCATION_NAME):
     return sentence
 
 
+_GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
+
+
+def _lookup_place(place):
+    """Turn a place name into (latitude, longitude, proper name), or None.
+
+    Open-Meteo's geocoding is free and needs no key. The result is stored,
+    so a place is only ever looked up once.
+    """
+    try:
+        response = requests.get(
+            _GEOCODE_URL,
+            params={"name": place, "count": 1, "language": "en"},
+            timeout=_TIMEOUT,
+        )
+        response.raise_for_status()
+
+        results = (response.json() or {}).get("results") or []
+
+    except (requests.RequestException, ValueError) as error:
+        print(f"[JARVIS] could not find {place}: {error}")
+        return None
+
+    if not results:
+        print(f"[JARVIS] no such place: {place}")
+        return None
+
+    first = results[0]
+
+    try:
+        return (
+            float(first["latitude"]),
+            float(first["longitude"]),
+            first.get("name") or place,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _where():
+    """Where to report the weather for: (latitude, longitude, name).
+
+    A remembered location wins over the .env setting, so saying "I'm based
+    in Birmingham" is enough and nothing has to be edited by hand.
+    """
+    try:
+        from actions import memory
+
+        place = memory.location()
+
+        if not place:
+            print(
+                "[JARVIS] no remembered location; using .env "
+                f"({LOCATION_NAME})"
+            )
+
+            return LATITUDE, LONGITUDE, LOCATION_NAME
+
+        latitude, longitude = memory.coordinates()
+
+        if latitude is not None and longitude is not None:
+            print(f"[JARVIS] weather for {place} (remembered)")
+
+            return latitude, longitude, place
+
+        found = _lookup_place(place)
+
+        if not found:
+            return LATITUDE, LONGITUDE, LOCATION_NAME
+
+        latitude, longitude, proper = found
+
+        print(f"[JARVIS] found {proper} at {latitude:.3f}, {longitude:.3f}")
+
+        # Remembered so the lookup happens once, not on every forecast.
+        memory.set_coordinates(latitude, longitude)
+
+        return latitude, longitude, proper
+
+    except Exception as error:
+        print(f"[JARVIS] could not read your location: {error}")
+        return LATITUDE, LONGITUDE, LOCATION_NAME
+
+
 def describe_weather():
     """Fetch and describe the current weather. Returns None on failure."""
+    latitude, longitude, place = _where()
+
     try:
         response = requests.get(
             _WEATHER_URL,
             params={
-                "latitude": LATITUDE,
-                "longitude": LONGITUDE,
+                "latitude": latitude,
+                "longitude": longitude,
                 "current": "temperature_2m,weather_code",
                 "daily": (
                     "temperature_2m_max,temperature_2m_min,"
@@ -194,7 +280,7 @@ def describe_weather():
         return None
 
     try:
-        return _format_weather(response.json())
+        return _format_weather(response.json(), location=place)
     except (ValueError, KeyError, TypeError) as error:
         print(f"[JARVIS] weather parse failed: {error}")
         return None

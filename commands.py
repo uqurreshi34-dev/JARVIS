@@ -215,6 +215,8 @@ _FAST_PHRASES = (
     (("what have you done", "whats in the log", "what is in the log",
       "read the log", "show me the log", "what did you do",
       "whats your log", "activity log"), "read_log"),
+    (("open my project", "open my main project", "open my default project",
+      "open the project", "load my project"), "open_default_project"),
     (("what do you know about me", "what do you remember",
       "what do you remember about me", "whats in your memory",
       "what have you remembered"), "recall_memory"),
@@ -1674,8 +1676,27 @@ _FORGET = re.compile(
 )
 
 
+_BARE_PREFERENCE = re.compile(
+    r"^(?:i (?:prefer|like|want)|give me|keep)\s+"
+    r"(?:short|brief|concise|medium|normal|long|detailed|full)\s+"
+    r"(?:answers|replies|responses)$", re.I
+)
+
+_BARE_FACT = re.compile(
+    r"^(?:my name is|call me|i live in|"
+    r"i(?:m|'m| am)?\s*based in|i(?:m|'m| am) in|"
+    r"my (?:default|main|current) project is|"
+    r"my location is|i work (?:at|for))\s+.+$",
+    re.I,
+)
+
+
 def _memory_request(text):
     """Return ("remember"|"forget", value) or None."""
+    # Stated plainly, without "remember" in front.
+    if _BARE_PREFERENCE.match(text) or _BARE_FACT.match(text):
+        return "remember", text.strip()
+
     match = _REMEMBER.match(text)
 
     if match:
@@ -2507,6 +2528,25 @@ def handle_command(command):
 
     if intent == "log_summary":
         return _query(intent, journal.summary)
+
+    if intent == "open_default_project":
+        default = memory.default_project()
+
+        if not default:
+            return _query(
+                intent,
+                lambda: (
+                    "You haven't told me which project is yours, sir. "
+                    "Say: remember my default project is JARVIS."
+                ),
+            )
+
+        return _action(
+            "open_project",
+            phrases.pick("opening", name=default),
+            lambda: _project_manager.open(default),
+            detail=default,
+        )
 
     if intent == "recall_memory":
         return _query(intent, memory.describe)
