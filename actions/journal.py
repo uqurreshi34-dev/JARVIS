@@ -139,20 +139,17 @@ _VERBS = {
     "remove_note": "remove {detail} from your notes",
     "remove_line": "remove {detail}",
     "clear_notes": "clear your notes",
-    "make_note": "note down {detail}",
+    "make_note": "make a note",
     "append_file": "add to {detail}",
     "create_file": "create {detail}",
     "copy_file": "copy {detail}",
     "file_to_clipboard": "copy {detail} to your clipboard",
     "clear_clipboard": "clear your clipboard",
-    "copy_to_clipboard": "copy {detail} to your clipboard",
+    "copy_to_clipboard": "copy something to your clipboard",
     "save_picture": "save a picture",
-    "save_chart": "save the chart",
-    "plot_chart": "plot {detail}",
-    "hide_chart": "close the chart",
-    "take_screenshot": "take a screenshot",
+    "save_chart": "save a chart",
     "click_thing": "click {detail}",
-    "type_text": "type {detail}",
+    "type_text": "type something",
     "open_application": "open {detail}",
     "close_application": "close {detail}",
 }
@@ -176,7 +173,20 @@ def _phrase_for(intent, detail):
     tidy = _tidy(detail)
 
     if template:
-        return template.format(detail=tidy) if "{detail}" in template else template
+        if "{detail}" not in template:
+            return template
+
+        # With no detail, drop the trailing placeholder and any dangling
+        # preposition, so "add to {detail}" becomes "add something".
+        if not tidy or tidy.replace("_", " ") == intent.replace("_", " "):
+            bare = template.replace("{detail}", "").strip()
+
+            if bare.endswith((" to", " from", " in", " on")):
+                bare = f"{bare} something"
+
+            return bare or intent.replace("_", " ")
+
+        return template.format(detail=tidy)
 
     # Unknown intent: at least say it as words rather than an identifier.
     words = intent.replace("_", " ")

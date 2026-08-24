@@ -62,23 +62,65 @@ def _website_label(url):
     return host
 
 
-def _action(intent, response, action):
+# What the command in flight was about, so the journal can name it without
+# every handler having to pass it along.
+_in_flight = {"detail": None}
+
+
+def _set_subject(result):
+    """Note what this command is about, for the journal."""
+    _in_flight["detail"] = (
+        result.get("application")
+        or result.get("project")
+        or result.get("website")
+        or result.get("text")
+        or None
+    )
+
+
+def _record(intent, action, detail=None):
+    """Wrap an action so what it did lands in the journal.
+
+    Only intents that change something are recorded, and it happens here
+    rather than in each handler, so a new skill is logged without anyone
+    having to remember to add a line to it.
+    """
+    if intent not in _WRITE_INTENTS or not callable(action):
+        return action
+
+    def recorded():
+        outcome = action()
+
+        succeeded = bool(outcome)
+
+        # An explicit detail wins; otherwise use whatever the command was
+        # about; otherwise say nothing beyond the verb.
+        said = detail or _in_flight.get("detail") or ""
+
+        journal.action(intent, said, succeeded)
+
+        return outcome
+
+    return recorded
+
+
+def _action(intent, response, action, detail=None):
     """A command that does something; JARVIS confirms when it succeeds."""
     return {
         "kind": "action",
         "intent": intent,
         "response": response,
-        "action": action,
+        "action": _record(intent, action, detail),
     }
 
 
-def _query(intent, action):
+def _query(intent, action, detail=None):
     """A command that finds something out; the action returns what to say."""
     return {
         "kind": "query",
         "intent": intent,
         "response": None,
-        "action": action,
+        "action": _record(intent, action, detail),
     }
 
 
@@ -1630,6 +1672,21 @@ _DESTRUCTIVE_OPENERS = (
 
 # Intents whose "text" field names a thing worth remembering. Notes and
 # clipboard text are content, not subjects, so they are excluded.
+# Intents that change something, so they belong in the journal. Logged in
+# one place rather than intent by intent, which is how most of them came to
+# be missing.
+_WRITE_INTENTS = frozenset({
+    "create_file", "append_file", "copy_file", "remove_line",
+    "file_to_clipboard", "make_note", "read_notes_removed",
+    "remove_note", "clear_notes", "copy_to_clipboard", "clear_clipboard",
+    "save_picture", "save_chart", "take_screenshot", "plot_chart",
+    "click_thing", "type_text", "open_application", "close_application",
+    "open_website", "open_project", "close_project", "set_reminder",
+    "cancel_reminders", "set_volume", "mute", "unmute", "toggle_mute",
+    "minimise_all", "restore_all", "stop_looking",
+})
+
+
 _SUBJECT_INTENTS = frozenset({
     "read_file", "append_file", "copy_file", "create_file",
     "file_to_clipboard", "plot_chart", "open_project", "close_project",
@@ -1847,6 +1904,8 @@ def handle_command(command):
     intent = result["intent"]
     application = result.get("application")
 
+    _set_subject(result)
+
     # Whatever this command was about becomes what "it" means next.
     _remember(
         result.get("application")
@@ -1935,34 +1994,28 @@ def handle_command(command):
         )
 
     if intent == "remove_note" and text:
-        def remove_note():
-            spoken = notes.describe_removal(text)
-            journal.action(
-                "remove_note", f"{text!r} from notes", "Removed" in spoken)
-            return spoken
-
-        return _query(intent, remove_note)
+        return _query(
+            intent,
+            lambda: notes.describe_removal(text),
+            detail=f"{text} from your notes",
+        )
 
     if intent == "remove_line" and text and project:
-        def remove_line():
-            spoken = files.describe_removal(project, text)
-            journal.action(
-                "remove_line", f"{text!r} from {project!r}", "Removed" in spoken
-            )
-            return spoken
-
-        return _query(intent, remove_line)
+        return _query(
+            intent,
+            lambda: files.describe_removal(project, text),
+            detail=f"{text} from {project}",
+        )
 
     if intent == "read_notes":
         return _query(intent, notes.describe)
 
     if intent == "clear_notes":
-        def clear_notes():
-            removed = notes.clear()
-            journal.action("clear_notes", f"deleted {removed} note(s)", True)
-            return removed >= 0
-
-        return _action(intent, "Clearing your notes, sir.", clear_notes)
+        return _action(
+            intent,
+            "Clearing your notes, sir.",
+            lambda: notes.clear() >= 0,
+        )
 
     if intent == "create_file" and text:
         suffix = unit or ".txt"
@@ -2033,11 +2086,9 @@ def handle_command(command):
             if not path:
                 return "There's no chart to save, sir."
 
-            journal.action("save_chart", os.path.basename(path), True)
-
             return "Saved to your JARVIS folder, sir."
 
-        return _query(intent, save_chart)
+        return _query(intent, save_chart, detail="a chart")
 
     if intent == "save_picture":
         return _query(intent, _save_picture)
