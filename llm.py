@@ -99,6 +99,12 @@ Use clear_clipboard when the user wants the clipboard emptied.
 Use take_screenshot when the user wants a screenshot, screen capture, or a
 picture of their screen.
 
+Use proofread when the user wants a file checked for spelling mistakes,
+such as "proofread my letter" or "check my report for spelling". Put the
+file name in "text".
+Use ignore_word when they want a word left alone in future spell checks,
+such as "add Qurreshi to the ignore list". Put the word in "text".
+
 Use plot_chart when the user wants a chart or graph from a spreadsheet, and
 put the file name in "text". Use hide_chart to close it.
 
@@ -207,6 +213,10 @@ _SCHEMA = {
                 "clear_notes",
                 "remove_note",
                 "remove_line",
+                "proofread",
+                "proofread_which",
+                "proofread_followup",
+                "ignore_word",
                 "plot_chart",
                 "hide_chart",
                 "read_log",

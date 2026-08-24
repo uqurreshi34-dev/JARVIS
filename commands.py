@@ -30,6 +30,7 @@ from actions import (
     files,
     journal,
     news,
+    proofread,
     notes,
     safety,
     screen_control,
@@ -215,6 +216,12 @@ _FAST_PHRASES = (
       "whats your log", "activity log"), "read_log"),
     (("close the camera", "stop looking", "camera off",
       "turn the camera off", "hide the camera"), "stop_looking"),
+    (("fix them", "fix the mistakes", "fix the spelling", "correct them",
+      "correct the mistakes", "fix those", "sort them out",
+      "list them", "read them", "read them out", "list the mistakes",
+      "tell me them", "what are they", "list to them",
+      "write a report", "write the report", "save a report",
+      "write me a report"), "proofread_followup"),
     (("save the chart", "save that chart", "save this chart",
       "save the graph", "save that graph", "save this graph",
       "keep the chart", "keep that chart", "keep the graph",
@@ -963,6 +970,145 @@ def _plot_columns(name, headers, text):
     return _query("plot_chart", lambda: f"{spoken} {question}")
 
 
+# What was last proofread, so a follow-up can act on it without checking
+# the whole file again.
+_last_check = {"name": None, "findings": None, "total": 0}
+
+
+def _proofread_answer(text):
+    """Handle the answer to what to do about the mistakes found."""
+    answer = _normalise(text)
+
+    name = _last_check.get("name")
+    findings = _last_check.get("findings") or []
+
+    if not name or not findings:
+        return _query("proofread", lambda: "There's nothing pending, sir.")
+
+    words = set(answer.split())
+
+    if words & {"fix", "correct", "repair", "sort", "amend"}:
+        usable = [f for f in findings if f["suggestions"]]
+
+        if not usable:
+            return _query(
+                "proofread",
+                lambda: "None of them have a suggestion I trust, sir.",
+            )
+
+        return _confirm(
+            "proofread_fix",
+            f"That will change {len(usable)} words in {name}. Go ahead?",
+            lambda: proofread.apply_fixes(name, findings) is not None,
+            yes_text="Corrected, sir.",
+            no_text="Leaving it as it is, sir.",
+        )
+
+    if words & {"report", "write", "save"}:
+        def write_report():
+            path = proofread.report(name, findings, _last_check["total"])
+
+            if not path:
+                return "I couldn't write the report, sir."
+
+            return (
+                f"Written to {files.spoken_name(os.path.basename(path))}, sir."
+            )
+
+        return _query("proofread_report", write_report, detail=name)
+
+    if words & {"list", "read", "tell", "say"}:
+        # The question stays open, so "fix them" still works next.
+        _rearm_proofread()
+
+        return _query(
+            "proofread", lambda: proofread.spoken_list(findings)
+        )
+
+    # Not an answer we recognise, so ask once more rather than giving up.
+    _rearm_proofread()
+
+    return _query(
+        "proofread",
+        lambda: (
+            "I can list them, fix them, or write a report, sir. "
+            "Which would you like?"
+        ),
+    )
+
+
+def _rearm_proofread():
+    """Keep the proofread question open for another answer."""
+    global _awaiting
+
+    _awaiting = {"intent": "proofread", "handler": _proofread_answer}
+
+
+def _proofread_named(text):
+    """Handle the answer to "which file shall I check?"."""
+    spoken = _normalise(text)
+
+    # Strip the wording people naturally add to an answer.
+    for prefix in ("my ", "the ", "check ", "proofread "):
+        if spoken.startswith(prefix):
+            spoken = spoken[len(prefix):]
+
+    for suffix in (" file", " document", " please"):
+        if spoken.endswith(suffix):
+            spoken = spoken[: -len(suffix)]
+
+    name = spoken.strip()
+
+    if not name:
+        return _query(
+            "proofread", lambda: "I didn't catch which file, sir."
+        )
+
+    if not _file_target(name):
+        return _query(
+            "proofread",
+            lambda: f"I can't find a file called {name}, sir.",
+        )
+
+    return _start_proofread(name)
+
+
+def _start_proofread(name):
+    """Check a file and ask what to do about what was found."""
+    if not proofread.available():
+        return _query(
+            "proofread",
+            lambda: (
+                "I don't have a dictionary installed, sir. "
+                "Pyspellchecker would give me one."
+            ),
+        )
+
+    findings, total = proofread.check(name)
+
+    _last_check.update({"name": name, "findings": findings, "total": total})
+
+    if findings is None:
+        return _query(
+            "proofread",
+            lambda: f"I couldn't read a file called {name}, sir.",
+        )
+
+    if not findings:
+        return _query(
+            "proofread", lambda: proofread.describe(name, findings, total)
+        )
+
+    summary = proofread.describe(name, findings, total)
+
+    # More than a handful is unusable by voice, so a report is offered too.
+    question = (
+        f"{summary} Shall I list them, fix them, or write a report?"
+    )
+
+    return _ask("proofread", question, _proofread_answer)
+
+
 def _start_plot(name):
     """Read the file and ask which two columns to plot."""
     headers, rows = charts.read_columns(name)
@@ -1390,6 +1536,44 @@ def _expand_request(text):
     return None
 
 
+_PROOFREAD_REQUEST = re.compile(
+    r"^(?:proofread|proof read|spell check|spellcheck|check the spelling"
+    r"(?: in| of)?|check|review)\s+(?:my\s+|the\s+)?(.+?)"
+    r"(?:\s+(?:file|document|for spelling|for mistakes|for errors|"
+    r"spelling|spellings))?$"
+)
+
+_IGNORE_WORD = re.compile(
+    r"^(?:ignore|add)\s+(.+?)\s*"
+    r"(?:to (?:my |the )?(?:ignore list|dictionary|spelling list))?$"
+)
+
+
+def _proofread_request(text):
+    """Resolve a proofread request.
+
+    Returns the file name, or the string "ask" when it is clearly a request
+    to proofread but the file is not named usefully. Returning "ask" matters:
+    without it "proofread my file" fell through to fuzzy matching and landed
+    on "list my files", which are only a word apart.
+    """
+    match = _PROOFREAD_REQUEST.match(text)
+
+    if not match:
+        return None
+
+    name = match.group(1).strip()
+
+    if not name or name in _NOT_FILENAMES:
+        return "ask"
+
+    if _file_target(name):
+        return name
+
+    # Named something, but no such file. Still clearly a proofread request.
+    return "ask"
+
+
 _PLOT_REQUEST = re.compile(
     r"^(?:plot|chart|graph|draw a chart of|draw a graph of|visualise|"
     r"visualize)\s+(?:my\s+|the\s+)?(.+?)"
@@ -1611,6 +1795,22 @@ def _fast_path(command):
     if text in _HIDE_CHART:
         return _blank_result("hide_chart")
 
+    ignore_match = _IGNORE_WORD.match(text)
+
+    if ignore_match and "ignore" in text:
+        word = ignore_match.group(1).strip()
+
+        if word and word not in _NOT_FILENAMES:
+            return _blank_result("ignore_word", text=word)
+
+    proof = _proofread_request(text)
+
+    if proof == "ask":
+        return _blank_result("proofread_which")
+
+    if proof:
+        return _blank_result("proofread", text=proof)
+
     plot = _plot_request(text)
 
     if plot:
@@ -1684,6 +1884,7 @@ _WRITE_INTENTS = frozenset({
     "open_website", "open_project", "close_project", "set_reminder",
     "cancel_reminders", "set_volume", "mute", "unmute", "toggle_mute",
     "minimise_all", "restore_all", "stop_looking",
+    "proofread_fix", "proofread_report", "ignore_word",
 })
 
 
@@ -1785,10 +1986,20 @@ def _ask(intent, question, handler):
 
 
 def _resolve_awaiting(text):
-    """Give the answer to whatever asked the question, or return None."""
+    """Give the answer to whatever asked the question, or return None.
+
+    A pending question must not swallow a real command: "list my files"
+    while waiting on "shall I list them?" is a new instruction, not an
+    answer. Anything the fast path recognises outright takes precedence,
+    and the question simply lapses.
+    """
     global _awaiting
 
     if not _awaiting:
+        return None
+
+    if _fast_path(text) is not None:
+        _awaiting = None
         return None
 
     handler = _awaiting["handler"]
@@ -2060,6 +2271,49 @@ def handle_command(command):
             intent,
             "Copying, sir.",
             lambda: files.copy(text, project) is not None,
+        )
+
+    if intent == "proofread_followup":
+        if not _last_check.get("findings"):
+            return _query(
+                "proofread",
+                lambda: "I haven't checked anything yet, sir.",
+            )
+
+        return _proofread_answer(command)
+
+    if intent == "proofread_which":
+        return _ask(
+            "proofread_which",
+            "Which file shall I check, sir?",
+            _proofread_named,
+        )
+
+    if intent == "proofread" and text:
+        return _start_proofread(text)
+
+    if intent == "ignore_word" and text:
+        def ignore_word():
+            if not proofread.ignore(text):
+                return False
+
+            # Drop it from the pending findings too, or "fix them" would
+            # still offer to change the word just excused.
+            findings = _last_check.get("findings")
+
+            if findings:
+                _last_check["findings"] = [
+                    f for f in findings
+                    if f["word"].casefold() != text.casefold()
+                ]
+
+            return True
+
+        return _action(
+            intent,
+            f"I'll leave {text} alone, sir.",
+            ignore_word,
+            detail=text,
         )
 
     if intent == "plot_chart" and text:
