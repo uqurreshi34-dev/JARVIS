@@ -6,7 +6,7 @@ from datetime import datetime
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
-from actions import camera
+from actions import camera, memory
 from actions.battery import battery_monitor
 import phrases
 from actions.markets import market_monitor
@@ -53,16 +53,26 @@ FOLLOW_UP = True
 
 
 def _greeting():
-    """Good morning, afternoon, or evening, depending on the actual hour."""
-    hour = datetime.now().hour
+    """Good morning, afternoon, or evening, using your name if it is known.
 
-    if hour < 12:
-        return "Good morning. JARVIS is online."
+    The wording is built in actions.memory so the name comes from the same
+    place everything else about you is kept.
+    """
+    try:
+        return memory.greeting()
 
-    if hour < 18:
-        return "Good afternoon. JARVIS is online."
+    except Exception as error:
+        print(f"[JARVIS] could not read memory: {error}")
 
-    return "Good evening. JARVIS is online."
+        hour = datetime.now().hour
+
+        if hour < 12:
+            return "Good morning. JARVIS is online."
+
+        if hour < 18:
+            return "Good afternoon. JARVIS is online."
+
+        return "Good evening. JARVIS is online."
 
 
 class Assistant:

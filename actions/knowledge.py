@@ -1,5 +1,6 @@
 import re
 
+from actions import memory
 from providers import chat
 
 
@@ -32,6 +33,24 @@ def _for_speech(text):
     return text.strip()
 
 
+def _system_prompt():
+    """The prompt, with what JARVIS knows about you appended as context.
+
+    The memory is passed as background, explicitly labelled as information
+    rather than instructions, so a stored line cannot redirect the answer.
+    """
+    try:
+        background = memory.summary_for_prompt()
+    except Exception as error:
+        print(f"[JARVIS] could not read memory: {error}")
+        background = ""
+
+    if not background:
+        return _SYSTEM_PROMPT
+
+    return f"{_SYSTEM_PROMPT}\n\n{background}"
+
+
 def answer(question):
     """Answer a general question, or None if it cannot be answered."""
     if not question or not question.strip():
@@ -40,7 +59,7 @@ def answer(question):
     try:
         raw = chat(
             messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": _system_prompt()},
                 {"role": "user", "content": question.strip()},
             ],
             temperature=0.3,

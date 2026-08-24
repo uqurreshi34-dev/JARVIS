@@ -29,6 +29,7 @@ from actions import (
     clipboard,
     files,
     journal,
+    memory,
     news,
     proofread,
     notes,
@@ -214,6 +215,9 @@ _FAST_PHRASES = (
     (("what have you done", "whats in the log", "what is in the log",
       "read the log", "show me the log", "what did you do",
       "whats your log", "activity log"), "read_log"),
+    (("what do you know about me", "what do you remember",
+      "what do you remember about me", "whats in your memory",
+      "what have you remembered"), "recall_memory"),
     (("what have you done today", "how busy have you been",
       "whats your day been like", "summarise the log",
       "summarise your log", "log summary"), "log_summary"),
@@ -1660,6 +1664,43 @@ _PROOFREAD_REQUEST = re.compile(
     r"spelling|spellings))?$"
 )
 
+_REMEMBER = re.compile(
+    r"^(?:remember(?: that)?|keep in mind(?: that)?|"
+    r"dont forget(?: that)?|bear in mind(?: that)?)\s+(.+)$"
+)
+
+_FORGET = re.compile(
+    r"^(?:forget(?: about| that)?|stop remembering)\s+(.+)$"
+)
+
+
+def _memory_request(text):
+    """Return ("remember"|"forget", value) or None."""
+    match = _REMEMBER.match(text)
+
+    if match:
+        value = match.group(1).strip()
+
+        # "remember to call mum in ten minutes" is a reminder, not a fact.
+        if value and not _TIMER_HINT.search(value):
+            return "remember", value
+
+    match = _FORGET.match(text)
+
+    if match:
+        value = match.group(1).strip()
+
+        if value and value not in _NOT_FILENAMES:
+            return "forget", value
+
+    return None
+
+
+_TIMER_HINT = re.compile(
+    r"\b(?:in|after)\s+\w+\s+(?:second|minute|hour|day)s?\b", re.I
+)
+
+
 _IGNORE_WORD = re.compile(
     r"^(?:ignore|add)\s+(.+?)\s*"
     r"(?:to (?:my |the )?(?:ignore list|dictionary|spelling list))?$"
@@ -1817,6 +1858,13 @@ def _fast_path(command):
 
         if _file_target(where):
             return _blank_result("remove_line", text=what, project=where)
+
+    remembering = _memory_request(text)
+
+    if remembering:
+        action, value = remembering
+
+        return _blank_result(action, text=_original_case(command, value))
 
     note = _note_request(text)
 
@@ -2010,6 +2058,7 @@ _WRITE_INTENTS = frozenset({
     "cancel_reminders", "set_volume", "mute", "unmute", "toggle_mute",
     "minimise_all", "restore_all", "stop_looking",
     "proofread_fix", "proofread_report", "proofread_copy", "ignore_word",
+    "remember", "forget",
 })
 
 
@@ -2458,6 +2507,36 @@ def handle_command(command):
 
     if intent == "log_summary":
         return _query(intent, journal.summary)
+
+    if intent == "recall_memory":
+        return _query(intent, memory.describe)
+
+    if intent == "remember" and text:
+        def store():
+            if memory.remember(verbatim_text or text):
+                return True
+
+            return False
+
+        return _action(
+            intent,
+            f"I'll remember that, sir.",
+            store,
+            detail=text,
+        )
+
+    if intent == "forget" and text:
+        def drop():
+            removed = memory.forget(text)
+
+            return removed > 0
+
+        return _action(
+            intent,
+            f"Forgetting {text}, sir.",
+            drop,
+            detail=text,
+        )
 
     if intent == "look":
         question = (verbatim_text or text or "").strip() or None

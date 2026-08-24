@@ -113,6 +113,13 @@ such as "add Qurreshi to the ignore list". Put the word in "text".
 Use plot_chart when the user wants a chart or graph from a spreadsheet, and
 put the file name in "text". Use hide_chart to close it.
 
+Use remember when the user wants a durable fact about themselves kept, such
+as "remember that I prefer short answers" or "call me AvidCoder". Put the
+fact in "text". Do not use it for reminders with a time; those are
+set_reminder.
+Use forget when they want something removed from that memory.
+Use recall_memory when they ask what JARVIS knows or remembers about them.
+
 Use log_summary when the user asks how much JARVIS has done today or wants
 the log summarised.
 Use read_log when the user asks what JARVIS has been doing or wants the
@@ -228,6 +235,9 @@ _SCHEMA = {
                 "ignore_word",
                 "plot_chart",
                 "hide_chart",
+                "remember",
+                "forget",
+                "recall_memory",
                 "read_log",
                 "log_summary",
                 "look",
