@@ -1159,9 +1159,11 @@ def _copy_corrected():
     if not content:
         return "There's no screen text to correct, sir."
 
-    fixed = proofread.corrected_text(content, findings)
+    fixed = proofread.for_clipboard(
+        proofread.corrected_text(content, findings)
+    )
 
-    if fixed == content:
+    if fixed == proofread.for_clipboard(content):
         return "Nothing there I can correct with confidence, sir."
 
     if not clipboard.write(fixed):

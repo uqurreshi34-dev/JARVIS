@@ -126,6 +126,19 @@ def ignore(word):
         return False
 
 
+# Word separates table cells and rows with control characters rather than
+# newlines, so a whole table arrives as one line. Left alone, every cell
+# after the first looks like a capitalised word mid-sentence -- a name --
+# and gets skipped, which is why "Seperate" was missed on screen but found
+# in the file.
+_CELL_MARKS = re.compile(r"[\x07\x0b\x0c\r\x1e\x1f]+")
+
+
+def _split_cells(content):
+    """Turn cell and row markers into real line breaks."""
+    return _CELL_MARKS.sub("\n", content or "")
+
+
 def _strip_noise(line):
     """Remove things that are not prose before checking."""
     for pattern in _SKIP:
@@ -156,6 +169,8 @@ def check_text(content):
     """
     if not _AVAILABLE or content is None:
         return None, 0
+
+    content = _split_cells(content)
 
     checker = _spell()
 
@@ -316,6 +331,29 @@ def corrected_text(content, findings):
         )
 
     return content
+
+
+def for_clipboard(content):
+    """Tidy screen text so it pastes sensibly.
+
+    Word marks the end of a cell and the end of a row with control
+    characters. Pasted raw they are invisible rubbish, so cells become tabs
+    and rows become line breaks -- which Word can turn back into a table
+    with Insert, Table, Convert Text to Table.
+    """
+    if not content:
+        return ""
+
+    # Row ends first: two markers together mean end of row.
+    tidied = re.sub(r"\x07\x07+", "\n", content)
+    tidied = tidied.replace("\x07", "\t")
+    tidied = re.sub(r"[\x0b\x0c\x1e\x1f]+", "\n", tidied)
+    tidied = tidied.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Trailing tabs at the end of a row serve no purpose once pasted.
+    tidied = re.sub(r"\t+\n", "\n", tidied)
+
+    return tidied.strip()
 
 
 def report(name, findings, total):
