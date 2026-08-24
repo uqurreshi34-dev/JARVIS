@@ -113,12 +113,21 @@ such as "add Qurreshi to the ignore list". Put the word in "text".
 Use plot_chart when the user wants a chart or graph from a spreadsheet, and
 put the file name in "text". Use hide_chart to close it.
 
+Use add_event when the user wants something put in their calendar. Put the
+event name in "text" and any spoken date in "project", such as "March 2nd
+2027". If no date was given, leave "project" null and JARVIS will ask.
+Use remove_event to take one out, the same way.
+Use read_calendar when they ask what is on their calendar or coming up.
+Use clear_calendar only when they want every entry removed.
+
 Use remember when the user wants a durable fact about themselves kept, such
 as "remember that I prefer short answers" or "call me AvidCoder". Put the
 fact in "text". Do not use it for reminders with a time; those are
 set_reminder.
 Use forget when they want something removed from that memory.
 Use recall_memory when they ask what JARVIS knows or remembers about them.
+Use open_default_project when they say "open my project" without naming
+which one.
 
 Use log_summary when the user asks how much JARVIS has done today or wants
 the log summarised.
@@ -235,9 +244,14 @@ _SCHEMA = {
                 "ignore_word",
                 "plot_chart",
                 "hide_chart",
+                "add_event",
+                "remove_event",
+                "read_calendar",
+                "clear_calendar",
                 "remember",
                 "forget",
                 "recall_memory",
+                "open_default_project",
                 "read_log",
                 "log_summary",
                 "look",

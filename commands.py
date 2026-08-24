@@ -27,6 +27,7 @@ from actions import (
     camera,
     charts,
     clipboard,
+    diary,
     files,
     journal,
     memory,
@@ -217,6 +218,12 @@ _FAST_PHRASES = (
       "whats your log", "activity log"), "read_log"),
     (("open my project", "open my main project", "open my default project",
       "open the project", "load my project"), "open_default_project"),
+    (("whats on my calendar", "what is on my calendar", "my calendar",
+      "whats in my diary", "what is in my diary", "read my calendar",
+      "whats coming up", "what is coming up", "what have i got on",
+      "whats my schedule", "check my calendar"), "read_calendar"),
+    (("clear my calendar", "empty my calendar", "delete my calendar",
+      "wipe my calendar", "clear my diary"), "clear_calendar"),
     (("what do you know about me", "what do you remember",
       "what do you remember about me", "whats in your memory",
       "what have you remembered"), "recall_memory"),
@@ -1106,6 +1113,135 @@ def _proofread_named(text):
     return _start_proofread(name)
 
 
+# The event waiting on a date, so "add X to my calendar" can ask.
+_pending_event = {"title": None}
+
+
+def _dated_event(text):
+    """Handle the answer to "what date, sir?"."""
+    title = _pending_event.get("title")
+
+    if not title:
+        return _query("calendar", lambda: "Which event, sir?")
+
+    when = diary.parse_date(text)
+
+    if not when:
+        return _ask(
+            "calendar",
+            "I didn't catch the date, sir. When is it?",
+            _dated_event,
+        )
+
+    at = diary.parse_time(text)
+
+    def store():
+        return diary.add(title, when, at) is not None
+
+    _pending_event["title"] = None
+
+    return _action(
+        "add_event",
+        f"{title}, {diary.spoken_when(_moment_for(when, at))}. Done, sir.",
+        store,
+        detail=f"{title} on {when.isoformat()}",
+    )
+
+
+def _moment_for(when, at):
+    """A date, or a datetime when a time was given."""
+    if not at:
+        return when
+
+    from datetime import datetime
+
+    return datetime.combine(when, datetime.min.time()).replace(
+        hour=at[0], minute=at[1]
+    )
+
+
+def _start_event(title, spoken_date=None):
+    """Add an event, asking for the date if it was not given."""
+    title = (title or "").strip()
+
+    if not title:
+        return _query("calendar", lambda: "What should I call it, sir?")
+
+    when = diary.parse_date(spoken_date) if spoken_date else None
+
+    if when:
+        at = diary.parse_time(spoken_date)
+
+        return _action(
+            "add_event",
+            f"{title}, {diary.spoken_when(_moment_for(when, at))}. Done, sir.",
+            lambda: diary.add(title, when, at) is not None,
+            detail=f"{title} on {when.isoformat()}",
+        )
+
+    _pending_event["title"] = title
+
+    return _ask("calendar", "What date, sir?", _dated_event)
+
+
+def _dated_removal(text):
+    """Handle the answer to "which date, sir?" when removing."""
+    title = _pending_event.get("title")
+
+    if not title:
+        return _query("calendar", lambda: "Which event, sir?")
+
+    when = diary.parse_date(text)
+
+    # "all of them" removes every event with that name.
+    everywhere = any(
+        word in _normalise(text) for word in ("all", "any", "every")
+    )
+
+    if not when and not everywhere:
+        return _ask(
+            "calendar",
+            "I didn't catch the date, sir. Which date?",
+            _dated_removal,
+        )
+
+    _pending_event["title"] = None
+
+    def drop():
+        removed = diary.remove(title, None if everywhere else when)
+
+        return removed > 0
+
+    return _action(
+        "remove_event",
+        f"Removing {title}, sir.",
+        drop,
+        detail=title,
+    )
+
+
+def _start_remove_event(title, spoken_date=None):
+    """Remove an event, asking which date if it was not given."""
+    title = (title or "").strip()
+
+    if not title:
+        return _query("calendar", lambda: "Which event, sir?")
+
+    when = diary.parse_date(spoken_date) if spoken_date else None
+
+    if when:
+        return _action(
+            "remove_event",
+            f"Removing {title}, sir.",
+            lambda: diary.remove(title, when) > 0,
+            detail=f"{title} on {when.isoformat()}",
+        )
+
+    _pending_event["title"] = title
+
+    return _ask("calendar", "Which date, sir?", _dated_removal)
+
+
 def _start_screen_proofread():
     """Check whatever is being written on screen."""
     if not proofread.available():
@@ -1666,6 +1802,34 @@ _PROOFREAD_REQUEST = re.compile(
     r"spelling|spellings))?$"
 )
 
+_ADD_EVENT = re.compile(
+    rf"^(?:{_ADD_VERBS}|schedule|book|put|create)\s+(.+?)\s+"
+    r"(?:to|in|on|into)\s+(?:my\s+|the\s+)?(?:calendar|diary|schedule)"
+    r"(?:\s+(?:for|on|at)\s+(.+))?$"
+)
+
+_REMOVE_EVENT = re.compile(
+    r"^(?:remove|delete|cancel|take off|drop)\s+(.+?)\s+"
+    r"(?:from|off)\s+(?:my\s+|the\s+)?(?:calendar|diary|schedule)"
+    r"(?:\s+(?:for|on)\s+(.+))?$"
+)
+
+
+def _event_request(text):
+    """Return ("add"|"remove", title, spoken date) or None."""
+    match = _ADD_EVENT.match(text)
+
+    if match:
+        return "add", match.group(1).strip(), (match.group(2) or "").strip()
+
+    match = _REMOVE_EVENT.match(text)
+
+    if match:
+        return "remove", match.group(1).strip(), (match.group(2) or "").strip()
+
+    return None
+
+
 _REMEMBER = re.compile(
     r"^(?:remember(?: that)?|keep in mind(?: that)?|"
     r"dont forget(?: that)?|bear in mind(?: that)?)\s+(.+)$"
@@ -1868,6 +2032,17 @@ def _fast_path(command):
         source, destination = copy_request
 
         return _blank_result("copy_file", text=source, project=destination)
+
+    event = _event_request(text)
+
+    if event:
+        action, title, spoken_date = event
+
+        return _blank_result(
+            "add_event" if action == "add" else "remove_event",
+            text=_original_case(command, title),
+            project=spoken_date or None,
+        )
 
     removal = _remove_request(text)
 
@@ -2080,6 +2255,7 @@ _WRITE_INTENTS = frozenset({
     "minimise_all", "restore_all", "stop_looking",
     "proofread_fix", "proofread_report", "proofread_copy", "ignore_word",
     "remember", "forget",
+    "add_event", "remove_event", "clear_calendar",
 })
 
 
@@ -2546,6 +2722,30 @@ def handle_command(command):
             phrases.pick("opening", name=default),
             lambda: _project_manager.open(default),
             detail=default,
+        )
+
+    if intent == "add_event" and text:
+        return _start_event(verbatim_text or text, project)
+
+    if intent == "remove_event" and text:
+        return _start_remove_event(verbatim_text or text, project)
+
+    if intent == "read_calendar":
+        return _query(intent, diary.describe)
+
+    if intent == "clear_calendar":
+        total = len(diary.events())
+
+        if not total:
+            return _query(intent, lambda: "Your calendar is already empty, sir.")
+
+        return _confirm(
+            "clear_calendar",
+            f"That will remove all {phrases.number(total)} entries, sir. "
+            "Are you sure?",
+            lambda: diary.clear() >= 0,
+            yes_text="Calendar cleared, sir.",
+            no_text="Cancelled, sir.",
         )
 
     if intent == "recall_memory":
