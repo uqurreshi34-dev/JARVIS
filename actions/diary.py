@@ -15,6 +15,7 @@ import re
 import threading
 from datetime import date, datetime, timedelta
 
+import phrases
 from actions import files, safety
 
 
@@ -471,12 +472,19 @@ def describe(limit=SPOKEN_LIMIT):
     if len(ahead) <= limit:
         word = "event" if len(ahead) == 1 else "events"
 
-        return f"You have {len(ahead)} {word}, sir. {listed}."
+        return (
+            f"You have {phrases.number(len(ahead))} {word}, sir. {listed}."
+        )
 
     return (
-        f"You have {len(ahead)} events coming up, sir. "
-        f"The next {len(shown)} are: {listed}."
+        f"You have {phrases.number(len(ahead))} events coming up, sir. "
+        f"The next {phrases.number(len(shown))} are: {listed}."
     )
+
+
+def _opening(word):
+    """Capitalise a word that begins a spoken sentence."""
+    return word[:1].upper() + word[1:] if word else word
 
 
 def briefing(days=2):
@@ -505,10 +513,14 @@ def briefing(days=2):
         return f"One thing in the diary, sir. {listed}."
 
     if len(soon) <= 3:
-        return f"{len(soon)} things in the diary, sir. {listed}."
+        return (
+            f"{_opening(phrases.number(len(soon)))} things in the diary, "
+            f"sir. {listed}."
+        )
 
     return (
-        f"{len(soon)} things in the diary, sir. The first three: {listed}."
+        f"{_opening(phrases.number(len(soon)))} things in the diary, sir. "
+        f"The first three: {listed}."
     )
 
 
