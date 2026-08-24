@@ -2671,8 +2671,15 @@ def handle_command(command):
         return _start_proofread(text)
 
     if intent == "ignore_word" and text:
+        # What was heard may not be what was said: an unfamiliar name comes
+        # back as a familiar word. The right word is almost certainly among
+        # the mistakes just found, so it is matched against those.
+        wanted = proofread.resolve_spoken(
+            verbatim_text or text, _last_check.get("findings")
+        )
+
         def ignore_word():
-            if not proofread.ignore(text):
+            if not proofread.ignore(wanted):
                 return False
 
             # Drop it from the pending findings too, or "fix them" would
@@ -2682,16 +2689,16 @@ def handle_command(command):
             if findings:
                 _last_check["findings"] = [
                     f for f in findings
-                    if f["word"].casefold() != text.casefold()
+                    if f["word"].casefold() != wanted.casefold()
                 ]
 
             return True
 
         return _action(
             intent,
-            f"I'll leave {text} alone, sir.",
+            f"I'll leave {wanted} alone, sir.",
             ignore_word,
-            detail=text,
+            detail=wanted,
         )
 
     if intent == "plot_chart" and text:

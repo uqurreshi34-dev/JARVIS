@@ -24,6 +24,11 @@ except ImportError:
     _AVAILABLE = False
 
 
+# Set True to skip capitalised words mid-sentence, on the assumption they
+# are names. Off by default: Word flags them and so should JARVIS, and a
+# name only has to be added to the ignore list once.
+SKIP_CAPITALISED = False
+
 # Words shorter than this are skipped: initials and abbreviations produce
 # far more noise than genuine findings.
 MIN_LENGTH = 4
@@ -92,6 +97,84 @@ def ignored_words():
 
     except OSError:
         return set()
+
+
+# A misheard word is matched against what was just flagged at or above
+# this. "prayer" scores 0.86 against "Priya"; unrelated words score far
+# lower, so a wrong guess is unlikely.
+_MATCH_THRESHOLD = 0.6
+
+_VOWELS = re.compile(r"[aeiou]")
+_NON_LETTERS = re.compile(r"[^a-z]")
+_DOUBLES = re.compile(r"(.)\1+")
+
+
+def _skeleton(word):
+    """Consonant skeleton, ignoring vowels and repeats."""
+    letters = _NON_LETTERS.sub("", (word or "").casefold())
+
+    return _DOUBLES.sub(r"\1", _VOWELS.sub("", letters))
+
+
+def _similarity(heard, flagged):
+    """How alike two words are, by spelling and by consonant skeleton."""
+    from difflib import SequenceMatcher
+
+    first = SequenceMatcher(
+        None, (heard or "").casefold(), (flagged or "").casefold()
+    ).ratio()
+
+    second = SequenceMatcher(
+        None, _skeleton(heard), _skeleton(flagged)
+    ).ratio()
+
+    return max(first, second)
+
+
+def resolve_spoken(heard, findings):
+    """Work out which flagged word was meant.
+
+    Speech recognition turns an unfamiliar name into a familiar word:
+    "Priya" arrives as "prayer". But the real word is already on screen,
+    among the mistakes just found, so the spoken form is matched against
+    those rather than taken literally.
+
+    Returns the flagged word, or the spoken one when nothing is close.
+    """
+    heard = (heard or "").strip()
+
+    if not heard or not findings:
+        return heard
+
+    words = {f["word"] for f in findings if f.get("word")}
+
+    if not words:
+        return heard
+
+    # An exact match needs no thinking about.
+    for word in words:
+        if word.casefold() == heard.casefold():
+            return word
+
+    best = None
+    best_score = 0.0
+
+    for word in words:
+        score = _similarity(heard, word)
+
+        if score > best_score:
+            best_score = score
+            best = word
+
+    if best and best_score >= _MATCH_THRESHOLD:
+        if best.casefold() != heard.casefold():
+            print(
+                f"[JARVIS] heard {heard!r}, taking it to mean {best!r}"
+            )
+
+        return best
+
+    return heard
 
 
 def ignore(word):
@@ -200,10 +283,12 @@ def check_text(content):
             if lowered in skip or lowered in seen:
                 continue
 
-            # A capitalised word mid-sentence is usually a name -- but not
-            # when it opens a sentence, which is why "Thas" was being
-            # missed. Look at what precedes it.
-            if word[0].isupper():
+            # Capitalised words are checked too, so a misspelled weekday or
+            # month is caught: "on Tusday" was being skipped as though it
+            # were somebody's name. Real names do get flagged as a result,
+            # exactly as they are in Word, and the ignore list is the
+            # answer to those.
+            if word[0].isupper() and SKIP_CAPITALISED:
                 before = line[:match.start()].rstrip()
 
                 if before and not before.endswith((".", "!", "?", ":", '"')):

@@ -49,6 +49,56 @@ WHISPER_PROMPT = os.getenv("WHISPER_PROMPT") or (
     "Chrome, Cursor, pgAdmin, YouTube, minimise, system."
 )
 
+# Whisper's prompt is capped at around 224 tokens, so only the most recent
+# names are added: those are the ones being used.
+MAX_PROMPT_NAMES = 40
+
+# The names are re-read this often rather than on every utterance, since
+# reading a file between every word would be wasteful.
+NAME_REFRESH_SECONDS = 30
+
+_names = {"words": (), "at": 0.0}
+
+
+def _known_names():
+    """Names the user has told JARVIS to accept, for biasing the decoder.
+
+    The spelling ignore list is exactly the set of words this user says but
+    a dictionary does not know -- names, places, jargon. Telling Whisper to
+    expect them is the same trick that stopped "Jarvis" arriving as
+    "java's", applied to the user's own vocabulary.
+    """
+    now = time.monotonic()
+
+    if _names["words"] and now - _names["at"] < NAME_REFRESH_SECONDS:
+        return _names["words"]
+
+    try:
+        from actions.proofread import ignored_words
+
+        words = sorted(
+            word for word in ignored_words()
+            if word and word.isalpha() and len(word) > 2
+        )
+
+    except Exception:
+        words = []
+
+    _names["words"] = tuple(words[-MAX_PROMPT_NAMES:])
+    _names["at"] = now
+
+    return _names["words"]
+
+
+def _prompt():
+    """The decoding prompt, including any names the user has taught."""
+    names = _known_names()
+
+    if not names:
+        return WHISPER_PROMPT
+
+    return f"{WHISPER_PROMPT} Names: {', '.join(names)}."
+
 
 @dataclass
 class Result:
@@ -341,7 +391,7 @@ class LocalWhisperEngine(SegmentingEngine):
             beam_size=1,
             vad_filter=False,
             condition_on_previous_text=False,
-            initial_prompt=WHISPER_PROMPT,
+            initial_prompt=_prompt(),
         )
 
         return " ".join(segment.text.strip() for segment in segments).strip()
@@ -373,7 +423,7 @@ class OpenAIWhisperEngine(SegmentingEngine):
             language="en",
             fp16=False,
             condition_on_previous_text=False,
-            initial_prompt=WHISPER_PROMPT,
+            initial_prompt=_prompt(),
             # A single temperature stops Whisper retrying the decode up to
             # six times when its quality thresholds fail, which is the main
             # source of multi-second delays on short commands.
@@ -447,7 +497,7 @@ class GroqWhisperEngine(SegmentingEngine):
             model=self._model_name,
             language="en",
             temperature=0,
-            prompt=WHISPER_PROMPT,
+            prompt=_prompt(),
         )
 
         return (response.text or "").strip()
