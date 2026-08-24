@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QApplication
 
 from actions import camera, memory
 from actions.battery import battery_monitor
+from actions.watch import watcher, catch_up
 import phrases
 from actions.markets import market_monitor
 from beam import Beam
@@ -183,7 +184,23 @@ class Assistant:
         battery_monitor.set_alert_listener(self._on_alert)
         battery_monitor.start()
 
+        # Observations share the same announcer, so they queue behind
+        # whatever JARVIS is already saying rather than talking over him.
+        watcher.set_listener(self._on_alert)
+        watcher.start()
+
         self._say(_greeting())
+
+        # Anything noticed while JARVIS was closed is mentioned now, rather
+        # than having been said to an empty room.
+        try:
+            missed = catch_up()
+
+            if missed:
+                self._say(missed)
+
+        except Exception as error:
+            print(f"[JARVIS] could not catch up: {error}")
 
         # Warm the cache for stock replies while the greeting plays, so the
         # first "Done, sir." does not wait on a network round trip.
@@ -262,6 +279,7 @@ class Assistant:
         self._state(IDLE)
         reminder_manager.cancel_all()
         battery_monitor.stop()
+        watcher.stop()
         camera.release()
         market_monitor.stop()
         self._hud.shutdown.emit()
