@@ -232,6 +232,13 @@ _FAST_PHRASES = (
       "summarise your log", "log summary"), "log_summary"),
     (("close the camera", "stop looking", "camera off",
       "turn the camera off", "hide the camera"), "stop_looking"),
+    (("show me your mind", "show your mind", "open your mind",
+      "show me your brain", "show your brain", "activate your mind",
+      "brain view", "show brain view", "neural view",
+      "show your neural net", "light up your mind"), "show_brain"),
+    (("hide your mind", "close your mind", "hide the brain",
+      "close the brain", "hide brain view", "turn off your mind",
+      "stop showing your mind"), "hide_brain"),
     (("fix them", "fix the mistakes", "fix the spelling", "correct them",
       "correct the mistakes", "fix those", "sort them out",
       "list them", "read them", "read them out", "list the mistakes",
@@ -814,6 +821,61 @@ def set_camera_listener(listener):
     """Register a callable taking (png bytes, caption)."""
     global _camera_listener
     _camera_listener = listener
+
+
+_brain_listener = None
+_brain_visible = False
+
+
+def set_brain_listener(listener):
+    """Register a callable taking a bool: True shows the mind view, False
+    hides it."""
+    global _brain_listener
+    _brain_listener = listener
+
+
+def _show_brain():
+    global _brain_visible
+    _brain_visible = True
+
+    if _brain_listener:
+        try:
+            _brain_listener(True)
+        except Exception as error:
+            print(f"[JARVIS] could not show the mind: {error}")
+            return False
+
+    return True
+
+
+def _hide_brain():
+    global _brain_visible
+    _brain_visible = False
+
+    if _brain_listener:
+        try:
+            _brain_listener(False)
+        except Exception as error:
+            print(f"[JARVIS] could not hide the mind: {error}")
+            return False
+
+    return True
+
+
+def toggle_brain_view():
+    """Flip the mind view from outside a voice command — the HUD's own
+    core click, specifically. Voice commands use the show_brain/hide_brain
+    intents below instead, which log through the usual _record/_WRITE_
+    INTENTS mechanism; this logs directly since a click never passes
+    through handle_command at all, so _record never sees it.
+    """
+    intent = "hide_brain" if _brain_visible else "show_brain"
+    action = _hide_brain if _brain_visible else _show_brain
+
+    succeeded = bool(action())
+    journal.action(intent, "", succeeded)
+
+    return succeeded
 
 
 def _look(question=None):
@@ -2254,6 +2316,7 @@ _WRITE_INTENTS = frozenset({
     "open_website", "open_project", "close_project", "set_reminder",
     "cancel_reminders", "set_volume", "mute", "unmute", "toggle_mute",
     "minimise_all", "restore_all", "stop_looking",
+    "show_brain", "hide_brain",
     "proofread_fix", "proofread_report", "proofread_copy", "ignore_word",
     "remember", "forget",
     "add_event", "remove_event", "clear_calendar",
@@ -2793,6 +2856,12 @@ def handle_command(command):
 
     if intent == "stop_looking":
         return _action(intent, "Camera off, sir.", _stop_looking)
+
+    if intent == "show_brain":
+        return _action(intent, "Showing you my mind, sir.", _show_brain)
+
+    if intent == "hide_brain":
+        return _action(intent, "Hiding it, sir.", _hide_brain)
 
     if intent == "save_chart":
         def save_chart():

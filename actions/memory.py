@@ -33,6 +33,8 @@ KNOWN_KEYS = (
     "reply length", "latitude", "longitude",
     # Where new appointments should go: "outlook" or "local".
     "calendar",
+    # Whether to open each .ics after writing it: "open" or nothing.
+    "invites",
 )
 
 # How long an answer should be. Anything else is treated as medium.
@@ -193,6 +195,9 @@ _KEYED_PATTERNS = (
         r"i(?:'m| am) working on)\s+(.+)$", re.I),
      "project"),
     (re.compile(
+        r"^(?:to )?(open|dont open|do not open)\s+my invites$", re.I),
+     "invites"),
+    (re.compile(
         r"^(?:my calendar is|use|put (?:my )?(?:events|appointments) in)\s+"
         r"(outlook|local|jarvis|the local calendar|"
         r"outlook calendar)(?:\s+(?:for|as)\s+my\s+calendar)?$", re.I),
@@ -201,7 +206,8 @@ _KEYED_PATTERNS = (
      "name"),
     (re.compile(
         r"^(?:i live in|i(?:m|'m| am)?\s*based in|i(?:m|'m| am) in|"
-        r"my location is)\s+(.+)$", re.I),
+        r"i(?:m|'m| am) from|i come from|i(?:m|'m| am) currently in|"
+        r"my location is|my home is|my city is)\s+(.+)$", re.I),
      "location"),
     (re.compile(r"^(?:i work (?:at|for)|my employer is)\s+(.+)$", re.I),
      "employer"),
@@ -210,6 +216,16 @@ _KEYED_PATTERNS = (
     (re.compile(r"^(?:my birthday is|i was born on)\s+(.+)$", re.I),
      "birthday"),
 )
+
+
+def classify(fact):
+    """What a spoken fact would be stored as: (key, value), or None.
+
+    Public so the caller can say what it understood. Saying "I'll remember
+    that" when a location was not recognised hides the failure until the
+    weather is wrong.
+    """
+    return _as_keyed(safety.clean(fact, 200))
 
 
 def _as_keyed(fact):

@@ -159,6 +159,8 @@ _VERBS = {
     "type_text": "type something",
     "open_application": "open {detail}",
     "close_application": "close {detail}",
+    "show_brain": "show you my mind",
+    "hide_brain": "hide my mind",
 }
 
 

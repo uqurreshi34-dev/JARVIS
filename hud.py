@@ -86,6 +86,7 @@ class Hud(QWidget):
     level_changed = pyqtSignal(float)
     shutdown = pyqtSignal()
     closed = pyqtSignal()
+    core_clicked = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -96,6 +97,7 @@ class Hud(QWidget):
         self._phase = 0.0
         self._sweep = 0.0
         self._drag_offset = None
+        self._press_pos = None
 
         self._target = 0.0
         self._level = 0.0
@@ -228,9 +230,13 @@ class Hud(QWidget):
 
         return self._phase * speed * 180.0 / math.pi
 
-    # Let the user drag the HUD anywhere on screen.
+    # Let the user drag the HUD anywhere on screen. A press on the core
+    # that releases without much movement is a click instead — that's what
+    # toggles the mind view — so this has to tell the two apart rather than
+    # treating every press as the start of a drag.
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.position()
             self._drag_offset = (
                 event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             )
@@ -240,7 +246,21 @@ class Hud(QWidget):
             self.move(event.globalPosition().toPoint() - self._drag_offset)
 
     def mouseReleaseEvent(self, event):
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._press_pos is not None
+        ):
+            moved = (event.position() - self._press_pos).manhattanLength()
+
+            if moved < 6 and self._distance_from_centre(self._press_pos) <= _R_RING3:
+                self.core_clicked.emit()
+
         self._drag_offset = None
+        self._press_pos = None
+
+    @staticmethod
+    def _distance_from_centre(pos):
+        return math.hypot(pos.x() - _CENTRE.x(), pos.y() - _CENTRE.y())
 
     def closeEvent(self, event):
         self.closed.emit()

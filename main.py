@@ -12,16 +12,19 @@ from actions.watch import watcher, catch_up
 import phrases
 from actions.markets import market_monitor
 from beam import Beam
+from brain_panel import BrainPanel
 from camera_panel import CameraPanel
 from chart_panel import ChartPanel
 from commands import (
     handle_command,
     reminder_manager,
+    set_brain_listener,
     set_camera_listener,
     set_chart_listener,
     set_highlight_listener,
     set_news_listener,
     set_picture_listener,
+    toggle_brain_view,
 )
 from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
 from news_panel import NewsPanel
@@ -343,6 +346,33 @@ def main():
 
     set_camera_listener(camera_update)
 
+    # The mind view gets its own panel, projected like the others — but
+    # unlike camera/chart it never receives a one-off image. It's fed the
+    # HUD's own state/amplitude/level signals directly, so its pulses come
+    # from the same real activity the ring itself reacts to.
+    brain = BrainPanel()
+    brain.set_anchor(hud)
+    brain_beam = Beam(brain, hud)
+
+    def brain_update(visible):
+        if visible:
+            brain.show_brain.emit()
+            brain_beam.shown.emit()
+        else:
+            brain.hide_brain.emit()
+            brain_beam.hidden.emit()
+
+    set_brain_listener(brain_update)
+
+    hud.state_changed.connect(brain.state_changed.emit)
+    hud.amplitude_changed.connect(brain.amplitude_changed.emit)
+    hud.level_changed.connect(brain.level_changed.emit)
+
+    # Clicking the reactor core toggles the mind view. This runs on the Qt
+    # main thread (a direct signal from the HUD's own click), so it can
+    # call straight into commands rather than needing a worker thread.
+    hud.core_clicked.connect(toggle_brain_view)
+
     def news_update(region, items):
         if region is None:
             panel.hide_news.emit()
@@ -375,6 +405,8 @@ def main():
     hud.shutdown.connect(chart_beam.hidden.emit)
     hud.shutdown.connect(view.hide_view.emit)
     hud.shutdown.connect(view_beam.hidden.emit)
+    hud.shutdown.connect(brain.hide_brain.emit)
+    hud.shutdown.connect(brain_beam.hidden.emit)
     hud.shutdown.connect(lambda: QTimer.singleShot(400, app.quit))
     hud.closed.connect(assistant.stop)
 
