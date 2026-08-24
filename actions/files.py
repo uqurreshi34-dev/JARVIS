@@ -9,6 +9,8 @@ import os
 import re
 import shutil
 
+import phrases
+
 # Optional formats. Missing libraries are reported rather than crashing.
 try:
     from docx import Document
@@ -527,7 +529,7 @@ def describe_listing(limit=4, names=True):
         if len(entries) == 1:
             return "One file, sir."
 
-        return f"You have {len(entries)} files, sir."
+        return f"You have {phrases.number(len(entries))} files, sir."
 
     if len(entries) == 1:
         return f"One file, sir: {spoken_name(entries[0])}."
@@ -536,11 +538,14 @@ def describe_listing(limit=4, names=True):
     listed = ", ".join(shown[:-1]) + f", and {shown[-1]}"
 
     if len(entries) <= limit:
-        return f"You have {len(entries)} files, sir: {listed}."
+        return (
+            f"You have {phrases.number(len(entries))} files, sir: {listed}."
+        )
 
     return (
-        f"You have {len(entries)} files, sir. I won't list them all, but "
-        f"your {len(shown)} most recent are {listed}."
+        f"You have {phrases.number(len(entries))} files, sir. I won't list "
+        f"them all, but your {phrases.number(len(shown))} most recent are "
+        f"{listed}."
     )
 
 

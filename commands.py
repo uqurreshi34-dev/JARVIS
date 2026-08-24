@@ -1024,7 +1024,8 @@ def _proofread_answer(text):
 
         return _confirm(
             "proofread_fix",
-            f"That will change {len(usable)} words in {name}. Go ahead?",
+            f"That will change {phrases.number(len(usable))} words in "
+            f"{name}. Go ahead?",
             lambda: proofread.apply_fixes(name, findings) is not None,
             yes_text="Corrected, sir.",
             no_text="Leaving it as it is, sir.",
@@ -1142,9 +1143,9 @@ def _start_screen_proofread():
     word = "mistake" if count == 1 else "mistakes"
 
     question = (
-        f"I found {count} possible spelling {word} in {label}, sir, "
-        f"out of {total} words. Shall I list them, copy a corrected "
-        "version, or write a report?"
+        f"I found {phrases.number(count)} possible spelling {word} in "
+        f"{label}, sir, out of {phrases.number(total)} words. "
+        "Shall I list them, copy a corrected version, or write a report?"
     )
 
     return _ask("proofread", question, _proofread_answer)
@@ -1170,7 +1171,8 @@ def _copy_corrected():
 
     return (
         f"The corrected text is on your clipboard, sir. "
-        f"{changed} words changed. Paste it over the original."
+        f"{phrases.number(changed)} words changed. "
+        "Paste it over the original."
     )
 
 
@@ -1642,6 +1644,13 @@ def _expand_request(text):
     return None
 
 
+# Ways of referring to what is on screen rather than to a file.
+_SCREEN_WORDS = frozenset({
+    "screen", "my screen", "the screen", "this", "what im writing",
+    "what i am writing", "my writing", "this window", "the window",
+    "here", "what im typing", "what i am typing",
+})
+
 _PROOFREAD_REQUEST = re.compile(
     r"^(?:proofread|proof read|spell check|spellcheck|check the spelling"
     r"(?: in| of)?|check|review)\s+(?:my\s+|the\s+)?(.+?)"
@@ -1669,6 +1678,11 @@ def _proofread_request(text):
         return None
 
     name = match.group(1).strip()
+
+    # "proof read my screen" arrives as two words and so misses the exact
+    # phrase table; it is still plainly about the screen.
+    if name in _SCREEN_WORDS:
+        return "screen"
 
     if not name or name in _NOT_FILENAMES:
         return "ask"
@@ -1910,6 +1924,9 @@ def _fast_path(command):
             return _blank_result("ignore_word", text=word)
 
     proof = _proofread_request(text)
+
+    if proof == "screen":
+        return _blank_result("proofread_screen")
 
     if proof == "ask":
         return _blank_result("proofread_which")

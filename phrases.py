@@ -105,6 +105,31 @@ POOLS = {
 }
 
 
+_NUMBER_WORDS = (
+    "zero", "one", "two", "three", "four", "five", "six", "seven",
+    "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
+    "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
+)
+
+
+def number(value):
+    """A small number as a word, for speech.
+
+    The voice reads a bare "4" as something close to "for", which is
+    confusing in a sentence like "4 words changed". Larger numbers read
+    correctly as digits, so only the small ones are spelled out.
+    """
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+    if 0 <= count < len(_NUMBER_WORDS):
+        return _NUMBER_WORDS[count]
+
+    return str(count)
+
+
 def pick(key, **fields):
     """A line from the pool, never the same one twice running."""
     pool = POOLS.get(key)

@@ -12,6 +12,7 @@ so the wording is always "possible", and fixing anything asks first.
 import os
 import re
 
+import phrases
 from actions import files
 
 try:
@@ -229,14 +230,17 @@ def describe(name, findings, total):
         return f"I couldn't read {label}, sir."
 
     if not findings:
-        return f"{label} looks clean, sir. I checked {total} words."
+        return (
+            f"{label} looks clean, sir. "
+            f"I checked {phrases.number(total)} words."
+        )
 
     count = len(findings)
     word = "mistake" if count == 1 else "mistakes"
 
     return (
-        f"I found {count} possible spelling {word} in {label}, sir, "
-        f"out of {total} words."
+        f"I found {phrases.number(count)} possible spelling {word} in "
+        f"{label}, sir, out of {phrases.number(total)} words."
     )
 
 
@@ -268,9 +272,28 @@ def spoken_list(findings, limit=SPOKEN_LIMIT):
         return f"{listed}, sir."
 
     return (
-        f"There are {len(findings)}, sir. I'll read the first {limit}. "
-        f"{listed}. A report would give you the rest."
+        f"There are {phrases.number(len(findings))}, sir. I'll read the "
+        f"first {phrases.number(limit)}. {listed}. "
+        "A report would give you the rest."
     )
+
+
+def _matched_case(original, replacement):
+    """Give the replacement the same capitalisation as the word it replaces.
+
+    Without this, correcting "Thas" at the start of a sentence produced
+    "that" and quietly introduced a different mistake.
+    """
+    if not original or not replacement:
+        return replacement
+
+    if original.isupper() and len(original) > 1:
+        return replacement.upper()
+
+    if original[0].isupper():
+        return replacement[0].upper() + replacement[1:]
+
+    return replacement
 
 
 def corrected_text(content, findings):
@@ -287,7 +310,10 @@ def corrected_text(content, findings):
             continue
 
         pattern = re.compile(rf"\b{re.escape(finding['word'])}\b")
-        content = pattern.sub(finding["suggestions"][0], content)
+        content = pattern.sub(
+            _matched_case(finding["word"], finding["suggestions"][0]),
+            content,
+        )
 
     return content
 
@@ -356,7 +382,8 @@ def _fix_docx(path, findings):
             for finding in findings:
                 pattern = re.compile(rf"\b{re.escape(finding['word'])}\b")
                 updated, count = pattern.subn(
-                    finding["suggestions"][0], updated
+                    _matched_case(finding["word"], finding["suggestions"][0]),
+                    updated,
                 )
                 changed += count
 
@@ -412,7 +439,10 @@ def apply_fixes(name, findings):
         pattern = re.compile(
             rf"\b{re.escape(finding['word'])}\b"
         )
-        content, count = pattern.subn(finding["suggestions"][0], content)
+        content, count = pattern.subn(
+            _matched_case(finding["word"], finding["suggestions"][0]),
+            content,
+        )
         changed += count
 
     path = files.find_existing(name)
