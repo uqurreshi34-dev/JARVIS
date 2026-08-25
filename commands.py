@@ -30,6 +30,7 @@ from actions import (
     diary,
     files,
     journal,
+    market_report,
     markets,
     memory,
     news,
@@ -1897,6 +1898,25 @@ def _event_request(text):
 
 
 # "tell me when bitcoin moves 2 percent", and the ways people say it.
+# "write me a report on bitcoin", and the ways people ask for one.
+_MARKET_REPORT = re.compile(
+    r"^(?:write|give|make|prepare|do)\s*(?:me)?\s*"
+    r"(?:a|an|the)?\s*(?:market\s+)?report\s+"
+    r"(?:on|for|about)\s+(?:the\s+)?(.+?)"
+    r"(?:\s+for\s+.+)?$"
+)
+
+
+def _report_request(text):
+    """The coin a report was asked about, or None."""
+    match = _MARKET_REPORT.match(text)
+
+    if not match:
+        return None
+
+    return markets.coin_for(match.group(1))
+
+
 _SET_ALERT = re.compile(
     r"^(?:tell me|let me know|alert me|warn me|shout)\s+"
     r"(?:when|if)\s+(?:the\s+)?(.+?)\s+"
@@ -2157,6 +2177,11 @@ def _fast_path(command):
         if _file_target(where):
             return _blank_result("remove_line", text=what, project=where)
 
+    reporting = _report_request(text)
+
+    if reporting:
+        return _blank_result("market_report", text=reporting)
+
     alert = _alert_request(text)
 
     if alert:
@@ -2364,7 +2389,7 @@ _WRITE_INTENTS = frozenset({
     "minimise_all", "restore_all", "stop_looking",
     "show_brain", "hide_brain",
     "proofread_fix", "proofread_report", "proofread_copy", "ignore_word",
-    "remember", "forget", "set_market_alert",
+    "remember", "forget", "set_market_alert", "market_report",
     "add_event", "remove_event", "clear_calendar",
 })
 
@@ -2865,14 +2890,41 @@ def handle_command(command):
             no_text="Cancelled, sir.",
         )
 
+    if intent == "market_report" and text:
+        def build():
+            path, sections = market_report.write(text)
+
+            return market_report.describe(text, path, sections)
+
+        spoken = markets.COINS.get(text, {}).get("spoken", text)
+
+        return _query(intent, build, detail=f"a report on {spoken}")
+
     if intent == "set_market_alert" and text and amount is not None:
         spoken = markets.COINS.get(text, {}).get("spoken", text)
 
+        try:
+            percent = abs(float(amount))
+        except (TypeError, ValueError):
+            percent = None
+
+        if percent is None or not (
+            markets.MIN_THRESHOLD <= percent <= markets.MAX_THRESHOLD
+        ):
+            return _query(
+                intent,
+                lambda: (
+                    f"I can watch for anything between "
+                    f"{markets.MIN_THRESHOLD:g} and "
+                    f"{markets.MAX_THRESHOLD:g} percent, sir."
+                ),
+            )
+
         return _action(
             intent,
-            f"I'll tell you when {spoken} moves {amount:g} percent, sir.",
-            lambda: markets.set_threshold(text, amount),
-            detail=f"{spoken} at {amount:g} percent",
+            f"I'll tell you when {spoken} moves {percent:g} percent, sir.",
+            lambda: markets.set_threshold(text, percent),
+            detail=f"{spoken} at {percent:g} percent",
         )
 
     if intent == "read_market_alerts":

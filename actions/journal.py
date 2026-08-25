@@ -150,6 +150,8 @@ _VERBS = {
     "save_chart": "save a chart",
     "click_thing": "click {detail}",
     "add_event": "add {detail} to your calendar",
+    "market_report": "write {detail}",
+    "set_market_alert": "watch {detail}",
     "remove_event": "remove {detail} from your calendar",
     "clear_calendar": "clear your calendar",
     "proofread_fix": "correct the spelling in {detail}",
@@ -159,8 +161,6 @@ _VERBS = {
     "type_text": "type something",
     "open_application": "open {detail}",
     "close_application": "close {detail}",
-    "show_brain": "show you my mind",
-    "hide_brain": "hide my mind",
 }
 
 
