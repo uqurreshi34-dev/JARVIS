@@ -17,11 +17,15 @@ import sounddevice as sd
 import soundfile as sf
 
 
-LINE = " ".join(sys.argv[1:]) or (
-    "Good evening, sir. Battery at seventy two percent, "
-    "and the news is on screen."
-)
+LINE = " ".join(sys.argv[1:]).strip()
 
+if not LINE:
+    LINE = (
+        "Sir, I've detected an unauthorized attempt to access our mainframe. "
+        "While the threat has been neutralized, I've taken the liberty of "
+        "implementing additional security protocols. "
+        "Might I suggest reviewing the breach logs at your earliest convenience?"
+    )
 # Voice, rate, pitch. The first is the current default.
 OPTIONS = [
     ("current default", "en-GB-RyanNeural", "", ""),
@@ -68,7 +72,8 @@ folder = os.path.join(tempfile.gettempdir(), "jarvis_voice_lab")
 os.makedirs(folder, exist_ok=True)
 
 for index, (label, voice, rate, pitch) in enumerate(OPTIONS, start=1):
-    path = os.path.join(folder, f"option_{index}.mp3")
+    safe_name = str(abs(hash(LINE)))
+    path = os.path.join(folder, f"{safe_name}_option_{index}.mp3")
 
     print(f"{index:2}. {label}")
     print(f"    voice {voice}  rate {rate or 'default'}  "
