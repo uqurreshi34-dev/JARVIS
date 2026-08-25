@@ -162,11 +162,42 @@ Costs an API call, since it needs a vision model.
 
 ## Screen control
 
+Works on whatever window is focused — any application, including a
+browser. "What's on my screen" is not a required first step; each command
+below looks at the live window itself, every time.
+
 | Say | Does |
 |---|---|
 | what's on my screen | describes the window |
 | click send | clicks it — asks first if risky |
 | type hello world | types into whatever has focus |
+
+A freshly loaded Chrome tab can briefly show nothing to click while its
+own accessibility tree wakes up; a click that misses for that reason is
+retried once automatically before giving up.
+
+## Browsing
+
+Read-only: goes somewhere and reads what's there. Needs the JARVIS Chrome
+shortcut running (see JARVIS.md) — a separate, persistent Chrome profile
+so it can run alongside your normal browser rather than needing it closed.
+
+Reading a page's actual text — an article, its headings, saving it to a
+file — is not something screen control can do at all: it only ever reads
+text boxes and fields, never rendered page content. This is what fills
+that gap.
+
+| Say | Does |
+|---|---|
+| browse to the bbc | opens it in the attached Chrome |
+| search for the offside rule | web search |
+| read this page | title, length, and the opening, spoken |
+| what's on this page | its headings and links |
+| what page am I on | title and site, no reading |
+| save this page | text saved to your JARVIS folder |
+
+Clicking and typing on a web page are still screen control, above, same
+as any other application — browsing does not change how those work.
 
 ## Memory
 

@@ -181,6 +181,30 @@ are currently looking at, such as "what's on my screen" or "describe my
 screen". This is different from look, which uses the camera to see the
 physical world, not the screen.
 
+These control the Chrome the user already has open, and only read from it:
+
+Use browse_to when the user wants a website opened in the browser they are
+already using, such as "browse to the BBC" or "take me to github". Put a
+full https URL in "website". This is different from open_website, which
+opens a fresh tab in whatever the default browser is; browse_to steers the
+browser already in front of them. If the user simply says "open X", prefer
+open_website or open_application, not browse_to.
+
+Use web_search when the user wants something searched for on the web, such
+as "search for the weather in Leeds" or "google the offside rule". Put only
+what they want searched in "text", without the verb.
+
+Use read_page when the user wants the page they are on read or summarised,
+such as "read this page" or "what does this article say".
+Use page_overview when they want to know what is on the page rather than
+its text, such as "what's on this page" or "describe this page". This is
+different from describe_screen, which describes the application window
+itself rather than a web page.
+Use current_page when they ask which page or site they are on.
+Use page_to_file when they want the page saved as a file, such as "save
+this page" or "take the page as a file".
+For all of these, leave "application", "project", "amount" and "unit" null.
+
 Use show_news when the user asks for news or headlines. If they name a
 region or topic, put it in "text" as one of: uk, world, america, europe,
 technology, business, sport, science, politics, health. Otherwise leave
@@ -281,6 +305,12 @@ _SCHEMA = {
                 "click_thing",
                 "type_text",
                 "describe_screen",
+                "browse_to",
+                "web_search",
+                "read_page",
+                "page_overview",
+                "current_page",
+                "page_to_file",
                 "show_news",
                 "hide_news",
                 "expand_story",

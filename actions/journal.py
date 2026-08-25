@@ -158,6 +158,7 @@ _VERBS = {
     "proofread_report": "write a spelling report for {detail}",
     "proofread_copy": "copy a corrected version of {detail}",
     "ignore_word": "add {detail} to the ignore list",
+    "page_to_file": "save a web page to your JARVIS folder",
     "type_text": "type something",
     "open_application": "open {detail}",
     "close_application": "close {detail}",
@@ -209,6 +210,17 @@ def _phrase_for(intent, detail):
     words = intent.replace("_", " ")
 
     return f"{words} {tidy}".strip()
+
+
+def browser(what, where, outcome=None):
+    """Record a browser step: every navigation, every page read.
+
+    Deliberately not action(): browsing is chatty, and a page read is not
+    the kind of thing worth answering "what did you do?" with. This writes
+    the audit trail without touching _last_spoken, so "what did you do"
+    still names the last real change rather than the last page visited.
+    """
+    write("browser", f"{what}: {where}", outcome)
 
 
 def refused(reason, detail):

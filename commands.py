@@ -24,6 +24,7 @@ from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
 import phrases
 from actions import (
+    browser,
     camera,
     charts,
     clipboard,
@@ -249,6 +250,21 @@ _FAST_PHRASES = (
     (("hide your mind", "close your mind", "hide the brain",
       "close the brain", "hide brain view", "turn off your mind",
       "stop showing your mind"), "hide_brain"),
+    (("read this page", "read the page", "read this article",
+      "read the article", "read this website", "summarise this page",
+      "summarise the page", "summarise this article",
+      "what does this page say", "whats this page say",
+      "read the page to me"), "read_page"),
+    (("whats on this page", "what is on this page", "whats on the page",
+      "what is on the page", "describe this page", "describe the page",
+      "whats on this website", "what can i click on this page",
+      "page overview", "survey this page"), "page_overview"),
+    (("what page am i on", "which page am i on", "what page is this",
+      "whats open in chrome", "what is open in chrome",
+      "what tab am i on", "what website am i on"), "current_page"),
+    (("save this page", "save the page", "save this page as a file",
+      "take the page as a file", "save this article",
+      "save the article", "keep this page"), "page_to_file"),
     (("fix them", "fix the mistakes", "fix the spelling", "correct them",
       "correct the mistakes", "fix those", "sort them out",
       "list them", "read them", "read them out", "list the mistakes",
@@ -778,6 +794,113 @@ def _type_request(text):
     payload = match.group(1).strip()
 
     return payload or None
+
+
+# Verbs that only ever mean the web. "go to" is deliberately absent: it is
+# already a click verb (see _CLICK_PATTERNS), so it is handled separately
+# below and only when the target is plainly a website.
+_BROWSE_PATTERN = re.compile(
+    r"^(?:browse\s+to|navigate\s+to|take\s+me\s+to|pull\s+up)\s+"
+    r"(?:the\s+)?(.+)$"
+)
+
+# "go to" is shared with clicking, so it is only treated as browsing when
+# what follows resolves to an actual site. "open" is left out altogether:
+# it already means launch-an-application or open-in-default-browser, and
+# quietly redirecting it into the attached Chrome would change what an
+# existing command does.
+_AMBIGUOUS_BROWSE = re.compile(r"^go\s+to\s+(?:the\s+)?(.+)$")
+
+_SEARCH_PATTERN = re.compile(
+    r"^(?:search\s+(?:the\s+web\s+)?for|search\s+google\s+for|"
+    r"google|look\s+up|search)\s+(.+)$"
+)
+
+# Trailing words that belong to the phrasing rather than the query.
+_SEARCH_TAIL = re.compile(
+    r"\s+(?:on\s+google|on\s+the\s+web|online|in\s+chrome|"
+    r"on\s+the\s+internet)$"
+)
+
+
+def _browse_request(text):
+    """Extract a URL to visit, or None.
+
+    Only returns something when the target really is a website. Anything
+    vaguer is left alone, so "go to settings" still reaches click_thing
+    and "open notepad" still launches an application.
+    """
+    match = _BROWSE_PATTERN.match(text)
+
+    if match:
+        target = match.group(1).strip()
+
+        # An explicit browsing verb means the web even for a bare word,
+        # so an unrecognised name becomes a search rather than nothing.
+        return browser.resolve_target(target) or browser.search_url(target)
+
+    match = _AMBIGUOUS_BROWSE.match(text)
+
+    if match:
+        # Shared verb: only take it when it is unmistakably a site.
+        return browser.resolve_target(match.group(1).strip())
+
+    return None
+
+
+def _search_request(text):
+    """Extract a web search query, or None."""
+    match = _SEARCH_PATTERN.match(text)
+
+    if not match:
+        return None
+
+    query = _SEARCH_TAIL.sub("", match.group(1).strip()).strip()
+
+    # "search my notes", "search my files" and friends belong to other
+    # commands. "the" is left alone: "search for the offside rule" is a
+    # perfectly ordinary web search.
+    if not query or query.split()[0] == "my":
+        return None
+
+    return query
+
+
+def _page_to_file():
+    """Save the readable text of the current page into the JARVIS folder."""
+    title, url, body = browser.page_text()
+
+    if not url:
+        return (
+            "Chrome isn't listening for me, sir. Start it with the JARVIS "
+            "shortcut and I'll try again."
+        )
+
+    if not body:
+        return "There's nothing readable on that page to save, sir."
+
+    # The title comes from the page, so it is outside content: it decides
+    # a filename here, which is exactly the sort of thing worth cleaning
+    # before it touches the file system.
+    stem = safety.clean(title, 60) or "page"
+    stem = re.sub(r"[^\w\s-]", "", stem).strip() or "page"
+
+    written = files.write(
+        stem,
+        f"{title}\n{url}\n\n{body}",
+        default_suffix=".txt",
+        overwrite=True,
+    )
+
+    if not written:
+        return "I couldn't save that page, sir."
+
+    label = files.spoken_name(files.safe_name(stem, ".txt"))
+    words = len(body.split())
+
+    journal.browser("saved", url, f"{stem}.txt, {words} words")
+
+    return f"Saved {label} to your JARVIS folder, sir. {words} words."
 
 
 def _timer_request(text):
@@ -2206,6 +2329,22 @@ def _fast_path(command):
     if note:
         return _blank_result("make_note", text=_original_case(command, note))
 
+    # Before clicking, because "go to" is both a click verb and a browsing
+    # verb. _browse_request only answers when the target is plainly a
+    # website, so "go to the file menu" still falls through to the click
+    # below exactly as it always did.
+    destination = _browse_request(text)
+
+    if destination:
+        return _blank_result("browse_to", website=destination)
+
+    query = _search_request(text)
+
+    if query:
+        return _blank_result(
+            "web_search", text=_original_case(command, query)
+        )
+
     click_target = _click_request(text)
 
     if click_target:
@@ -2392,6 +2531,11 @@ _WRITE_INTENTS = frozenset({
     "open_website", "open_project", "close_project", "set_reminder",
     "cancel_reminders", "set_volume", "mute", "unmute", "toggle_mute",
     "minimise_all", "restore_all", "stop_looking",
+    # The read-only browser intents are deliberately absent: they log
+    # themselves through journal.browser instead, so visiting a page
+    # never becomes the answer to "what did you do?". Saving one is a
+    # real artefact on disk, so that one is recorded properly.
+    "page_to_file",
     "show_brain", "hide_brain",
     "proofread_fix", "proofread_report", "proofread_copy", "ignore_word",
     "remember", "forget", "set_market_alert", "market_report",
@@ -3007,6 +3151,31 @@ def handle_command(command):
 
     if intent == "describe_screen":
         return _query(intent, screen_control.describe)
+
+    # Browsing is read-only for now: go somewhere, read what's there.
+    # Nothing below types, clicks, or submits. Each step logs itself
+    # through journal.browser, which writes the audit trail without
+    # claiming to be the last thing JARVIS "did" — a page visit is not
+    # the answer anyone wants to "what did you do?".
+    if intent == "browse_to" and website:
+        return _query(intent, lambda: browser.navigate(website))
+
+    if intent == "web_search" and (verbatim_text or text):
+        wanted = verbatim_text or text
+
+        return _query(intent, lambda: browser.search(wanted))
+
+    if intent == "read_page":
+        return _query(intent, browser.describe_page)
+
+    if intent == "page_overview":
+        return _query(intent, browser.describe_overview)
+
+    if intent == "current_page":
+        return _query(intent, browser.describe_current)
+
+    if intent == "page_to_file":
+        return _query(intent, _page_to_file)
 
     if intent == "show_news":
         region = text if text in news.FEEDS else news.DEFAULT_REGION

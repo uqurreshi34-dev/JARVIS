@@ -23,6 +23,7 @@ Known limits, worth knowing before relying on this:
   describe() (read-only) before trying click().
 """
 
+import re
 import threading
 import time
 from difflib import SequenceMatcher
@@ -131,6 +132,22 @@ def _clickable_elements(window):
     return elements
 
 
+def _contains_whole(haystack, needle):
+    """True when needle appears in haystack as a whole word or phrase,
+    not merely as a run of characters.
+
+    Plain "needle in haystack" containment is how a control named "X" —
+    a close icon, commonly — ends up matching "scores and fixtures": the
+    letter x is genuinely present, inside "fixtures", with no relation to
+    what was actually meant. Anchoring on word boundaries closes that off
+    while still matching "log" inside "please click log in".
+    """
+    if not needle:
+        return False
+
+    return bool(re.search(rf"(?<!\w){re.escape(needle)}(?!\w)", haystack))
+
+
 def _best_match(wanted, elements):
     """The element whose name is the closest match to wanted, or None."""
     target = wanted.strip().casefold()
@@ -144,7 +161,8 @@ def _best_match(wanted, elements):
 
     contained = [
         (name, element) for name, element in elements
-        if target in name.casefold() or name.casefold() in target
+        if _contains_whole(target, name.casefold())
+        or _contains_whole(name.casefold(), target)
     ]
 
     if contained:
@@ -175,7 +193,7 @@ def find_clickable(wanted):
     """Locate something to click by name.
 
     Returns (element, label, risky). element is None if nothing on the
-    active window matched closely enough.
+    active window matched closely enough, even after a retry.
     """
     window = _foreground_window()
 
@@ -183,6 +201,17 @@ def find_clickable(wanted):
         return None, None, False
 
     match = _best_match(wanted, _clickable_elements(window))
+
+    if not match:
+        # Chromium apps can expose a thin accessibility tree until
+        # something has actually queried it once (see the module
+        # docstring), so a freshly loaded page's real controls can be
+        # briefly invisible. One quiet retry means that alone is never
+        # why "click X" fails — and means nobody has to ask "what's on
+        # my screen" first purely to warm the tree up before a click
+        # will work; that was never a real requirement, just this gap.
+        time.sleep(0.2)
+        match = _best_match(wanted, _clickable_elements(window))
 
     if not match:
         return None, None, False
