@@ -293,23 +293,25 @@ def summarise(readings):
 
 
 def spoken_price(price):
-    """A price said the way a person would say it.
+    """A price said aloud, exactly.
 
-    Reading "40,132.87" aloud digit by digit is unusable, so it is rounded
-    to something a listener can actually hold on to.
+    A price is a fact, so it is never rounded to "58 thousand pounds": at
+    that scale the approximation hides tens of pounds. Written with
+    thousands separators, the voice reads it as "fifty eight thousand and
+    five" rather than digit by digit.
     """
     try:
         value = float(price)
     except (TypeError, ValueError):
         return "an unknown amount"
 
-    if value >= 1000:
-        return f"{value / 1000:.1f} thousand pounds"
+    if value >= 1:
+        # The pence stay. Dropping them rounded 2,450.87 up to 2,451,
+        # which is a different number and so simply wrong.
+        return f"{value:,.2f} pounds"
 
-    if value >= 10:
-        return f"{value:.0f} pounds"
-
-    return f"{value:.2f} pounds"
+    # A coin worth pennies needs the small digits to mean anything.
+    return f"{value:.4f} pounds"
 
 
 THRESHOLD_FILE = "market-alerts.txt"
@@ -482,23 +484,43 @@ market_monitor = MarketMonitor()
 
 
 def describe():
-    """Spoken summary, for when the user asks outright."""
-    rows = snapshot()
+    """Spoken summary, for when the user asks outright.
 
-    if not rows:
+    Built from the prices directly rather than from snapshot(): that
+    shortens "58,005.00" to "58.0k" for the HUD, where space is tight and
+    you can read it. Said aloud, an abbreviated price is just wrong.
+    """
+    prices = crypto()
+    pairs = rates()
+
+    if not prices and not pairs:
         return "I couldn't reach the markets, sir."
 
     parts = []
 
-    for label, text, change in rows:
-        direction = "up" if change > 0 else "down" if change < 0 else "flat"
-        name = {"BTC": "Bitcoin", "USD": "the dollar",
-                "EUR": "the euro"}.get(label, label)
+    for name, coin in COINS.items():
+        entry = prices.get(name)
 
-        if label == "BTC":
-            parts.append(
-                f"Bitcoin is {text}, {direction} {abs(change):.1f} percent")
-        else:
-            parts.append(f"{name} at {text}")
+        if not entry:
+            continue
+
+        price, change = entry
+        direction = "up" if change > 0 else "down" if change < 0 else "flat"
+
+        parts.append(
+            f"{coin['spoken']} is {spoken_price(price)}, "
+            f"{direction} {abs(change):.1f} percent"
+        )
+
+    for code, spoken in (("USD", "The dollar"), ("EUR", "The euro")):
+        pair = pairs.get(code)
+
+        if pair:
+            # Each part becomes its own sentence below, so it opens with a
+            # capital.
+            parts.append(f"{spoken} is at {pair[0]:.3f}")
+
+    if not parts:
+        return "I couldn't reach the markets, sir."
 
     return ". ".join(parts) + ", sir."
