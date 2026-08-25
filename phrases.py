@@ -20,15 +20,19 @@ POOLS = {
     # Acknowledging something small that succeeded.
     "acknowledge": (
         "Noted, sir.",
+        "Consider it handled, sir.",
+        "Already seen to, sir.",
+        "I've taken the liberty, sir.",
         "Very well, sir.",
         "Certainly, sir.",
         "Happy to, sir.",
     ),
     "done": (
-        "Done, sir.",
+        "That's dealt with, sir.",
         "Consider it done, sir.",
         "All done, sir.",
         "That's done, sir.",
+        "All in order, sir."
     ),
     "saved": (
         "Saved, sir.",
@@ -55,6 +59,8 @@ POOLS = {
         "Very well, sir. I'll leave it to you.",
         "As you wish, sir.",
         "Leaving it be, sir.",
+        "As you prefer, sir.",
+        "I'll leave it in your hands, sir."
     ),
     "cancelled": (
         "Cancelled, sir.",
@@ -70,6 +76,8 @@ POOLS = {
         "That didn't work, sir.",
         "I'm afraid that failed, sir.",
         "No luck, sir.",
+        "I'm afraid that eluded me, sir.",
+        "That didn't take, sir. Might I try again?",
     ),
     "cannot_open": (
         "I couldn't open that, sir.",
