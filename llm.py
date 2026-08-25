@@ -123,6 +123,9 @@ Use clear_calendar only when they want every entry removed.
 Use show_brain when the user wants to see the neural view, such as "show me
 your mind". Use hide_brain to close it.
 
+Use market_summary when the user asks how the markets or a coin are doing
+and wants it spoken, not written.
+
 Use market_report when the user wants a written report on a coin, such as
 "write me a report on bitcoin". Put the coin in "text".
 
@@ -261,6 +264,7 @@ _SCHEMA = {
                 "clear_calendar",
                 "show_brain",
                 "hide_brain",
+                "market_summary",
                 "market_report",
                 "set_market_alert",
                 "read_market_alerts",

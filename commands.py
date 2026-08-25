@@ -226,6 +226,11 @@ _FAST_PHRASES = (
       "whats my schedule", "check my calendar"), "read_calendar"),
     (("clear my calendar", "empty my calendar", "delete my calendar",
       "wipe my calendar", "clear my diary"), "clear_calendar"),
+    (("how are the markets", "how are my markets", "hows the market",
+      "hows bitcoin", "how is bitcoin", "whats bitcoin at",
+      "whats bitcoin doing", "market prices", "crypto prices",
+      "whats the bitcoin price", "how are my crypto",
+      "how is crypto doing", "market summary"), "market_summary"),
     (("what are you watching", "whats your market alerts",
       "what are my market alerts", "market alerts",
       "what alerts do i have"), "read_market_alerts"),
@@ -2926,6 +2931,9 @@ def handle_command(command):
             lambda: markets.set_threshold(text, percent),
             detail=f"{spoken} at {percent:g} percent",
         )
+
+    if intent == "market_summary":
+        return _query(intent, markets.describe)
 
     if intent == "read_market_alerts":
         return _query(intent, markets.describe_thresholds)
