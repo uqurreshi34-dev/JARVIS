@@ -38,6 +38,15 @@ REPEAT_HOURS = 6
 DISK_PERCENT_FREE = 10
 MEMORY_PERCENT = 92
 
+# A coin is not mentioned again for this long after a move, so a market
+# drifting past the threshold cannot nag every two minutes.
+MARKET_QUIET_HOURS = 2
+
+# Prices are compared against a mark that resets after this long, so
+# "moved 2 percent" means recently rather than since the app started days
+# ago.
+MARK_HOURS = 12
+
 # Memory has to stay high for this many checks before it is worth saying:
 # a single spike while something compiles is not news.
 MEMORY_SUSTAINED = 3
@@ -111,8 +120,24 @@ def clear_held():
         print(f"[JARVIS] could not clear held notices: {error}")
 
 
+def _at(when):
+    """The time part of a held notice's stamp, spoken as a clock time."""
+    stamp = (when or "").strip()
+
+    # Stored as "2026-08-25 03:00"; only the time is worth saying.
+    if " " in stamp:
+        return stamp.split(" ", 1)[1]
+
+    return stamp
+
+
 def catch_up():
-    """What to say about anything missed, or None."""
+    """What to say about anything missed, or None.
+
+    Each notice carries the time it happened, so a market move that
+    occurred at three in the morning is reported as such rather than as
+    though it were news now.
+    """
     entries = held()
 
     if not entries:
@@ -121,9 +146,13 @@ def catch_up():
     clear_held()
 
     if len(entries) == 1:
-        return f"While you were away, sir: {entries[0][1]}"
+        when, text = entries[0]
 
-    listed = " ".join(text for _, text in entries[-3:])
+        return f"While you were away, sir, at {_at(when)}: {text}"
+
+    parts = [f"at {_at(when)}, {text}" for when, text in entries[-4:]]
+
+    listed = " ".join(parts)
 
     return (
         f"{len(entries)} things happened while you were away, sir. "
@@ -150,6 +179,10 @@ class Watcher:
 
         self._memory_high = 0
 
+        # The price each coin is measured against, and when that mark was
+        # taken: {coin: (price, when)}.
+        self._marks = {}
+
     def set_listener(self, listener):
         """Register a callable taking the sentence to say."""
         self._listener = listener
@@ -165,7 +198,7 @@ class Watcher:
     def stop(self):
         self._stop.set()
 
-    def _due(self, key):
+    def _due(self, key, hours=None):
         """True when this observation has not been made recently.
 
         An observation never made is always due. Comparing against zero
@@ -178,7 +211,9 @@ class Watcher:
         if last is None:
             return True
 
-        return time.monotonic() - last > REPEAT_HOURS * 3600
+        window = REPEAT_HOURS if hours is None else hours
+
+        return time.monotonic() - last > window * 3600
 
     def _mention(self, key, text, urgent=False):
         """Say something, or hold it if now is not the time."""
@@ -215,6 +250,67 @@ class Watcher:
     def _check(self):
         self._check_disk()
         self._check_memory()
+        self._check_markets()
+
+    def _check_markets(self):
+        """Speak up when a coin has moved further than you asked about."""
+        try:
+            from actions import markets
+
+            prices = markets.crypto()
+
+        except Exception as error:
+            print(f"[JARVIS] could not read the markets: {error}")
+            return
+
+        if not prices:
+            return
+
+        now = time.monotonic()
+
+        for name, (price, _) in prices.items():
+            if price is None:
+                continue
+
+            mark = self._marks.get(name)
+
+            # First sighting, or the mark has gone stale, so start afresh.
+            if mark is None or now - mark[1] > MARK_HOURS * 3600:
+                self._marks[name] = (price, now)
+                continue
+
+            was, _when = mark
+
+            if not was:
+                self._marks[name] = (price, now)
+                continue
+
+            move = (price - was) / was * 100.0
+            limit = markets.threshold_for(name)
+
+            if abs(move) < limit:
+                continue
+
+            key = f"market:{name}"
+
+            if not self._due(key, MARKET_QUIET_HOURS):
+                continue
+
+            spoken = markets.COINS.get(name, {}).get("spoken", name)
+            direction = "up" if move > 0 else "down"
+
+            self._mention(
+                key,
+                (
+                    f"{spoken} is {direction} "
+                    f"{abs(move):.1f} percent, sir, "
+                    f"at {markets.spoken_price(price)}."
+                ),
+            )
+
+            # Measuring from here on, so the next alert is about the next
+            # move rather than the same one all over again.
+            self._marks[name] = (price, now)
 
     def _check_disk(self):
         if not self._due("disk"):

@@ -30,6 +30,7 @@ from actions import (
     diary,
     files,
     journal,
+    markets,
     memory,
     news,
     proofread,
@@ -224,6 +225,9 @@ _FAST_PHRASES = (
       "whats my schedule", "check my calendar"), "read_calendar"),
     (("clear my calendar", "empty my calendar", "delete my calendar",
       "wipe my calendar", "clear my diary"), "clear_calendar"),
+    (("what are you watching", "whats your market alerts",
+      "what are my market alerts", "market alerts",
+      "what alerts do i have"), "read_market_alerts"),
     (("what do you know about me", "what do you remember",
       "what do you remember about me", "whats in your memory",
       "what have you remembered"), "recall_memory"),
@@ -1892,6 +1896,40 @@ def _event_request(text):
     return None
 
 
+# "tell me when bitcoin moves 2 percent", and the ways people say it.
+_SET_ALERT = re.compile(
+    r"^(?:tell me|let me know|alert me|warn me|shout)\s+"
+    r"(?:when|if)\s+(?:the\s+)?(.+?)\s+"
+    r"(?:moves?|changes?|shifts?|goes|swings?)\s+"
+    # Normalising strips the decimal point, so "0.5" arrives as "0 5" and
+    # both halves have to be caught.
+    r"(?:by\s+)?(\d+)(?:\s+(\d+))?\s*(?:percent|per cent|%)?$"
+)
+
+
+def _alert_request(text):
+    """Return (coin, percent) for a threshold change, or None."""
+    match = _SET_ALERT.match(text)
+
+    if not match:
+        return None
+
+    coin = markets.coin_for(match.group(1))
+
+    if not coin:
+        return None
+
+    whole = match.group(2)
+    fraction = match.group(3)
+
+    try:
+        percent = float(f"{whole}.{fraction}" if fraction else whole)
+    except ValueError:
+        return None
+
+    return coin, percent
+
+
 _REMEMBER = re.compile(
     r"^(?:remember(?: that)?|keep in mind(?: that)?|"
     r"dont forget(?: that)?|bear in mind(?: that)?)\s+(.+)$"
@@ -2119,6 +2157,13 @@ def _fast_path(command):
         if _file_target(where):
             return _blank_result("remove_line", text=what, project=where)
 
+    alert = _alert_request(text)
+
+    if alert:
+        coin, percent = alert
+
+        return _blank_result("set_market_alert", text=coin, amount=percent)
+
     remembering = _memory_request(text)
 
     if remembering:
@@ -2319,7 +2364,7 @@ _WRITE_INTENTS = frozenset({
     "minimise_all", "restore_all", "stop_looking",
     "show_brain", "hide_brain",
     "proofread_fix", "proofread_report", "proofread_copy", "ignore_word",
-    "remember", "forget",
+    "remember", "forget", "set_market_alert",
     "add_event", "remove_event", "clear_calendar",
 })
 
@@ -2819,6 +2864,19 @@ def handle_command(command):
             yes_text="Calendar cleared, sir.",
             no_text="Cancelled, sir.",
         )
+
+    if intent == "set_market_alert" and text and amount is not None:
+        spoken = markets.COINS.get(text, {}).get("spoken", text)
+
+        return _action(
+            intent,
+            f"I'll tell you when {spoken} moves {amount:g} percent, sir.",
+            lambda: markets.set_threshold(text, amount),
+            detail=f"{spoken} at {amount:g} percent",
+        )
+
+    if intent == "read_market_alerts":
+        return _query(intent, markets.describe_thresholds)
 
     if intent == "recall_memory":
         return _query(intent, memory.describe)

@@ -120,6 +120,14 @@ Use remove_event to take one out, the same way.
 Use read_calendar when they ask what is on their calendar or coming up.
 Use clear_calendar only when they want every entry removed.
 
+Use show_brain when the user wants to see the neural view, such as "show me
+your mind". Use hide_brain to close it.
+
+Use set_market_alert when the user wants telling about a price move, such
+as "tell me when bitcoin moves 2 percent". Put the coin in "text" as one
+of bitcoin, ethereum, xrp, and the percentage in "amount".
+Use read_market_alerts when they ask what price moves JARVIS is watching.
+
 Use remember when the user wants a durable fact about themselves kept, such
 as "remember that I prefer short answers" or "call me AvidCoder". Put the
 fact in "text". Do not use it for reminders with a time; those are
@@ -248,6 +256,10 @@ _SCHEMA = {
                 "remove_event",
                 "read_calendar",
                 "clear_calendar",
+                "show_brain",
+                "hide_brain",
+                "set_market_alert",
+                "read_market_alerts",
                 "remember",
                 "forget",
                 "recall_memory",
