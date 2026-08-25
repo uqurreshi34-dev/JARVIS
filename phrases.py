@@ -68,7 +68,6 @@ POOLS = {
         "Very well, sir.",
     ),
     "unknown": (
-        "I don't know how to do that yet, sir.",
         "That's beyond me for now, sir.",
         "I'm not equipped for that yet, sir.",
     ),
