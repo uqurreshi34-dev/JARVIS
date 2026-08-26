@@ -2827,12 +2827,16 @@ def _fast_path(command):
             return _blank_result("open_website", website=_WEBSITES[target])
 
     if text in _HIDE_PICTURE:
-        # A headline picture belongs to the news panel; otherwise the thing
-        # on screen is the camera view.
+        # A headline picture belongs to the news panel and takes priority
+        # if it's showing. Otherwise "picture" is exactly as ambiguous as
+        # "image" — a fetched Unsplash photo is a picture too — so this
+        # shares hide_image's own chain (picker, then a committed image,
+        # falling back to the camera last) rather than assuming camera
+        # outright.
         if _on_screen:
             return _blank_result("hide_picture")
 
-        return _blank_result("stop_looking")
+        return _blank_result("hide_image")
 
     if _on_screen:
         picture = _picture_request(text)
