@@ -101,6 +101,32 @@ Local dictionary, no API. Works on files and on whatever is on screen.
 Word documents keep their formatting when corrected. Screen text goes to
 the clipboard rather than being typed over your work.
 
+## Images
+
+Fetched from Unsplash — costs a request to find a photo, the same way the
+camera costs a call to see one. Everything after that (rotating, resizing,
+saving) is free: pure local pixel work, no network involved.
+
+| Say | Does |
+|---|---|
+| show me an image of the Eiffel Tower | finds three candidates, shows them side by side |
+| one / the second one / three | picks one — say or click a card |
+| none of these | closes the picker without choosing |
+| rotate the image 90 degrees | turns it — also "left", "counterclockwise", 180, 270 |
+| make the image bigger / smaller | zooms in or out, visibly, in the panel |
+| restore the image | back to exactly how it was fetched — undoes both the zoom and any rotation |
+| save the image / save the picture | either phrase saves whichever is actually on screen — the fetched photo if one's showing, otherwise the camera's |
+| close the image | dismisses the panel |
+
+Saved images go into `JARVIS\images\`, created the first time it's needed.
+Whatever rotation and zoom are in effect when you save is what ends up in
+the file — the preview and the save always match.
+
+If nothing is chosen or the reply isn't clear, JARVIS asks again rather
+than silently giving up; the question stays open for a few minutes, so
+going quiet and coming back later (even needing the wake word again)
+still works.
+
 ## Charts
 
 | Say | Does |
@@ -157,7 +183,7 @@ Costs an API call, since it needs a vision model.
 | what am I holding | looks and tells you |
 | how about now | looks again |
 | what do you see | same |
-| save the picture | keeps it |
+| save the picture | keeps it — or saves a fetched image instead, if one's on screen; see Images below |
 | close the camera | releases it |
 
 ## Screen control

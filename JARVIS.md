@@ -16,7 +16,7 @@ transcribes locally with Whisper, works out what you meant, does it, and
 answers aloud in a British voice. A heads-up display shows what it heard,
 what it is doing, and live machine telemetry.
 
-**72 intents. 279 spoken phrases resolve locally with no API call.**
+**91 intents. 383 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -32,9 +32,12 @@ you speak → Whisper (local) → phrase table (free) → fuzzy match (free)
 ```
 
 In practice almost everything is free: apps, files, notes, clipboard, news,
-charts, spelling, screen control, calendar, memory, volume, timers. Only
-two things always cost: asking a general question, and asking the camera
-what it can see.
+charts, spelling, screen control, calendar, memory, volume, timers. Three
+things always need a live request to actually carry out, even though
+recognising the command itself is free: a general question and the camera
+both cost money, through a language or vision model; finding a fetched
+image costs a request too, but not money — Unsplash's own call is free,
+just not local.
 
 **When adding a capability, add its phrases to the free path.** An intent
 that only the model can reach is slower and costs money on every use.
@@ -110,6 +113,61 @@ Captures through pygrabber (pure Python DirectShow). Sends one frame to a
 vision model and says what it sees. Detects a too-dark frame locally and
 says so rather than paying for an answer that cannot exist.
 
+### Images — `actions/images.py`, `actions/image_choices.py`
+Fetches from Unsplash (a free request, not a paid one — see the cost note
+above) and offers three candidates rather than committing to the first
+result, since a single result too often has an unrelated head or hand in
+frame. Say or click one, two, or three; unclear replies get asked again
+rather than silently abandoned, and the question stays open for a few
+minutes so it survives a pause. `save the image` and `save the picture`
+are the same command now — whichever is actually on screen, the fetched
+photo or the camera's, is what gets saved.
+
+Rotating, resizing, and restoring are pure Pillow, no network involved.
+Every render works from the pristine fetched bytes rather than the last
+edit, so repeated rotating and resizing never loses quality. Restoring
+undoes both the rotation and the zoom — not size alone, on the reasoning
+that "restore" means put it back, not undo one specific edit.
+
+### Browsing — `actions/browser.py`
+Read-only: navigate, search, read a page's actual text, list its headings
+and links, save one to a file. Fully on the free path, unlike Camera or
+Images — Selenium talks to an already-running Chrome over its own
+`localhost` debugging port, so nothing external or metered is ever
+called. Whatever a page fetches is just ordinary browsing, the same as if
+it were clicked by hand; the only precondition is that Chrome has to
+actually be running that way (see below), not that anything costs
+something to use.
+
+Attaches to an already-running Chrome over its remote debugging port
+rather than launching its own, so it drives a real browser session with
+real logins rather than a fresh, empty one. From Chrome 136 that port is
+refused on the default profile — Google's own hardening against exactly
+this kind of attachment — so it needs a dedicated, persistent Chrome
+profile instead, started with `jarvis-chrome.bat`. Signed in once, that
+profile's logins persist across runs.
+
+Page text comes from injected JavaScript rather than a screenshot; a
+page's real body text was never reachable through screen control at all,
+which only ever sees text boxes and fields, never rendered content. A
+page's own text is outside content, so it goes through
+`actions/safety.py` before being read aloud, same as any other untrusted
+input — a page that tries to give orders gets flagged, not obeyed. Logged
+through its own `journal.browser()` rather than `journal.action()`, so a
+page visit is recorded but never becomes the answer to "what did you do".
+
+### The brain view — `brain_panel.py`
+A rotating wireframe globe, standalone rather than attached to the HUD by
+a beam like the other panels — it appears centred on screen instead.
+Pulses are tied to real activity relayed from the HUD (state changes,
+voice amplitude, microphone level), never a timer animating on its own;
+idle time gets the same slow ambient breath the HUD's own core already
+uses, rather than a fake pulse invented for this view.
+
+Toggled by voice or by clicking the reactor core directly. Both paths
+converge on the same function, so the two can never disagree about
+whether it's currently showing.
+
 ### Screen control — `actions/screen_control.py`
 Windows UI Automation. Describes the active window, clicks a named control,
 types into whatever has focus, and reads the text being written. Typing
@@ -177,8 +235,21 @@ archived, never discarded.
 clipboard" works for sixty seconds after naming something. Never for
 removal or clearing, where a wrong guess costs data.
 
-**A pending question never swallows a real command.** If the next thing said
-is a recognised command, that is done and the question lapses.
+**A pending question never swallows a real command — unless the reply is
+unmistakably an answer to it.** If the next thing said is a recognised
+command, that wins and the question lapses. The one exception: a question
+can name its own recogniser for what a genuine reply looks like, checked
+first, so an answer that happens to also resemble a command isn't stolen
+by that safety net. "Select image one" reads equally well as a reply to
+"which one, sir?" and as a click_thing command ("select" is a click verb
+too) — without this, the picker lost the reply and JARVIS went looking
+for something to click that didn't exist. Every other pending question is
+unaffected; only the image picker opts in.
+
+**Pending questions expire.** Five minutes, unanswered, and a question is
+abandoned rather than still live — long enough to survive a genuine pause,
+short enough that a stray matching word in an unrelated sentence hours
+later can't resurrect it.
 
 ---
 
@@ -213,6 +284,15 @@ file.
 **Say numbers as words.** The voice reads a bare "4" as something close to
 "for". `phrases.number()` spells out anything up to twenty; use it in every
 spoken sentence.
+
+**A generic verb can collide with a specific answer.** "Select" was
+already a click verb by the time the image picker needed "select image
+one" to mean "pick the first photo." A pending question deferring to any
+recognised command, unconditionally, meant the picker lost silently and
+JARVIS went looking for something called "image one" to click. The fix
+was letting a specific question say what its own answers look like,
+checked before that general deference — see the pending-question rule
+above.
 
 **An empty reply is a failure, not a success.** A provider returning an
 empty string was treated as an answer, so the fallback never ran and no
