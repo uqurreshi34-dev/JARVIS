@@ -290,10 +290,11 @@ _FAST_PHRASES = (
       "keep that picture", "keep that photo",
       "keep the picture"), "save_picture"),
     (("save the image", "save that image", "save this image",
-      "keep the image", "keep that image", "download the image",
-      "download this image"), "save_image"),
+      "save image", "keep the image", "keep that image",
+      "download the image", "download this image"), "save_image"),
     (("close the image", "hide the image", "close that image",
       "dismiss the image", "close this image", "close the images",
+      "close image", "hide image",
       "i dont want any of these", "i dont want any of these images",
       "none of these images", "not any of these",
       "not any of these images", "cancel the images",
@@ -1251,11 +1252,12 @@ def _show_image(query):
 def _hide_image():
     """Close whichever is actually on top.
 
-    If the three-candidate picker is open, that's what "close the image"
-    almost certainly means — closing it also clears _awaiting, so a
-    stray "select image 2" afterward doesn't fall through to click_thing
-    with nothing left listening. Only when no picker is open does this
-    fall back to hiding the single committed image, as before.
+    Checked in priority order: the three-candidate picker first, then a
+    committed fetched image, and only if neither is showing does
+    "close/hide image" fall back to meaning the camera — the same
+    assumption this code made before the image feature existed at all,
+    kept as the final default now that "image" has more than one thing
+    it could mean.
     """
     global _awaiting
 
@@ -1265,10 +1267,13 @@ def _hide_image():
 
         return True
 
-    images.hide()
-    _push_image()
+    if images.has_image():
+        images.hide()
+        _push_image()
 
-    return True
+        return True
+
+    return _stop_looking()
 
 
 def _rotate_image(degrees):
@@ -2250,9 +2255,17 @@ _SHOW_PICTURE = re.compile(
     r"(?:number\s*)?(\w+)$"
 )
 
+# "Image"-worded phrasing used to live here too, but hide_image's own
+# phrase list (checked earlier, via the main lookup) now catches "close
+# image" / "hide the image" precisely and routes it through the
+# picker-aware logic in _hide_image(). Leaving duplicate entries here
+# would be unreachable dead code that misleadingly suggests this set
+# still handles them — this set is reached only when nothing earlier
+# matched, so from here down it only ever means the news headline photo
+# or the camera, exactly matching the picture/photo-vs-image wording
+# convention used throughout.
 _HIDE_PICTURE = frozenset({
-    "hide the image", "close the image", "hide the picture",
-    "close the picture", "hide image", "close image",
+    "hide the picture", "close the picture",
 })
 
 
