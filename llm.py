@@ -157,9 +157,34 @@ such as "save the chart" or "save the graph". This works even if the offer
 to save it has already passed.
 
 Use save_picture when the user wants the picture currently shown by the
-camera saved as a file, such as "save the picture", "save that image", or
+camera saved as a file, such as "save the picture", "save that photo", or
 "keep that photo". This is different from take_screenshot, which captures
-the whole screen — save_picture is only for the camera's own picture.
+the whole screen — save_picture is only for the camera's own picture. It
+is also different from save_image below: "image" always means the fetched
+photo panel, "picture" and "photo" always mean the camera's.
+
+Use show_image when the user wants to see a photo of something that is
+not on their own screen or camera — a fetched picture, such as "show me an
+image of the Eiffel Tower" or "find a picture of a golden retriever". Put
+what they want a picture of in "text", without the leading verb. This
+costs a call to an image search service, the same way look costs a call to
+a vision model.
+Use rotate_image when the user wants the currently shown fetched image
+turned, such as "rotate the image 90 degrees" or "turn the picture left".
+Put the number of degrees in "amount" as a positive number for clockwise
+and a negative number for counter-clockwise — 90, 180, or 270 only, since
+those are the only turns that make sense for a rectangular photo. Leave
+"amount" null for a bare "rotate the image", which means a plain clockwise
+quarter turn.
+Use enlarge_image when they want it bigger, such as "make the image
+bigger" or "enlarge the image". Use shrink_image for the opposite, such as
+"make it smaller". Use restore_image when they want it back to the size it
+was fetched at, such as "restore the image" or "original size" — this
+undoes enlarging or shrinking only, not a rotation.
+Use save_image when the user wants the fetched image saved as a file,
+however it currently looks — rotated, enlarged, or shrunk — such as "save
+the image" or "keep that image". Use hide_image when they want the photo
+panel closed, such as "close the image".
 
 Use click_thing when the user wants to click, press, select, or activate
 something already visible on screen in the application that is currently
@@ -302,6 +327,13 @@ _SCHEMA = {
                 "stop_looking",
                 "save_picture",
                 "save_chart",
+                "show_image",
+                "hide_image",
+                "rotate_image",
+                "enlarge_image",
+                "shrink_image",
+                "restore_image",
+                "save_image",
                 "click_thing",
                 "type_text",
                 "describe_screen",

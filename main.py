@@ -15,6 +15,7 @@ from beam import Beam
 from brain_panel import BrainPanel
 from camera_panel import CameraPanel
 from chart_panel import ChartPanel
+from image_panel import ImagePanel
 from commands import (
     handle_command,
     reminder_manager,
@@ -22,6 +23,7 @@ from commands import (
     set_camera_listener,
     set_chart_listener,
     set_highlight_listener,
+    set_image_listener,
     set_news_listener,
     set_picture_listener,
     toggle_brain_view,
@@ -346,6 +348,23 @@ def main():
 
     set_camera_listener(camera_update)
 
+    # The fetched-image panel gets its own beam too, same as camera/chart.
+    # Named "photo" rather than "picture" to avoid reading like the news
+    # panel's unrelated picture.emit signal a few lines below.
+    photo = ImagePanel()
+    photo.set_anchor(hud)
+    photo_beam = Beam(photo, hud)
+
+    def image_update(data, title, caption, caption_link):
+        if data:
+            photo.show_view.emit(data, title, caption, caption_link)
+            photo_beam.shown.emit()
+        else:
+            photo.hide_view.emit()
+            photo_beam.hidden.emit()
+
+    set_image_listener(image_update)
+
     # The mind view gets its own panel, projected like the others — but
     # unlike camera/chart it never receives a one-off image. It's fed the
     # HUD's own state/amplitude/level signals directly, so its pulses come
@@ -405,6 +424,8 @@ def main():
     hud.shutdown.connect(chart_beam.hidden.emit)
     hud.shutdown.connect(view.hide_view.emit)
     hud.shutdown.connect(view_beam.hidden.emit)
+    hud.shutdown.connect(photo.hide_view.emit)
+    hud.shutdown.connect(photo_beam.hidden.emit)
     hud.shutdown.connect(brain.hide_brain.emit)
     hud.shutdown.connect(brain_beam.hidden.emit)
     hud.shutdown.connect(lambda: QTimer.singleShot(400, app.quit))

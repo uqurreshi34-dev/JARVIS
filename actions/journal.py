@@ -148,6 +148,7 @@ _VERBS = {
     "copy_to_clipboard": "copy something to your clipboard",
     "save_picture": "save a picture",
     "save_chart": "save a chart",
+    "save_image": "save an image to your JARVIS images folder",
     "click_thing": "click {detail}",
     "add_event": "add {detail} to your calendar",
     "market_report": "write {detail}",

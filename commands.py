@@ -30,6 +30,7 @@ from actions import (
     clipboard,
     diary,
     files,
+    images,
     journal,
     market_report,
     markets,
@@ -285,8 +286,23 @@ _FAST_PHRASES = (
       "save the plot", "save that plot"), "save_chart"),
     (("save the picture", "save that picture", "save this picture",
       "save the photo", "save that photo", "save this photo",
-      "keep that picture", "keep that photo", "save the image",
-      "save that image", "keep the picture"), "save_picture"),
+      "keep that picture", "keep that photo",
+      "keep the picture"), "save_picture"),
+    (("save the image", "save that image", "save this image",
+      "keep the image", "keep that image", "download the image",
+      "download this image"), "save_image"),
+    (("close the image", "hide the image", "close that image",
+      "dismiss the image", "close this image"), "hide_image"),
+    (("enlarge the image", "enlarge image", "make the image bigger",
+      "make image bigger", "zoom in on the image", "bigger image",
+      "increase the image size", "make it bigger"), "enlarge_image"),
+    (("shrink the image", "shrink image", "make the image smaller",
+      "make image smaller", "zoom out on the image", "smaller image",
+      "decrease the image size", "make it smaller"), "shrink_image"),
+    (("restore the image", "restore image", "reset the image size",
+      "restore the image to its original size",
+      "restore image to original size", "original size",
+      "undo the zoom"), "restore_image"),
     (("whats on my screen", "what is on my screen", "whats on the screen",
       "what is on the screen", "what am i looking at", "describe my screen",
       "describe the screen", "tell me whats on my screen"),
@@ -346,6 +362,9 @@ _NEVER_FUZZY = frozenset({
     # "close the picture" and "save the picture" differ by one word too, and
     # a near miss there writes a file the user did not ask for.
     "save_picture",
+    # Same risk, same reason: "close the image" and "save the image" are
+    # one word apart.
+    "save_image",
 })
 
 
@@ -993,6 +1012,114 @@ def _hide_brain():
             return False
 
     return True
+
+
+_image_listener = None
+
+
+def set_image_listener(listener):
+    """Register a callable taking (png bytes, title, caption, caption_link).
+
+    Called with empty/None values to hide the panel, matching the shape
+    the camera and chart listeners already use.
+    """
+    global _image_listener
+    _image_listener = listener
+
+
+def _push_image():
+    """Send the current image (or nothing) to the panel, if one is
+    registered. Shared by every intent below that changes what the
+    image panel should be showing."""
+    if not _image_listener:
+        return
+
+    if not images.has_image():
+        try:
+            _image_listener(b"", "", "", "")
+        except Exception as error:
+            print(f"[JARVIS] could not clear the image panel: {error}")
+        return
+
+    data = images.current_bytes()
+
+    photographer, photographer_link, photo_link = images.attribution()
+    caption = f"Photo by {photographer} on Unsplash" if photographer else ""
+
+    try:
+        _image_listener(
+            data or b"", images.current_title(), caption, photo_link or ""
+        )
+    except Exception as error:
+        print(f"[JARVIS] could not update the image panel: {error}")
+
+
+def _show_image(query):
+    """Search Unsplash and display the result."""
+    if not images.available():
+        return (
+            "I don't have an Unsplash key set up, sir. Set "
+            "UNSPLASH_ACCESS_KEY and I'll be able to."
+        )
+
+    if not images.search(query):
+        return f"I couldn't find a picture of {query}, sir."
+
+    _push_image()
+
+    return f"Here's {query}, sir."
+
+
+def _hide_image():
+    images.hide()
+    _push_image()
+
+    return True
+
+
+def _rotate_image(degrees):
+    if images.rotate(degrees) is None:
+        return "There's no image on screen to rotate, sir."
+
+    _push_image()
+
+    return "Rotated, sir."
+
+
+def _enlarge_image():
+    if images.enlarge() is None:
+        return "There's no image on screen to enlarge, sir."
+
+    _push_image()
+
+    return "There you are, sir."
+
+
+def _shrink_image():
+    if images.shrink() is None:
+        return "There's no image on screen to shrink, sir."
+
+    _push_image()
+
+    return "There you are, sir."
+
+
+def _restore_image():
+    if images.restore() is None:
+        return "There's no image on screen to restore, sir."
+
+    _push_image()
+
+    return "Back to its original size, sir."
+
+
+def _save_image():
+    path = images.save()
+
+    if not path:
+        return "There's no image on screen to save, sir."
+
+    return "Saved to your JARVIS images folder, sir."
 
 
 def toggle_brain_view():
@@ -2230,6 +2357,81 @@ def _news_request(text):
     return None
 
 
+# Costs a call to Unsplash to execute, same as "look" costs a vision
+# call — but is still matched here rather than sent to the LLM, so
+# understanding the command itself stays free even though fetching the
+# photo is not. "photo"/"picture"/"image" are all accepted for search,
+# unlike saving (see save_image's phrase list above), since there is no
+# existing command claiming "show me a picture of X" the way "save the
+# picture" already claims that wording for the camera.
+_IMAGE_SEARCH_PATTERN = re.compile(
+    r"^(?:show me |show |find |get me |get |bring up |fetch |"
+    r"look up )?(?:an? |the )?(?:image|picture|photo) of (?:the )?(.+)$"
+)
+
+
+def _image_search_request(text):
+    """What to search Unsplash for, or None."""
+    match = _IMAGE_SEARCH_PATTERN.match(text)
+
+    if not match:
+        return None
+
+    query = match.group(1).strip()
+
+    # The pattern only strips a "the" directly after "of"; "of a golden
+    # retriever" still has its own leading article to drop, so the panel
+    # heading reads "Golden Retriever" rather than "A Golden Retriever".
+    query = re.sub(r"^(?:a|an)\s+", "", query)
+
+    return query or None
+
+
+_ROTATE_PATTERN = re.compile(
+    r"^(?:rotate|turn|spin)\s+(?:the\s+|this\s+)?(?:image|picture|photo)"
+    r"\s*(.*)$"
+)
+
+# Only the counter-clockwise / negative case needs a check at all — the
+# absence of one is what "clockwise" or "right" or a bare "rotate the
+# image" (positive, the everyday default) fall through to below. Using
+# \b word boundaries matters here: "counterclockwise" contains the
+# substring "clockwise", the exact class of bug already found once in
+# screen_control.py's word matching, so a naive "clockwise" check run
+# first would wrongly fire on it too.
+_COUNTERCLOCKWISE = re.compile(
+    r"\b(?:counter\s*clockwise|anti\s*clockwise|left|widdershins)\b"
+)
+_NEGATIVE_WORD = re.compile(r"\b(?:minus|negative)\b")
+
+
+def _rotate_request(text):
+    """Degrees to turn the image, positive meaning clockwise, or None."""
+    match = _ROTATE_PATTERN.match(text)
+
+    if not match:
+        return None
+
+    tail = match.group(1).strip()
+
+    if _COUNTERCLOCKWISE.search(tail) or _NEGATIVE_WORD.search(tail):
+        sign = -1
+    else:
+        # Also true with no direction word at all: a bare "rotate the
+        # image" means a plain clockwise quarter turn, the everyday
+        # default in every photo app.
+        sign = 1
+
+    digits = re.search(r"\d+", tail)
+    degrees = int(digits.group()) if digits else 90
+
+    # Only orthogonal turns make sense for a rectangular photo.
+    if degrees not in (90, 180, 270):
+        degrees = 90
+
+    return sign * degrees
+
+
 def _blank_result(intent, **fields):
     result = {
         "intent": intent, "application": None, "website": None,
@@ -2463,6 +2665,18 @@ def _fast_path(command):
     if plot:
         return _blank_result("plot_chart", text=plot)
 
+    rotate_degrees = _rotate_request(text)
+
+    if rotate_degrees is not None:
+        return _blank_result("rotate_image", amount=rotate_degrees)
+
+    image_query = _image_search_request(text)
+
+    if image_query:
+        return _blank_result(
+            "show_image", text=_original_case(command, image_query)
+        )
+
     region = _news_request(text)
 
     if region:
@@ -2536,6 +2750,13 @@ _WRITE_INTENTS = frozenset({
     # never becomes the answer to "what did you do?". Saving one is a
     # real artefact on disk, so that one is recorded properly.
     "page_to_file",
+    # Same principle applies to the fetched-image feature: show_image
+    # costs a call to Unsplash but is not logged as a "did", matching
+    # "look" (also absent above) — a search or a view is not a change.
+    # Rotating, enlarging, shrinking and restoring are ephemeral view
+    # state too, gone the moment the panel closes, so none of those are
+    # logged either. save_image is the one that writes a real file.
+    "save_image",
     "show_brain", "hide_brain",
     "proofread_fix", "proofread_report", "proofread_copy", "ignore_word",
     "remember", "forget", "set_market_alert", "market_report",
@@ -3142,6 +3363,38 @@ def handle_command(command):
 
     if intent == "save_picture":
         return _query(intent, _save_picture)
+
+    # The search itself costs a call to Unsplash, same as "look" costs a
+    # vision call, so it is never in _WRITE_INTENTS — matching "look",
+    # which is not either. Everything from here down is pure local pixel
+    # manipulation with no network involved, and only save_image writes
+    # anything to disk, which is the one that is logged.
+    if intent == "show_image" and (verbatim_text or text):
+        wanted = verbatim_text or text
+
+        return _query(intent, lambda: _show_image(wanted))
+
+    if intent == "hide_image":
+        return _action(intent, "Closing it, sir.", _hide_image)
+
+    if intent == "rotate_image":
+        # amount is already numeric-or-None by this point in
+        # handle_command (see _to_number above); no need to convert again.
+        degrees = int(amount) if amount is not None else 90
+
+        return _query(intent, lambda: _rotate_image(degrees))
+
+    if intent == "enlarge_image":
+        return _query(intent, _enlarge_image)
+
+    if intent == "shrink_image":
+        return _query(intent, _shrink_image)
+
+    if intent == "restore_image":
+        return _query(intent, _restore_image)
+
+    if intent == "save_image":
+        return _query(intent, _save_image, detail="an image")
 
     if intent == "click_thing" and text:
         return _click_thing(text)
