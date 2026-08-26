@@ -1105,14 +1105,40 @@ _CHOICE_CANCEL_WORDS = frozenset({
     "none", "cancel", "never", "nevermind", "stop", "forget",
 })
 
+# "One" does double duty in English: the digit 1, and the placeholder
+# pronoun for "that option" ("the blue one", "the small one"). Only the
+# word right before "one" tells them apart — a colour or size word means
+# a photo is being described, not a number picked. This does not apply to
+# "two"/"three": they aren't used as a standalone pronoun this way, so
+# "the blue two" was never ambiguous to begin with.
+_DESCRIPTIVE_BEFORE_ONE = frozenset({
+    "blue", "red", "green", "yellow", "orange", "purple", "pink",
+    "black", "white", "grey", "gray", "brown", "beige",
+    "big", "bigger", "small", "smaller", "large", "little", "tiny",
+    "left", "right", "top", "bottom", "middle", "last",
+    "dark", "light", "bright", "blurry", "nice", "pretty",
+})
+
 
 def _parse_choice_number(text):
     """1, 2, or 3 from a spoken reply, or None if it can't be read that
     way. Checked as whole words, not substrings — "third" should not
-    accidentally match inside some unrelated longer word."""
+    accidentally match inside some unrelated longer word.
+    """
     words = _normalise(text).split()
 
-    for word in words:
+    for index, word in enumerate(words):
+        if (
+            word == "one" and index > 0
+            and words[index - 1] in _DESCRIPTIVE_BEFORE_ONE
+        ):
+            # "the blue one" -- describing the photo, not picking a
+            # number. Skip just this occurrence; a genuine number word
+            # elsewhere in the same sentence is still found below, and
+            # "the first one" is unaffected regardless, since "first"
+            # itself already matches before this word is even reached.
+            continue
+
         if word in _CHOICE_WORDS:
             return _CHOICE_WORDS[word]
 
