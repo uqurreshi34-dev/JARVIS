@@ -1018,9 +1018,10 @@ _image_listener = None
 
 
 def set_image_listener(listener):
-    """Register a callable taking (png bytes, title, caption, caption_link).
+    """Register a callable taking
+    (png bytes, title, caption, caption_link, scale).
 
-    Called with empty/None values to hide the panel, matching the shape
+    Called with empty/1.0 values to hide the panel, matching the shape
     the camera and chart listeners already use.
     """
     global _image_listener
@@ -1030,25 +1031,34 @@ def set_image_listener(listener):
 def _push_image():
     """Send the current image (or nothing) to the panel, if one is
     registered. Shared by every intent below that changes what the
-    image panel should be showing."""
+    image panel should be showing.
+
+    Uses current_display() rather than current_bytes(): the panel fits
+    whatever it is given to its own window, so handing it an
+    already-resized image just gets fit straight back to the same size
+    — that was why "make it bigger" visibly did nothing. Sending
+    rotation-only bytes plus the scale as a separate number lets the
+    panel apply zoom on top of its own sizing instead of underneath it.
+    """
     if not _image_listener:
         return
 
     if not images.has_image():
         try:
-            _image_listener(b"", "", "", "")
+            _image_listener(b"", "", "", "", 1.0)
         except Exception as error:
             print(f"[JARVIS] could not clear the image panel: {error}")
         return
 
-    data = images.current_bytes()
+    data, scale = images.current_display()
 
     photographer, photographer_link, photo_link = images.attribution()
     caption = f"Photo by {photographer} on Unsplash" if photographer else ""
 
     try:
         _image_listener(
-            data or b"", images.current_title(), caption, photo_link or ""
+            data or b"", images.current_title(), caption,
+            photo_link or "", scale,
         )
     except Exception as error:
         print(f"[JARVIS] could not update the image panel: {error}")
@@ -1110,7 +1120,7 @@ def _restore_image():
 
     _push_image()
 
-    return "Back to its original size, sir."
+    return "Restored, sir."
 
 
 def _save_image():
@@ -3361,8 +3371,20 @@ def handle_command(command):
 
         return _query(intent, save_chart, detail="a chart")
 
-    if intent == "save_picture":
-        return _query(intent, _save_picture)
+    if intent in ("save_picture", "save_image"):
+        # "Save the picture" and "save the image" now do the same thing:
+        # save whichever is actually on screen, rather than requiring
+        # the word to match the panel. The journal intent is picked
+        # here, at the moment of saving — not from whichever word was
+        # said — so "what did you do" always describes what actually
+        # happened. If both were ever open at once, the fetched image
+        # wins, on the reasoning that asking to save right after
+        # rotating or resizing it is the more deliberate, in-progress
+        # action of the two.
+        if images.has_image():
+            return _query("save_image", _save_image, detail="an image")
+
+        return _query("save_picture", _save_picture)
 
     # The search itself costs a call to Unsplash, same as "look" costs a
     # vision call, so it is never in _WRITE_INTENTS — matching "look",
@@ -3392,9 +3414,6 @@ def handle_command(command):
 
     if intent == "restore_image":
         return _query(intent, _restore_image)
-
-    if intent == "save_image":
-        return _query(intent, _save_image, detail="an image")
 
     if intent == "click_thing" and text:
         return _click_thing(text)

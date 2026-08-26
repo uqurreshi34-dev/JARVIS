@@ -39,7 +39,7 @@ class ImagePanel(QWidget):
     tier, not only once an app is approved for production.
     """
 
-    show_view = pyqtSignal(bytes, str, str, str)
+    show_view = pyqtSignal(bytes, str, str, str, float)
     hide_view = pyqtSignal()
 
     def __init__(self):
@@ -50,6 +50,11 @@ class ImagePanel(QWidget):
         self._caption = ""
         self._caption_link = None
         self._caption_rect = None
+        # How far to zoom the photo, on top of the panel's own fit-to-
+        # window sizing. Reported separately from the image bytes
+        # rather than baked into them — see actions/images.py's
+        # current_display() for exactly why that matters.
+        self._scale = 1.0
         self._sweep = 0.0
         self._anchor = None
         self._drag_offset = None
@@ -72,7 +77,7 @@ class ImagePanel(QWidget):
         """Sit alongside another window, joined by the beam."""
         self._anchor = widget
 
-    def _on_show(self, data, title, caption, caption_link):
+    def _on_show(self, data, title, caption, caption_link, scale):
         """Display a photo, or clear it when given nothing."""
         if not data:
             self._on_hide()
@@ -88,6 +93,7 @@ class ImagePanel(QWidget):
         self._title = title or ""
         self._caption = caption or ""
         self._caption_link = caption_link or None
+        self._scale = scale if scale else 1.0
 
         self._position()
         self.show()
@@ -101,6 +107,7 @@ class ImagePanel(QWidget):
         self._image = None
         self._title = ""
         self._caption = ""
+        self._scale = 1.0
         self.hide()
 
     def _position(self):
@@ -227,8 +234,24 @@ class ImagePanel(QWidget):
             _HEIGHT - 66 - _MARGIN - _CAPTION_HEIGHT,
         )
 
-        scaled = self._image.scaled(
+        # Fit to the available area at "100%" first, then apply the
+        # actual zoom on top of that baseline. Applying zoom AFTER
+        # fitting — rather than fitting whatever pixel size the image
+        # happens to be — is what makes "make it bigger" visible at
+        # all: a resized source image, fit straight back down to this
+        # same window, would just come out the same on-screen size
+        # either way. See actions/images.py's current_display().
+        fitted = self._image.scaled(
             int(available.width()), int(available.height()),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+        target_w = max(1, round(fitted.width() * self._scale))
+        target_h = max(1, round(fitted.height() * self._scale))
+
+        scaled = self._image.scaled(
+            target_w, target_h,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
@@ -238,13 +261,19 @@ class ImagePanel(QWidget):
 
         target = QRectF(x, y, scaled.width(), scaled.height())
 
-        painter.save()
-        painter.setClipPath(self._rounded(target, 8))
-        painter.drawImage(target.topLeft(), scaled)
-        painter.restore()
+        # An enlarged photo can be bigger than the available area now;
+        # clip to it so the overflow crops at the frame rather than
+        # drawing over the heading or the caption below it.
+        bounds = QPainterPath()
+        bounds.addRect(available)
+        clip = self._rounded(target, 8).intersected(bounds)
 
+        painter.save()
+        painter.setClipPath(clip)
+        painter.drawImage(target.topLeft(), scaled)
         painter.setPen(QPen(self._tint(100), 1.2))
         painter.drawPath(self._rounded(target, 8))
+        painter.restore()
 
     @staticmethod
     def _rounded(rect, radius=8):

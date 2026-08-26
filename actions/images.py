@@ -169,14 +169,12 @@ def search(query):
     return True
 
 
-def _render():
-    """The current photo as PNG bytes, with rotation and scale applied.
-
-    Always rebuilt from the pristine original rather than the last
-    render (see _current's docstring), so quality never degrades no
-    matter how the image has been turned or resized. Caller must hold
-    _lock.
-    """
+def _rotated_original():
+    """The pristine original, decoded and rotated but not yet scaled.
+    Shared by _render() (which also applies scale, for saving) and
+    current_display() (which reports scale separately, for showing) so
+    the load-and-rotate step exists in exactly one place. Caller must
+    hold _lock."""
     original = _current["original"]
 
     if not original:
@@ -188,6 +186,22 @@ def _render():
 
     if rotation in _TRANSPOSE:
         image = image.transpose(_TRANSPOSE[rotation])
+
+    return image
+
+
+def _render():
+    """The current photo as PNG bytes, with rotation and scale applied.
+
+    Always rebuilt from the pristine original rather than the last
+    render (see _current's docstring), so quality never degrades no
+    matter how the image has been turned or resized. Caller must hold
+    _lock.
+    """
+    image = _rotated_original()
+
+    if image is None:
+        return None
 
     scale = _current["scale"]
 
@@ -207,13 +221,39 @@ def has_image():
 
 
 def current_bytes():
-    """The current photo as PNG bytes, exactly as it would be shown or
-    saved right now — for a caller (the panel update) that needs to
-    display the current state without changing it. Properly holds the
-    lock itself, unlike _render(), which expects the caller already has
-    it and exists only for the transform functions below that do."""
+    """The current photo as PNG bytes, rotation and scale both applied —
+    exactly what save() would write right now. Kept as a general-purpose
+    accessor; current_display() below is what the live panel actually
+    uses, for the reason explained there."""
     with _lock:
         return _render()
+
+
+def current_display():
+    """(rotation-only PNG bytes, scale) for the panel to show.
+
+    Deliberately not the same render save() uses. The panel always fits
+    whatever image it is given to its own fixed window — that is what
+    makes "make it bigger" invisible if the bytes handed over are
+    already resized: an enlarged image, fit straight back down to the
+    same viewing window, comes out the same size on screen as it started.
+    Sending rotation only, with the scale reported as a separate number,
+    lets the panel apply that zoom on top of its own fit-to-window sizing
+    instead of underneath it — which is what actually makes zooming
+    visible. save() is unaffected: it still renders rotation and scale
+    together, so the saved file's real pixel dimensions reflect the zoom
+    regardless of how the live preview draws it.
+    """
+    with _lock:
+        image = _rotated_original()
+
+        if image is None:
+            return None, 1.0
+
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+
+        return buffer.getvalue(), _current["scale"]
 
 
 def current_title():
@@ -266,12 +306,19 @@ def shrink():
 
 
 def restore():
-    """Back to the size it was fetched at. Rotation is left as it is —
-    only an earlier request to be bigger or smaller is undone."""
+    """Back to how it was fetched — undoes both rotation and zoom.
+
+    Originally this reset only the zoom, reasoning that "restore to
+    original size" sounded size-specific. On reflection that reading was
+    too narrow: after rotating and resizing, "restore the image" is a
+    request to put it back, not a request to undo one specific edit
+    while quietly keeping the other.
+    """
     with _lock:
         if not _current["original"]:
             return None
 
+        _current["rotation"] = 0
         _current["scale"] = 1.0
 
         return _render()

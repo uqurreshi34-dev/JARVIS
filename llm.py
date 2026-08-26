@@ -156,12 +156,12 @@ Use save_chart when the user wants the chart currently on screen saved,
 such as "save the chart" or "save the graph". This works even if the offer
 to save it has already passed.
 
-Use save_picture when the user wants the picture currently shown by the
-camera saved as a file, such as "save the picture", "save that photo", or
-"keep that photo". This is different from take_screenshot, which captures
-the whole screen — save_picture is only for the camera's own picture. It
-is also different from save_image below: "image" always means the fetched
-photo panel, "picture" and "photo" always mean the camera's.
+Use save_picture (or save_image — either works, whichever is actually on
+screen gets saved) when the user wants the picture currently shown, by the
+camera or fetched from a search, saved as a file, such as "save the
+picture", "save that photo", "save the image", or "keep that photo". This
+is different from take_screenshot, which captures the whole screen rather
+than the picture on it.
 
 Use show_image when the user wants to see a photo of something that is
 not on their own screen or camera — a fetched picture, such as "show me an
@@ -178,9 +178,10 @@ those are the only turns that make sense for a rectangular photo. Leave
 quarter turn.
 Use enlarge_image when they want it bigger, such as "make the image
 bigger" or "enlarge the image". Use shrink_image for the opposite, such as
-"make it smaller". Use restore_image when they want it back to the size it
-was fetched at, such as "restore the image" or "original size" — this
-undoes enlarging or shrinking only, not a rotation.
+"make it smaller". Use restore_image when they want it back to how it
+was fetched, such as "restore the image" or "original size" — this undoes
+both an earlier rotation and any resizing, a full revert rather than one
+specific edit.
 Use save_image when the user wants the fetched image saved as a file,
 however it currently looks — rotated, enlarged, or shrunk — such as "save
 the image" or "keep that image". Use hide_image when they want the photo

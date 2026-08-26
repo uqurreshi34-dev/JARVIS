@@ -355,9 +355,9 @@ def main():
     photo.set_anchor(hud)
     photo_beam = Beam(photo, hud)
 
-    def image_update(data, title, caption, caption_link):
+    def image_update(data, title, caption, caption_link, scale):
         if data:
-            photo.show_view.emit(data, title, caption, caption_link)
+            photo.show_view.emit(data, title, caption, caption_link, scale)
             photo_beam.shown.emit()
         else:
             photo.hide_view.emit()
