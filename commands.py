@@ -293,7 +293,11 @@ _FAST_PHRASES = (
       "keep the image", "keep that image", "download the image",
       "download this image"), "save_image"),
     (("close the image", "hide the image", "close that image",
-      "dismiss the image", "close this image"), "hide_image"),
+      "dismiss the image", "close this image", "close the images",
+      "i dont want any of these", "i dont want any of these images",
+      "none of these images", "not any of these",
+      "not any of these images", "cancel the images",
+      "close the picker", "dismiss these"), "hide_image"),
     (("enlarge the image", "enlarge image", "make the image bigger",
       "make image bigger", "zoom in on the image", "bigger image",
       "increase the image size", "make it bigger"), "enlarge_image"),
@@ -1245,6 +1249,22 @@ def _show_image(query):
 
 
 def _hide_image():
+    """Close whichever is actually on top.
+
+    If the three-candidate picker is open, that's what "close the image"
+    almost certainly means — closing it also clears _awaiting, so a
+    stray "select image 2" afterward doesn't fall through to click_thing
+    with nothing left listening. Only when no picker is open does this
+    fall back to hiding the single committed image, as before.
+    """
+    global _awaiting
+
+    if image_choices.active():
+        image_choices.cancel()
+        _awaiting = None
+
+        return True
+
     images.hide()
     _push_image()
 
