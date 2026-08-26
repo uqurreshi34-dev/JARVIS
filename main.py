@@ -15,13 +15,16 @@ from beam import Beam
 from brain_panel import BrainPanel
 from camera_panel import CameraPanel
 from chart_panel import ChartPanel
+from image_choices_panel import ImageChoicesPanel
 from image_panel import ImagePanel
 from commands import (
     handle_command,
     reminder_manager,
+    select_image_choice,
     set_brain_listener,
     set_camera_listener,
     set_chart_listener,
+    set_choices_listener,
     set_highlight_listener,
     set_image_listener,
     set_news_listener,
@@ -365,6 +368,25 @@ def main():
 
     set_image_listener(image_update)
 
+    # The three-candidate picker gets its own panel and beam too. Its
+    # click path runs straight into select_image_choice rather than
+    # through handle_command, on the Qt main thread — same shape as the
+    # reactor-core click above.
+    choices = ImageChoicesPanel()
+    choices.set_anchor(hud)
+    choices_beam = Beam(choices, hud)
+
+    def choices_update(items):
+        if items:
+            choices.show_choices.emit(items)
+            choices_beam.shown.emit()
+        else:
+            choices.hide_choices.emit()
+            choices_beam.hidden.emit()
+
+    set_choices_listener(choices_update)
+    choices.choice_clicked.connect(select_image_choice)
+
     # The mind view gets its own panel, projected like the others — but
     # unlike camera/chart it never receives a one-off image. It's fed the
     # HUD's own state/amplitude/level signals directly, so its pulses come
@@ -426,6 +448,8 @@ def main():
     hud.shutdown.connect(view_beam.hidden.emit)
     hud.shutdown.connect(photo.hide_view.emit)
     hud.shutdown.connect(photo_beam.hidden.emit)
+    hud.shutdown.connect(choices.hide_choices.emit)
+    hud.shutdown.connect(choices_beam.hidden.emit)
     hud.shutdown.connect(brain.hide_brain.emit)
     hud.shutdown.connect(brain_beam.hidden.emit)
     hud.shutdown.connect(lambda: QTimer.singleShot(400, app.quit))

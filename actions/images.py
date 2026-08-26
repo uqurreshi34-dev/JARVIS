@@ -97,6 +97,32 @@ def _trigger_download(download_location):
     threading.Thread(target=fire, daemon=True).start()
 
 
+def _commit_photo(photo, text, image_bytes, trigger=True):
+    """Make a fetched photo the current one — rotation/scale reset, its
+    metadata recorded, and (unless told not to) Unsplash told it was
+    used. Shared by search() and select_choice() so this exists in
+    exactly one place; trigger=False lets the 3-preview path in
+    search_choices() skip the download-tracking ping for photos that
+    were only shown, not actually chosen — see search_choices()'s
+    docstring for why that distinction matters."""
+    with _lock:
+        _current["original"] = image_bytes
+        _current["rotation"] = 0
+        _current["scale"] = 1.0
+        _current["query"] = text
+        _current["photographer"] = (photo.get("user") or {}).get("name")
+        _current["photographer_link"] = (
+            (photo.get("user") or {}).get("links") or {}
+        ).get("html")
+        _current["photo_link"] = (photo.get("links") or {}).get("html")
+        _current["download_location"] = (
+            photo.get("links") or {}
+        ).get("download_location")
+
+    if trigger and _current["download_location"]:
+        _trigger_download(_current["download_location"])
+
+
 def search(query):
     """Find a photo and fetch it. Returns True on success.
 
@@ -149,22 +175,119 @@ def search(query):
         print(f"[JARVIS] could not download the photo: {error}")
         return False
 
-    with _lock:
-        _current["original"] = original
-        _current["rotation"] = 0
-        _current["scale"] = 1.0
-        _current["query"] = text
-        _current["photographer"] = (photo.get("user") or {}).get("name")
-        _current["photographer_link"] = (
-            (photo.get("user") or {}).get("links") or {}
-        ).get("html")
-        _current["photo_link"] = (photo.get("links") or {}).get("html")
-        _current["download_location"] = (
-            photo.get("links") or {}
-        ).get("download_location")
+    _commit_photo(photo, text, original)
 
-    if _current["download_location"]:
-        _trigger_download(_current["download_location"])
+    return True
+
+
+def search_choices(query, count=3):
+    """Find up to `count` candidate photos, as lightweight previews.
+
+    None of these become the "current" image — that only happens once
+    one is actually picked, via select_choice(). Deliberately fetches
+    the small preview size rather than the full "regular" resolution
+    for all `count` results: only one of them, at most, will ever
+    actually be used, so downloading full-size copies of the other two
+    would just be wasted bandwidth and time.
+
+    For the same reason, this does NOT ping Unsplash's download-tracking
+    endpoint for any of these three — that signal means a photo was
+    used, and being one of three options briefly shown in a picker is
+    not that. select_choice() below is where that ping actually happens,
+    for the one photo that really was chosen.
+
+    Returns a list of dicts — each with "data" (preview PNG bytes),
+    "title" (for the picker card), and "photo" (the raw Unsplash record,
+    which select_choice() needs to finish the job) — or an empty list if
+    nothing was found or the search failed.
+    """
+    if not _ACCESS_KEY:
+        print("[JARVIS] no UNSPLASH_ACCESS_KEY set")
+        return []
+
+    text = (query or "").strip()
+
+    if not text:
+        return []
+
+    try:
+        response = _session.get(
+            _SEARCH_URL,
+            params={
+                "query": text,
+                "per_page": max(1, min(10, count)),
+                "orientation": "landscape",
+            },
+            headers={"Authorization": f"Client-ID {_ACCESS_KEY}"},
+            timeout=TIMEOUT,
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+    except (requests.RequestException, ValueError) as error:
+        print(f"[JARVIS] Unsplash search failed: {error}")
+        return []
+
+    results = (payload.get("results") or [])[:count]
+
+    choices = []
+
+    for photo in results:
+        urls = photo.get("urls") or {}
+        preview_url = urls.get("small") or urls.get(
+            "thumb") or urls.get("regular")
+
+        if not preview_url:
+            continue
+
+        try:
+            preview_response = _session.get(preview_url, timeout=TIMEOUT)
+            preview_response.raise_for_status()
+            preview_bytes = preview_response.content
+
+        except requests.RequestException as error:
+            print(f"[JARVIS] could not fetch a preview: {error}")
+            continue
+
+        title = (
+            photo.get("description")
+            or photo.get("alt_description")
+            or text
+        )
+
+        choices.append({
+            "data": preview_bytes,
+            "title": title.title() if title else text.title(),
+            "photo": photo,
+            "query": text,
+        })
+
+    return choices
+
+
+def select_choice(choice):
+    """Commit one of search_choices()'s results as the current image,
+    downloading it at full resolution now that it is actually wanted.
+    Returns True on success."""
+    if not choice:
+        return False
+
+    photo = choice.get("photo") or {}
+    image_url = (photo.get("urls") or {}).get("regular")
+
+    if not image_url:
+        return False
+
+    try:
+        image_response = _session.get(image_url, timeout=TIMEOUT)
+        image_response.raise_for_status()
+        original = image_response.content
+
+    except requests.RequestException as error:
+        print(f"[JARVIS] could not download the photo: {error}")
+        return False
+
+    _commit_photo(photo, choice.get("query") or "image", original)
 
     return True
 

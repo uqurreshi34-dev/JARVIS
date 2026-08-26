@@ -30,6 +30,7 @@ from actions import (
     clipboard,
     diary,
     files,
+    image_choices,
     images,
     journal,
     market_report,
@@ -1064,20 +1065,157 @@ def _push_image():
         print(f"[JARVIS] could not update the image panel: {error}")
 
 
-def _show_image(query):
-    """Search Unsplash and display the result."""
-    if not images.available():
-        return (
-            "I don't have an Unsplash key set up, sir. Set "
-            "UNSPLASH_ACCESS_KEY and I'll be able to."
-        )
+_choices_listener = None
 
-    if not images.search(query):
-        return f"I couldn't find a picture of {query}, sir."
 
+def set_choices_listener(listener):
+    """Register a callable taking the current list of image choices —
+    each a dict with "data" (preview bytes) and "title" — or an empty
+    list to hide the picker.
+    """
+    global _choices_listener
+    _choices_listener = listener
+
+
+def _on_choices_changed(choices):
+    """Forward image_choices's own notifications to whatever main.py
+    registered above. image_choices.py doesn't need to know commands.py
+    or main.py exist at all — it just calls whatever listener it has,
+    exactly like every other listener in this file.
+    """
+    if _choices_listener:
+        try:
+            _choices_listener(choices)
+        except Exception as error:
+            print(f"[JARVIS] could not update the choices panel: {error}")
+
+
+image_choices.set_listener(_on_choices_changed)
+
+
+# Digits and the ordinal words people actually say in reply to "one, two,
+# or three".
+_CHOICE_WORDS = {
+    "1": 1, "one": 1, "first": 1, "1st": 1,
+    "2": 2, "two": 2, "second": 2, "2nd": 2,
+    "3": 3, "three": 3, "third": 3, "3rd": 3,
+}
+
+_CHOICE_CANCEL_WORDS = frozenset({
+    "none", "cancel", "never", "nevermind", "stop", "forget",
+})
+
+
+def _parse_choice_number(text):
+    """1, 2, or 3 from a spoken reply, or None if it can't be read that
+    way. Checked as whole words, not substrings — "third" should not
+    accidentally match inside some unrelated longer word."""
+    words = _normalise(text).split()
+
+    for word in words:
+        if word in _CHOICE_WORDS:
+            return _CHOICE_WORDS[word]
+
+    return None
+
+
+def _is_choice_cancel(text):
+    words = set(_normalise(text).split())
+
+    return bool(words & _CHOICE_CANCEL_WORDS)
+
+
+def _looks_like_choice_reply(text):
+    """True when a reply is unmistakably meant for the picker.
+
+    This is what lets "select image one" resolve as choice #1 instead
+    of being read as a click_thing command aimed at something called
+    "image one" — "select" is already a registered click verb, so
+    without this, the picker would be silently abandoned and JARVIS
+    would go looking for something to click that doesn't exist.
+    """
+    return _is_choice_cancel(text) or _parse_choice_number(text) is not None
+
+
+def select_image_choice(number):
+    """Pick one of the three current image search results.
+
+    Used by both the voice reply handler below and a direct click on a
+    card in the HUD's own picker panel — mirroring toggle_brain_view's
+    shape, since a click never passes through handle_command at all. A
+    click resolving things directly, rather than through
+    _resolve_awaiting, means _awaiting has to be cleared here explicitly
+    too: without that, JARVIS would still think he's waiting for a
+    spoken one/two/three and wrongly intercept whatever is said next.
+    """
+    global _awaiting
+
+    if not image_choices.select(number):
+        return False
+
+    _awaiting = None
     _push_image()
 
-    return f"Here's {query}, sir."
+    return True
+
+
+def _select_image_choice(text):
+    """Handle the reply to "which one, sir?" after a three-image search."""
+    if _is_choice_cancel(text):
+        image_choices.cancel()
+
+        return _query("show_image", lambda: "No problem, sir.")
+
+    number = _parse_choice_number(text)
+
+    if number is None:
+        # Didn't catch a clear one/two/three -- ask again rather than
+        # silently leaving the picker on screen with nothing left
+        # listening for an answer.
+        return _ask(
+            "show_image", "Sorry, was that one, two, or three, sir?",
+            _select_image_choice, recognizes=_looks_like_choice_reply,
+        )
+
+    if not select_image_choice(number):
+        return _ask(
+            "show_image",
+            "I couldn't get that one, sir. One, two, or three?",
+            _select_image_choice, recognizes=_looks_like_choice_reply,
+        )
+
+    return _query("show_image", lambda: "Here you are, sir.")
+
+
+def _show_image(query):
+    """Search Unsplash for up to three candidates and ask which to use.
+
+    Returned directly as the dispatch result (see the show_image branch
+    below) rather than nested inside another _query's action: _ask()
+    needs to be the top-level result so handle_command hands the very
+    next utterance to _select_image_choice instead of treating it as a
+    new command.
+    """
+    if not images.available():
+        return _query(
+            "show_image",
+            lambda: (
+                "I don't have an Unsplash key set up, sir. Set "
+                "UNSPLASH_ACCESS_KEY and I'll be able to."
+            ),
+        )
+
+    if not image_choices.search(query):
+        return _query(
+            "show_image",
+            lambda: f"I couldn't find a picture of {query}, sir.",
+        )
+
+    return _ask(
+        "show_image",
+        f"I found a few for {query}, sir. Say or click one, two, or three.",
+        _select_image_choice, recognizes=_looks_like_choice_reply,
+    )
 
 
 def _hide_image():
@@ -2855,13 +2993,39 @@ _pending = None
 # up and let the command be treated normally.
 _awaiting = None
 
+# How long a question waits for its answer before it's considered
+# abandoned rather than still live. Long enough to survive a genuine
+# pause — going quiet, the follow-up window expiring, saying "Jarvis"
+# again later — since none of that touches _awaiting at all; only a
+# real answer, a real interruption, or this timeout ever clears it.
+# Short enough that a stray "one" in some unrelated sentence hours later
+# can't resurrect a question nobody meant to still be answering.
+_AWAITING_TIMEOUT = 300
 
-def _ask(intent, question, handler):
-    """Ask something and hand the next utterance to the handler."""
+
+def _ask(intent, question, handler, recognizes=None):
+    """Ask something and hand the next utterance to the handler.
+
+    `recognizes`, if given, is a function taking the next utterance and
+    returning True when it clearly answers this specific question. It is
+    checked before the usual "does this match an existing command
+    instead" safety net below, so a genuine answer that happens to also
+    resemble an unrelated command — "select image one" reads equally
+    well as a reply to "which one, sir?" and as a click_thing command —
+    isn't wrongly stolen by that check. Most callers don't need this;
+    it defaults to treating nothing as an unambiguous answer, which
+    preserves the exact previous behaviour of always deferring to a
+    genuine command match.
+    """
     global _awaiting, _pending
 
     _pending = None
-    _awaiting = {"intent": intent, "handler": handler}
+    _awaiting = {
+        "intent": intent,
+        "handler": handler,
+        "recognizes": recognizes,
+        "asked_at": time.monotonic(),
+    }
 
     return {
         "kind": "query",
@@ -2876,15 +3040,25 @@ def _resolve_awaiting(text):
 
     A pending question must not swallow a real command: "list my files"
     while waiting on "shall I list them?" is a new instruction, not an
-    answer. Anything the fast path recognises outright takes precedence,
-    and the question simply lapses.
+    answer. Anything the fast path recognises outright takes precedence
+    and the question simply lapses — unless the question itself said it
+    would clearly recognise this particular reply as its own answer
+    (see _ask's `recognizes`), in which case that takes priority instead.
     """
     global _awaiting
 
     if not _awaiting:
         return None
 
-    if _fast_path(text) is not None:
+    if time.monotonic() - _awaiting.get("asked_at", 0) > _AWAITING_TIMEOUT:
+        # Abandoned rather than answered — see _AWAITING_TIMEOUT.
+        _awaiting = None
+        return None
+
+    recognizes = _awaiting.get("recognizes")
+    is_a_clear_answer = bool(recognizes and recognizes(text))
+
+    if not is_a_clear_answer and _fast_path(text) is not None:
         _awaiting = None
         return None
 
@@ -3392,9 +3566,11 @@ def handle_command(command):
     # manipulation with no network involved, and only save_image writes
     # anything to disk, which is the one that is logged.
     if intent == "show_image" and (verbatim_text or text):
-        wanted = verbatim_text or text
-
-        return _query(intent, lambda: _show_image(wanted))
+        # Not wrapped in _query() here: _show_image returns the full
+        # dispatch result itself now (either a plain answer, or an
+        # _ask() that hands the next utterance to the picker) rather
+        # than a bare string for an outer _query to speak.
+        return _show_image(verbatim_text or text)
 
     if intent == "hide_image":
         return _action(intent, "Closing it, sir.", _hide_image)
