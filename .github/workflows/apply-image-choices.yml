@@ -1,0 +1,34 @@
+name: Apply JARVIS image choices
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/apply_image_choices_v2.py'
+      - 'actions/image_choices.py'
+      - 'image_choices_panel.py'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply additive integration
+        run: python scripts/apply_image_choices_v2.py
+
+      - name: Commit integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add actions/images.py actions/image_choices.py commands.py main.py image_choices_panel.py scripts/apply_image_choices_v2.py
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Add three-image selection integration"
+            git push
+          fi
