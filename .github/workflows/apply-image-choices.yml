@@ -1,0 +1,144 @@
+name: Apply JARVIS image choices
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-image-choices.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch three-image chooser
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path('actions/images.py')
+          s = p.read_text()
+          start = s.index('def search(query):')
+          end = s.index('\n\ndef _render():', start)
+          new_search = r'''def _fetch_photo(photo):
+    """Download one Unsplash result and return its local record."""
+    image_url = (photo.get("urls") or {}).get("regular")
+    if not image_url:
+        return None
+    try:
+        response = _session.get(image_url, timeout=TIMEOUT)
+        response.raise_for_status()
+    except requests.RequestException as error:
+        print(f"[JARVIS] could not download the photo: {error}")
+        return None
+    links = photo.get("links") or {}
+    user = photo.get("user") or {}
+    return {"original": response.content, "query": None, "photographer": user.get("name"), "photographer_link": (user.get("links") or {}).get("html"), "photo_link": links.get("html"), "download_location": links.get("download_location")}
+
+
+def _apply_photo(record, query=None):
+    with _lock:
+        _current["original"] = record["original"]
+        _current["rotation"] = 0
+        _current["scale"] = 1.0
+        _current["query"] = query or record.get("query")
+        _current["photographer"] = record.get("photographer")
+        _current["photographer_link"] = record.get("photographer_link")
+        _current["photo_link"] = record.get("photo_link")
+        _current["download_location"] = record.get("download_location")
+
+
+def _search_results(query, count=3):
+    if not _ACCESS_KEY:
+        print("[JARVIS] no UNSPLASH_ACCESS_KEY set")
+        return []
+    text = (query or "").strip()
+    if not text:
+        return []
+    try:
+        response = _session.get(_SEARCH_URL, params={"query": text, "per_page": max(3, count), "orientation": "landscape"}, headers={"Authorization": f"Client-ID {_ACCESS_KEY}"}, timeout=TIMEOUT)
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as error:
+        print(f"[JARVIS] Unsplash search failed: {error}")
+        return []
+    results = []
+    for photo in payload.get("results") or []:
+        record = _fetch_photo(photo)
+        if record:
+            record["query"] = text
+            results.append(record)
+            if len(results) >= count:
+                break
+    return results
+
+
+def search(query):
+    results = _search_results(query, 1)
+    if not results:
+        return False
+    _apply_photo(results[0], (query or "").strip())
+    if results[0].get("download_location"):
+        _trigger_download(results[0]["download_location"])
+    return True
+
+
+def search_choices(query, count=3):
+    results = _search_results(query, count)
+    for record in results:
+        if record.get("download_location"):
+            _trigger_download(record["download_location"])
+    return results
+
+
+def select_choice(record):
+    if not record or not record.get("original"):
+        return False
+    _apply_photo(record)
+    return True
+'''
+          p.write_text(s[:start] + new_search + s[end:])
+
+          p = Path('commands.py')
+          s = p.read_text()
+          s = s.replace('_image_listener = None\n', '_image_listener = None\n_image_choices_listener = None\n_image_choices = []\n', 1)
+          idx = s.index('\ndef _push_image():')
+          s = s[:idx] + '''\n\ndef set_image_choices_listener(listener):\n    global _image_choices_listener\n    _image_choices_listener = listener\n''' + s[idx:]
+          start = s.index('def _show_image(query):')
+          end = s.index('\n\ndef _hide_image():', start)
+          new_show = '''def _choose_image(text):\n    global _image_choices\n    number = {"one": 1, "won": 1, "first": 1, "two": 2, "to": 2, "too": 2, "second": 2, "three": 3, "third": 3}.get(_normalise(text).strip())\n    if number is None:\n        return _query("show_image", lambda: "Please say one, two, or three, sir.")\n    if not 1 <= number <= len(_image_choices):\n        return _query("show_image", lambda: "I only have the choices I showed you, sir.")\n    choice = _image_choices[number - 1]\n    _image_choices = []\n    if not images.select_choice(choice):\n        return _query("show_image", lambda: "I couldn't select that image, sir.")\n    if _image_choices_listener:\n        try: _image_choices_listener([])\n        except Exception: pass\n    _push_image()\n    return f"Choice {number}, sir."\n\n\ndef _show_image(query):\n    global _image_choices, _awaiting\n    if not images.available():\n        return "I don't have an Unsplash key set up, sir. Set UNSPLASH_ACCESS_KEY and I'll be able to."\n    choices = images.search_choices(query, 3)\n    if not choices:\n        return f"I couldn't find a picture of {query}, sir."\n    _image_choices = choices\n    if _image_choices_listener:\n        try: _image_choices_listener(choices)\n        except Exception as error: print(f"[JARVIS] could not show image choices: {error}")\n    _awaiting = {"intent": "show_image", "handler": _choose_image}\n    return "I found three images, sir. Say one, two, or three."\n'''
+          p.write_text(s[:start] + new_show + s[end:])
+
+          p = Path('main.py')
+          s = p.read_text().replace('    set_image_listener,\n', '    set_image_listener,\n    set_image_choices_listener,\n', 1)
+          needle = '    set_image_listener(image_update)\n'
+          block = needle + '''\n    def image_choices_update(choices):\n        if choices:\n            photo.show_choices.emit(choices)\n            photo_beam.shown.emit()\n        else:\n            photo.hide_choices.emit()\n\n    set_image_choices_listener(image_choices_update)\n'''
+          if 'set_image_choices_listener(image_choices_update)' not in s: s = s.replace(needle, block, 1)
+          p.write_text(s)
+
+          p = Path('image_panel.py')
+          s = p.read_text()
+          s = s.replace('    show_view = pyqtSignal(bytes, str, str, str)\n', '    show_view = pyqtSignal(bytes, str, str, str)\n    show_choices = pyqtSignal(object)\n    hide_choices = pyqtSignal()\n', 1)
+          s = s.replace('        self._image = None\n', '        self._image = None\n        self._choices = []\n', 1)
+          s = s.replace('        self.show_view.connect(self._on_show)\n', '        self.show_view.connect(self._on_show)\n        self.show_choices.connect(self._on_show_choices)\n        self.hide_choices.connect(self._on_hide_choices)\n', 1)
+          idx = s.index('    def _on_hide(self):\n')
+          methods = '''    def _on_show_choices(self, choices):\n        self._choices = list(choices or [])\n        self._image = None\n        self._title = "SELECT IMAGE"\n        self._caption = "Say one, two, or three"\n        self._caption_link = None\n        self._position(); self.show(); self.raise_(); self._animate.start(_FRAME_MS); self.update()\n\n    def _on_hide_choices(self):\n        self._choices = []\n        if not self._image: self._on_hide()\n        else: self.update()\n\n'''
+          s = s[:idx] + methods + s[idx:]
+          s = s.replace('        self._image = image\n', '        self._choices = []\n        self._image = image\n', 1)
+          old = '        self._paint_heading(painter)\n        self._paint_photo(painter)\n'
+          new = '        self._paint_heading(painter)\n        if self._choices:\n            self._paint_choices(painter)\n        else:\n            self._paint_photo(painter)\n'
+          s = s.replace(old, new, 1)
+          idx = s.index('    @staticmethod\n    def _rounded')
+          method = '''    def _paint_choices(self, painter):\n        gap, left, top = 10, _MARGIN, 72\n        width = (_WIDTH - 2 * _MARGIN - 2 * gap) / 3\n        height = _HEIGHT - 72 - _MARGIN - _CAPTION_HEIGHT\n        for index, record in enumerate(self._choices[:3]):\n            data = record.get("original"); image = QImage()\n            box = QRectF(left + index * (width + gap), top, width, height)\n            if data and image.loadFromData(data):\n                scaled = image.scaled(int(width), int(height), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)\n                x = box.left() + (box.width() - scaled.width()) / 2; y = box.top() + (box.height() - scaled.height()) / 2\n                painter.drawImage(QRectF(x, y, scaled.width(), scaled.height()).topLeft(), scaled)\n            painter.setPen(QPen(self._tint(150), 1.2)); painter.drawPath(self._rounded(box, 8))\n            painter.setPen(QPen(_ACCENT)); painter.setFont(QFont("Consolas", 18, QFont.Weight.Bold)); painter.drawText(int(box.left() + 10), int(box.top() + 28), str(index + 1))\n\n'''
+          s = s[:idx] + method + s[idx:]
+          p.write_text(s)
+
+          Path('.github/workflows/apply-image-choices.yml').unlink()
+          for path in ('actions/images.py','commands.py','main.py','image_panel.py'):
+              print('patched', path)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add actions/images.py commands.py main.py image_panel.py .github/workflows/apply-image-choices.yml
+          git commit -m 'feat(images): offer three image choices by voice'
+          git push
