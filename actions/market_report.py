@@ -271,7 +271,8 @@ def describe(name, path, sections):
 
     return (
         f"Written, sir. {label} is {direction} "
-        f"{abs(figures['change']):.1f} percent over the last 24 hours, at "
+        f"{markets.spoken_number(abs(figures['change']), 1)} percent "
+        f"over the last 24 hours, at "
         f"{markets.spoken_price(figures['close'])}. "
         f"The report is in your JARVIS folder."
     )

@@ -14,6 +14,7 @@ import time
 from datetime import date, datetime, timedelta
 
 import requests
+from num2words import num2words
 
 from actions import files
 
@@ -292,6 +293,51 @@ def summarise(readings):
     }
 
 
+_DIGIT_WORDS = {
+    "0": "zero", "1": "one", "2": "two", "3": "three", "4": "four",
+    "5": "five", "6": "six", "7": "seven", "8": "eight", "9": "nine",
+}
+
+
+def spoken_number(value, decimals=2):
+    """A number spelled out in full words: the whole part as a cardinal
+    number, the decimal part read digit by digit.
+
+    This exists because handing edge-tts a literal run of digits (a
+    price's pence, a percentage change) occasionally comes back mangled
+    -- a repeated 4 in particular can render as something like "fofor"
+    rather than "four four". Spelling every digit as a word ourselves
+    leaves nothing ambiguous for the TTS engine's own number-reading to
+    misfire on.
+
+    Digit by digit for the fraction is deliberate, not a shortcut: it is
+    how a price or percentage is actually said aloud ("point four four",
+    never "and forty-four hundredths"), and unlike letting a library
+    infer the decimal from the raw float, formatting first preserves an
+    exact trailing zero (58,320.40 stays "point four zero", not silently
+    "point four" -- a float cannot represent that difference on its own,
+    only the formatted string can).
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+    formatted = f"{number:,.{decimals}f}"
+
+    negative = formatted.startswith("-")
+    formatted = formatted.lstrip("+-").replace(",", "")
+
+    whole, _, fraction = formatted.partition(".")
+    words = num2words(int(whole)) if whole else "zero"
+
+    if fraction:
+        digits = " ".join(_DIGIT_WORDS[digit] for digit in fraction)
+        words = f"{words} point {digits}"
+
+    return f"minus {words}" if negative else words
+
+
 def spoken_price(price):
     """A price said aloud, exactly.
 
@@ -305,13 +351,12 @@ def spoken_price(price):
     except (TypeError, ValueError):
         return "an unknown amount"
 
-    if value >= 1:
-        # The pence stay. Dropping them rounded 2,450.87 up to 2,451,
-        # which is a different number and so simply wrong.
-        return f"{value:,.2f} pounds"
+    # The pence stay, and a coin worth pennies keeps its small digits, for
+    # the same reason as before: dropping them rounded 2,450.87 up to
+    # 2,451, which is a different number and so simply wrong.
+    decimals = 2 if value >= 1 else 4
 
-    # A coin worth pennies needs the small digits to mean anything.
-    return f"{value:.4f} pounds"
+    return f"{spoken_number(value, decimals)} pounds"
 
 
 THRESHOLD_FILE = "market-alerts.txt"
@@ -509,7 +554,7 @@ def describe():
 
         parts.append(
             f"{coin['spoken']} is {spoken_price(price)}, "
-            f"{direction} {abs(change):.1f} percent"
+            f"{direction} {spoken_number(abs(change), 1)} percent"
         )
 
     for code, spoken in (("USD", "The dollar"), ("EUR", "The euro")):
@@ -518,7 +563,7 @@ def describe():
         if pair:
             # Each part becomes its own sentence below, so it opens with a
             # capital.
-            parts.append(f"{spoken} is at {pair[0]:.3f}")
+            parts.append(f"{spoken} is at {spoken_number(pair[0], 3)}")
 
     if not parts:
         return "I couldn't reach the markets, sir."
