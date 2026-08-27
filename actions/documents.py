@@ -16,6 +16,9 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from actions import safety
+
+
 try:
     from docx import Document
     _DOCX_AVAILABLE = True
@@ -34,6 +37,15 @@ except ImportError:
 MAX_CONTEXT_CHARS = 60_000
 MAX_DOCUMENTS = 8
 _GETTING_FULL_AT = 0.75
+
+# Every document is capped to this individually, unconditionally, before
+# anything checks whether it fits alongside the rest of the working set.
+# Kept well below MAX_CONTEXT_CHARS so a fresh, empty set can always take
+# one document after this cap is applied — which is what makes "too long
+# even on its own" structurally impossible, and "too long to add to the
+# others" the only size-based refusal that can actually happen. Roughly
+# 15-16 pages of ordinary prose.
+MAX_CHARS_PER_DOCUMENT = 24_000
 
 SUPPORTED_SUFFIXES = frozenset({
     ".txt", ".md", ".csv", ".log", ".json", ".docx", ".pdf",
@@ -308,61 +320,77 @@ def _display_name(entry: DocumentEntry) -> str:
     return _article(entry.kind)
 
 
-def _read_one(path_string: str) -> DocumentEntry | None:
+def _read_one(path_string: str):
+    """Read and prepare one dropped file.
+
+    Returns (entry, None) on success — already appended to the working
+    set — or (None, reason) on failure, where reason is one of
+    "unsupported", "unreadable", "duplicate", "full", or "overflow".
+    Explicit, rather than an empty-text sentinel a caller has to re-lock
+    and re-derive the reason for later, which is what the previous
+    version did.
+    """
     try:
         path = Path(path_string).expanduser().resolve()
     except (OSError, RuntimeError):
-        return None
+        return None, "unreadable"
 
-    if not path.is_file() or path.suffix.casefold() not in SUPPORTED_SUFFIXES:
-        return None
+    if not path.is_file():
+        return None, "unreadable"
+
+    if path.suffix.casefold() not in SUPPORTED_SUFFIXES:
+        return None, "unsupported"
 
     try:
         raw = _normalise_text(_extract(path))
     except Exception as error:
         print(f"[JARVIS] could not read {path}: {error}")
-        return None
+        return None, "unreadable"
 
     if not raw:
-        return None
+        return None, "unreadable"
 
     kind = _classify(raw)
 
-    with _LOCK:
-        remaining = MAX_CONTEXT_CHARS - \
-            sum(len(item.text) for item in _DOCUMENTS)
-        current_count = len(_DOCUMENTS)
-
-        if current_count >= MAX_DOCUMENTS:
-            return DocumentEntry(
-                path=str(path), filename=path.name, kind=kind, text="",
-                original_chars=len(raw), truncated=False,
-            )
-
-        already = any(item.path == str(path) for item in _DOCUMENTS)
-        if already:
-            return DocumentEntry(
-                path=str(path), filename=path.name, kind=kind, text="",
-                original_chars=len(raw), truncated=False,
-            )
-
-        if len(raw) <= remaining:
-            text = raw
-            truncated = False
-        elif not _DOCUMENTS and remaining == MAX_CONTEXT_CHARS:
-            # One large document is useful on its own, but it must be bounded.
-            text, truncated = _truncate_for_context(raw, MAX_CONTEXT_CHARS)
-        else:
-            # Refuse only the offending document; the existing set stays intact.
-            return DocumentEntry(
-                path=str(path), filename=path.name, kind=kind, text="",
-                original_chars=len(raw), truncated=False,
-            )
-
-        return DocumentEntry(
-            path=str(path), filename=path.name, kind=kind, text=text,
-            original_chars=len(raw), truncated=truncated,
+    # Capped unconditionally now, not only when this happens to be the
+    # first document added — a large file dropped second or third used
+    # to be refused outright instead of getting the same useful
+    # truncated read a lone large file already got.
+    if len(raw) > MAX_CHARS_PER_DOCUMENT:
+        capped_text, doc_truncated = _truncate_for_context(
+            raw, MAX_CHARS_PER_DOCUMENT
         )
+    else:
+        capped_text, doc_truncated = raw, False
+
+    with _LOCK:
+        if any(item.path == str(path) for item in _DOCUMENTS):
+            return None, "duplicate"
+
+        if len(_DOCUMENTS) >= MAX_DOCUMENTS:
+            return None, "full"
+
+        remaining = MAX_CONTEXT_CHARS - sum(
+            len(item.text) for item in _DOCUMENTS
+        )
+
+        if len(capped_text) > remaining:
+            # MAX_CHARS_PER_DOCUMENT is always <= MAX_CONTEXT_CHARS, so
+            # this can only mean it doesn't fit alongside what's already
+            # loaded — it would always have fit fine on its own.
+            return None, "overflow"
+
+        entry = DocumentEntry(
+            path=str(path), filename=path.name, kind=kind,
+            text=capped_text, original_chars=len(raw),
+            truncated=doc_truncated,
+        )
+
+        _DOCUMENTS.append(entry)
+
+    _notify()
+
+    return entry, None
 
 
 def add_paths(paths) -> str:
@@ -382,47 +410,40 @@ def add_paths(paths) -> str:
         return "I couldn't read those documents, sir."
 
     added = []
-    refused = []
-    duplicate = []
     unsupported = []
+    unreadable = []
+    duplicate = []
+    full = []
+    overflow = []
 
     for path in cleaned:
-        candidate = _read_one(path)
+        entry, reason = _read_one(path)
 
-        if candidate is None:
-            suffix = Path(path).suffix.casefold()
-            if suffix not in SUPPORTED_SUFFIXES:
-                unsupported.append(Path(path).name)
-            else:
-                refused.append(Path(path).name)
+        if entry is not None:
+            added.append(entry)
             continue
 
-        if not candidate.text:
-            with _LOCK:
-                exists_here = any(
-                    item.path == candidate.path for item in _DOCUMENTS)
-                full = len(_DOCUMENTS) >= MAX_DOCUMENTS
-                remaining = MAX_CONTEXT_CHARS - \
-                    sum(len(item.text) for item in _DOCUMENTS)
+        name = Path(path).name
 
-            if exists_here:
-                duplicate.append(candidate.filename)
-            elif full:
-                refused.append(candidate.filename)
-            else:
-                refused.append(candidate.filename)
-            continue
+        if reason == "unsupported":
+            unsupported.append(name)
+        elif reason == "duplicate":
+            duplicate.append(name)
+        elif reason == "full":
+            full.append(name)
+        elif reason == "overflow":
+            overflow.append(name)
+        else:
+            unreadable.append(name)
 
-        with _LOCK:
-            _DOCUMENTS.append(candidate)
-        added.append(candidate)
-
-        _notify()
-
-    return _spoken_drop_result(added, refused, duplicate, unsupported)
+    return _spoken_drop_result(
+        added, unsupported, unreadable, duplicate, full, overflow
+    )
 
 
-def _spoken_drop_result(added, refused, duplicate, unsupported) -> str:
+def _spoken_drop_result(
+    added, unsupported, unreadable, duplicate, full, overflow
+) -> str:
     added_count = len(added)
     total = count()
 
@@ -436,49 +457,71 @@ def _spoken_drop_result(added, refused, duplicate, unsupported) -> str:
                 f"You now have {total} documents loaded."
             )
             if entry.truncated:
-                text += " It is larger than my working-set limit, so I kept the most useful beginning and end."
+                text += (
+                    " It's larger than my per-document limit, so I kept "
+                    "the most useful beginning and end."
+                )
             pieces.append(text)
         else:
             labels = ", ".join(_display_name(entry) for entry in added[:4])
             if added_count > 4:
                 labels += " and more"
-            pieces.append(f"Added {added_count} documents, sir: {labels}.")
+            pieces.append(
+                f"Added {added_count} documents, sir: {labels}. "
+                f"You now have {total} documents loaded."
+            )
 
-    if refused:
-        if added_count:
-            if len(refused) == 1 and total == 0:
-                pieces.append(
-                    "I couldn't add the other document because it is too large for the working set."
-                )
-            elif len(refused) == 1:
-                pieces.append(
-                    "I left the other document out because it would exceed my working-set limit; the documents already loaded are untouched."
-                )
-            else:
-                pieces.append(
-                    f"I left {len(refused)} documents out because they would exceed my working-set limit."
-                )
+    if overflow:
+        if len(overflow) == 1:
+            pieces.append(
+                f"{overflow[0]} is too long to add to the others, sir. "
+                "On its own I could manage it."
+            )
+        else:
+            names = ", ".join(overflow)
+            pieces.append(
+                f"{names} are too long to add to the others, sir. "
+                "On their own I could manage them."
+            )
+
+    if full:
+        if len(full) == 1:
+            pieces.append(
+                "I'm already holding as many as I can manage, sir — "
+                f"{full[0]} will have to wait."
+            )
         else:
             pieces.append(
-                f"I couldn't add those documents to the working set. "
-                f"They may be too large, unsupported, or unreadable. "
-                f"You currently have {total} documents loaded."
+                "I'm already holding as many as I can manage, sir — "
+                f"{len(full)} more will have to wait."
             )
 
     if duplicate:
-        pieces.append(
-            f"One or more were already in the working set. "
-            f"You currently have {total} documents loaded."
-        )
+        if len(duplicate) == 1:
+            pieces.append(f"{duplicate[0]} was already in the working set.")
+        else:
+            pieces.append(
+                f"{len(duplicate)} of those were already in the working set."
+            )
 
     if unsupported:
         pieces.append(
-            "I currently support text, Markdown, CSV, JSON, Word documents, and PDFs.")
+            "I currently support text, Markdown, CSV, JSON, Word "
+            "documents, and PDFs."
+        )
+
+    if unreadable:
+        if len(unreadable) == 1:
+            pieces.append(f"I couldn't read {unreadable[0]}, sir.")
+        else:
+            pieces.append(f"I couldn't read {len(unreadable)} of them, sir.")
 
     if not pieces:
         return "I couldn't add those documents to the working set, sir."
 
-    if total and sum(len(item.text) for item in entries()) >= int(MAX_CONTEXT_CHARS * _GETTING_FULL_AT):
+    if total and sum(
+        len(item.text) for item in entries()
+    ) >= int(MAX_CONTEXT_CHARS * _GETTING_FULL_AT):
         pieces.append("My working set is getting full.")
 
     return " ".join(pieces)
@@ -491,12 +534,29 @@ def context() -> str:
     sections = []
     for index, item in enumerate(items, 1):
         label = _article(item.kind)
-        sections.append(
+        header = (
             f"DOCUMENT {index}\n"
             f"Type identified from content: {label}\n"
-            f"Original filename (not authoritative): {item.filename}\n"
-            f"Content:\n{item.text}"
+            f"Original filename (not authoritative): {item.filename}"
         )
+
+        # The document's own text is untrusted content — it can be
+        # written to look like an instruction to the model, exactly the
+        # concern safety.py already exists to guard against everywhere
+        # else outside content reaches a prompt (browser pages, memory
+        # facts, application names). This is the first place several
+        # such documents go into one prompt together, so this matters
+        # more here than anywhere else in the project.
+        #
+        # limit is explicit and set to the text's own length: quote()
+        # defaults to a 2000-character cap of its own, which would
+        # silently re-truncate a document already correctly sized down
+        # to MAX_CHARS_PER_DOCUMENT to a fraction of that if left unset.
+        wrapped = safety.quote(
+            f"document {index} content", item.text, limit=len(item.text)
+        )
+
+        sections.append(f"{header}\n{wrapped}")
 
     return "\n\n==============================\n\n".join(sections)
 
@@ -513,4 +573,9 @@ def status() -> str:
         labels += " and more"
 
     used = sum(len(item.text) for item in items)
-    return f"I have {len(items)} documents loaded, sir: {labels}. {used} characters are in the working set."
+    word = "document" if len(items) == 1 else "documents"
+
+    return (
+        f"I have {len(items)} {word} loaded, sir: {labels}. "
+        f"{used} characters are in the working set."
+    )

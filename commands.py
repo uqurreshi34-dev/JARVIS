@@ -331,6 +331,10 @@ _FAST_PHRASES = (
     (("clear my notes", "delete my notes", "wipe my notes",
       "clear all my notes"), "clear_notes"),
     (("clear the documents", "clear documents"), "clear_documents"),
+    (("what documents do i have", "what documents have i loaded",
+      "how many documents do i have", "what have you read",
+      "what documents are loaded", "list my documents",
+      "list the documents"), "list_documents"),
     (("clear my clipboard", "empty my clipboard", "clear the clipboard",
       "empty the clipboard", "wipe my clipboard", "clear clipboard"),
      "clear_clipboard"),
@@ -3773,6 +3777,9 @@ def handle_command(command):
 
     if intent == "clear_documents":
         return _query(intent, documents.clear)
+
+    if intent == "list_documents":
+        return _query(intent, documents.status)
 
     if intent == "answer_question":
         if documents.active():

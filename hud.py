@@ -101,6 +101,7 @@ class Hud(QWidget):
         self._sweep = 0.0
         self._drag_offset = None
         self._press_pos = None
+        self._drag_hover = False
 
         self._target = 0.0
         self._level = 0.0
@@ -174,8 +175,14 @@ class Hud(QWidget):
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
+            self._drag_hover = True
+            self.update()
         else:
             event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._drag_hover = False
+        self.update()
 
     def dropEvent(self, event):
         paths = []
@@ -183,6 +190,9 @@ class Hud(QWidget):
         for url in event.mimeData().urls():
             if url.isLocalFile():
                 paths.append(url.toLocalFile())
+
+        self._drag_hover = False
+        self.update()
 
         if paths:
             self.files_dropped.emit(paths)
@@ -310,6 +320,7 @@ class Hud(QWidget):
         self._paint_text(painter, accent)
         self._paint_telemetry(painter, accent)
         self._paint_scanline(painter, accent)
+        self._paint_drop_hint(painter, accent)
 
         painter.end()
 
@@ -317,6 +328,20 @@ class Hud(QWidget):
         colour = QColor(accent)
         colour.setAlpha(alpha)
         return colour
+
+    def _paint_drop_hint(self, painter, accent):
+        """A brighter ring while a file is being dragged over the HUD —
+        the only visible sign a drop target exists at all otherwise."""
+        if not self._drag_hover:
+            return
+
+        body = QRectF(self.rect().adjusted(5, 5, -5, -5))
+
+        path = QPainterPath()
+        path.addRoundedRect(body, 20, 20)
+
+        painter.setPen(QPen(self._tint(accent, 235), 3.0))
+        painter.drawPath(path)
 
     def _paint_panel(self, painter, accent):
         body = QRectF(self.rect().adjusted(5, 5, -5, -5))

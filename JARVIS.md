@@ -55,9 +55,9 @@ count, copy contents to the clipboard. A spoken name matches any extension,
 so "business" finds `business.docx`. Word documents are read including
 their tables.
 
-### Document working set — `actions/documents.py`
+## Documents
 
-Files can be dragged directly onto the JARVIS HUD to create a temporary working set for questions and comparisons. Supported formats are Word documents, PDFs, TXT, Markdown, CSV and JSON.
+Drag Word documents, PDFs, TXT, Markdown, CSV or JSON files directly onto the JARVIS HUD to create a temporary working set. Once loaded, JARVIS can answer questions about individual documents, find information across the set, compare documents and combine information from several documents.
 
 Documents are read locally when dropped; no API call is made for loading or classifying them. JARVIS identifies the document type from its contents rather than trusting the filename.
 

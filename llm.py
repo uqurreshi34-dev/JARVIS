@@ -95,6 +95,10 @@ Use clear_documents ONLY when the user explicitly wants the currently
 loaded documents cleared, such as "clear the documents", "clear my
 documents", or "remove the loaded documents". Do not use it for deleting
 files from disk.
+Use list_documents when the user asks what documents are currently
+loaded, such as "what documents do I have" or "what have you read". This
+is different from answer_question: it reports what is in the working set
+rather than answering a question using its content.
 
 Use read_clipboard when the user asks what is on their clipboard.
 Use copy_to_clipboard when the user wants something put on the clipboard, and
@@ -306,6 +310,7 @@ _SCHEMA = {
                 "remove_note",
                 "remove_line",
                 "clear_documents",
+                "list_documents",
                 "proofread",
                 "proofread_which",
                 "proofread_followup",
