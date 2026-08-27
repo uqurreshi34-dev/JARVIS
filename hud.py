@@ -82,8 +82,10 @@ class Hud(QWidget):
     state_changed = pyqtSignal(str)
     heard_changed = pyqtSignal(str)
     reply_changed = pyqtSignal(str)
+    documents_changed = pyqtSignal(int)
     amplitude_changed = pyqtSignal(float)
     level_changed = pyqtSignal(float)
+    files_dropped = pyqtSignal(list)
     shutdown = pyqtSignal()
     closed = pyqtSignal()
     core_clicked = pyqtSignal()
@@ -94,6 +96,7 @@ class Hud(QWidget):
         self._state = IDLE
         self._heard = ""
         self._reply = ""
+        self._documents_count = 0
         self._phase = 0.0
         self._sweep = 0.0
         self._drag_offset = None
@@ -125,6 +128,7 @@ class Hud(QWidget):
         self.state_changed.connect(self._on_state)
         self.heard_changed.connect(self._on_heard)
         self.reply_changed.connect(self._on_reply)
+        self.documents_changed.connect(self._on_documents)
         self.amplitude_changed.connect(self._on_amplitude)
         self.level_changed.connect(self._on_level)
 
@@ -139,6 +143,9 @@ class Hud(QWidget):
         self._poll_telemetry()
 
         self._position()
+
+        # drag drop documents
+        self.setAcceptDrops(True)
 
     def _position(self):
         screen = self.screen().availableGeometry()
@@ -164,6 +171,24 @@ class Hud(QWidget):
         except Exception:
             pass
 
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        paths = []
+
+        for url in event.mimeData().urls():
+            if url.isLocalFile():
+                paths.append(url.toLocalFile())
+
+        if paths:
+            self.files_dropped.emit(paths)
+
+        event.acceptProposedAction()
+
     def _on_state(self, state):
         self._state = state if state in _PALETTE else IDLE
 
@@ -178,6 +203,10 @@ class Hud(QWidget):
 
     def _on_reply(self, text):
         self._reply = text
+        self.update()
+
+    def _on_documents(self, count):
+        self._documents_count = max(0, min(8, int(count)))
         self.update()
 
     def _on_amplitude(self, value):
@@ -482,6 +511,21 @@ class Hud(QWidget):
         lines = max(1, available // spacing)
 
         self._draw_wrapped(painter, reply, left, _REPLY_TOP, width, lines)
+
+        # Document working-set indicator. Hidden completely when empty.
+        if self._documents_count > 0:
+            painter.setPen(QPen(self._tint(accent, 185)))
+            font = QFont("Consolas", 8, QFont.Weight.Bold)
+            font.setLetterSpacing(
+                QFont.SpacingType.AbsoluteSpacing, 1.4
+            )
+            painter.setFont(font)
+
+            painter.drawText(
+                28,
+                _HEIGHT - 22,
+                f"DOCUMENTS {self._documents_count} / 8",
+            )
 
     def _paint_wave(self, painter, accent, x, y, width):
         """A live level meter: microphone when listening, voice when speaking."""

@@ -6,7 +6,7 @@ from datetime import datetime
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
-from actions import camera, diary, memory
+from actions import camera, diary, memory, documents
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
 import phrases
@@ -41,6 +41,8 @@ from voice import (
     set_status_listener,
     set_wake_listener,
 )
+
+from pathlib import Path
 
 
 # Set True to print how long each stage takes. Also enable the TIMING flags
@@ -405,9 +407,30 @@ def main():
 
     set_brain_listener(brain_update)
 
+    def on_files_dropped(paths):
+        def load():
+            try:
+                result = documents.add_paths(paths)
+
+                if result:
+                    hud.reply_changed.emit(result)
+            except Exception as exc:
+                hud.reply_changed.emit(
+                    f"I couldn't load the documents: {exc}"
+                )
+
+        threading.Thread(target=load, daemon=True).start()
+
+    hud.files_dropped.connect(on_files_dropped)
+
     hud.state_changed.connect(brain.state_changed.emit)
     hud.amplitude_changed.connect(brain.amplitude_changed.emit)
     hud.level_changed.connect(brain.level_changed.emit)
+
+    def on_documents_changed():
+        hud.documents_changed.emit(documents.count())
+
+    documents.set_listener(on_documents_changed)
 
     # Clicking the reactor core toggles the mind view. This runs on the Qt
     # main thread (a direct signal from the HUD's own click), so it can

@@ -55,6 +55,20 @@ count, copy contents to the clipboard. A spoken name matches any extension,
 so "business" finds `business.docx`. Word documents are read including
 their tables.
 
+### Document working set — `actions/documents.py`
+
+Files can be dragged directly onto the JARVIS HUD to create a temporary working set for questions and comparisons. Supported formats are Word documents, PDFs, TXT, Markdown, CSV and JSON.
+
+Documents are read locally when dropped; no API call is made for loading or classifying them. JARVIS identifies the document type from its contents rather than trusting the filename.
+
+The working set holds up to eight documents and up to 60,000 extracted characters. If a new document would exceed the character budget, it is refused without disturbing documents already loaded. A single oversized document can be used on its own, with its middle truncated to stay within the budget.
+
+The working-set count is shown on the HUD only when at least one document is loaded. Dragging files does not produce a spoken response, to avoid unnecessary speech.
+
+Questions about the loaded documents use one normal language-model request with the document contents supplied as context. This supports questions such as "which document has the shorter termination period", "which contract has the higher fees", and "which document contains confidentiality". When comparing documents, JARVIS names the actual document rather than referring to them as "document one" or "document two".
+
+Say "clear my documents" to empty the working set. Clearing is an exact command and JARVIS confirms how many documents were removed.
+
 ### Notes — `actions/notes.py`
 A timestamped list in `notes.txt`. Add, read, remove one entry, clear all.
 Distinct from files: "add milk to my notes" is the notes skill, "copy my

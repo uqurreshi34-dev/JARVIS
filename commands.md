@@ -76,6 +76,29 @@ Everything lives in `C:\Users\<you>\JARVIS\`. Nothing outside it is touched.
 Saying **"file"** always works. Leaving it off works when the file already
 exists.
 
+## Documents
+
+Drag Word documents, PDFs, TXT, Markdown, CSV or JSON files directly onto the JARVIS HUD to load them into a temporary working set.
+
+| Say / Do | Does |
+|---|---|
+| drag a document onto the HUD | loads it into the working set |
+| drag several documents onto the HUD | loads all that fit |
+| which document has the shorter termination period | compares the relevant documents |
+| which contract has the higher fees | compares the relevant documents |
+| which document contains confidentiality | finds the relevant document or documents |
+| what does the Smith Consulting contract say about termination | answers from the loaded documents |
+| clear my documents | clears the working set |
+| clear the documents | clears the working set |
+
+The working set holds up to eight documents and 60,000 extracted characters. Documents are extracted and classified locally; loading them does not make an API call.
+
+The HUD shows the current working-set count when one or more documents are loaded, for example "3 / 8". The indicator disappears when there are no documents loaded.
+
+JARVIS does not speak when documents are successfully dropped onto the HUD. He speaks when documents are cleared and when answering questions about them.
+
+When comparing documents, JARVIS names the actual document rather than referring to them only as "document one" or "document two".
+
 ## Clipboard
 
 | Say | Does |

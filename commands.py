@@ -19,7 +19,7 @@ from actions.desktop import (
     volume_down,
     volume_up,
 )
-from actions.knowledge import answer
+from actions.knowledge import answer, answer_with_documents
 from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
 import phrases
@@ -29,6 +29,7 @@ from actions import (
     charts,
     clipboard,
     diary,
+    documents,
     files,
     image_choices,
     images,
@@ -329,6 +330,7 @@ _FAST_PHRASES = (
       "read out my notes"), "read_notes"),
     (("clear my notes", "delete my notes", "wipe my notes",
       "clear all my notes"), "clear_notes"),
+    (("clear the documents", "clear documents"), "clear_documents"),
     (("clear my clipboard", "empty my clipboard", "clear the clipboard",
       "empty the clipboard", "wipe my clipboard", "clear clipboard"),
      "clear_clipboard"),
@@ -362,6 +364,7 @@ _NEVER_FUZZY = frozenset({
     "clear_clipboard",
     "clear_notes",
     "cancel_reminders",
+    "clear_documents",
     # "open the news" and "close the news" differ by one word and score 0.85
     # against each other, so closing must be said exactly.
     "hide_news",
@@ -3768,7 +3771,19 @@ def handle_command(command):
             lambda: reminder_manager.cancel_all() >= 0,
         )
 
+    if intent == "clear_documents":
+        return _query(intent, documents.clear)
+
     if intent == "answer_question":
+        if documents.active():
+            return _query(
+                intent,
+                lambda: answer_with_documents(
+                    command,
+                    documents.context(),
+                ),
+            )
+
         return _query(intent, lambda: answer(command))
 
     return None

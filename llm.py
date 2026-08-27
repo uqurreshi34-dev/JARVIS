@@ -91,6 +91,11 @@ that, since it would destroy everything else.
 Use remove_line to take a line out of a file: the text in "text" and the file
 name in "project".
 
+Use clear_documents ONLY when the user explicitly wants the currently
+loaded documents cleared, such as "clear the documents", "clear my
+documents", or "remove the loaded documents". Do not use it for deleting
+files from disk.
+
 Use read_clipboard when the user asks what is on their clipboard.
 Use copy_to_clipboard when the user wants something put on the clipboard, and
 put the exact wording to copy in "text".
@@ -300,6 +305,7 @@ _SCHEMA = {
                 "clear_notes",
                 "remove_note",
                 "remove_line",
+                "clear_documents",
                 "proofread",
                 "proofread_which",
                 "proofread_followup",

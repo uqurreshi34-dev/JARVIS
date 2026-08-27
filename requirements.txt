@@ -63,6 +63,7 @@ pydantic_core==2.46.4
 pygrabber==0.2
 PyJWT==2.13.0
 pyparsing==3.3.2
+pypdf==6.16.2
 pypiwin32==223
 PyQt6==6.11.0
 PyQt6-Qt6==6.11.1

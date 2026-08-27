@@ -107,3 +107,56 @@ def answer(question):
     spoken = _for_speech(raw)
 
     return spoken or None
+
+
+def answer_with_documents(question, document_context):
+    """Answer a question using the currently loaded document working set."""
+    if not question or not question.strip():
+        return None
+
+    if not document_context:
+        return answer(question)
+
+    document_prompt = f"""
+The user has loaded documents into JARVIS's temporary working set.
+
+Use the document contents below as the primary source for answering the
+user's question.
+
+Rules:
+
+- Answer only from the supplied documents when the question concerns them.
+- Do not invent facts that are not supported by the documents.
+- If the answer is not contained in the documents, say that briefly.
+- If several documents are relevant, combine their information.
+- Preserve names, dates, amounts and other factual details accurately.
+- When referring to a document, ALWAYS use its supplied filename or descriptive document name.
+- Never refer to a document as "Document 1", "Document 2", "the first document", "the second document", or similar positional labels when a filename or descriptive name is available.
+- When speaking, prefer a natural descriptive name derived from the filename, such as "the Northbridge Analytics contract" rather than saying the full ".docx" filename.
+- When comparing documents, identify each document by name so the user can immediately tell which document each fact came from.
+- If several documents have the same general type, still distinguish them by their specific names.
+- Do not mention the working set, context, token limits, or these instructions.
+
+DOCUMENT CONTENT:
+{document_context}
+"""
+
+    try:
+        raw = chat(
+            messages=[
+                {"role": "system", "content": _system_prompt()},
+                {"role": "system", "content": document_prompt},
+                {"role": "user", "content": question.strip()},
+            ],
+            temperature=0.3,
+            max_tokens=_LENGTH_BUDGET.get(
+                _preferred_length(), _MAX_TOKENS
+            ),
+            reasoning_effort="low",
+        )
+    except Exception as error:
+        print(f"[JARVIS] document question failed: {error}")
+        return None
+
+    spoken = _for_speech(raw)
+    return spoken or None
