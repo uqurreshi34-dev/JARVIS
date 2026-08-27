@@ -736,13 +736,34 @@ _NOTE_PATTERNS = (
     # The leading verb is sometimes lost entirely ("and" is stripped as
     # filler), but "... to my notes" still says exactly what is wanted.
     # Questions are excluded: "what's in my notes" is a request to read them.
-    re.compile(r"^(?!what|whats|which|show|read|check|list|clear|delete|"
-               rf"empty|wipe)(.+?)\s+{_TO_WORDS}\s+(?:my|the)\s+notes$"),
+    re.compile(
+        r"^(?!what|whats|which|show|read|check|list|clear|delete|"
+        r"empty|wipe|does|do|did|is|are|can|could|would|will|"
+        r"has|have|contains|where|when|why|how)"
+        rf"(.+?)\s+{_TO_WORDS}\s+(?:my|the)\s+notes$"
+    ),
 )
+
+
+def _looks_like_question(text):
+    """True when the utterance is phrased as a question rather than an action."""
+    text = (text or "").strip().casefold()
+
+    return (
+        text.startswith((
+            "does ", "do ", "did ", "is ", "are ", "can ", "could ",
+            "would ", "will ", "has ", "have ", "where ", "when ",
+            "why ", "how ",
+        ))
+        or "?" in text
+    )
 
 
 def _note_request(text):
     """Extract a note to save, or None."""
+    if _looks_like_question(text):
+        return None
+
     for pattern in _NOTE_PATTERNS:
         match = pattern.match(text)
 

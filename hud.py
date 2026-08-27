@@ -180,6 +180,17 @@ class Hud(QWidget):
         else:
             event.ignore()
 
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+            if not self._drag_hover:
+                self._drag_hover = True
+
+            self.update()
+        else:
+            event.ignore()
+
     def dragLeaveEvent(self, event):
         self._drag_hover = False
         self.update()
@@ -330,18 +341,46 @@ class Hud(QWidget):
         return colour
 
     def _paint_drop_hint(self, painter, accent):
-        """A brighter ring while a file is being dragged over the HUD —
-        the only visible sign a drop target exists at all otherwise."""
+        """Glow around the reactor while a file is dragged over JARVIS."""
         if not self._drag_hover:
             return
 
-        body = QRectF(self.rect().adjusted(5, 5, -5, -5))
+        painter.save()
 
-        path = QPainterPath()
-        path.addRoundedRect(body, 20, 20)
+        radius = _R_OUTER + 5.0
 
-        painter.setPen(QPen(self._tint(accent, 235), 3.0))
-        painter.drawPath(path)
+        # Soft outer glow.
+        glow = QRadialGradient(_CENTRE, radius + 18.0)
+        glow.setColorAt(0.0, self._tint(accent, 0))
+        glow.setColorAt(0.72, self._tint(accent, 0))
+        glow.setColorAt(0.90, self._tint(accent, 55))
+        glow.setColorAt(1.0, self._tint(accent, 0))
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(glow)
+        painter.drawEllipse(
+            _CENTRE,
+            radius + 18.0,
+            radius + 18.0,
+        )
+
+        # Bright drop-target ring.
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(
+            QPen(
+                self._tint(accent, 235),
+                3.0,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+            )
+        )
+        painter.drawEllipse(
+            _CENTRE,
+            radius,
+            radius,
+        )
+
+        painter.restore()
 
     def _paint_panel(self, painter, accent):
         body = QRectF(self.rect().adjusted(5, 5, -5, -5))

@@ -317,7 +317,7 @@ def _article(kind: str | None) -> str:
 
 
 def _display_name(entry: DocumentEntry) -> str:
-    return _article(entry.kind)
+    return entry.filename
 
 
 def _read_one(path_string: str):
@@ -568,7 +568,7 @@ def status() -> str:
     if not items:
         return "There are no documents in my working set, sir."
 
-    labels = ", ".join(_article(item.kind) for item in items[:4])
+    labels = ", ".join(item.filename for item in items[:4])
     if len(items) > 4:
         labels += " and more"
 
