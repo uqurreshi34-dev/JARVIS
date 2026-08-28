@@ -214,7 +214,11 @@ into another application.
 Use describe_screen when the user asks what is on their screen or what they
 are currently looking at, such as "what's on my screen" or "describe my
 screen". This is different from look, which uses the camera to see the
-physical world, not the screen.
+physical world, not the screen, and different from answer_question, which
+covers "what's in this document" or "what does this file say" when
+documents have been loaded into the working set — a vague "this
+file"/"this document" reference is about that working set, not the
+screen.
 
 These control the Chrome the user already has open, and only read from it:
 
@@ -258,10 +262,18 @@ For these, leave both "application" and "website" null.
 
 Use answer_question when the user asks a general knowledge or factual
 question that none of the intents above cover, such as "what's the capital of
-Peru", "how far away is the moon", or "explain what an API is". This is a last
-resort: if the command is a request to control the machine, use the matching
-intent above instead. Never use answer_question for opening or closing things,
-for volume or media, or for the time, weather, or system status.
+Peru", "how far away is the moon", or "explain what an API is". This also
+covers a question about a document dropped into JARVIS's working set, such
+as "what does this file contain", "what's in this document", "summarise
+the contract", or "does the lease mention a notice period". A vague
+reference like "this file" or "this document" with no specific name given
+almost always means the currently loaded working-set documents — this is
+NOT describe_screen (which describes the visible application window) and
+NOT a request to read a specific named file from the JARVIS folder. This
+is a last resort: if the command is a request to control the machine, use
+the matching intent above instead. Never use answer_question for opening
+or closing things, for volume or media, or for the time, weather, or
+system status.
 
 Use unknown for anything else.
 """
