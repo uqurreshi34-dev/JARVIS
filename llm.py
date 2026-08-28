@@ -114,6 +114,15 @@ noticed pattern cleared at once, such as "forget all patterns" or
 "forget every pattern". Never use it when a single pattern is named --
 that is forget_pattern.
 
+Use git_status when the user asks what has changed in their code, what
+is staged, or for the state of their repository, such as "what have I
+changed" or "what's staged".
+Use propose_commit when the user wants a commit message written for
+their staged changes, such as "propose a commit message", "commit my
+changes", or "write me a commit message". JARVIS reads the staged diff,
+suggests a message, and commits only after the user says yes. This never
+stages or pushes anything.
+
 Use read_clipboard when the user asks what is on their clipboard.
 Use copy_to_clipboard when the user wants something put on the clipboard, and
 put the exact wording to copy in "text".
@@ -345,6 +354,8 @@ _SCHEMA = {
                 "list_patterns",
                 "forget_pattern",
                 "forget_all_patterns",
+                "git_status",
+                "propose_commit",
                 "proofread",
                 "proofread_which",
                 "proofread_followup",

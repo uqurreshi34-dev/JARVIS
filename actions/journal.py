@@ -169,6 +169,7 @@ _VERBS = {
     "ignore_word": "add {detail} to the ignore list",
     "page_to_file": "save a web page to your JARVIS folder",
     "type_text": "type something",
+    "git_commit": "commit your staged changes: {detail}",
     "open_application": "open {detail}",
     "close_application": "close {detail}",
 }
@@ -300,6 +301,23 @@ def command_history(days=30):
             continue
 
     return entries
+
+
+def recent(count=12):
+    """The last few lines, for reading back aloud."""
+    path = _path()
+
+    if not path or not os.path.exists(path):
+        return []
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+            lines = [line.strip() for line in handle if line.strip()]
+
+    except OSError:
+        return []
+
+    return lines[-count:]
 
 
 def summary():

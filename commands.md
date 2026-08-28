@@ -3,9 +3,9 @@
 Every command starts with **"Jarvis"** unless a follow-up window is open.
 
 Anything marked **free** costs nothing — no API call. That is nearly
-everything. Only three things cost: a general question, asking the camera
-what it sees, and a command phrased in a way not listed here (which falls
-through to the language model).
+everything. Four things cost: a general question, asking the camera what
+it sees, drafting a commit message, and a command phrased in a way not
+listed here (which falls through to the language model).
 
 Where a phrase is shown, close variations usually work too — "what's the
 time" and "what time is it" both land in the same place.
@@ -297,6 +297,30 @@ Where the thing needs a subject, that's part of the habit: a nine o'clock
 Bitcoin report and a five o'clock Ethereum report are two separate
 patterns, not one. That's why the labels include the coin — so you always
 know which one you're removing.
+
+## Git
+
+Set `JARVIS_REPO` in your `.env` to your repository folder — no quotes,
+backslashes are fine. Reading is free; drafting a commit message costs a
+call, since a model reads the diff.
+
+| Say | Does |
+|---|---|
+| what have I changed | branch, staged, unstaged and untracked counts |
+| what's staged | same |
+| propose a commit message | drafts one from the staged diff, reads it, asks |
+| commit my changes | same |
+| yes | commits it |
+| no | nothing happens, staging untouched |
+
+**You stage, JARVIS commits, you push.** He never runs `git add`, `push`,
+`reset` or anything else — the only thing he can do is commit exactly what
+you already staged, and only after you say yes. `git log` in your own
+terminal to see it land.
+
+Signed commits work normally: he runs real git, so your GPG passphrase
+prompt appears just as it would if you'd typed the command yourself.
+That's also a useful tell — if a prompt appears, a real commit happened.
 
 ## The brain view
 

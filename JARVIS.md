@@ -16,7 +16,7 @@ transcribes locally with Whisper, works out what you meant, does it, and
 answers aloud in a British voice. A heads-up display shows what it heard,
 what it is doing, and live machine telemetry.
 
-**96 intents. 445 spoken phrases resolve locally with no API call.**
+**98 intents. 462 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -125,6 +125,35 @@ Unlike `memory.txt`, this file is **not** size-bounded. Memory can trim
 old facts safely because a fact costs nothing to state again; there is
 no equivalent for multi-day behavioural evidence, and trimming it would
 delete exactly the history a pattern needs to exist.
+
+### Git — `actions/git_tasks.py`
+Reads a repository's state, and commits when told to. The repository is
+set with `JARVIS_REPO` in `.env` — a Windows path is close to impossible
+to dictate reliably, so the durable setting belongs in a file. Saying
+"remember my repo is ..." still works and takes precedence, for
+switching mid-session.
+
+This is the first thing in JARVIS that can change a repository, so it is
+deliberately the narrowest useful version of that. Three constraints,
+each by construction rather than by prompt:
+
+- The only write it can perform is `commit`. No `add`, `push`, `reset`
+  or `checkout`, so staging stays the user's job and JARVIS can only
+  ever commit what was already chosen deliberately.
+- Every git call is a fixed argument list, never a shell string, and
+  the message is passed as a single argument. Shell metacharacters in a
+  commit message commit as literal text and execute nothing.
+- Nothing commits without an explicit spoken yes, through the same
+  confirmation path as any other hard-to-undo action.
+
+The message itself is drafted by the language model from the staged
+diff, framed as data rather than instructions like any other outside
+text. That makes this the one feature here that sends your code off the
+machine — worth knowing plainly rather than discovering later.
+
+Signed commits keep working: JARVIS runs real git, so a GPG passphrase
+prompt appears exactly as it would from a terminal. It never types into
+a terminal and doesn't care which window has focus.
 
 ### Calendar — `actions/diary.py`
 JARVIS keeps his own calendar in `calendar.txt`, so it works whether or not
