@@ -434,10 +434,26 @@ def _spoken_title(title):
     return _LEADING_COUNT.sub("", title or "").strip()
 
 
+def _speakable_host(host):
+    """A domain with every dot spelled out as the word "dot".
+
+    Verified directly against the real edge-tts CLI, not guessed:
+    "bbc.co.uk" read as literal text mispronounces ".co.", and
+    "bbc co dot uk" (only one dot spelled out) drops the other one
+    entirely -- the engine is making a per-dot judgment call about
+    whether it's a decimal point, an abbreviation, or a domain
+    separator, and getting ".co." wrong specifically. Spelling out
+    every dot removes that judgment call rather than trying to predict
+    which one it'll get wrong.
+    """
+    return host.replace(".", " dot ")
+
+
 def _site_label(url):
     host = urlparse(url).netloc or url
+    host = host[4:] if host.startswith("www.") else host
 
-    return host[4:] if host.startswith("www.") else host
+    return _speakable_host(host)
 
 
 def resolve_target(spoken):
