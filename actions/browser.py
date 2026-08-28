@@ -37,6 +37,7 @@ may object to it), set JARVIS_CHROMEDRIVER to the full path of a
 chromedriver.exe you downloaded yourself, and it will be used directly.
 """
 
+import ctypes
 import os
 import re
 import socket
@@ -279,8 +280,140 @@ def release():
         _driver = None
 
 
+def _foreground_window_title():
+    """The title of whichever window has OS-level focus right now.
+
+    Read via ctypes straight to Windows' own user32.dll -- no extra
+    dependency, and Smart App Control never objects to Microsoft's own
+    signed DLLs. This has to be read before anything below touches
+    Selenium at all: switch_to.window() itself visibly brings that tab
+    to the front (this is documented, ordinary Selenium/CDP behaviour --
+    it calls Target.activateTarget under the hood -- not a bug specific
+    to this file), which would corrupt this exact signal if read
+    afterward. Checking "does this tab have focus" by switching to it
+    is self-defeating: the very act of checking makes the answer yes.
+
+    Returns "" on anything other than Windows, or if the call fails for
+    any reason -- callers already treat an empty title as "couldn't
+    determine this" and fall back accordingly.
+    """
+    try:
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        ctypes.windll.user32.GetWindowTextW(hwnd, buffer, length + 1)
+
+        return buffer.value
+    except Exception:
+        return ""
+
+
+def _titles_without_switching(driver):
+    """Every open tab's title, via a raw CDP call rather than Selenium's
+    switch_to.window() + driver.title.
+
+    Target.getTargets reads a tab's title without ever activating or
+    foregrounding it -- unlike the standard Selenium approach, this
+    causes no visible disruption at all. Returns {handle: title}, or
+    {} if the call isn't supported or nothing usable comes back; either
+    is treated as "this path didn't work" by the caller, which falls
+    back to a different approach rather than failing outright.
+    """
+    try:
+        response = driver.execute_cdp_cmd("Target.getTargets", {})
+    except Exception:
+        return {}
+
+    titles = {}
+
+    for target in (response or {}).get("targetInfos", []):
+        target_id = target.get("targetId")
+        title = target.get("title")
+
+        if target_id and title:
+            titles[target_id] = title
+
+    return titles
+
+
+def _focus_active_window(driver):
+    """Point the session at whichever tab is actually in front.
+
+    Two layers. First, the fast path: read every tab's title without
+    switching to any of them (_titles_without_switching), and match
+    against the OS-level foreground window's title
+    (_foreground_window_title) -- read before any of this touches
+    Selenium, since switching corrupts that exact signal. If a match
+    is found, this switches once, directly to the correct tab, with
+    nothing else ever touched or made briefly visible.
+
+    Falls back to switching through each tab in turn only if the CDP
+    call didn't help (older Chrome, or its target IDs not matching
+    Selenium's own window handles). That path is still correct -- it
+    ends on the OS-confirmed right tab, not whichever it happened to
+    check first -- but may be briefly visible while it checks.
+    """
+    try:
+        handles = driver.window_handles
+    except WebDriverException:
+        return
+
+    if len(handles) <= 1:
+        return
+
+    target_title = _foreground_window_title()
+
+    try:
+        started_on = driver.current_window_handle
+    except WebDriverException:
+        started_on = None
+
+    if target_title:
+        titles_by_handle = _titles_without_switching(driver)
+
+        for handle in handles:
+            title = titles_by_handle.get(handle)
+
+            if title and title in target_title:
+                try:
+                    driver.switch_to.window(handle)
+                except WebDriverException:
+                    pass
+
+                return
+
+    # Fallback: the fast path found nothing usable. Still correct in
+    # the end, just potentially visible while it checks each tab.
+    matched = None
+
+    for handle in handles:
+        try:
+            driver.switch_to.window(handle)
+        except WebDriverException:
+            continue
+
+        try:
+            tab_title = (driver.title or "").strip()
+        except WebDriverException:
+            continue
+
+        if tab_title and target_title and tab_title in target_title:
+            matched = handle
+            break
+
+    final = matched or started_on
+
+    if final and final != driver.current_window_handle:
+        try:
+            driver.switch_to.window(final)
+        except WebDriverException:
+            pass
+
+
 def _current(driver):
-    """(title, url) for whatever tab is in front, safely."""
+    """(title, url) for whatever tab is actually in front, safely."""
+    _focus_active_window(driver)
+
     try:
         return (driver.title or "").strip(), (driver.current_url or "").strip()
     except WebDriverException:
