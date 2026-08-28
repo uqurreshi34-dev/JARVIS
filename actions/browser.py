@@ -420,6 +420,20 @@ def _current(driver):
         return "", ""
 
 
+_LEADING_COUNT = re.compile(r"^\(\d+\+?\)\s*")
+
+
+def _spoken_title(title):
+    """A page title fit to say aloud.
+
+    Strips a leading notification-count badge -- YouTube, Gmail, and
+    plenty of other sites prepend "(7) " to the title while there are
+    unread items, which reads strangely spoken aloud ("You're on
+    seven YouTube") and has nothing to do with what page this is.
+    """
+    return _LEADING_COUNT.sub("", title or "").strip()
+
+
 def _site_label(url):
     host = urlparse(url).netloc or url
 
@@ -595,7 +609,7 @@ def describe_page():
     warning = safety.warning_for(body)
 
     words = len(body.split())
-    heading = safety.clean(title, 120) or _site_label(url)
+    heading = safety.clean(_spoken_title(title), 120) or _site_label(url)
     opening = safety.clean(_spoken_opening(body), 900)
 
     spoken = f"{heading}, sir. About {words} words. It begins: {opening}"
@@ -641,7 +655,7 @@ def describe_overview():
         "overview", url, f"{len(headings)} headings, {len(links)} links"
     )
 
-    heading = safety.clean(title, 120) or _site_label(url)
+    heading = safety.clean(_spoken_title(title), 120) or _site_label(url)
 
     if not headings and not links:
         return f"{heading}, sir. Nothing on it I can pick out."
@@ -674,7 +688,7 @@ def describe_current():
     if not url:
         return "There's nothing open, sir."
 
-    heading = safety.clean(title, 120) or _site_label(url)
+    heading = safety.clean(_spoken_title(title), 120) or _site_label(url)
 
     return f"You're on {heading}, sir, at {_site_label(url)}."
 

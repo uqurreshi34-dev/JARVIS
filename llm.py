@@ -239,7 +239,12 @@ Use page_overview when they want to know what is on the page rather than
 its text, such as "what's on this page" or "describe this page". This is
 different from describe_screen, which describes the application window
 itself rather than a web page.
-Use current_page when they ask which page or site they are on.
+Use current_page when they ask which page or site they are on. This
+includes garbled transcriptions of that question -- "what tub on my own"
+or "what tab an i own" are almost certainly a mis-heard "what tab am I
+on", not a real question about hobbies or solitude. If a short phrase
+containing "tab" or "tub" alongside "on" doesn't parse as a sensible
+question on its own, prefer current_page over answer_question.
 Use page_to_file when they want the page saved as a file, such as "save
 this page" or "take the page as a file".
 For all of these, leave "application", "project", "amount" and "unit" null.
