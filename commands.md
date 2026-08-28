@@ -298,6 +298,29 @@ Bitcoin report and a five o'clock Ethereum report are two separate
 patterns, not one. That's why the labels include the coin — so you always
 know which one you're removing.
 
+## Tasks
+
+Define your own commands in `tasks.txt` in your JARVIS folder:
+
+    task: tests
+    run: pytest -q
+    confirm: no
+
+| Say | Does |
+|---|---|
+| what tasks do I have | lists what you've defined |
+| run the tests | runs that task |
+| run my build | same, for any name you defined |
+
+He can only run what you wrote down. Nothing you say ever becomes part of
+a command — speech only picks a name off your own list. Leave `confirm`
+out and he'll ask first; set it to `no` for things like tests that are
+safe to just run.
+
+Tasks run in the background and he tells you when they finish, with the
+last few lines of output. The full output goes to a file in your JARVIS
+folder.
+
 ## Git
 
 Set `JARVIS_REPO` in your `.env` to your repository folder — no quotes,

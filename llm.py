@@ -114,6 +114,13 @@ noticed pattern cleared at once, such as "forget all patterns" or
 "forget every pattern". Never use it when a single pattern is named --
 that is forget_pattern.
 
+Use list_tasks when the user asks what tasks are defined or what you
+can run, such as "what tasks do I have" or "what can you run".
+Use run_task when the user asks to run one of their defined tasks, such
+as "run the tests" or "run my build". Put the task name in "text". Only
+tasks the user has defined in tasks.txt can be run; never use this to
+invent a command.
+
 Use git_status when the user asks what has changed in their code, what
 is staged, or for the state of their repository, such as "what have I
 changed" or "what's staged".
@@ -354,6 +361,8 @@ _SCHEMA = {
                 "list_patterns",
                 "forget_pattern",
                 "forget_all_patterns",
+                "list_tasks",
+                "run_task",
                 "git_status",
                 "propose_commit",
                 "proofread",

@@ -44,6 +44,7 @@ from actions import (
     patterns,
     safety,
     screen_control,
+    tasks,
 )
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
@@ -370,6 +371,9 @@ _FAST_PHRASES = (
       "what's my git status", "whats my git status", "git status",
       "what's staged", "whats staged", "what have i staged"),
      "git_status"),
+    (("what tasks do i have", "what tasks are there", "list my tasks",
+      "list the tasks", "what can you run", "what tasks can you run"),
+     "list_tasks"),
     (("clear my clipboard", "empty my clipboard", "clear the clipboard",
       "empty the clipboard", "wipe my clipboard", "clear clipboard"),
      "clear_clipboard"),
@@ -2161,6 +2165,28 @@ _ADD_TO_FILE = re.compile(
 )
 
 
+_RUN_TASK = re.compile(
+    r"^(?:run|start|execute|do)\s+(?:the\s+|my\s+)?(.+?)"
+    r"(?:\s+task)?$"
+)
+
+
+def _run_task_request(text):
+    """The task a spoken phrase refers to, or None.
+
+    Gated on the task actually existing: the phrase is only ever
+    matched against names already written in tasks.txt, so a
+    mishearing can pick the wrong task from your own list at worst,
+    never invent a command.
+    """
+    match = _RUN_TASK.match(text)
+
+    if not match:
+        return None
+
+    return tasks.find(match.group(1).strip())
+
+
 # "forget the markets report pattern" -- gated on the word "pattern",
 # the same way _READ_FILE_EXPLICIT is gated on "file", so this can only
 # ever match a genuine attempt to name one, never something else that
@@ -2788,6 +2814,11 @@ def _fast_path(command):
     if to_clipboard:
         return _blank_result("file_to_clipboard", text=to_clipboard)
 
+    task = _run_task_request(text)
+
+    if task:
+        return _blank_result("run_task", text=task["name"])
+
     pattern_label = _forget_pattern_request(text)
 
     if pattern_label:
@@ -3266,6 +3297,38 @@ def _confirm(intent, question, action, yes_text=None, no_text=None):
         "response": None,
         "action": lambda: question,
     }
+
+
+def _start_task(name):
+    """Run a defined task, asking first unless it said not to."""
+    task = tasks.find(name)
+
+    if not task:
+        return _query(
+            "run_task",
+            lambda: f"I don't have a task called {name}, sir.",
+        )
+
+    def _go():
+        tasks.run_in_background(task)
+
+        return True
+
+    if tasks.needs_confirmation(task):
+        return _confirm(
+            "run_task",
+            f"Run {task['spoken']}, sir?",
+            _go,
+            yes_text=f"Running {task['spoken']}, sir.",
+            no_text="Very good, sir.",
+        )
+
+    return _action(
+        "run_task",
+        f"Running {task['spoken']}, sir.",
+        _go,
+        detail=task["spoken"],
+    )
 
 
 def _propose_commit():
@@ -4037,6 +4100,12 @@ def handle_command(command):
 
     if intent == "list_patterns":
         return _query(intent, patterns.describe)
+
+    if intent == "list_tasks":
+        return _query(intent, tasks.describe)
+
+    if intent == "run_task" and verbatim_text:
+        return _start_task(verbatim_text)
 
     if intent == "git_status":
         return _query(intent, git_tasks.describe_status)

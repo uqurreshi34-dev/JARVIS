@@ -16,7 +16,7 @@ transcribes locally with Whisper, works out what you meant, does it, and
 answers aloud in a British voice. A heads-up display shows what it heard,
 what it is doing, and live machine telemetry.
 
-**98 intents. 462 spoken phrases resolve locally with no API call.**
+**100 intents. 468 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -125,6 +125,23 @@ Unlike `memory.txt`, this file is **not** size-bounded. Memory can trim
 old facts safely because a fact costs nothing to state again; there is
 no equivalent for multi-day behavioural evidence, and trimming it would
 delete exactly the history a pattern needs to exist.
+
+### Tasks — `actions/tasks.py`
+Named commands you defined by hand in `tasks.txt`, run on request. The
+important property is what this is *not*: it is not a shell. Speech only
+ever picks a name out of your own file; the command that name maps to was
+written by you. A mishearing can pick the wrong task from your list at
+worst — it can never compose a new command.
+
+    task: tests
+    run: pytest -q
+    confirm: no
+
+`confirm` defaults to yes when missing, so a task you added without
+thinking about it asks before running rather than just going. Tasks run
+in the background and speak when they finish, since a build legitimately
+takes minutes, and the full output is always written to a file in the
+JARVIS folder — the spoken summary is only the useful tail.
 
 ### Git — `actions/git_tasks.py`
 Reads a repository's state, and commits when told to. The repository is
