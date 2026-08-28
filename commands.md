@@ -268,6 +268,36 @@ Facts are kept in `memory.txt`, editable by hand.
 the vague *"I'll remember that"* rather than *"Your location is Madrid"*,
 that phrasing didn't land.
 
+## Patterns
+
+Habits JARVIS notices from what you actually do, kept in `patterns.txt`,
+separate from `memory.txt`. Memory is what you told him; a pattern is
+something he worked out by watching. Free — built from the log he already
+keeps, no API call.
+
+| Say | Does |
+|---|---|
+| what patterns have you noticed | lists them, and whether each is running |
+| what have you noticed about me | same |
+| yes (after he suggests one) | starts running it automatically |
+| no (after he suggests one) | drops it, and won't ask again |
+| forget the weather pattern | removes just that one |
+| forget the bitcoin markets report pattern | removes just that one |
+| forget all patterns | removes every one — exact phrase only, asks first |
+
+He only mentions a habit after seeing it at least five times, across at
+least four different days, at roughly the same time. Below that he says
+nothing, so a few requests in one busy afternoon won't trigger anything.
+
+Nothing runs automatically until you say yes. A suggestion is made once —
+ignore it and he won't keep asking. Once confirmed, it runs at that time
+each day and speaks the result, at most once a day.
+
+Where the thing needs a subject, that's part of the habit: a nine o'clock
+Bitcoin report and a five o'clock Ethereum report are two separate
+patterns, not one. That's why the labels include the coin — so you always
+know which one you're removing.
+
 ## The brain view
 
 | Say | Does |
@@ -312,6 +342,8 @@ Ctrl+C skips the cleanup, so prefer saying it.
 - A coin moving past your threshold
 - What's in the diary for today and tomorrow, at startup
 - Anything missed while he was closed, when he next starts
+- A habit he's noticed, offered once — see Patterns
+- Anything you've confirmed as a pattern, at its usual time
 
 Nothing non-urgent between 10pm and 8am; it waits.
 
@@ -330,5 +362,6 @@ usually the transcription, not the matching.
 fed to the transcriber, so it learns your vocabulary.
 
 **Anything destructive needs the exact phrase.** Clearing notes, the
-clipboard, the calendar or reminders will not respond to a near miss. That
-is deliberate.
+clipboard, the calendar, reminders or every noticed pattern will not
+respond to a near miss. That is deliberate. Removing a single pattern by
+name is not in that category — that one's specific enough to be safe.

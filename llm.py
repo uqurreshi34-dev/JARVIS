@@ -100,6 +100,20 @@ loaded, such as "what documents do I have" or "what have you read". This
 is different from answer_question: it reports what is in the working set
 rather than answering a question using its content.
 
+Use list_patterns when the user asks what habits or patterns JARVIS has
+noticed, such as "what patterns have you noticed" or "what have you
+noticed about me". This is about observed behaviour over time, not
+answer_question and not the memory intents, which cover facts the user
+stated outright.
+Use forget_pattern when the user names one specific pattern to remove,
+such as "forget the markets report pattern" or "forget the weather
+pattern". Put the pattern's name in "text". This removes only the one
+named.
+Use forget_all_patterns ONLY when the user explicitly wants every
+noticed pattern cleared at once, such as "forget all patterns" or
+"forget every pattern". Never use it when a single pattern is named --
+that is forget_pattern.
+
 Use read_clipboard when the user asks what is on their clipboard.
 Use copy_to_clipboard when the user wants something put on the clipboard, and
 put the exact wording to copy in "text".
@@ -328,6 +342,9 @@ _SCHEMA = {
                 "remove_line",
                 "clear_documents",
                 "list_documents",
+                "list_patterns",
+                "forget_pattern",
+                "forget_all_patterns",
                 "proofread",
                 "proofread_which",
                 "proofread_followup",

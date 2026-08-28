@@ -16,7 +16,7 @@ transcribes locally with Whisper, works out what you meant, does it, and
 answers aloud in a British voice. A heads-up display shows what it heard,
 what it is doing, and live machine telemetry.
 
-**93 intents. 433 spoken phrases resolve locally with no API call.**
+**96 intents. 445 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -89,6 +89,42 @@ editable by hand. Some facts change behaviour rather than being recited:
 Facts are data, never instructions: anything shaped like an order is
 refused at the point of storing, so memory cannot become a way round the
 rules.
+
+### Patterns — `actions/patterns.py`
+Habits JARVIS notices from what you actually do, in `patterns.txt`,
+deliberately a separate file from `memory.txt`. Memory holds things you
+stated outright; a pattern is a conclusion drawn from watching
+behaviour. Keeping them apart means you can always tell "JARVIS knows
+this because I said so" from "JARVIS is guessing this from habit" —
+blurring that line would quietly undermine the reason memory is
+trustworthy in the first place.
+
+Built entirely from the journal, which already records every command's
+intent and time — no new tracking, just reading history that already
+exists. `journal.command_history()` reads across rotated archives as
+well as the live log, since several days of continuous history is the
+whole point and a rotation mid-way would otherwise lose it silently.
+
+A pattern must appear at least five times, on at least four distinct
+calendar days, clustered within a thirty-minute window, before it is
+even eligible to be mentioned. Deliberately conservative: better to stay
+quiet a while longer than to announce a habit from a handful of
+occurrences in one busy afternoon. Where an intent needs a subject the
+subject is part of the pattern's identity, so a nine o'clock Bitcoin
+report and a five o'clock Ethereum report stay two separate habits
+rather than merging into one meaningless "market report" pattern.
+
+Nothing is ever promoted silently. A detected pattern is offered once,
+and only running it automatically after you say yes; declining removes
+it rather than leaving it to be asked again. Each pattern carries a
+short spoken label ("the weather pattern", "the bitcoin markets report
+pattern") so one can be removed by name without touching the others,
+and clearing all of them at once needs its own exact phrase.
+
+Unlike `memory.txt`, this file is **not** size-bounded. Memory can trim
+old facts safely because a fact costs nothing to state again; there is
+no equivalent for multi-day behavioural evidence, and trimming it would
+delete exactly the history a pattern needs to exist.
 
 ### Calendar — `actions/diary.py`
 JARVIS keeps his own calendar in `calendar.txt`, so it works whether or not
@@ -192,11 +228,17 @@ combinations.
 Time, weather, CPU and memory, volume and media keys, screenshots,
 minimise and restore.
 
-### Unprompted — `actions/battery.py`, `actions/watch.py`
+### Unprompted — `actions/battery.py`, `actions/watch.py`, `actions/patterns.py`
 Battery at 80% charging, 50% and 30% discharging. Disk below 10% free.
 Memory above 92% sustained. Each is said once, never during quiet hours,
 and anything noticed while JARVIS was closed is held and mentioned when he
 next starts.
+
+A confirmed pattern also runs and speaks at its own time, and a newly
+detected one is offered once — both through the same announcer, so they
+queue behind whatever JARVIS is already saying rather than talking over
+him. A pattern fires at most once a day, never repeatedly across the
+several checks that fall inside its due window.
 
 ### Reminders — `actions/reminders.py`
 Spoken timers that announce themselves when due.
@@ -226,9 +268,10 @@ beam joining them to the HUD.
 ## The rules that keep it safe
 
 **Destructive things are exact-match only.** Clearing notes, the clipboard,
-reminders, the calendar, or the document working set; saving a picture;
-hiding the news. A near miss must never delete or overwrite. This rule
-exists because a fuzzy match once wiped a notes file.
+reminders, the calendar, the document working set, or every noticed
+pattern at once; saving a picture; hiding the news. A near miss must
+never delete or overwrite. This rule exists because a fuzzy match once
+wiped a notes file.
 
 **Anything hard to undo asks first.** Overwriting a file, clicking a control
 whose name suggests sending or deleting, correcting a document, clearing
