@@ -19,7 +19,7 @@ from actions.desktop import (
     volume_down,
     volume_up,
 )
-from actions.knowledge import answer, answer_with_documents
+from actions.knowledge import answer, answer_with_documents, commit_message
 from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
 import phrases
@@ -31,6 +31,7 @@ from actions import (
     diary,
     documents,
     files,
+    git_tasks,
     image_choices,
     images,
     journal,
@@ -360,6 +361,15 @@ _FAST_PHRASES = (
     (("forget all patterns", "forget every pattern",
       "clear all patterns", "clear my patterns"),
      "forget_all_patterns"),
+    (("propose a commit", "propose a commit message",
+      "suggest a commit message", "suggest a commit",
+      "write me a commit message", "write a commit message",
+      "commit my changes", "whats my commit message",
+      "draft a commit message"), "propose_commit"),
+    (("what have i changed", "whats changed in my project",
+      "what's my git status", "whats my git status", "git status",
+      "what's staged", "whats staged", "what have i staged"),
+     "git_status"),
     (("clear my clipboard", "empty my clipboard", "clear the clipboard",
       "empty the clipboard", "wipe my clipboard", "clear clipboard"),
      "clear_clipboard"),
@@ -3258,6 +3268,56 @@ def _confirm(intent, question, action, yes_text=None, no_text=None):
     }
 
 
+def _propose_commit():
+    """Read the staged diff, draft a message, and ask before committing.
+
+    Returns a result dict either way -- a plain query when there's
+    nothing to do, or a confirmation when there's a real message to
+    approve. Nothing is committed until the user actually says yes.
+    """
+    if not git_tasks.available():
+        return _query("propose_commit", git_tasks.no_repo_message)
+
+    if not git_tasks.staged_files():
+        return _query(
+            "propose_commit",
+            lambda: (
+                "Nothing's staged, sir. Run git add, then ask me again."
+            ),
+        )
+
+    diff = git_tasks.staged_diff()
+    message = commit_message(diff)
+
+    if not message:
+        return _query(
+            "propose_commit",
+            lambda: (
+                "I couldn't draft a message for that, sir. "
+                "The console says why."
+            ),
+        )
+
+    staged = git_tasks.staged_files()
+    count = len(staged)
+    word = "file" if count == 1 else "files"
+
+    def _do_commit():
+        ok, spoken = git_tasks.commit(message)
+
+        journal.action("git_commit", message, ok)
+
+        return ok
+
+    return _confirm(
+        "git_commit",
+        f"{count} {word} staged, sir. I'd say: {message}. Shall I commit?",
+        _do_commit,
+        yes_text="Committing, sir.",
+        no_text="Very good, sir. Nothing committed.",
+    )
+
+
 def offer_pattern(pattern):
     """Turn a detected pattern into a confirmation question.
 
@@ -3977,6 +4037,12 @@ def handle_command(command):
 
     if intent == "list_patterns":
         return _query(intent, patterns.describe)
+
+    if intent == "git_status":
+        return _query(intent, git_tasks.describe_status)
+
+    if intent == "propose_commit":
+        return _propose_commit()
 
     if intent == "forget_pattern" and verbatim_text:
         label = verbatim_text

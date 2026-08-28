@@ -35,6 +35,11 @@ KNOWN_KEYS = (
     "calendar",
     # Whether to open each .ics after writing it: "open" or nothing.
     "invites",
+    # The folder git commands run in. Deliberately separate from
+    # "project": which folder to open in an editor and which folder is
+    # a git repository are different questions, and are not always the
+    # same directory.
+    "repo",
 )
 
 # How long an answer should be. Anything else is treated as medium.
@@ -191,6 +196,10 @@ _KEYED_PATTERNS = (
         r"(?:answers|replies|responses)$", re.I),
      "reply length"),
     (re.compile(
+        r"^(?:my (?:git )?repo(?:sitory)? is|"
+        r"my (?:git )?repo(?:sitory)? path is)\s+(.+)$", re.I),
+     "repo"),
+    (re.compile(
         r"^(?:my (?:default|main|current) project is|"
         r"i(?:'m| am) working on)\s+(.+)$", re.I),
      "project"),
@@ -300,6 +309,11 @@ def set_coordinates(latitude, longitude):
 def default_project():
     """The project to open when none is named."""
     return get("project")
+
+
+def repo_path():
+    """The folder git commands run in, or None."""
+    return get("repo")
 
 
 def calendar_target():

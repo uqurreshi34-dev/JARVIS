@@ -191,7 +191,25 @@ class Provider:
 
             response = self._client.chat.completions.create(**retried)
 
-        return response.choices[0].message.content or ""
+        message = response.choices[0].message
+        content = (message.content or "").strip()
+
+        if content:
+            return content
+
+        # A reasoning model can leave content empty and put the answer in
+        # a separate field instead -- vision() below has handled this for
+        # a while, but chat() never did, so any prompt where the model
+        # chose that shape came back as an empty string. That surfaced as
+        # a vague failure in whatever called it rather than anything
+        # pointing here.
+        for field in ("reasoning", "reasoning_content"):
+            spare = getattr(message, field, None)
+
+            if spare and str(spare).strip():
+                return _strip_reasoning(str(spare).strip())
+
+        return ""
 
 
 def _is_parameter_error(error):
