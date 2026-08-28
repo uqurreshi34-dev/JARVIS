@@ -88,10 +88,12 @@ Drag Word documents, PDFs, TXT, Markdown, CSV or JSON files directly onto the JA
 | which contract has the higher fees | compares the relevant documents |
 | which document contains confidentiality | finds the relevant document or documents |
 | what does the Smith Consulting contract say about termination | answers from the loaded documents |
+| what's in this document / what does this file say | answers from whichever documents are loaded, unnamed |
+| what documents do I have | lists what's currently loaded, without clearing it |
 | clear my documents | clears the working set |
 | clear the documents | clears the working set |
 
-The working set holds up to eight documents and 60,000 extracted characters. Documents are extracted and classified locally; loading them does not make an API call.
+Every document is capped to a fixed size individually before anything else happens, regardless of how many others are already loaded — a large file dropped second or third is truncated the same way a lone large file is, rather than refused. The working set as a whole holds up to eight documents and 60,000 extracted characters; a document that doesn't fit alongside what's already loaded is refused on its own, without disturbing the rest — it would always have fit by itself. Documents are extracted and classified locally; loading them does not make an API call.
 
 The HUD shows the current working-set count when one or more documents are loaded, for example "3 / 8". The indicator disappears when there are no documents loaded.
 

@@ -16,7 +16,7 @@ transcribes locally with Whisper, works out what you meant, does it, and
 answers aloud in a British voice. A heads-up display shows what it heard,
 what it is doing, and live machine telemetry.
 
-**91 intents. 383 spoken phrases resolve locally with no API call.**
+**93 intents. 433 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -55,19 +55,19 @@ count, copy contents to the clipboard. A spoken name matches any extension,
 so "business" finds `business.docx`. Word documents are read including
 their tables.
 
-## Documents
+### Documents — `actions/documents.py`
 
 Drag Word documents, PDFs, TXT, Markdown, CSV or JSON files directly onto the JARVIS HUD to create a temporary working set. Once loaded, JARVIS can answer questions about individual documents, find information across the set, compare documents and combine information from several documents.
 
-Documents are read locally when dropped; no API call is made for loading or classifying them. JARVIS identifies the document type from its contents rather than trusting the filename.
+Documents are read and classified locally when dropped; no API call is made for loading them. Classification is content-based, not filename-based — a file named `Doc4.docx` is still correctly identified as a contract from what it actually says — and that classification is passed to the model as context for every question. Spoken confirmations and "what documents do I have" use the actual filename rather than the classified type, since you're looking at the list yourself and can judge it; the model answering a question is the one place a bare, unverified filename shouldn't be trusted on its own.
 
-The working set holds up to eight documents and up to 60,000 extracted characters. If a new document would exceed the character budget, it is refused without disturbing documents already loaded. A single oversized document can be used on its own, with its middle truncated to stay within the budget.
+Every document is capped individually to a fixed size before anything else happens, regardless of how many other documents are already loaded — a large file dropped second or third gets the same useful truncated read a lone large file does, rather than being refused outright. The working set as a whole holds up to eight documents and 60,000 extracted characters; a document that would exceed that alongside what's already loaded is refused without disturbing the documents already there, and JARVIS says so specifically — it would always have fit on its own.
 
-The working-set count is shown on the HUD only when at least one document is loaded. Dragging files does not produce a spoken response, to avoid unnecessary speech.
+The working-set count is shown on the HUD only when at least one document is loaded. Dragging files does not produce a spoken response, to avoid unnecessary speech — deliberate, not an oversight.
 
-Questions about the loaded documents use one normal language-model request with the document contents supplied as context. This supports questions such as "which document has the shorter termination period", "which contract has the higher fees", and "which document contains confidentiality". When comparing documents, JARVIS names the actual document rather than referring to them as "document one" or "document two".
+Questions about the loaded documents use one normal language-model request with the document contents supplied as context, each wrapped as clearly labelled, untrusted data — the same guard used everywhere else outside text reaches a prompt, and the first place several untrusted documents go into one prompt together. This supports questions such as "which document has the shorter termination period", "which contract has the higher fees", "which document contains confidentiality", and a vague, unnamed reference like "what does this file say" or "what's in this document", which is read as being about the working set rather than the visible screen. When comparing documents, JARVIS names the actual document rather than referring to them as "document one" or "document two".
 
-Say "clear my documents" to empty the working set. Clearing is an exact command and JARVIS confirms how many documents were removed.
+Say "clear my documents" or "clear the documents" to empty the working set — exact phrase only, like clearing notes or the clipboard. Say "what documents do I have" to hear what's currently loaded without clearing it.
 
 ### Notes — `actions/notes.py`
 A timestamped list in `notes.txt`. Add, read, remove one entry, clear all.
@@ -226,9 +226,9 @@ beam joining them to the HUD.
 ## The rules that keep it safe
 
 **Destructive things are exact-match only.** Clearing notes, the clipboard,
-reminders or the calendar; saving a picture; hiding the news. A near miss
-must never delete or overwrite. This rule exists because a fuzzy match once
-wiped a notes file.
+reminders, the calendar, or the document working set; saving a picture;
+hiding the news. A near miss must never delete or overwrite. This rule
+exists because a fuzzy match once wiped a notes file.
 
 **Anything hard to undo asks first.** Overwriting a file, clicking a control
 whose name suggests sending or deleting, correcting a document, clearing
@@ -236,8 +236,9 @@ the calendar. The confirmation re-finds the control at the moment you say
 yes, so it cannot act on something that has since changed.
 
 **Outside text is data, never instructions** — `actions/safety.py`. Folder
-names, file contents, stored facts and words held up to the camera can be
-written to look like orders. They are filtered before reaching a model.
+names, file contents, dropped documents, stored facts and words held up to
+the camera can be written to look like orders. They are filtered before
+reaching a model.
 
 **Everything that changes something is logged** — `actions/journal.py`.
 `jarvis-log.txt` records every command, its route (local or model), and
