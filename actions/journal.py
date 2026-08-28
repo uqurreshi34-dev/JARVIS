@@ -112,11 +112,18 @@ def _prune_archives(base):
         pass
 
 
-def command(spoken, intent, free_path):
-    """Record a command as it is understood."""
+def command(spoken, intent, free_path, detail=None):
+    """Record a command as it is understood, including an optional subject."""
     route = "local" if free_path else "model"
 
-    write("command", f"{spoken!r} -> {intent} ({route})")
+    line = f"{spoken!r} -> {intent}"
+
+    if detail:
+        line += f" [{detail}]"
+
+    line += f" ({route})"
+
+    write("command", line)
 
 
 def action(intent, detail, succeeded, spoken=None):
@@ -237,18 +244,15 @@ def alert(text):
 
 _COMMAND_LINE = re.compile(
     r"^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):\d{2}\s+command\s+"
-    r"'.*?' -> (\w+) \(\w+\)$"
+    r"'.*?' -> (\w+)(?: \[(.*?)\])? \(\w+\)$"
 )
 
 
 def command_history(days=30):
-    """(date, hour, minute, intent) for every logged command in the last
-    N days, across the live log and any archives it has rotated into.
+    """(date, hour, minute, intent, detail) for recent logged commands.
 
-    Archives exist specifically so nothing is ever discarded -- reading
-    only the live file would silently lose history the moment a
-    rotation happens, which for anything wanting several days of
-    pattern is close to guaranteed rather than an edge case.
+    Reads both the live journal and rotated archives. Older log entries
+    without a subject simply return None for detail.
     """
     base = files.root()
 
@@ -257,7 +261,8 @@ def command_history(days=30):
 
     try:
         names = [FILENAME] + sorted(
-            name for name in os.listdir(base)
+            name
+            for name in os.listdir(base)
             if name.startswith("jarvis-log-") and name.endswith(".txt")
         )
     except OSError:
@@ -270,38 +275,31 @@ def command_history(days=30):
         path = os.path.join(base, name)
 
         try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+            with open(
+                path, "r", encoding="utf-8", errors="ignore"
+            ) as handle:
                 for line in handle:
                     match = _COMMAND_LINE.match(line.strip())
 
                     if not match:
                         continue
 
-                    date, hour, minute, intent = match.groups()
+                    date, hour, minute, intent, detail = match.groups()
 
                     if date >= cutoff:
                         entries.append(
-                            (date, int(hour), int(minute), intent)
+                            (
+                                date,
+                                int(hour),
+                                int(minute),
+                                intent,
+                                detail or None,
+                            )
                         )
         except OSError:
             continue
 
     return entries
-
-    """The last few lines, for reading back aloud."""
-    path = _path()
-
-    if not path or not os.path.exists(path):
-        return []
-
-    try:
-        with open(path, "r", encoding="utf-8", errors="ignore") as handle:
-            lines = [line.strip() for line in handle if line.strip()]
-
-    except OSError:
-        return []
-
-    return lines[-count:]
 
 
 def summary():

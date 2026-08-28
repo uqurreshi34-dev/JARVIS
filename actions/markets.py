@@ -554,7 +554,7 @@ def describe():
 
         parts.append(
             f"{coin['spoken']} is {spoken_price(price)}, "
-            f"{direction} {spoken_number(abs(change), 1)} percent"
+            f"{direction} {spoken_number(abs(change), 2)} percent"
         )
 
     for code, spoken in (("USD", "The dollar"), ("EUR", "The euro")):

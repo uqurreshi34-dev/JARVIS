@@ -176,6 +176,14 @@ def _label_for(intent):
     return _LABELS.get(intent, f"the {intent.replace('_', ' ')} pattern")
 
 
+def _label_for_occurrence(intent, detail=None):
+    """Create a descriptive label, including a subject when one matters."""
+    if intent == "market_report" and detail:
+        return f"the {detail} markets report pattern"
+
+    return _label_for(intent)
+
+
 def _cluster_by_time(occurrences):
     """Group (hour, minute) occurrences of one intent into clusters no
     more than TIME_WINDOW_MINUTES apart, returning the largest cluster's
@@ -214,7 +222,9 @@ def _cluster_by_time(occurrences):
 
 def detect():
     """Look at journal history for a new pattern worth suggesting.
-
+    A pattern is identified by intent plus subject where a subject exists.
+    That prevents different coins from being merged into one market-report
+    habit.
     Returns a pattern dict ready to be suggested, or None. Only ever
     returns ONE pattern per call -- the caller decides when it's a good
     moment to actually mention it, and suggesting several habits at once
@@ -226,28 +236,44 @@ def detect():
     if not history:
         return None
 
-    known_intents = {p.get("intent") for p in _entries()}
+    known_patterns = {
+        (
+            pattern.get("intent"),
+            pattern.get("subject"),
+        )
+        for pattern in _entries()
+    }
 
-    by_intent = {}
+    by_pattern = {}
 
-    for date, hour, minute, intent in history:
-        if intent not in _ELIGIBLE_INTENTS or intent in known_intents:
+    for date, hour, minute, intent, detail in history:
+        if intent not in _ELIGIBLE_INTENTS:
             continue
 
-        by_intent.setdefault(intent, []).append((date, hour, minute))
+        key = (intent, detail)
 
-    for intent, occurrences in by_intent.items():
+        if key in known_patterns:
+            continue
+
+        by_pattern.setdefault(key, []).append(
+            (date, hour, minute)
+        )
+
+    for (intent, detail), occurrences in by_pattern.items():
         if len(occurrences) < MIN_OCCURRENCES:
             continue
 
-        count, distinct_days, hour, minute = _cluster_by_time(occurrences)
+        count, distinct_days, hour, minute = _cluster_by_time(
+            occurrences
+        )
 
         if count < MIN_OCCURRENCES or distinct_days < MIN_DISTINCT_DAYS:
             continue
 
         return {
-            "label": _label_for(intent),
+            "label": _label_for_occurrence(intent, detail),
             "intent": intent,
+            "subject": detail,
             "hour": str(hour),
             "minute": str(minute),
             "status": "suggested",
@@ -381,8 +407,8 @@ def spoken_suggestion(pattern):
     ) + (" a.m." if hour < 12 else " p.m.")
 
     return (
-        f"I've noticed you usually ask about this around {time_phrase}, "
-        f"sir -- shall I make {label} run automatically from now on?"
+        f"I've noticed you usually ask for {label} around {time_phrase}, "
+        "sir -- shall I run it automatically from now on?"
     )
 
 

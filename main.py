@@ -11,12 +11,14 @@ from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
 import phrases
 from actions.markets import market_monitor
+from actions.patterns import pattern_monitor
 from beam import Beam
 from brain_panel import BrainPanel
 from camera_panel import CameraPanel
 from chart_panel import ChartPanel
 from image_choices_panel import ImageChoicesPanel
 from image_panel import ImagePanel
+import commands
 from commands import (
     handle_command,
     reminder_manager,
@@ -184,6 +186,24 @@ class Assistant:
         self._say(phrases.pick("wake"))
         self._state(LISTENING)
 
+    def _on_pattern_suggestion(self, pattern):
+        """Speak a newly detected pattern suggestion once."""
+        result = commands.offer_pattern(pattern)
+
+        if result:
+            self._run_query(result)
+
+    def _on_pattern_due(self, patterns):
+        """Run patterns already confirmed for automatic execution."""
+        for pattern in patterns:
+            result = commands.run_pattern(pattern)
+
+            if result:
+                if result.get("kind") == "query":
+                    self._run_query(result)
+                else:
+                    self._run_action(result)
+
     def run(self):
         set_wake_listener(self._on_wake)
         set_status_listener(self._on_status)
@@ -198,6 +218,10 @@ class Assistant:
         # whatever JARVIS is already saying rather than talking over him.
         watcher.set_listener(self._on_alert)
         watcher.start()
+
+        pattern_monitor.set_due_listener(self._on_pattern_due)
+        pattern_monitor.set_suggestion_listener(self._on_pattern_suggestion)
+        pattern_monitor.start()
 
         self._say(_greeting())
 
@@ -301,6 +325,7 @@ class Assistant:
         reminder_manager.cancel_all()
         battery_monitor.stop()
         watcher.stop()
+        pattern_monitor.stop()
         camera.release()
         market_monitor.stop()
         self._hud.shutdown.emit()

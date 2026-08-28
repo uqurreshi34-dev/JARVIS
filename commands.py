@@ -3258,6 +3258,86 @@ def _confirm(intent, question, action, yes_text=None, no_text=None):
     }
 
 
+def offer_pattern(pattern):
+    """Turn a detected pattern into a confirmation question.
+
+    The monitor calls this outside the normal command loop. _confirm()
+    stores the pending yes/no action, while the returned query lets the
+    Assistant speak the suggestion through the normal speech path.
+    """
+    if not pattern:
+        return None
+
+    label = pattern.get("label")
+
+    if not label:
+        return None
+
+    return _confirm(
+        "confirm_pattern",
+        patterns.spoken_suggestion(pattern),
+        lambda: patterns.confirm(label),
+        yes_text=f"Certainly, sir. I'll run {label} automatically from now on.",
+        no_text=f"Very good, sir. I won't use {label}.",
+    )
+
+
+def run_pattern(pattern):
+    """Execute one confirmed automatic pattern using its normal intent."""
+    if not pattern:
+        return None
+
+    intent = pattern.get("intent")
+
+    if intent == "get_weather":
+        return _query(intent, describe_weather)
+
+    if intent == "get_system_status":
+        return _query(intent, describe_system)
+
+    if intent == "show_news":
+        return _query(
+            intent,
+            lambda: _show_news(news.DEFAULT_REGION),
+        )
+
+    if intent == "read_log":
+        return _query(intent, journal.describe)
+
+    if intent == "log_summary":
+        return _query(intent, journal.summary)
+
+    if intent == "read_notes":
+        return _query(intent, notes.describe)
+
+    if intent == "read_calendar":
+        return _query(intent, diary.describe)
+
+    # market_report needs a coin to produce a useful report, but the current
+    # pattern record only stores the intent and time, not the original coin.
+    # Do not guess one silently.
+    if intent == "market_report":
+        subject = pattern.get("subject")
+
+        if not subject:
+            return None
+
+        def build_report():
+            path, sections = market_report.write(subject)
+
+            return market_report.describe(subject, path, sections)
+
+        spoken = markets.COINS.get(subject, {}).get("spoken", subject)
+
+        return _query(
+            intent,
+            build_report,
+            detail=f"a report on {spoken}",
+        )
+
+    return None
+
+
 def _resolve_pending(text):
     """Handle a yes or no reply to an earlier question, or return None."""
     global _pending
@@ -3346,7 +3426,16 @@ def handle_command(command):
     # its intent at all, which would make any intent that regularly
     # falls through to the model invisible to anything reading history
     # (pattern detection, "what have you done today").
-    journal.command(command, intent, took_free_path)
+    journal.command(
+        command,
+        intent,
+        took_free_path,
+        detail=(
+            (result.get("text") or "").strip()
+            if intent == "market_report"
+            else None
+        ),
+    )
 
     application = result.get("application")
 
