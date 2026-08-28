@@ -9,8 +9,9 @@ JARVIS from working, so every failure here is swallowed after one warning.
 """
 
 import os
+import re
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from actions import files
 
@@ -234,7 +235,59 @@ def alert(text):
     write("alert", text)
 
 
-def recent(count=12):
+_COMMAND_LINE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):\d{2}\s+command\s+"
+    r"'.*?' -> (\w+) \(\w+\)$"
+)
+
+
+def command_history(days=30):
+    """(date, hour, minute, intent) for every logged command in the last
+    N days, across the live log and any archives it has rotated into.
+
+    Archives exist specifically so nothing is ever discarded -- reading
+    only the live file would silently lose history the moment a
+    rotation happens, which for anything wanting several days of
+    pattern is close to guaranteed rather than an edge case.
+    """
+    base = files.root()
+
+    if not base:
+        return []
+
+    try:
+        names = [FILENAME] + sorted(
+            name for name in os.listdir(base)
+            if name.startswith("jarvis-log-") and name.endswith(".txt")
+        )
+    except OSError:
+        return []
+
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    entries = []
+
+    for name in names:
+        path = os.path.join(base, name)
+
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    match = _COMMAND_LINE.match(line.strip())
+
+                    if not match:
+                        continue
+
+                    date, hour, minute, intent = match.groups()
+
+                    if date >= cutoff:
+                        entries.append(
+                            (date, int(hour), int(minute), intent)
+                        )
+        except OSError:
+            continue
+
+    return entries
+
     """The last few lines, for reading back aloud."""
     path = _path()
 

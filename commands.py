@@ -40,6 +40,7 @@ from actions import (
     news,
     proofread,
     notes,
+    patterns,
     safety,
     screen_control,
 )
@@ -352,6 +353,13 @@ _FAST_PHRASES = (
       "how many documents do i have", "what have you read",
       "what documents are loaded", "list my documents",
       "list the documents"), "list_documents"),
+    (("what patterns have you noticed", "what have you noticed about me",
+      "what patterns do you know", "list my patterns",
+      "list the patterns", "what patterns are there"),
+     "list_patterns"),
+    (("forget all patterns", "forget every pattern",
+      "clear all patterns", "clear my patterns"),
+     "forget_all_patterns"),
     (("clear my clipboard", "empty my clipboard", "clear the clipboard",
       "empty the clipboard", "wipe my clipboard", "clear clipboard"),
      "clear_clipboard"),
@@ -386,6 +394,9 @@ _NEVER_FUZZY = frozenset({
     "clear_notes",
     "cancel_reminders",
     "clear_documents",
+    # Losing every noticed pattern to a near miss is the same risk as
+    # clear_documents, for the same reason.
+    "forget_all_patterns",
     # "open the news" and "close the news" differ by one word and score 0.85
     # against each other, so closing must be said exactly.
     "hide_news",
@@ -2140,6 +2151,48 @@ _ADD_TO_FILE = re.compile(
 )
 
 
+# "forget the markets report pattern" -- gated on the word "pattern",
+# the same way _READ_FILE_EXPLICIT is gated on "file", so this can only
+# ever match a genuine attempt to name one, never something else that
+# happens to start with "forget".
+_FORGET_PATTERN = re.compile(
+    r"^forget\s+(?:the\s+|about\s+the\s+)?(.+?)\s+pattern$"
+)
+
+
+def _forget_pattern_request(text):
+    """The label someone's trying to forget, or None.
+
+    Matches loosely against what's actually stored -- "forget the
+    markets pattern" should work even if the stored label is "the
+    markets report pattern", since asking for the exact stored wording
+    defeats the point of a short spoken label. Returns the real stored
+    label so the caller always removes by an exact match, never a
+    fuzzy guess.
+    """
+    match = _FORGET_PATTERN.match(text)
+
+    if not match:
+        return None
+
+    said = match.group(1).strip()
+
+    if not said:
+        return None
+
+    for pattern in patterns._entries():
+        label = pattern.get("label", "")
+        # Compare against the label with "the"/"pattern" stripped, so
+        # "forget the markets pattern" matches a stored "the markets
+        # report pattern" without needing the exact wording.
+        bare = label.replace("the ", "", 1).replace(" pattern", "").strip()
+
+        if said in bare or bare in said:
+            return label
+
+    return None
+
+
 # Reading and copying are gated on the file existing, so "read my notes" and
 # "open chrome" can never be mistaken for a file request. The word "file"
 # makes it explicit; without it, the name must match something on disk.
@@ -2725,6 +2778,11 @@ def _fast_path(command):
     if to_clipboard:
         return _blank_result("file_to_clipboard", text=to_clipboard)
 
+    pattern_label = _forget_pattern_request(text)
+
+    if pattern_label:
+        return _blank_result("forget_pattern", text=pattern_label)
+
     target = _read_file_request(text)
 
     if target:
@@ -3246,10 +3304,10 @@ def handle_command(command):
         return answered
 
     result = _fast_path(command)
+    took_free_path = result is not None
 
     if result is not None:
         print(f"[fast] {result['intent']} (no API call)")
-        journal.command(command, result["intent"], True)
 
     else:
         candidates = _application_manager.candidates(command)
@@ -3281,6 +3339,15 @@ def handle_command(command):
         return None
 
     intent = result["intent"]
+
+    # Logged here rather than per-branch above, so a command's resolved
+    # intent is recorded regardless of whether it took the free path or
+    # needed the model -- previously only the free path was logged with
+    # its intent at all, which would make any intent that regularly
+    # falls through to the model invisible to anything reading history
+    # (pattern detection, "what have you done today").
+    journal.command(command, intent, took_free_path)
+
     application = result.get("application")
 
     _set_subject(result)
@@ -3818,6 +3885,26 @@ def handle_command(command):
 
     if intent == "list_documents":
         return _query(intent, documents.status)
+
+    if intent == "list_patterns":
+        return _query(intent, patterns.describe)
+
+    if intent == "forget_pattern" and verbatim_text:
+        label = verbatim_text
+
+        def _do_forget_pattern():
+            return f"I've forgotten {label}, sir." if patterns.forget(label) \
+                else f"I couldn't find {label}, sir."
+
+        return _query(intent, _do_forget_pattern)
+
+    if intent == "forget_all_patterns":
+        return _confirm(
+            intent,
+            "Forget every pattern I've noticed, sir?",
+            lambda: patterns.forget_all() >= 0,
+            yes_text="Cleared, sir.",
+        )
 
     if intent == "answer_question":
         if documents.active():
