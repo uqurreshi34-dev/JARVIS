@@ -33,6 +33,14 @@ _GAIN = 6.0
 _CACHE_DIR = os.path.join(tempfile.gettempdir(), "jarvis_tts_cache")
 _MEMORY_LIMIT = 48
 
+# The in-memory cache is bounded by _MEMORY_LIMIT, but nothing previously
+# bounded the disk cache at all -- every distinct phrase JARVIS has ever
+# said (filenames, page titles, prices) accumulates there forever. This
+# caps it, oldest-touched evicted first. Generous: at a few KB per short
+# phrase, this comfortably holds a normal day's worth of dynamic speech
+# without needing to re-synthesise, while still being an actual ceiling.
+_DISK_CACHE_LIMIT = 1000
+
 # Set True to print how long synthesis and playback take.
 TIMING = False
 
@@ -84,6 +92,18 @@ class SpeechEngine:
         # Reminders fire on their own thread, so utterances must not overlap.
         self._lock = threading.Lock()
 
+        # Separate from _lock on purpose. _lock is held for a whole
+        # utterance, including playback; _audio_for is called from
+        # inside that (via speak) and also directly from prewarm(),
+        # which runs on its own background thread and does NOT hold
+        # _lock. Without a lock of its own, prewarm and a real speak()
+        # could both mutate _memory (an OrderedDict, not thread-safe
+        # for concurrent writes) and the disk cache at the same time --
+        # prewarm's own "wait while a real reply is in progress" check
+        # is a look-then-act race, not a guarantee, so this is a real
+        # gap, not a theoretical one.
+        self._cache_lock = threading.Lock()
+
         # Decoded audio keyed by phrase, most recently used last.
         self._memory = OrderedDict()
 
@@ -130,6 +150,8 @@ class SpeechEngine:
         reply, so it waits whenever JARVIS is actually speaking and pauses
         between phrases to leave the connection free.
         """
+        self._prune_disk_cache()
+
         for phrase in phrases:
             # A real utterance takes priority; wait for it to finish.
             while _priority.is_set():
@@ -144,6 +166,69 @@ class SpeechEngine:
             # run of back-to-back requests.
             time.sleep(_PREWARM_GAP)
 
+    def _prune_disk_cache(self):
+        """Evict the least-recently-used disk cache entries over the cap.
+
+        Runs once per process start rather than per call -- a disk scan
+        on every utterance would undercut the entire point of caching.
+        Never touches the in-memory cache; an evicted phrase still in
+        _memory simply re-synthesises to disk next time it's needed.
+        """
+        with self._cache_lock:
+            try:
+                entries = [
+                    name for name in os.listdir(_CACHE_DIR)
+                    if name.endswith(".mp3")
+                ]
+            except OSError:
+                return
+
+            if len(entries) <= _DISK_CACHE_LIMIT:
+                return
+
+            def mtime(name):
+                try:
+                    return os.path.getmtime(os.path.join(_CACHE_DIR, name))
+                except OSError:
+                    return 0
+
+            entries.sort(key=mtime)
+            overflow = len(entries) - _DISK_CACHE_LIMIT
+
+            for name in entries[:overflow]:
+                stem = name[:-4]
+
+                for suffix in (".mp3", ".txt"):
+                    try:
+                        os.remove(os.path.join(_CACHE_DIR, f"{stem}{suffix}"))
+                    except OSError:
+                        pass
+
+            print(f"[JARVIS] pruned {overflow} old cached phrases")
+
+    def invalidate(self, text):
+        """Remove one phrase from both the memory and disk cache.
+
+        For fixing a specific bad cache entry -- a wrong pronunciation,
+        say -- without needing to know its hash or clear the whole
+        cache. Returns True if anything was actually found and removed.
+        """
+        key = self._cache_key(text)
+        path = os.path.join(_CACHE_DIR, f"{key}.mp3")
+        sidecar = os.path.join(_CACHE_DIR, f"{key}.txt")
+
+        with self._cache_lock:
+            removed = self._memory.pop(key, None) is not None
+
+            for target in (path, sidecar):
+                try:
+                    os.remove(target)
+                    removed = True
+                except OSError:
+                    pass
+
+        return removed
+
     def _cache_key(self, text):
         digest = hashlib.sha1(
             f"{self.voice}|{VOICE_RATE}|{VOICE_PITCH}|{text}".encode("utf-8")
@@ -154,40 +239,111 @@ class SpeechEngine:
     def _audio_for(self, text):
         """Return (samples, samplerate), synthesising only when necessary."""
         key = self._cache_key(text)
-
-        cached = self._memory.get(key)
-
-        if cached is not None:
-            self._memory.move_to_end(key)
-            return cached
-
         path = os.path.join(_CACHE_DIR, f"{key}.mp3")
+        sidecar = os.path.join(_CACHE_DIR, f"{key}.txt")
 
-        started = time.monotonic()
-        synthesised = False
+        with self._cache_lock:
+            cached = self._memory.get(key)
 
-        if not os.path.exists(path):
-            asyncio.run(self._synthesize(text, path))
-            synthesised = True
+            if cached is not None:
+                self._memory.move_to_end(key)
+                self._touch(path)
+                return cached
 
-        data, samplerate = sf.read(path, dtype="float32")
+            started = time.monotonic()
+            synthesised = False
+
+            if not os.path.exists(path):
+                self._synthesize_to_cache(text, path, sidecar)
+                synthesised = True
+
+            data, samplerate = self._read_cached(text, path, sidecar)
+
+            if not synthesised:
+                # Freshly-written files already have a current mtime;
+                # this marks an existing file as freshly used again,
+                # not just freshly created once, long ago.
+                self._touch(path)
+
+            self._memory[key] = (data, samplerate)
+            self._memory.move_to_end(key)
+
+            while len(self._memory) > _MEMORY_LIMIT:
+                self._memory.popitem(last=False)
+
+            if TIMING:
+                source = "synthesised" if synthesised else "disk cache"
+                print(
+                    f"[timing] {source} in "
+                    f"{time.monotonic() - started:.2f}s: {text[:40]!r}",
+                    flush=True,
+                )
+
+            return data, samplerate
+
+    @staticmethod
+    def _touch(path):
+        """Mark a cache file as just used, for mtime-based LRU eviction.
+
+        Uses mtime rather than atime deliberately: NTFS access-time
+        updates are commonly disabled system-wide on Windows for
+        performance, which would make atime silently unreliable here.
+        """
+        try:
+            os.utime(path, None)
+        except OSError:
+            pass
+
+    def _synthesize_to_cache(self, text, path, sidecar):
+        """Synthesise text, writing both the audio and its text sidecar.
+
+        The sidecar exists purely so a bad cache entry can be found and
+        removed by what it actually says ("bbc.co.uk") rather than
+        needing its SHA1 hash computed by hand -- see invalidate().
+        """
+        asyncio.run(self._synthesize(text, path))
+
+        try:
+            sidecar_partial = f"{sidecar}.partial"
+
+            with open(sidecar_partial, "w", encoding="utf-8") as handle:
+                handle.write(text)
+
+            os.replace(sidecar_partial, sidecar)
+        except OSError as error:
+            # The sidecar is a convenience for humans, not something
+            # playback depends on -- losing it should never stop speech.
+            print(f"[JARVIS] could not write cache sidecar: {error}")
+
+    def _read_cached(self, text, path, sidecar):
+        """Read a cached file, recovering once from a corrupted one.
+
+        A file that was written successfully can still go bad later --
+        disk error, antivirus rewriting it, manual tampering, ordinary
+        bit rot over a cache that's never pruned by age. This should
+        never be able to take the whole speech pipeline down: on a read
+        failure, the bad file is removed and re-synthesised exactly
+        once, not retried indefinitely.
+        """
+        try:
+            data, samplerate = sf.read(path, dtype="float32")
+        except Exception as error:
+            print(
+                f"[JARVIS] cached audio was unreadable, re-synthesising "
+                f"({error}): {text[:40]!r}"
+            )
+
+            for bad in (path, sidecar):
+                try:
+                    os.remove(bad)
+                except OSError:
+                    pass
+
+            self._synthesize_to_cache(text, path, sidecar)
+            data, samplerate = sf.read(path, dtype="float32")
 
         if data.ndim > 1:
             data = data.mean(axis=1)
-
-        self._memory[key] = (data, samplerate)
-        self._memory.move_to_end(key)
-
-        while len(self._memory) > _MEMORY_LIMIT:
-            self._memory.popitem(last=False)
-
-        if TIMING:
-            source = "synthesised" if synthesised else "disk cache"
-            print(
-                f"[timing] {source} in "
-                f"{time.monotonic() - started:.2f}s: {text[:40]!r}",
-                flush=True,
-            )
 
         return data, samplerate
 
@@ -312,6 +468,12 @@ COMMON_PHRASES = (
 
 def speak(text):
     speech.speak(text)
+
+
+def invalidate(text):
+    """Remove one phrase from the cache -- for fixing a bad entry (a
+    wrong pronunciation, say) without clearing the whole cache."""
+    return speech.invalidate(text)
 
 
 def set_amplitude_listener(listener):
