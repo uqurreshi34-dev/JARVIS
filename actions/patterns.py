@@ -156,7 +156,12 @@ def _entries():
 def _serialise(pattern):
     lines = [f"label: {pattern['label']}"]
 
-    for key in ("intent", "hour", "minute", "status", "created"):
+    # "subject" matters as much as "intent" for anything that needs one
+    # (a market report needs its coin). Leaving it out here meant a
+    # pattern survived the round trip looking complete, but with the
+    # subject silently gone -- run_pattern would then refuse to guess
+    # a coin and do nothing at all, with no error to explain why.
+    for key in ("intent", "subject", "hour", "minute", "status", "created"):
         if key in pattern:
             lines.append(f"{key}: {pattern[key]}")
 
