@@ -289,6 +289,15 @@ class PhoneServer:
         self._notices_lock = threading.Lock()
         self._next_notice_id = 0
 
+        # Notice ids count from zero each run, because the queue lives
+        # in memory. A phone remembers how far it had read, so without
+        # something identifying the run it would carry a cursor from a
+        # previous session -- asking for "anything after 5" when the
+        # new run has only reached 1, and so seeing nothing at all,
+        # permanently. This lets the page notice the restart and start
+        # over.
+        self._run_id = secrets.token_hex(4)
+
         self._app = Flask(__name__)
         self._register_routes()
 
@@ -393,6 +402,7 @@ class PhoneServer:
             return jsonify({
                 "notices": self.notices_since(since),
                 "latest": self.latest_notice_id(),
+                "run": self._run_id,
             })
 
         @app.post("/phone-active")
@@ -773,11 +783,14 @@ const BUSY_STATES = new Set(["thinking", "speaking", "listening"]);
 // opening the page for the first time after being out still tells you
 // what you missed.
 let lastNoticeId = 0;
+let noticeRun = null;
 
 try {
   lastNoticeId = parseInt(localStorage.getItem("jarvisLastNotice") || "0", 10) || 0;
+  noticeRun = localStorage.getItem("jarvisNoticeRun");
 } catch (e) {
   lastNoticeId = 0;
+  noticeRun = null;
 }
 let recording = false;
 let audioContext = null;
@@ -1149,12 +1162,31 @@ async function collectNotices() {
     if (!res.ok) return;
 
     const data = await res.json();
+
+    // Notice ids restart from zero whenever JARVIS does, since the
+    // queue is held in memory. A cursor kept from a previous run would
+    // then be ahead of every new id -- asking for "anything after 5"
+    // when the new run has only reached 1 -- and this device would
+    // silently never see another notice. Spotting the change and
+    // starting over is the whole reason the run id exists.
+    if (data.run && data.run !== noticeRun) {
+      noticeRun = data.run;
+      lastNoticeId = 0;
+
+      try {
+        localStorage.setItem("jarvisNoticeRun", noticeRun);
+        localStorage.setItem("jarvisLastNotice", "0");
+      } catch (e) {
+        // Storage refused; the reset still holds for this session.
+      }
+
+      // Re-ask from the beginning of this run, so the restart's own
+      // announcements aren't lost to the poll that detected it.
+      return collectNotices();
+    }
+
     const notices = data.notices || [];
 
-    // Track how far this device has got, rather than the server
-    // clearing the queue on collection -- that meant whichever device
-    // polled first took them and any other never knew. Remembered
-    // across reloads so refreshing the page doesn't replay everything.
     if (notices.length) {
       lastNoticeId = notices[notices.length - 1].id;
       try {

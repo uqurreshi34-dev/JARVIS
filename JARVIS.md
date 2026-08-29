@@ -123,6 +123,13 @@ a phone and a tablet both see everything. Clearing the queue on
 collection meant whichever polled first took them and the other never
 knew they existed.
 
+Because the queue is in memory, its ids count from zero again whenever
+JARVIS restarts, while a phone remembers how far it had read. Each run
+therefore carries an identifier, and a page holding a cursor from an
+earlier run starts over rather than asking for notices numbered higher
+than any that now exist -- which would have meant that device silently
+never seeing another announcement.
+
 The page draws the same arc reactor as the desktop HUD, in a canvas,
 using the same palette and geometry read from `hud.py`. Its energy is
 real throughout: the microphone's own level while recording, the
