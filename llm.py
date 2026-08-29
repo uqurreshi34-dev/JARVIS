@@ -156,7 +156,11 @@ Use add_event when the user wants something put in their calendar. Put the
 event name in "text" and any spoken date in "project", such as "March 2nd
 2027". If no date was given, leave "project" null and JARVIS will ask.
 Use remove_event to take one out, the same way.
-Use read_calendar when they ask what is on their calendar or coming up.
+Use read_calendar when they ask what is on their calendar or coming up,
+including "what's in my calendar" and any wording about their diary.
+Never use read_file for this: calendar.txt genuinely exists on disk, so
+reading it as a plain file would read the raw contents aloud -- Outlook
+identifiers and tab separators included -- rather than the events.
 Use clear_calendar only when they want every entry removed.
 
 Use show_brain when the user wants to see the neural view, such as "show me

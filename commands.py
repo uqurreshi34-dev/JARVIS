@@ -228,7 +228,9 @@ _FAST_PHRASES = (
       "whats your log", "activity log"), "read_log"),
     (("open my project", "open my main project", "open my default project",
       "open the project", "load my project"), "open_default_project"),
-    (("whats on my calendar", "what is on my calendar", "my calendar",
+    (("whats on my calendar", "whats in my calendar",
+      "what is in my calendar", "read my diary",
+      "whats on my diary", "what is on my diary", "what is on my calendar", "my calendar",
       "whats in my diary", "what is in my diary", "read my calendar",
       "whats coming up", "what is coming up", "what have i got on",
       "whats my schedule", "check my calendar"), "read_calendar"),
@@ -2252,6 +2254,12 @@ _COPY_FILE = re.compile(
 _NOT_FILENAMES = frozenset({
     "clipboard", "files", "file", "my clipboard", "my files",
     "them", "it", "this", "that",
+    # calendar.txt and notes.txt genuinely exist in the JARVIS folder,
+    # so without this "what's in my calendar" resolves to a real file
+    # and gets read out raw -- Outlook GUIDs, tab separators and all --
+    # instead of going to the skill that knows how to say it.
+    "calendar", "my calendar", "diary", "my diary",
+    "notes", "my notes",
 })
 
 
