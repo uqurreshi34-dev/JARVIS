@@ -448,6 +448,17 @@ Nothing non-urgent between 10pm and 8am; it waits.
 
 ## When something doesn't work
 
+**The phone won't let you grant microphone access.** If Chrome says "this
+site can't ask for your permission, close any bubbles or overlays from
+other apps", something on your phone is drawing over the screen and
+Android is blocking the prompt. It names no app, and it is often not one
+you would suspect — a screen recorder, a blue light filter, chat bubbles,
+a caller ID app. Look in Settings, Apps, Special access, Appear on top,
+and turn off whatever is listed. Alternatively, tap Block deliberately,
+then open the padlock menu in the address bar and set Microphone to
+Allow — that route goes through settings rather than the prompt, so the
+overlay doesn't block it.
+
 **He says "That's beyond me for now, sir." or "I'm not equipped for that yet, sir."** The phrasing isn't in the
 table above and the language model couldn't place it either. Try a phrase
 from this file.

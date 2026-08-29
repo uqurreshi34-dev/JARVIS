@@ -510,6 +510,19 @@ later can't resurrect it.
 
 Each of these cost real time. They are here so they are not repeated.
 
+**An Android overlay silently blocks every browser permission prompt.**
+Chrome refuses to ask for the microphone while any app holds "appear on
+top" -- and says so with "this site can't ask for your permission, close
+any bubbles or overlays from other apps", naming nothing. It was a screen
+recorder, which is not the sort of app anyone thinks to suspect, and the
+setting is on by default for several. The fix is Settings, Apps, Special
+access, Appear on top, and turning off whatever is listed there. There is
+also a workaround that avoids hunting: tap Block deliberately, then set
+Microphone to Allow through the padlock menu in the address bar, which
+goes through settings rather than the prompt the overlay check gates.
+Nothing in JARVIS can detect or report this, which is exactly why it is
+written down.
+
 **Optional dependencies are imported where they are used, not at the top.**
 `faster_whisper`, `whisper`, `openai`, `pygrabber` are all optional. Hoisted
 to the top of a file, a missing one takes the whole application down instead
