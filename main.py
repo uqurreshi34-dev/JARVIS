@@ -288,6 +288,13 @@ class Assistant:
             missed = catch_up()
 
             if missed:
+                # Announced as well as said. These call _say() directly
+                # rather than going through _on_alert, so without this
+                # they reach the desk and never the phone -- and they
+                # are exactly the "what did I miss" content the phone
+                # queue exists for. The queue holds them, so opening
+                # the phone later still shows what was said at startup.
+                phone_server.announce(missed)
                 self._say(missed)
 
         except Exception as error:
@@ -299,6 +306,7 @@ class Assistant:
             ahead = diary.briefing()
 
             if ahead:
+                phone_server.announce(ahead)
                 self._say(ahead)
 
         except Exception as error:
