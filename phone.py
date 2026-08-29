@@ -633,6 +633,23 @@ PAGE = """<!DOCTYPE html>
     filter: grayscale(0);
   }
   #mute.off { filter: grayscale(1); opacity: 0.4; }
+  #reactor-wrap {
+    position: relative; flex: none;
+    height: 190px; display: flex; align-items: center;
+    justify-content: center;
+    border-bottom: 1px solid rgba(95, 200, 245, 0.12);
+  }
+  #reactor { width: 190px; height: 190px; }
+  #reactor-label {
+    position: absolute; bottom: 10px;
+    font-size: 10px; letter-spacing: 3px; color: var(--dim);
+  }
+  /* On a short screen the reactor gives way to the conversation --
+     it is decoration, and the words are the point. */
+  @media (max-height: 620px) {
+    #reactor-wrap { height: 128px; }
+    #reactor { width: 128px; height: 128px; }
+  }
   #log {
     flex: 1; overflow-y: auto; padding: 16px;
     display: flex; flex-direction: column; gap: 12px;
@@ -693,6 +710,11 @@ PAGE = """<!DOCTYPE html>
     <span id="state">connecting</span>
     <button id="mute" title="voice">&#128266;</button>
   </header>
+
+  <div id="reactor-wrap">
+    <canvas id="reactor"></canvas>
+    <div id="reactor-label">STANDBY</div>
+  </div>
 
   <div id="log">
     <div class="hint" id="hint">
@@ -763,6 +785,199 @@ function unlockAudio() {
   player.pause();
 }
 
+// ---- reactor ----------------------------------------------------
+// A canvas reimplementation of hud.py's arc reactor. Same geometry and
+// the same palette, because the phone showing something different from
+// the desk would be a second design to keep in step rather than one
+// assistant seen from two places.
+//
+// The energy driving it is real throughout: the microphone's own level
+// while recording, the reply's actual waveform while speaking, and a
+// slow breath the rest of the time. Nothing here is a timer pretending
+// to be activity.
+
+const R_OUTER = 108, R_TICKS = 96;
+const R_RING1 = 84, R_RING2 = 68, R_RING3 = 52, R_CORE = 30;
+
+const PALETTE = {
+  idle:      [95, 165, 205],
+  listening: [80, 215, 255],
+  thinking:  [255, 180, 65],
+  speaking:  [95, 255, 195]
+};
+
+const canvas = document.getElementById("reactor");
+const ctx2d = canvas.getContext("2d");
+
+let hudState = "idle";
+let energy = 0;        // 0..1, what the rings actually react to
+let target = 0;        // where energy is heading
+let sweep = 0;         // rotating arc position
+let phase = 0;         // slow idle breath
+
+// Reading the real output while it plays, so the rings move with the
+// voice rather than to a guess about how long it might last.
+let analyser = null;
+let analyserData = null;
+
+function setHudState(next) {
+  hudState = PALETTE[next] ? next : "idle";
+}
+
+function setEnergy(value) {
+  target = Math.max(0, Math.min(1, value));
+}
+
+function rgba(colour, alpha) {
+  return "rgba(" + colour[0] + "," + colour[1] + "," + colour[2] + "," + alpha + ")";
+}
+
+function sizeCanvas() {
+  // Drawn at the HUD's own coordinates and scaled to fit, so the
+  // proportions survive whatever width the phone happens to be.
+  const ratio = window.devicePixelRatio || 1;
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+
+  const scale = Math.min(width, height) / (R_OUTER * 2 + 16);
+
+  ctx2d.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx2d.translate(width / 2, height / 2);
+  ctx2d.scale(scale, scale);
+}
+
+function arc(radius, startDeg, spanDeg, colour, alpha, width) {
+  ctx2d.beginPath();
+  ctx2d.strokeStyle = rgba(colour, alpha);
+  ctx2d.lineWidth = width;
+  ctx2d.arc(
+    0, 0, radius,
+    (startDeg * Math.PI) / 180,
+    ((startDeg + spanDeg) * Math.PI) / 180
+  );
+  ctx2d.stroke();
+}
+
+function drawTicks(colour) {
+  // 72 ticks, every sixth one major -- the same as the desk.
+  for (let index = 0; index < 72; index++) {
+    const major = index % 6 === 0;
+    const angle = (index * 5 * Math.PI) / 180;
+    const length = major ? 10 : 5;
+
+    ctx2d.beginPath();
+    ctx2d.strokeStyle = rgba(colour, major ? 0.69 : 0.33);
+    ctx2d.lineWidth = major ? 1.6 : 1.0;
+    ctx2d.moveTo(Math.cos(angle) * R_TICKS, Math.sin(angle) * R_TICKS);
+    ctx2d.lineTo(
+      Math.cos(angle) * (R_TICKS + length),
+      Math.sin(angle) * (R_TICKS + length)
+    );
+    ctx2d.stroke();
+  }
+}
+
+function drawFrame() {
+  const colour = PALETTE[hudState];
+
+  // Ease toward the target rather than jumping, so the rings settle
+  // instead of flickering on every reading.
+  energy += (target - energy) * (target > energy ? 0.35 : 0.08);
+  sweep = (sweep + 1.1) % 360;
+  phase += 0.02;
+
+  // Idle has no input of its own, so it breathes slowly rather than
+  // sitting perfectly still, which reads as switched off.
+  const breath = hudState === "idle"
+    ? 0.10 + 0.05 * Math.sin(phase)
+    : 0;
+  const level = Math.max(energy, breath);
+
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+
+  ctx2d.save();
+  ctx2d.setTransform(1, 0, 0, 1, 0, 0);
+  ctx2d.clearRect(0, 0, canvas.width, canvas.height);
+  ctx2d.restore();
+
+  drawTicks(colour);
+
+  // Outer boundary.
+  arc(R_OUTER, 0, 360, colour, 0.22, 1.2);
+
+  // Two counter-rotating broken rings, which is what makes it read as
+  // running rather than drawn.
+  arc(R_RING1, sweep, 110, colour, 0.55 + level * 0.35, 2.0);
+  arc(R_RING1, sweep + 180, 60, colour, 0.30 + level * 0.30, 2.0);
+  arc(R_RING2, -sweep * 0.7, 80, colour, 0.45 + level * 0.35, 1.8);
+  arc(R_RING2, -sweep * 0.7 + 140, 40, colour, 0.25, 1.8);
+  arc(R_RING3, sweep * 1.3, 150, colour, 0.35 + level * 0.4, 1.5);
+
+  // The core: a filled glow that swells with whatever is happening.
+  const coreRadius = R_CORE * (0.72 + level * 0.42);
+  const glow = ctx2d.createRadialGradient(0, 0, 0, 0, 0, coreRadius * 2.2);
+
+  glow.addColorStop(0, rgba(colour, 0.55 + level * 0.4));
+  glow.addColorStop(0.5, rgba(colour, 0.16));
+  glow.addColorStop(1, rgba(colour, 0));
+
+  ctx2d.beginPath();
+  ctx2d.fillStyle = glow;
+  ctx2d.arc(0, 0, coreRadius * 2.2, 0, Math.PI * 2);
+  ctx2d.fill();
+
+  ctx2d.beginPath();
+  ctx2d.fillStyle = rgba([235, 250, 255], 0.55 + level * 0.45);
+  ctx2d.arc(0, 0, coreRadius * 0.42, 0, Math.PI * 2);
+  ctx2d.fill();
+
+  arc(coreRadius, 0, 360, colour, 0.8, 1.6);
+
+  // While the reply plays, take the level from the audio itself.
+  if (analyser && hudState === "speaking") {
+    analyser.getByteFrequencyData(analyserData);
+
+    let total = 0;
+    for (let i = 0; i < analyserData.length; i++) total += analyserData[i];
+
+    setEnergy(Math.min(1, (total / analyserData.length) / 90));
+  }
+
+  requestAnimationFrame(drawFrame);
+}
+
+// Wiring the player through an analyser so "speaking" is driven by the
+// actual audio. Built lazily on first use: an AudioContext created
+// before a user gesture starts suspended on mobile and never recovers.
+function attachAnalyser() {
+  if (analyser || !window.AudioContext) return;
+
+  try {
+    const context = new AudioContext();
+    const source = context.createMediaElementSource(player);
+
+    analyser = context.createAnalyser();
+    analyser.fftSize = 128;
+    analyserData = new Uint8Array(analyser.frequencyBinCount);
+
+    source.connect(analyser);
+    analyser.connect(context.destination);
+  } catch (e) {
+    // Without it the reply still plays; the rings just use a steady
+    // level instead of the real waveform.
+    analyser = null;
+  }
+}
+
+window.addEventListener("resize", sizeCanvas);
+sizeCanvas();
+requestAnimationFrame(drawFrame);
+
+
 async function speak(text) {
   if (!voiceOn || !text) return;
   try {
@@ -775,6 +990,12 @@ async function speak(text) {
     const blob = await res.blob();
     if (player.src) URL.revokeObjectURL(player.src);
     player.src = URL.createObjectURL(blob);
+
+    attachAnalyser();
+    setState("busy", "speaking");
+
+    player.onended = () => setState("live", "ready");
+
     await player.play();
   } catch (e) {
     // No voice is a small loss when the text is already on screen.
@@ -784,6 +1005,22 @@ async function speak(text) {
 function setState(kind, label) {
   dot.className = "dot" + (kind ? " " + kind : "");
   state.textContent = label;
+
+  // The reactor follows the same state the header shows, so there is
+  // one source of truth rather than two things to keep in step.
+  const mapped = label === "listening" ? "listening"
+               : label === "thinking" ? "thinking"
+               : label === "speaking" ? "speaking"
+               : "idle";
+
+  setHudState(mapped);
+  document.getElementById("reactor-label").textContent =
+    mapped === "listening" ? "LISTENING"
+    : mapped === "thinking" ? "PROCESSING"
+    : mapped === "speaking" ? "SPEAKING"
+    : "STANDBY";
+
+  if (mapped === "idle" || mapped === "thinking") setEnergy(0);
 }
 
 function add(text, cls) {
@@ -1074,6 +1311,13 @@ async function startRecording() {
       const input = event.inputBuffer.getChannelData(0);
 
       recordedChunks.push(new Float32Array(input));
+
+      // Drive the rings from what the microphone is actually hearing,
+      // so the reactor responds to your voice rather than merely
+      // showing that recording is switched on.
+      let sum = 0;
+      for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+      setEnergy(Math.sqrt(sum / input.length) * 6);
     };
 
     inputNode.connect(processor);
