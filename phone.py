@@ -21,6 +21,7 @@ import os
 import secrets
 import socket
 import threading
+import time
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
@@ -56,6 +57,11 @@ CA_FILE = os.path.join(
 # How long a single command may take before the phone gives up waiting.
 # Generous, since a command can involve a model call.
 REQUEST_TIMEOUT = 60
+
+# How many unprompted announcements to hold for a phone that isn't
+# collecting them. Enough for a long absence, bounded so a machine left
+# running for days doesn't grow without limit.
+MAX_NOTICES = 40
 
 
 def local_address():
@@ -266,8 +272,48 @@ class PhoneServer:
         self._server = None
         self._thread = None
 
+        # Things JARVIS said unprompted that the phone hasn't collected
+        # yet. Battery warnings, market alerts, pattern runs and the
+        # morning diary are all announced to whoever is at the desk --
+        # which is nobody, if you're in another room. Held here so the
+        # phone can pick them up rather than them being said to an
+        # empty chair.
+        self._notices = []
+        self._notices_lock = threading.Lock()
+
         self._app = Flask(__name__)
         self._register_routes()
+
+    def announce(self, text):
+        """Hold something JARVIS said unprompted, for the phone to collect.
+
+        Deliberately a queue rather than a push: the phone may not be
+        connected, may be asleep, or may not exist. Anything said while
+        nobody was looking is still worth reading afterwards.
+        """
+        text = (text or "").strip()
+
+        if not text:
+            return
+
+        with self._notices_lock:
+            self._notices.append({
+                "text": text,
+                "at": time.strftime("%H:%M"),
+            })
+
+            # Bounded, because a JARVIS left running for days with no
+            # phone connected should not accumulate for ever.
+            if len(self._notices) > MAX_NOTICES:
+                del self._notices[:-MAX_NOTICES]
+
+    def take_notices(self):
+        """Everything held since the last collection, clearing it."""
+        with self._notices_lock:
+            pending = list(self._notices)
+            self._notices.clear()
+
+        return pending
 
     def set_handler(self, handler):
         """Register what actually runs a command.
@@ -307,6 +353,20 @@ class PhoneServer:
             # isn't running" from "you typed the wrong token", and a
             # liveness check leaks nothing worth protecting.
             return jsonify({"ok": True})
+
+        @app.get("/notices")
+        def notices():
+            """Anything JARVIS announced while nobody was at the desk.
+
+            Collected on the poll the page already makes, rather than a
+            second timer -- the phone is checking whether the PC is
+            alive every few seconds regardless, so this costs nothing
+            extra.
+            """
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            return jsonify({"notices": self.take_notices()})
 
         @app.post("/phone-active")
         def phone_active():
@@ -552,6 +612,10 @@ PAGE = """<!DOCTYPE html>
         border: 1px solid rgba(95, 165, 205, 0.3); }
   .jarvis { align-self: flex-start; background: var(--panel);
             border: 1px solid rgba(95, 255, 195, 0.22); }
+  .notice { align-self: stretch; background: rgba(255, 180, 65, 0.10);
+            border: 1px solid rgba(255, 180, 65, 0.30);
+            color: #ffe0ad; font-size: 14px; }
+  .notice .when { color: var(--dim); font-size: 12px; margin-right: 8px; }
   .oops { align-self: flex-start; background: rgba(255, 110, 110, 0.12);
           border: 1px solid rgba(255, 110, 110, 0.35); color: #ffc9c9; }
   .hint { color: var(--dim); font-size: 13px; text-align: center;
@@ -718,6 +782,42 @@ async function ping() {
     setState("live", "ready");
   }
   send.disabled = !alive;
+
+  if (alive) collectNotices();
+}
+
+// Anything JARVIS announced on his own while you were elsewhere. Shown
+// as it arrives, and spoken if voice is on -- a market alert you only
+// read hours later is barely an alert at all.
+async function collectNotices() {
+  try {
+    const res = await fetch("/notices?t=" + encodeURIComponent(TOKEN));
+    if (!res.ok) return;
+
+    const data = await res.json();
+    const notices = data.notices || [];
+
+    for (const notice of notices) {
+      if (hint) hint.remove();
+      const el = document.createElement("div");
+      el.className = "turn notice";
+      const when = document.createElement("span");
+      when.className = "when";
+      when.textContent = notice.at;
+      el.appendChild(when);
+      el.appendChild(document.createTextNode(notice.text));
+      log.appendChild(el);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    // Only the most recent is spoken. Returning to a dozen queued
+    // announcements should not mean sitting through all of them.
+    if (notices.length) {
+      speak(notices[notices.length - 1].text);
+    }
+  } catch (e) {
+    // Missing a notice is not worth surfacing as an error.
+  }
 }
 
 async function submit() {
@@ -988,6 +1088,11 @@ async function stopRecording() {
   stopRecordingUI();
 
   if (!combined.length) {
+    // Nothing was captured -- a stray tap rather than a command. The
+    // channel was still claimed on pointerdown, so it has to be given
+    // back here too, or the PC microphone stays deaf with nothing
+    // coming to release it.
+    await setPhoneActive(false);
     setState("live", "ready");
     return;
   }

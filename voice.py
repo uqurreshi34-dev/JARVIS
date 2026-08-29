@@ -105,6 +105,14 @@ print(f"[JARVIS] speech engine: {engine.name}")
 
 _armed_until = 0.0
 _phone_active = threading.Event()
+
+# How long a phone voice claim survives without being released. Long
+# enough for a slow command plus the spoken reply; short enough that a
+# phone that vanished mid-recording doesn't leave the desk deaf for any
+# noticeable length of time.
+PHONE_ACTIVE_TIMEOUT = 90.0
+
+_phone_active_until = 0.0
 _wake_listener = None
 _status_listener = None
 _level_listener = None
@@ -311,14 +319,45 @@ def is_armed():
 
 
 def set_phone_active(active):
-    """Suppress the PC microphone while the phone is using JARVIS voice."""
+    """Suppress the PC microphone while the phone is using JARVIS voice.
+
+    The claim expires on its own after PHONE_ACTIVE_TIMEOUT. The phone
+    is expected to release it, and normally does -- but a locked phone,
+    a closed tab or a dropped connection means that release never
+    arrives, and without an expiry the desk microphone would stay deaf
+    with nothing left to wake it but a restart. A microphone that has
+    silently stopped listening is the one failure here nobody can
+    diagnose by listening.
+    """
+    global _phone_active_until
+
     if active:
+        _phone_active_until = time.monotonic() + PHONE_ACTIVE_TIMEOUT
         _phone_active.set()
         _disarm()
         _drain_queue()
     else:
+        _phone_active_until = 0.0
         _phone_active.clear()
         _drain_queue()
+
+
+def _phone_owns_voice():
+    """True while the phone still holds the voice channel.
+
+    Checked rather than trusting the flag alone, so a claim that was
+    never released lapses instead of lasting for ever.
+    """
+    if not _phone_active.is_set():
+        return False
+
+    if time.monotonic() < _phone_active_until:
+        return True
+
+    print("[JARVIS] phone voice claim expired; desk microphone restored")
+    set_phone_active(False)
+
+    return False
 
 
 def arm_follow_up(seconds=FOLLOW_UP_SECONDS):
@@ -362,7 +401,7 @@ def listen():
         while True:
             # A reminder can speak at any moment, from its own thread. Throw
             # away everything the microphone hears while that happens.
-            if is_speaking() or _phone_active.is_set():
+            if is_speaking() or _phone_owns_voice():
                 _drain_queue()
                 time.sleep(0.05)
                 continue

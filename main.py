@@ -170,6 +170,13 @@ class Assistant:
         """
         previous = self._current_state
 
+        # Held for the phone as well as said aloud. Every unprompted
+        # announcement passes through here -- battery, disk, market
+        # alerts, pattern runs, the morning diary -- so this one line
+        # covers all of them. Still spoken to the room regardless,
+        # since being at the desk is still the normal case.
+        phone_server.announce(text)
+
         self._reply(text)
         self._state(SPEAKING)
         speak(text)
