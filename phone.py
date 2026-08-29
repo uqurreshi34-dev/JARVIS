@@ -49,6 +49,21 @@ PORT_ENV = "JARVIS_PHONE_PORT"
 
 CERT_FILE = os.path.join(os.path.dirname(__file__), "jarvis-phone-cert.pem")
 KEY_FILE = os.path.join(os.path.dirname(__file__), "jarvis-phone-key.pem")
+
+# Point these at a certificate issued by something a phone already
+# trusts and the browser stops complaining -- no CA to install, and no
+# warning to click through. Tailscale issues exactly that for a
+# machine on your tailnet ("tailscale cert <name>.<tailnet>.ts.net"),
+# which also makes JARVIS reachable from outside the house without
+# opening a single port. Left unset, the self-signed pair below is
+# generated and used as before, so nothing changes for local-only use.
+CERT_ENV = "JARVIS_CERT"
+KEY_ENV = "JARVIS_KEY"
+
+# The name the phone should use. With Tailscale this is the MagicDNS
+# name the certificate is actually issued for; a bare IP would fail
+# validation however good the certificate is.
+HOST_ENV = "JARVIS_PHONE_HOST"
 CA_FILE = os.path.join(
     os.path.dirname(__file__),
     "jarvis-phone-ca.cer"
@@ -353,9 +368,26 @@ class PhoneServer:
         """
         self._handler = handler
 
+    @staticmethod
+    def _hostname():
+        """The name to reach JARVIS by.
+
+        A certificate is issued for a name, so with a real one the URL
+        has to use that name -- a bare IP fails validation however
+        valid the certificate is. Falls back to the local address,
+        which is right for the self-signed case where the name never
+        mattered.
+        """
+        configured = os.getenv(HOST_ENV)
+
+        if configured:
+            return configured.strip()
+
+        return local_address()
+
     @property
     def url(self):
-        return f"https://{local_address()}:{self.port}/?t={self.token}"
+        return f"https://{self._hostname()}:{self.port}/?t={self.token}"
 
     def _authorised(self):
         supplied = (
@@ -569,11 +601,35 @@ class PhoneServer:
                 "Cache-Control": "no-store",
             }
 
+    @staticmethod
+    def _certificate_pair():
+        """(cert, key) to serve with, and whether they were supplied.
+
+        A supplied pair is used as-is and never regenerated -- these
+        are issued by a real authority and JARVIS has no business
+        touching them.
+        """
+        cert = os.getenv(CERT_ENV)
+        key = os.getenv(KEY_ENV)
+
+        if cert and key:
+            if os.path.exists(cert) and os.path.exists(key):
+                return cert, key, True
+
+            print(
+                f"[JARVIS] {CERT_ENV}/{KEY_ENV} are set but the files "
+                "are missing; falling back to the local certificate."
+            )
+
+        return CERT_FILE, KEY_FILE, False
+
     def start(self):
         if self._thread and self._thread.is_alive():
             return
 
-        if not ensure_certificate():
+        cert, key, supplied = self._certificate_pair()
+
+        if not supplied and not ensure_certificate():
             print(
                 "[JARVIS] phone server not started because HTTPS "
                 "certificate setup failed."
@@ -588,7 +644,7 @@ class PhoneServer:
                 self.port,
                 self._app,
                 threaded=True,
-                ssl_context=(CERT_FILE, KEY_FILE),
+                ssl_context=(cert, key),
             )
         except OSError as error:
             print(
