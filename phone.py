@@ -29,7 +29,7 @@ from flask import Flask, jsonify, request
 from werkzeug.serving import make_server
 
 import transcriber
-from voice import set_phone_active
+from voice import FILLERS, set_phone_active
 
 import speech
 
@@ -62,6 +62,13 @@ REQUEST_TIMEOUT = 60
 # collecting them. Enough for a long absence, bounded so a machine left
 # running for days doesn't grow without limit.
 MAX_NOTICES = 40
+
+# Below this, a recording is too short to be a command. 16 kHz mono
+# 16-bit is 32000 bytes a second, so this is about a third of a second
+# of audio plus the WAV header -- shorter than anyone can say anything,
+# but long enough that a real short command like "stop" still gets
+# through.
+MIN_VOICE_BYTES = 44 + 32000 // 3
 
 
 def local_address():
@@ -444,6 +451,15 @@ class PhoneServer:
             if not audio:
                 return jsonify({"error": "No audio received."}), 400
 
+            # A recording too short to contain a command. A stray tap
+            # still captures a fraction of a second of room noise,
+            # which transcribes into something -- so length is checked
+            # before anything is transcribed at all.
+            if len(audio) < MIN_VOICE_BYTES:
+                return jsonify({
+                    "error": "That was too short to be a command, sir."
+                }), 400
+
             set_phone_active(True)
 
             try:
@@ -452,6 +468,23 @@ class PhoneServer:
                 if not text:
                     return jsonify({
                         "error": "I couldn't make out what you said."
+                    }), 400
+
+                # The same filter the desk microphone applies. A very
+                # short recording reliably transcribes into one short
+                # word -- "the", "you", "a" -- and since no fast-path
+                # phrase matches it, it would otherwise fall through to
+                # the language model: a long wait and a real cost for a
+                # command nobody gave. FILLERS is imported rather than
+                # redefined so the phone and the desk cannot drift
+                # apart on what counts as noise.
+                words = text.split()
+
+                if len(words) == 1 and words[0].casefold() in FILLERS:
+                    print(f'[filtered] "{text}" (single filler word, phone)')
+
+                    return jsonify({
+                        "error": "I only caught a stray word, sir."
                     }), 400
 
                 reply = self._handler(text)
@@ -1087,9 +1120,13 @@ async function stopRecording() {
 
   stopRecordingUI();
 
-  if (!combined.length) {
-    // Nothing was captured -- a stray tap rather than a command. The
-    // channel was still claimed on pointerdown, so it has to be given
+  // A tap rather than a hold. Caught here as well as on the server so
+  // a stray touch costs nothing at all -- no upload, no transcription,
+  // and no wait while the PC works out that a fraction of a second of
+  // room noise wasn't a command. MIN_RECORD_SAMPLES is a third of a
+  // second at whatever rate the microphone actually runs at.
+  if (combined.length < sourceRate / 3) {
+    // The channel was claimed on pointerdown, so it has to be given
     // back here too, or the PC microphone stays deaf with nothing
     // coming to release it.
     await setPhoneActive(false);
