@@ -4,3 +4,7 @@ __pycache__/
 .env
 model/
 *.mp3
+# Local JARVIS phone HTTPS certificate
+jarvis-phone-cert.pem
+jarvis-phone-key.pem
+jarvis-phone-ca.cer

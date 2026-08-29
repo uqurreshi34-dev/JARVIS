@@ -557,11 +557,16 @@ def transcribe_pcm16(pcm_bytes):
         return ""
 
     with _remote_lock:
-        if isinstance(engine, VoskEngine):
+        # The live engine is created by voice.py after transcriber.py
+        # finishes importing. Import it here at call time to avoid the
+        # transcriber <-> voice circular import during startup.
+        from voice import engine as active_engine
+
+        if isinstance(active_engine, VoskEngine):
             from vosk import KaldiRecognizer
 
             recognizer = KaldiRecognizer(
-                engine._model,
+                active_engine._model,
                 SAMPLE_RATE,
             )
             recognizer.SetWords(False)
@@ -571,7 +576,7 @@ def transcribe_pcm16(pcm_bytes):
 
             return (payload.get("text") or "").strip().casefold()
 
-        text = engine._transcribe(samples)
+        text = active_engine._transcribe(samples)
 
     return (text or "").strip().casefold()
 

@@ -46,6 +46,13 @@ DEFAULT_PORT = 8765
 TOKEN_ENV = "JARVIS_PHONE_TOKEN"
 PORT_ENV = "JARVIS_PHONE_PORT"
 
+CERT_FILE = os.path.join(os.path.dirname(__file__), "jarvis-phone-cert.pem")
+KEY_FILE = os.path.join(os.path.dirname(__file__), "jarvis-phone-key.pem")
+CA_FILE = os.path.join(
+    os.path.dirname(__file__),
+    "jarvis-phone-ca.cer"
+)
+
 # How long a single command may take before the phone gives up waiting.
 # Generous, since a command can involve a model call.
 REQUEST_TIMEOUT = 60
@@ -69,6 +76,177 @@ def local_address():
         return "127.0.0.1"
     finally:
         probe.close()
+
+
+def ensure_certificate():
+    """Create a local CA and a server certificate for JARVIS HTTPS."""
+
+    if (
+        os.path.exists(CERT_FILE)
+        and os.path.exists(KEY_FILE)
+        and os.path.exists(CA_FILE)
+    ):
+        return True
+
+    print("[JARVIS] generating local HTTPS certificates...")
+
+    try:
+        import ipaddress
+        from datetime import datetime, timedelta
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        hostname = local_address()
+        now = datetime.utcnow()
+
+        # -------------------------------------------------------------
+        # 1. Create the local JARVIS Certificate Authority.
+        # -------------------------------------------------------------
+
+        ca_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+        )
+
+        ca_subject = x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, "JARVIS Local CA"),
+        ])
+
+        ca_certificate = (
+            x509.CertificateBuilder()
+            .subject_name(ca_subject)
+            .issuer_name(ca_subject)
+            .public_key(ca_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(minutes=1))
+            .not_valid_after(now + timedelta(days=3650))
+            .add_extension(
+                x509.BasicConstraints(
+                    ca=True,
+                    path_length=None,
+                ),
+                critical=True,
+            )
+            .sign(ca_key, hashes.SHA256())
+        )
+
+        # -------------------------------------------------------------
+        # 2. Create the JARVIS server certificate.
+        # -------------------------------------------------------------
+
+        server_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+        )
+
+        server_subject = x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, "JARVIS"),
+        ])
+
+        server_certificate = (
+            x509.CertificateBuilder()
+            .subject_name(server_subject)
+            .issuer_name(ca_certificate.subject)
+            .public_key(server_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(minutes=1))
+            .not_valid_after(now + timedelta(days=3650))
+            .add_extension(
+                x509.SubjectAlternativeName([
+                    x509.DNSName("localhost"),
+                    x509.IPAddress(
+                        ipaddress.ip_address(hostname)
+                    ),
+                ]),
+                critical=False,
+            )
+            .add_extension(
+                x509.BasicConstraints(
+                    ca=False,
+                    path_length=None,
+                ),
+                critical=True,
+            )
+            .add_extension(
+                x509.KeyUsage(
+                    digital_signature=True,
+                    key_encipherment=True,
+                    key_cert_sign=False,
+                    key_agreement=False,
+                    content_commitment=False,
+                    data_encipherment=False,
+                    crl_sign=False,
+                    encipher_only=False,
+                    decipher_only=False,
+                ),
+                critical=True,
+            )
+            .add_extension(
+                x509.ExtendedKeyUsage([
+                    x509.oid.ExtendedKeyUsageOID.SERVER_AUTH,
+                ]),
+                critical=False,
+            )
+            .sign(ca_key, hashes.SHA256())
+        )
+
+        # -------------------------------------------------------------
+        # 3. Write the server private key.
+        # -------------------------------------------------------------
+
+        with open(KEY_FILE, "wb") as file:
+            file.write(
+                server_key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.TraditionalOpenSSL,
+                    encryption_algorithm=serialization.NoEncryption(),
+                )
+            )
+
+        # -------------------------------------------------------------
+        # 4. Write the server certificate.
+        # -------------------------------------------------------------
+
+        with open(CERT_FILE, "wb") as file:
+            file.write(
+                server_certificate.public_bytes(
+                    serialization.Encoding.PEM
+                )
+            )
+
+            # Include the CA certificate after the server certificate.
+            # This allows the browser to receive the complete chain.
+            file.write(
+                ca_certificate.public_bytes(
+                    serialization.Encoding.PEM
+                )
+            )
+
+        # -------------------------------------------------------------
+        # 5. Write the CA certificate in DER format.
+        #
+        # Android/Samsung gets this file, NOT the private key.
+        # -------------------------------------------------------------
+
+        with open(CA_FILE, "wb") as file:
+            file.write(
+                ca_certificate.public_bytes(
+                    serialization.Encoding.DER
+                )
+            )
+
+        print("[JARVIS] HTTPS certificates created.")
+        return True
+
+    except Exception as error:
+        print(
+            f"[JARVIS] could not generate HTTPS certificates: "
+            f"{error}"
+        )
+        return False
 
 
 class PhoneServer:
@@ -103,7 +281,7 @@ class PhoneServer:
 
     @property
     def url(self):
-        return f"http://{local_address()}:{self.port}/?t={self.token}"
+        return f"https://{local_address()}:{self.port}/?t={self.token}"
 
     def _authorised(self):
         supplied = (
@@ -262,11 +440,22 @@ class PhoneServer:
         if self._thread and self._thread.is_alive():
             return
 
+        if not ensure_certificate():
+            print(
+                "[JARVIS] phone server not started because HTTPS "
+                "certificate setup failed."
+            )
+            return
+
         try:
-            # 0.0.0.0 so the phone can reach it; the token is what
-            # actually guards this, not the bind address.
+            # 0.0.0.0 so the phone can reach it over the local network.
+            # HTTPS is required by mobile browsers for microphone access.
             self._server = make_server(
-                "0.0.0.0", self.port, self._app, threaded=True
+                "0.0.0.0",
+                self.port,
+                self._app,
+                threaded=True,
+                ssl_context=(CERT_FILE, KEY_FILE),
             )
         except OSError as error:
             print(
@@ -276,7 +465,8 @@ class PhoneServer:
             return
 
         self._thread = threading.Thread(
-            target=self._server.serve_forever, daemon=True
+            target=self._server.serve_forever,
+            daemon=True,
         )
         self._thread.start()
 
