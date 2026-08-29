@@ -985,6 +985,11 @@ requestAnimationFrame(drawFrame);
 
 async function speak(text) {
   if (!voiceOn || !text) return;
+
+  // Only reset the state at the end if we actually set it, so a
+  // failed fetch cannot stamp "ready" over a state it never touched.
+  let speaking = false;
+
   try {
     const res = await fetch("/audio?t=" + encodeURIComponent(TOKEN), {
       method: "POST",
@@ -997,6 +1002,7 @@ async function speak(text) {
     player.src = URL.createObjectURL(blob);
 
     attachAnalyser();
+    speaking = true;
     setState("busy", "speaking");
 
     // Resolves when playback FINISHES, not when it starts.
@@ -1027,8 +1033,17 @@ async function speak(text) {
 
       player.play().catch(done);
     });
+
   } catch (e) {
     // No voice is a small loss when the text is already on screen.
+  } finally {
+    // speak() sets the speaking state, so speak() clears it -- in a
+    // finally, so no early return or failure can skip it. Leaving this
+    // to each caller meant one that forgot (collectNotices) left the
+    // reactor stuck on "speaking" indefinitely, and since the health
+    // poll deliberately does not overwrite a busy state, nothing was
+    // left to rescue it.
+    if (speaking) setState("live", "ready");
   }
 }
 
