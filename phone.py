@@ -742,6 +742,11 @@ const hint = document.getElementById("hint");
 
 let alive = false;
 let voiceOn = true;
+
+// States the health poll must not overwrite, because something is
+// genuinely happening. Kept as one list so a new state cannot be added
+// later and silently get stamped over a few seconds in.
+const BUSY_STATES = new Set(["thinking", "speaking", "listening"]);
 let recording = false;
 let audioContext = null;
 let inputNode = null;
@@ -994,9 +999,34 @@ async function speak(text) {
     attachAnalyser();
     setState("busy", "speaking");
 
-    player.onended = () => setState("live", "ready");
+    // Resolves when playback FINISHES, not when it starts.
+    // player.play() resolves as soon as audio begins, so awaiting it
+    // returned before a single word had been heard -- which let the
+    // caller reset the state to "ready" over the top of "speaking",
+    // and on the voice path released the PC microphone while JARVIS
+    // was still talking.
+    await new Promise((resolve) => {
+      let finished = false;
 
-    await player.play();
+      const done = () => {
+        if (finished) return;
+        finished = true;
+        resolve();
+      };
+
+      player.onended = done;
+      player.onerror = done;
+
+      // A reply that somehow never fires 'ended' must not leave the
+      // page stuck on "speaking" for ever.
+      const guard = setTimeout(done, 120000);
+      const clearGuard = () => clearTimeout(guard);
+
+      player.addEventListener("ended", clearGuard, { once: true });
+      player.addEventListener("error", clearGuard, { once: true });
+
+      player.play().catch(done);
+    });
   } catch (e) {
     // No voice is a small loss when the text is already on screen.
   }
@@ -1048,7 +1078,11 @@ async function ping() {
   }
   if (!alive) {
     setState("", "JARVIS is not running");
-  } else if (state.textContent !== "thinking") {
+  } else if (!BUSY_STATES.has(state.textContent)) {
+    // Only reset when nothing is actually in progress. This poll runs
+    // every few seconds, so anything it doesn't know about gets wiped
+    // mid-flight -- which is exactly what happened to "speaking" when
+    // a reply outlasted one interval.
     setState("live", "ready");
   }
   send.disabled = !alive;
@@ -1123,7 +1157,9 @@ async function submit() {
       add(data.error || "That didn't work, sir.", "oops");
     } else if (data.reply) {
       add(data.reply, "jarvis");
-      speak(data.reply);
+      // Awaited, so "ready" is not set over the top of "speaking"
+      // before the reply has actually been heard.
+      await speak(data.reply);
     } else {
       add("Done, sir.", "jarvis");
     }
@@ -1415,7 +1451,9 @@ async function stopRecording() {
 
       setState("live", "ready");
       send.disabled = !alive;
-      box.focus();
+      // Deliberately no box.focus() here: this is the voice path, and
+    // focusing the text input is what makes the on-screen keyboard
+    // appear every time the microphone is used.
       return;
     }
 
@@ -1451,7 +1489,9 @@ async function stopRecording() {
   }
 
   send.disabled = !alive;
-  box.focus();
+  // Deliberately no box.focus() here: this is the voice path, and
+  // focusing the text input is what makes the on-screen keyboard
+  // appear every time the microphone is used.
 }
 
 mic.addEventListener("pointerdown", (event) => {
