@@ -36,7 +36,7 @@ This prevents speech intended for the phone from being heard or acted on by
 the desktop listener. When the phone interaction finishes, the desktop
 microphone is restored.
 
-**100 intents. 468 spoken phrases resolve locally with no API call.**
+**100 intents. 473 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -93,6 +93,37 @@ and drains any queued desktop audio. This prevents speech intended for the
 phone from leaking into the desktop listener. The desktop microphone is
 restored after the phone has finished the interaction and the phone has
 finished playing the reply.
+
+That claim is held open by the phone: it takes the voice channel before
+opening its microphone and gives it back when the reply has finished
+playing. A phone that locks, loses its connection or has its tab closed
+mid-recording never gives it back, so the claim also expires on its own
+after `PHONE_ACTIVE_TIMEOUT`. Without that, the desk microphone would stay
+deaf until JARVIS was restarted -- and a microphone that has silently
+stopped listening is the one failure here nobody can diagnose by listening.
+
+A very short recording is rejected twice over: the phone will not send
+one under a third of a second, and the server rejects both audio too
+short to contain speech and a transcription that is a single filler
+word. A stray tap otherwise transcribes into "the" or "you", matches no
+phrase, and falls through to the language model -- a slow, billable
+round trip for a command nobody gave. `FILLERS` is imported from
+`voice.py` rather than redefined, so the phone and the desk cannot
+drift apart on what counts as noise.
+
+Anything JARVIS says unprompted -- battery warnings, market alerts,
+pattern runs, the startup diary briefing -- is held for the phone as
+well as spoken at the desk, and collected on the poll the page already
+makes. The queue means the phone need not be connected when something
+is announced: open it later and the briefing is still waiting, with the
+time it was actually said. It is capped, held in memory only, and
+cleared when collected.
+
+The page draws the same arc reactor as the desktop HUD, in a canvas,
+using the same palette and geometry read from `hud.py`. Its energy is
+real throughout: the microphone's own level while recording, the
+reply's waveform while speaking, and a slow breath when idle. Nothing
+there is a timer pretending to be activity.
 
 Phone commands are still ordinary JARVIS commands: they use the same memory,
 actions, journal and command history as commands spoken at the desk.
@@ -341,17 +372,6 @@ several checks that fall inside its due window.
 Spoken timers that announce themselves when due.
 
 ---
-
-## How a command travels
-
-```
-voice.py        hears you, checks the wake word
-transcriber.py  turns audio into text (Whisper or Vosk)
-commands.py     decides what you meant
-actions/*.py    does it
-speech.py       says the reply
-hud.py          shows the state
-```
 
 ## How a command travels
 

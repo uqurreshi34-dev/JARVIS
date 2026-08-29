@@ -1,6 +1,8 @@
 # What you can say to JARVIS
 
 Every command starts with **"Jarvis"** unless a follow-up window is open.
+That rule is for the desk. On your phone, see below — the microphone
+button is itself the invocation, so no wake word is needed there.
 
 Anything marked **free** costs nothing — no API call. That is nearly
 everything. Four things cost: a general question, asking the camera what
@@ -9,6 +11,47 @@ listed here (which falls through to the language model).
 
 Where a phrase is shown, close variations usually work too — "what's the
 time" and "what time is it" both land in the same place.
+
+---
+
+## From your phone
+
+JARVIS prints a URL when he starts. Open it on a phone on the same
+network and bookmark it. Everything below works from there too — it is
+the same JARVIS, not a smaller version of him.
+
+| Do | Does |
+|---|---|
+| type a command, press Send | exactly as if you'd said it at the desk |
+| hold 🎙, speak, release | same, spoken |
+| tap 🔊 | turns the spoken reply on or off |
+
+**No wake word on the phone.** Holding the microphone button already
+says you're talking to him, which is the only job "Jarvis" ever did.
+
+**The reply comes back to the phone, not the room.** Your desk stays
+silent — it would only be talking to an empty chair. The HUD there still
+shows what happened.
+
+**While you hold the microphone, the desk stops listening.** Speech meant
+for your phone can't set off the PC, even in the same room. It starts
+listening again once the reply has finished playing.
+
+**Anything he says on his own reaches you.** Battery warnings, market
+alerts, the morning diary — they wait on the phone until you look, with
+the time he actually said them. He doesn't need the page open at the
+time; open it later and they're still there.
+
+**A stray tap does nothing.** Too short to be a command, so it's ignored
+rather than guessed at.
+
+### Setting it up
+
+The page is served over HTTPS, because mobile browsers refuse microphone
+access otherwise. JARVIS generates the certificates himself on first
+start. Install `jarvis-phone-ca.cer` on the phone as a CA certificate so
+the browser trusts him. `jarvis-phone-key.pem` is the private key and
+stays on the PC.
 
 ---
 
@@ -362,6 +405,8 @@ Clicking the reactor core in the HUD does the same.
 | what have you done today | counts for the day |
 
 Everything that changes anything is written to `jarvis-log.txt`.
+Commands sent from your phone go through the same path, so they're
+logged there too.
 
 ## Reminders
 
@@ -391,6 +436,8 @@ Ctrl+C skips the cleanup, so prefer saying it.
 - Anything missed while he was closed, when he next starts
 - A habit he's noticed, offered once — see Patterns
 - Anything you've confirmed as a pattern, at its usual time
+
+All of these reach your phone as well, and wait there until you look.
 
 Nothing non-urgent between 10pm and 8am; it waits.
 
