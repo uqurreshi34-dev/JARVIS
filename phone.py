@@ -308,6 +308,19 @@ class PhoneServer:
             # liveness check leaks nothing worth protecting.
             return jsonify({"ok": True})
 
+        @app.post("/phone-active")
+        def phone_active():
+            """Tell the desktop whether the phone owns the voice channel."""
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            payload = request.get_json(silent=True) or {}
+            active = bool(payload.get("active"))
+
+            set_phone_active(active)
+
+            return jsonify({"ok": True, "active": active})
+
         @app.post("/command")
         def command():
             if not self._authorised():
@@ -399,9 +412,6 @@ class PhoneServer:
                 return jsonify({
                     "error": "I couldn't process that voice command."
                 }), 500
-
-            finally:
-                set_phone_active(False)
 
         @app.post("/audio")
         def audio():
@@ -619,6 +629,26 @@ let inputNode = null;
 let processor = null;
 let micStream = null;
 let recordedChunks = [];
+
+async function setPhoneActive(active) {
+  try {
+    const response = await fetch(
+      "/phone-active?t=" + encodeURIComponent(TOKEN),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ active: active })
+      }
+    );
+
+    return response.ok;
+  } catch (error) {
+    console.error("[JARVIS] phone-active failed:", error);
+    return false;
+  }
+}
 
 // One audio element reused for every reply. Mobile browsers refuse to
 // play audio that wasn't started by a user gesture, and by the time a
@@ -856,7 +886,21 @@ async function startRecording() {
     return;
   }
 
+  let phoneActive = false;
+
   try {
+    // Claim the voice channel BEFORE opening the microphone.
+    // This makes the PC microphone deaf during the entire interaction.
+    phoneActive = await setPhoneActive(true);
+
+    if (!phoneActive) {
+      add(
+        "I couldn't reserve the voice channel, sir.",
+        "oops"
+      );
+      return;
+    }
+
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
@@ -904,6 +948,10 @@ async function startRecording() {
 
   } catch (error) {
     console.error(error);
+
+    if (phoneActive) {
+      await setPhoneActive(false);
+    }
 
     add(
       "Microphone access was denied or unavailable, sir.",
@@ -991,13 +1039,21 @@ async function stopRecording() {
 
     if (data.reply) {
       add(data.reply, "jarvis");
-      speak(data.reply);
+
+      // Keep the PC microphone disabled while JARVIS's answer
+      // is actually being played on the phone.
+      await speak(data.reply);
     }
+
+    await setPhoneActive(false);
 
     setState("live", "ready");
 
   } catch (error) {
     console.error(error);
+
+    // Never leave the PC microphone locked if the phone request fails.
+    await setPhoneActive(false);
 
     add(
       "No reply from your PC, sir. Is JARVIS still running?",
