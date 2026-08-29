@@ -116,8 +116,12 @@ pattern runs, the startup diary briefing -- is held for the phone as
 well as spoken at the desk, and collected on the poll the page already
 makes. The queue means the phone need not be connected when something
 is announced: open it later and the briefing is still waiting, with the
-time it was actually said. It is capped, held in memory only, and
-cleared when collected.
+time it was actually said. It is capped and held in memory only.
+
+Reading does not consume it: each device tracks how far it has got, so
+a phone and a tablet both see everything. Clearing the queue on
+collection meant whichever polled first took them and the other never
+knew they existed.
 
 The page draws the same arc reactor as the desktop HUD, in a canvas,
 using the same palette and geometry read from `hud.py`. Its energy is

@@ -287,6 +287,7 @@ class PhoneServer:
         # empty chair.
         self._notices = []
         self._notices_lock = threading.Lock()
+        self._next_notice_id = 0
 
         self._app = Flask(__name__)
         self._register_routes()
@@ -304,7 +305,10 @@ class PhoneServer:
             return
 
         with self._notices_lock:
+            self._next_notice_id += 1
+
             self._notices.append({
+                "id": self._next_notice_id,
                 "text": text,
                 "at": time.strftime("%H:%M"),
             })
@@ -314,13 +318,21 @@ class PhoneServer:
             if len(self._notices) > MAX_NOTICES:
                 del self._notices[:-MAX_NOTICES]
 
-    def take_notices(self):
-        """Everything held since the last collection, clearing it."""
-        with self._notices_lock:
-            pending = list(self._notices)
-            self._notices.clear()
+    def notices_since(self, last_seen):
+        """Everything announced after the caller's last seen id.
 
-        return pending
+        Nothing is consumed by reading. Each device tracks how far it
+        has got, so a phone and a tablet both see everything --
+        clearing the queue on collection meant whichever polled first
+        took them and the other never knew they existed.
+        """
+        with self._notices_lock:
+            return [n for n in self._notices if n["id"] > last_seen]
+
+    def latest_notice_id(self):
+        """The newest id issued, so a caller can start from now."""
+        with self._notices_lock:
+            return self._next_notice_id
 
     def set_handler(self, handler):
         """Register what actually runs a command.
@@ -373,7 +385,15 @@ class PhoneServer:
             if not self._authorised():
                 return jsonify({"error": "unauthorised"}), 403
 
-            return jsonify({"notices": self.take_notices()})
+            try:
+                since = int(request.args.get("since", "0"))
+            except ValueError:
+                since = 0
+
+            return jsonify({
+                "notices": self.notices_since(since),
+                "latest": self.latest_notice_id(),
+            })
 
         @app.post("/phone-active")
         def phone_active():
@@ -747,6 +767,18 @@ let voiceOn = true;
 // genuinely happening. Kept as one list so a new state cannot be added
 // later and silently get stamped over a few seconds in.
 const BUSY_STATES = new Set(["thinking", "speaking", "listening"]);
+
+// How far this device has read. Starting at 0 on a device that has
+// never connected is deliberate: everything still held gets shown, so
+// opening the page for the first time after being out still tells you
+// what you missed.
+let lastNoticeId = 0;
+
+try {
+  lastNoticeId = parseInt(localStorage.getItem("jarvisLastNotice") || "0", 10) || 0;
+} catch (e) {
+  lastNoticeId = 0;
+}
 let recording = false;
 let audioContext = null;
 let inputNode = null;
@@ -1110,11 +1142,28 @@ async function ping() {
 // read hours later is barely an alert at all.
 async function collectNotices() {
   try {
-    const res = await fetch("/notices?t=" + encodeURIComponent(TOKEN));
+    const res = await fetch(
+      "/notices?t=" + encodeURIComponent(TOKEN) +
+      "&since=" + encodeURIComponent(lastNoticeId)
+    );
     if (!res.ok) return;
 
     const data = await res.json();
     const notices = data.notices || [];
+
+    // Track how far this device has got, rather than the server
+    // clearing the queue on collection -- that meant whichever device
+    // polled first took them and any other never knew. Remembered
+    // across reloads so refreshing the page doesn't replay everything.
+    if (notices.length) {
+      lastNoticeId = notices[notices.length - 1].id;
+      try {
+        localStorage.setItem("jarvisLastNotice", String(lastNoticeId));
+      } catch (e) {
+        // Private browsing refuses storage; the cursor still works for
+        // this session, a reload just replays what is still held.
+      }
+    }
 
     for (const notice of notices) {
       if (hint) hint.remove();

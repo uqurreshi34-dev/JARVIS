@@ -29,9 +29,12 @@ the same JARVIS, not a smaller version of him.
 **No wake word on the phone.** Holding the microphone button already
 says you're talking to him, which is the only job "Jarvis" ever did.
 
-**The reply comes back to the phone, not the room.** Your desk stays
-silent — it would only be talking to an empty chair. The HUD there still
-shows what happened.
+**A reply to something you asked from the phone comes back to the phone,
+not the room.** Your desk stays silent for that one — it would only be
+talking to an empty chair. The HUD there still shows what happened.
+
+This does not apply to things he says on his own. He has no idea which
+room you're in, so those go to both, a second or so apart.
 
 **While you hold the microphone, the desk stops listening.** Speech meant
 for your phone can't set off the PC, even in the same room. It starts
