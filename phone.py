@@ -22,10 +22,19 @@ import secrets
 import socket
 import threading
 
+from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 
 from werkzeug.serving import make_server
 
+import speech
+
+
+# Loaded here rather than relied upon from elsewhere: this module reads
+# its settings at import time, and it is imported before anything that
+# would otherwise have called load_dotenv() -- so without this, a token
+# set in .env is silently ignored and a random one generated instead.
+load_dotenv()
 
 # The port the phone connects to. Well above anything privileged, and
 # unlikely to collide with a dev server already running.
@@ -154,6 +163,39 @@ class PhoneServer:
 
             return jsonify({"heard": text, "reply": reply})
 
+        @app.post("/audio")
+        def audio():
+            """The spoken form of a reply, as MP3, for the phone to play.
+
+            Synthesised on demand rather than returned with the command
+            itself, so the text appears immediately and the voice
+            follows -- a reply is readable long before it is speakable.
+            Shares speak()'s cache, so a phrase JARVIS already says
+            often costs nothing here.
+            """
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            payload = request.get_json(silent=True) or {}
+            text = (payload.get("text") or "").strip()
+
+            if not text:
+                return jsonify({"error": "Nothing to say."}), 400
+
+            try:
+                data = speech.audio_bytes(text)
+            except Exception as error:
+                print(f"[JARVIS] phone audio failed: {error}")
+                data = None
+
+            if not data:
+                return jsonify({"error": "No audio."}), 503
+
+            return data, 200, {
+                "Content-Type": "audio/mpeg",
+                "Cache-Control": "no-store",
+            }
+
     def start(self):
         if self._thread and self._thread.is_alive():
             return
@@ -230,6 +272,12 @@ PAGE = """<!DOCTYPE html>
     font-weight: 600; color: var(--idle);
   }
   #state { margin-left: auto; font-size: 12px; color: var(--dim); }
+  #mute {
+    background: none; border: none; padding: 0 0 0 12px;
+    font-size: 17px; color: var(--ink); line-height: 1;
+    filter: grayscale(0);
+  }
+  #mute.off { filter: grayscale(1); opacity: 0.4; }
   #log {
     flex: 1; overflow-y: auto; padding: 16px;
     display: flex; flex-direction: column; gap: 12px;
@@ -271,6 +319,7 @@ PAGE = """<!DOCTYPE html>
     <span class="dot" id="dot"></span>
     <h1>JARVIS</h1>
     <span id="state">connecting</span>
+    <button id="mute" title="voice">&#128266;</button>
   </header>
 
   <div id="log">
@@ -296,6 +345,41 @@ const state = document.getElementById("state");
 const hint = document.getElementById("hint");
 
 let alive = false;
+let voiceOn = true;
+
+// One audio element reused for every reply. Mobile browsers refuse to
+// play audio that wasn't started by a user gesture, and by the time a
+// reply arrives the tap that sent it has long since "expired". The way
+// round it is to start this element once during a real tap -- even with
+// nothing loaded -- which marks it as user-initiated for the rest of
+// the session.
+const player = new Audio();
+let unlocked = false;
+
+function unlockAudio() {
+  if (unlocked) return;
+  unlocked = true;
+  player.play().catch(() => {});
+  player.pause();
+}
+
+async function speak(text) {
+  if (!voiceOn || !text) return;
+  try {
+    const res = await fetch("/audio?t=" + encodeURIComponent(TOKEN), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text })
+    });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    if (player.src) URL.revokeObjectURL(player.src);
+    player.src = URL.createObjectURL(blob);
+    await player.play();
+  } catch (e) {
+    // No voice is a small loss when the text is already on screen.
+  }
+}
 
 function setState(kind, label) {
   dot.className = "dot" + (kind ? " " + kind : "");
@@ -366,6 +450,7 @@ async function submit() {
       add(data.error || "That didn't work, sir.", "oops");
     } else if (data.reply) {
       add(data.reply, "jarvis");
+      speak(data.reply);
     } else {
       add("Done, sir.", "jarvis");
     }
@@ -382,9 +467,17 @@ async function submit() {
   box.focus();
 }
 
-send.addEventListener("click", submit);
+const mute = document.getElementById("mute");
+mute.addEventListener("click", () => {
+  voiceOn = !voiceOn;
+  mute.classList.toggle("off", !voiceOn);
+  if (!voiceOn) player.pause();
+  unlockAudio();
+});
+
+send.addEventListener("click", () => { unlockAudio(); submit(); });
 box.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); submit(); }
+  if (e.key === "Enter") { e.preventDefault(); unlockAudio(); submit(); }
 });
 
 ping();

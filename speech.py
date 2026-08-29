@@ -281,6 +281,40 @@ class SpeechEngine:
 
             return data, samplerate
 
+    def audio_bytes(self, text):
+        """The synthesised MP3 for some text, without playing it here.
+
+        For the phone: someone in another room wants the reply on the
+        device they asked from, not announced to an empty desk. Reuses
+        the same disk cache speak() fills, so anything JARVIS has
+        already said is served with no synthesis at all -- and anything
+        new is cached for the next time it's said out loud.
+        """
+        if not text or not text.strip():
+            return None
+
+        key = self._cache_key(text)
+        path = os.path.join(_CACHE_DIR, f"{key}.mp3")
+        sidecar = os.path.join(_CACHE_DIR, f"{key}.txt")
+
+        with self._cache_lock:
+            if not os.path.exists(path):
+                try:
+                    self._synthesize_to_cache(text, path, sidecar)
+                except Exception as error:
+                    print(
+                        f"[JARVIS] could not synthesise for the phone: {error}")
+                    return None
+            else:
+                self._touch(path)
+
+            try:
+                with open(path, "rb") as handle:
+                    return handle.read()
+            except OSError as error:
+                print(f"[JARVIS] could not read cached audio: {error}")
+                return None
+
     @staticmethod
     def _touch(path):
         """Mark a cache file as just used, for mtime-based LRU eviction.
@@ -468,6 +502,11 @@ COMMON_PHRASES = (
 
 def speak(text):
     speech.speak(text)
+
+
+def audio_bytes(text):
+    """Synthesised MP3 for text, without playing it on this machine."""
+    return speech.audio_bytes(text)
 
 
 def invalidate(text):
