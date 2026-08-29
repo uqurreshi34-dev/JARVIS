@@ -18,7 +18,7 @@ import os
 import time
 from collections import deque
 from dataclasses import dataclass
-
+import threading
 import numpy as np
 from dotenv import load_dotenv
 
@@ -534,3 +534,65 @@ def build_engine(model, block_size):
         print("[JARVIS] falling back to Vosk (no network used)")
 
     return VoskEngine(model, block_seconds)
+
+
+_remote_lock = threading.Lock()
+
+
+def transcribe_pcm16(pcm_bytes):
+    """Transcribe 16-bit mono PCM using JARVIS's existing STT engine.
+
+    The phone sends raw PCM rather than browser-specific WebM/Opus so no
+    ffmpeg or other decoder is needed.
+    """
+    if not pcm_bytes:
+        return ""
+
+    samples = (
+        np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32)
+        / 32768.0
+    )
+
+    if not len(samples):
+        return ""
+
+    with _remote_lock:
+        if isinstance(engine, VoskEngine):
+            from vosk import KaldiRecognizer
+
+            recognizer = KaldiRecognizer(
+                engine._model,
+                SAMPLE_RATE,
+            )
+            recognizer.SetWords(False)
+            recognizer.AcceptWaveform(pcm_bytes)
+
+            payload = json.loads(recognizer.FinalResult())
+
+            return (payload.get("text") or "").strip().casefold()
+
+        text = engine._transcribe(samples)
+
+    return (text or "").strip().casefold()
+
+
+def transcribe_wav(wav_bytes):
+    """Decode a mono PCM WAV and send its audio to the configured STT engine."""
+    import io
+    import wave
+
+    if not wav_bytes:
+        return ""
+
+    with wave.open(io.BytesIO(wav_bytes), "rb") as handle:
+        channels = handle.getnchannels()
+        width = handle.getsampwidth()
+        rate = handle.getframerate()
+        frames = handle.readframes(handle.getnframes())
+
+    if channels != 1 or width != 2 or rate != SAMPLE_RATE:
+        raise ValueError(
+            "Phone audio must be 16-bit mono PCM at 16000 Hz."
+        )
+
+    return transcribe_pcm16(frames)

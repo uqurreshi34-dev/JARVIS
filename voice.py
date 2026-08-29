@@ -2,6 +2,7 @@ import json
 import queue
 import re
 import time
+import threading
 from difflib import SequenceMatcher
 
 import numpy as np
@@ -103,6 +104,7 @@ engine = transcriber.build_engine(model, BLOCK_SIZE)
 print(f"[JARVIS] speech engine: {engine.name}")
 
 _armed_until = 0.0
+_phone_active = threading.Event()
 _wake_listener = None
 _status_listener = None
 _level_listener = None
@@ -308,6 +310,17 @@ def is_armed():
     return _armed()
 
 
+def set_phone_active(active):
+    """Suppress the PC microphone while the phone is using JARVIS voice."""
+    if active:
+        _phone_active.set()
+        _disarm()
+        _drain_queue()
+    else:
+        _phone_active.clear()
+        _drain_queue()
+
+
 def arm_follow_up(seconds=FOLLOW_UP_SECONDS):
     """Listen for a bare follow-up command without the wake word."""
     global _armed_until
@@ -349,7 +362,7 @@ def listen():
         while True:
             # A reminder can speak at any moment, from its own thread. Throw
             # away everything the microphone hears while that happens.
-            if is_speaking():
+            if is_speaking() or _phone_active.is_set():
                 _drain_queue()
                 time.sleep(0.05)
                 continue

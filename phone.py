@@ -27,6 +27,9 @@ from flask import Flask, jsonify, request
 
 from werkzeug.serving import make_server
 
+import transcriber
+from voice import set_phone_active
+
 import speech
 
 
@@ -162,6 +165,65 @@ class PhoneServer:
                 reply = str(reply)
 
             return jsonify({"heard": text, "reply": reply})
+
+        @app.post("/voice")
+        def voice():
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            if not self._handler:
+                return jsonify({
+                    "error": "JARVIS is still starting up. Try again."
+                }), 503
+
+            content_type = (
+                request.headers.get("Content-Type", "")
+                .split(";", 1)[0]
+                .strip()
+                .casefold()
+            )
+
+            if content_type != "audio/wav":
+                return jsonify({
+                    "error": "Phone voice must be sent as WAV audio."
+                }), 400
+
+            audio = request.get_data()
+
+            if not audio:
+                return jsonify({"error": "No audio received."}), 400
+
+            set_phone_active(True)
+
+            try:
+                text = transcriber.transcribe_wav(audio)
+
+                if not text:
+                    return jsonify({
+                        "error": "I couldn't make out what you said."
+                    }), 400
+
+                reply = self._handler(text)
+
+                if reply is None:
+                    reply = ""
+                elif not isinstance(reply, str):
+                    reply = str(reply)
+
+                return jsonify({
+                    "heard": text,
+                    "reply": reply,
+                })
+
+            except Exception as error:
+                print(f"[JARVIS] phone voice failed: {error}")
+
+                return jsonify({
+                    "error": "I couldn't process that voice command."
+                }), 500
+
+            finally:
+                set_phone_active(False)
 
         @app.post("/audio")
         def audio():
@@ -312,6 +374,19 @@ PAGE = """<!DOCTYPE html>
     color: #04121c; flex: none;
   }
   button:disabled { opacity: 0.4; }
+  #mic {
+  width: 48px;
+  padding: 0;
+  font-size: 18px;
+  background: rgba(95, 165, 205, 0.16);
+  color: var(--ink);
+  border: 1px solid rgba(95, 165, 205, 0.32);
+}
+
+#mic.recording {
+  background: var(--bad);
+  color: white;
+}
 </style>
 </head>
 <body>
@@ -331,7 +406,8 @@ PAGE = """<!DOCTYPE html>
 
   <footer>
     <input id="text" placeholder="what's the weather" autocomplete="off"
-           autocapitalize="off" enterkeyhint="send">
+          autocapitalize="off" enterkeyhint="send">
+    <button id="mic" type="button" title="hold to speak">🎙</button>
     <button id="send">Send</button>
   </footer>
 
@@ -340,12 +416,19 @@ const TOKEN = "__TOKEN__";
 const log = document.getElementById("log");
 const box = document.getElementById("text");
 const send = document.getElementById("send");
+const mic = document.getElementById("mic");
 const dot = document.getElementById("dot");
 const state = document.getElementById("state");
 const hint = document.getElementById("hint");
 
 let alive = false;
 let voiceOn = true;
+let recording = false;
+let audioContext = null;
+let inputNode = null;
+let processor = null;
+let micStream = null;
+let recordedChunks = [];
 
 // One audio element reused for every reply. Mobile browsers refuse to
 // play audio that wasn't started by a user gesture, and by the time a
@@ -473,6 +556,287 @@ mute.addEventListener("click", () => {
   mute.classList.toggle("off", !voiceOn);
   if (!voiceOn) player.pause();
   unlockAudio();
+});
+
+function encodeWav(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  function writeString(offset, value) {
+    for (let i = 0; i < value.length; i++) {
+      view.setUint8(offset + i, value.charCodeAt(i));
+    }
+  }
+
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+
+  let offset = 44;
+
+  for (const sample of samples) {
+    const clamped = Math.max(-1, Math.min(1, sample));
+
+    view.setInt16(
+      offset,
+      clamped < 0
+        ? clamped * 0x8000
+        : clamped * 0x7fff,
+      true
+    );
+
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function resample16k(samples, sourceRate) {
+  const targetRate = 16000;
+
+  if (sourceRate === targetRate) {
+    return samples;
+  }
+
+  const ratio = sourceRate / targetRate;
+  const outputLength = Math.max(
+    1,
+    Math.round(samples.length / ratio)
+  );
+
+  const output = new Float32Array(outputLength);
+
+  for (let i = 0; i < outputLength; i++) {
+    const position = i * ratio;
+    const left = Math.floor(position);
+    const right = Math.min(left + 1, samples.length - 1);
+    const fraction = position - left;
+
+    output[i] =
+      samples[left] * (1 - fraction) +
+      samples[right] * fraction;
+  }
+
+  return output;
+}
+
+function stopRecordingUI() {
+  recording = false;
+
+  mic.classList.remove("recording");
+  mic.textContent = "🎙";
+
+  send.disabled = !alive;
+  box.disabled = false;
+
+  if (processor) {
+    processor.disconnect();
+    processor.onaudioprocess = null;
+    processor = null;
+  }
+
+  if (inputNode) {
+    inputNode.disconnect();
+    inputNode = null;
+  }
+
+  if (audioContext) {
+    audioContext.close().catch(() => {});
+    audioContext = null;
+  }
+
+  if (micStream) {
+    micStream.getTracks().forEach(track => track.stop());
+    micStream = null;
+  }
+}
+
+async function startRecording() {
+  if (recording || !alive) {
+    return;
+  }
+
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+
+    audioContext = new AudioContext();
+
+    await audioContext.resume();
+
+    inputNode = audioContext.createMediaStreamSource(micStream);
+
+    processor = audioContext.createScriptProcessor(
+      4096,
+      1,
+      1
+    );
+
+    recordedChunks = [];
+    recording = true;
+
+    mic.classList.add("recording");
+    mic.textContent = "■";
+
+    send.disabled = true;
+    box.disabled = true;
+
+    setState("busy", "listening");
+
+    processor.onaudioprocess = (event) => {
+      if (!recording) {
+        return;
+      }
+
+      const input = event.inputBuffer.getChannelData(0);
+
+      recordedChunks.push(new Float32Array(input));
+    };
+
+    inputNode.connect(processor);
+    processor.connect(audioContext.destination);
+
+  } catch (error) {
+    console.error(error);
+
+    add(
+      "Microphone access was denied or unavailable, sir.",
+      "oops"
+    );
+
+    stopRecordingUI();
+  }
+}
+
+async function stopRecording() {
+  if (!recording) {
+    return;
+  }
+
+  recording = false;
+
+  const sourceRate = audioContext.sampleRate;
+
+  const totalSamples = recordedChunks.reduce(
+    (total, chunk) => total + chunk.length,
+    0
+  );
+
+  const combined = new Float32Array(totalSamples);
+
+  let offset = 0;
+
+  for (const chunk of recordedChunks) {
+    combined.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  stopRecordingUI();
+
+  if (!combined.length) {
+    setState("live", "ready");
+    return;
+  }
+
+  const samples = resample16k(combined, sourceRate);
+  const wav = encodeWav(samples, 16000);
+
+  setState("busy", "thinking");
+
+  try {
+    const controller = new AbortController();
+
+    const timer = setTimeout(
+      () => controller.abort(),
+      60000
+    );
+
+    const response = await fetch(
+      "/voice?t=" + encodeURIComponent(TOKEN),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "audio/wav"
+        },
+        body: wav,
+        signal: controller.signal
+      }
+    );
+
+    clearTimeout(timer);
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      add(
+        data.error || "I couldn't process that, sir.",
+        "oops"
+      );
+
+      setState("live", "ready");
+      send.disabled = !alive;
+      box.focus();
+      return;
+    }
+
+    if (data.heard) {
+      add(data.heard, "me");
+    }
+
+    if (data.reply) {
+      add(data.reply, "jarvis");
+      speak(data.reply);
+    }
+
+    setState("live", "ready");
+
+  } catch (error) {
+    console.error(error);
+
+    add(
+      "No reply from your PC, sir. Is JARVIS still running?",
+      "oops"
+    );
+
+    setState("", "JARVIS is not running");
+    alive = false;
+  }
+
+  send.disabled = !alive;
+  box.focus();
+}
+
+mic.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+
+  unlockAudio();
+  startRecording();
+});
+
+mic.addEventListener("pointerup", (event) => {
+  event.preventDefault();
+
+  stopRecording();
+});
+
+mic.addEventListener("pointercancel", () => {
+  stopRecording();
 });
 
 send.addEventListener("click", () => { unlockAudio(); submit(); });
