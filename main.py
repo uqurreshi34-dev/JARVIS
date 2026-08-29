@@ -12,6 +12,7 @@ from actions.watch import watcher, catch_up
 import phrases
 from actions.markets import market_monitor
 from actions.patterns import pattern_monitor
+from phone import phone_server
 from beam import Beam
 from brain_panel import BrainPanel
 from camera_panel import CameraPanel
@@ -204,6 +205,49 @@ class Assistant:
                 else:
                     self._run_action(result)
 
+    def _on_phone_command(self, text):
+        """Run a command that came from the phone, and return the words.
+
+        Deliberately does not go through _run_query/_run_action: those
+        call _say(), which plays through the PC speakers. Someone
+        holding their phone in another room does not want their desk
+        talking to an empty room -- the reply belongs to the device
+        that asked for it. The HUD is still updated, so the desk shows
+        what happened even though it stays quiet.
+        """
+        self._heard(text)
+        self._state(THINKING)
+
+        try:
+            result = handle_command(text)
+        except Exception as error:
+            print(f"[JARVIS] phone command error: {error}")
+            self._state(IDLE)
+
+            return phrases.pick("wrong")
+
+        if not result:
+            self._state(IDLE)
+
+            return phrases.pick("unknown")
+
+        try:
+            if result.get("kind") == "query":
+                spoken = result["action"]() or phrases.pick("cannot_find")
+            else:
+                # An action's confirmation is fixed up front; the work
+                # itself still has to run.
+                spoken = result.get("response") or phrases.pick("done")
+                result["action"]()
+        except Exception as error:
+            print(f"[JARVIS] phone action error: {error}")
+            spoken = phrases.pick("failed")
+
+        self._reply(spoken)
+        self._state(IDLE)
+
+        return spoken
+
     def run(self):
         set_wake_listener(self._on_wake)
         set_status_listener(self._on_status)
@@ -222,6 +266,12 @@ class Assistant:
         pattern_monitor.set_due_listener(self._on_pattern_due)
         pattern_monitor.set_suggestion_listener(self._on_pattern_suggestion)
         pattern_monitor.start()
+
+        # A phone on the same network drives the same assistant. The
+        # handler runs on the server's own thread, which is why
+        # handle_command serialises itself -- see _command_lock.
+        phone_server.set_handler(self._on_phone_command)
+        phone_server.start()
 
         self._say(_greeting())
 
@@ -326,6 +376,7 @@ class Assistant:
         battery_monitor.stop()
         watcher.stop()
         pattern_monitor.stop()
+        phone_server.stop()
         camera.release()
         market_monitor.stop()
         self._hud.shutdown.emit()

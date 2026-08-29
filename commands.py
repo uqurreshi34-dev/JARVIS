@@ -1,5 +1,6 @@
 import os
 import re
+import threading
 import time
 import webbrowser
 from difflib import SequenceMatcher
@@ -3493,7 +3494,22 @@ def _resolve_pending(text):
     return None
 
 
+# Commands arrive from two places now: the voice loop at the desk, and
+# the phone server on its own thread. Everything below relies on module
+# state -- _awaiting, _pending, the pronoun subject -- so two commands
+# running at once could let one answer the other's pending question, or
+# leave "it" pointing at the wrong thing. Serialising them is the whole
+# fix; a command is short enough that waiting is no hardship, and one
+# genuinely finishing before the next starts is what the state assumes.
+_command_lock = threading.RLock()
+
+
 def handle_command(command):
+    with _command_lock:
+        return _handle_command(command)
+
+
+def _handle_command(command):
     command = _resolve_pronouns(command)
 
     answered = _resolve_awaiting(command)
