@@ -160,10 +160,14 @@ def catch_up():
     )
 
 
-def _quiet_hours():
+def quiet_hours():
     hour = datetime.now().hour
 
     return hour < QUIET_BEFORE or hour >= QUIET_AFTER
+
+
+def _quiet_hours():
+    return quiet_hours()
 
 
 class Watcher:

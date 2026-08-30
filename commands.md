@@ -25,6 +25,7 @@ the same JARVIS, not a smaller version of him.
 | type a command, press Send | exactly as if you'd said it at the desk |
 | hold 🎙, speak, release | same, spoken |
 | tap 🔊 | turns the spoken reply on or off |
+| tap 🔔 | once, to allow notifications |
 
 **No wake word on the phone.** Holding the microphone button already
 says you're talking to him, which is the only job "Jarvis" ever did.
@@ -44,6 +45,12 @@ listening again once the reply has finished playing.
 alerts, the morning diary — they wait on the phone until you look, with
 the time he actually said them. He doesn't need the page open at the
 time; open it later and they're still there.
+
+**Tap 🔔 once and he'll notify you properly.** After that his
+announcements arrive as Android notifications the moment they happen,
+even with the page closed. The waiting list above still works
+underneath, so a notification you miss isn't news you lose. He stays
+quiet overnight, same as he does at the desk.
 
 **A stray tap does nothing.** Too short to be a command, so it's ignored
 rather than guessed at.
@@ -448,7 +455,7 @@ Nothing non-urgent between 10pm and 8am; it waits.
 
 ## When something doesn't work
 
-**The phone won't let you grant microphone access.** If Chrome says "this
+**The phone won't let you grant microphone access, or notifications.** If Chrome says "this
 site can't ask for your permission, close any bubbles or overlays from
 other apps", something on your phone is drawing over the screen and
 Android is blocking the prompt. It names no app, and it is often not one

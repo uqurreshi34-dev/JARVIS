@@ -17,6 +17,7 @@ reasons: it can be shut down cleanly from another thread, and it takes
 an ssl_context, which is what phase three will need.
 """
 
+import json
 import os
 import secrets
 import socket
@@ -27,6 +28,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 
 from werkzeug.serving import make_server
+from pywebpush import webpush, WebPushException
 
 import transcriber
 from voice import FILLERS, set_phone_active
@@ -59,6 +61,10 @@ KEY_FILE = os.path.join(os.path.dirname(__file__), "jarvis-phone-key.pem")
 # generated and used as before, so nothing changes for local-only use.
 CERT_ENV = "JARVIS_CERT"
 KEY_ENV = "JARVIS_KEY"
+
+VAPID_PRIVATE_ENV = "JARVIS_VAPID_PRIVATE"
+VAPID_PUBLIC_ENV = "JARVIS_VAPID_PUBLIC"
+VAPID_SUBJECT_ENV = "JARVIS_VAPID_SUBJECT"
 
 # The name the phone should use. With Tailscale this is the MagicDNS
 # name the certificate is actually issued for; a bare IP would fail
@@ -304,6 +310,12 @@ class PhoneServer:
         self._notices_lock = threading.Lock()
         self._next_notice_id = 0
 
+        # Web Push subscriptions registered by the phone browser.
+        # Kept in memory deliberately: this is a single-user local assistant,
+        # and the browser can re-register whenever the server restarts.
+        self._push_subscriptions = []
+        self._push_lock = threading.Lock()
+
         # Notice ids count from zero each run, because the queue lives
         # in memory. A phone remembers how far it had read, so without
         # something identifying the run it would carry a cursor from a
@@ -342,6 +354,14 @@ class PhoneServer:
             if len(self._notices) > MAX_NOTICES:
                 del self._notices[:-MAX_NOTICES]
 
+        # Push is deliberately separate from the backlog. If push fails,
+        # /notices still guarantees the phone can recover the announcement.
+        threading.Thread(
+            target=self._send_push,
+            args=(text,),
+            daemon=True,
+        ).start()
+
     def notices_since(self, last_seen):
         """Everything announced after the caller's last seen id.
 
@@ -357,6 +377,76 @@ class PhoneServer:
         """The newest id issued, so a caller can start from now."""
         with self._notices_lock:
             return self._next_notice_id
+
+    def _send_push(self, text):
+        """Send an immediate Web Push notification to registered phones."""
+        if not text or not self._push_allowed():
+            return
+
+        private_key = os.getenv(VAPID_PRIVATE_ENV)
+        subject = os.getenv(VAPID_SUBJECT_ENV)
+
+        if not private_key or not subject:
+            print(
+                "[JARVIS] push is not configured; "
+                "missing VAPID private key or subject."
+            )
+            return
+
+        with self._push_lock:
+            subscriptions = list(self._push_subscriptions)
+
+        if not subscriptions:
+            return
+
+        payload = {
+            "title": "JARVIS",
+            "body": text,
+        }
+
+        vapid_claims = {
+            "sub": subject,
+        }
+
+        expired = []
+
+        for subscription in subscriptions:
+            try:
+                webpush(
+                    subscription_info=subscription,
+                    data=json.dumps(payload),
+                    vapid_private_key=private_key,
+                    vapid_claims=vapid_claims,
+                )
+
+            except WebPushException as error:
+                status = getattr(
+                    getattr(error, "response", None),
+                    "status_code",
+                    None,
+                )
+
+                # 404/410 means the browser subscription is no longer valid.
+                if status in (404, 410):
+                    expired.append(subscription.get("endpoint"))
+
+                else:
+                    print(
+                        f"[JARVIS] phone push failed: {error}"
+                    )
+
+            except Exception as error:
+                print(
+                    f"[JARVIS] phone push failed: {error}"
+                )
+
+        if expired:
+            with self._push_lock:
+                self._push_subscriptions = [
+                    item
+                    for item in self._push_subscriptions
+                    if item.get("endpoint") not in expired
+                ]
 
     def set_handler(self, handler):
         """Register what actually runs a command.
@@ -401,9 +491,22 @@ class PhoneServer:
     def _register_routes(self):
         app = self._app
 
+        @app.get("/service-worker.js")
+        def service_worker():
+            return SERVICE_WORKER.replace("__TOKEN__", self.token), 200, {
+                "Content-Type": "application/javascript; charset=utf-8",
+                "Cache-Control": "no-store",
+            }
+
         @app.get("/")
         def page():
-            return PAGE.replace("__TOKEN__", self.token), 200, {
+            return PAGE.replace(
+                "__TOKEN__",
+                self.token
+            ).replace(
+                "__VAPID_PUBLIC_KEY__",
+                os.getenv(VAPID_PUBLIC_ENV, "")
+            ), 200, {
                 "Content-Type": "text/html; charset=utf-8"
             }
 
@@ -436,6 +539,57 @@ class PhoneServer:
                 "latest": self.latest_notice_id(),
                 "run": self._run_id,
             })
+
+        @app.post("/push/subscribe")
+        def push_subscribe():
+            """Register the phone's Web Push subscription."""
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            payload = request.get_json(silent=True) or {}
+            subscription = payload.get("subscription")
+
+            if not isinstance(subscription, dict):
+                return jsonify({"error": "Invalid subscription."}), 400
+
+            endpoint = subscription.get("endpoint")
+
+            if not endpoint:
+                return jsonify({"error": "Invalid subscription."}), 400
+
+            with self._push_lock:
+                # Replace an existing subscription from this browser
+                # rather than accumulating duplicates.
+                self._push_subscriptions = [
+                    item
+                    for item in self._push_subscriptions
+                    if item.get("endpoint") != endpoint
+                ]
+
+                self._push_subscriptions.append(subscription)
+
+            return jsonify({"ok": True})
+
+        @app.post("/push/unsubscribe")
+        def push_unsubscribe():
+            """Remove a phone's Web Push subscription."""
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            payload = request.get_json(silent=True) or {}
+            endpoint = payload.get("endpoint")
+
+            if not endpoint:
+                return jsonify({"error": "Invalid subscription."}), 400
+
+            with self._push_lock:
+                self._push_subscriptions = [
+                    item
+                    for item in self._push_subscriptions
+                    if item.get("endpoint") != endpoint
+                ]
+
+            return jsonify({"ok": True})
 
         @app.post("/phone-active")
         def phone_active():
@@ -602,6 +756,13 @@ class PhoneServer:
             }
 
     @staticmethod
+    def _push_allowed():
+        """Whether an announcement is allowed to buzz the phone."""
+        from actions.watch import quiet_hours
+
+        return not quiet_hours()
+
+    @staticmethod
     def _certificate_pair():
         """(cert, key) to serve with, and whether they were supplied.
 
@@ -669,6 +830,55 @@ class PhoneServer:
                 pass
 
 
+SERVICE_WORKER = r"""
+self.addEventListener("push", event => {
+    let data = {
+        title: "JARVIS",
+        body: "JARVIS has something to tell you."
+    };
+
+    try {
+        data = event.data ? event.data.json() : data;
+    } catch (error) {
+        // Fall back to the default notification.
+    }
+
+    event.waitUntil(
+        self.registration.showNotification(
+            data.title || "JARVIS",
+            {
+                body: data.body || "",
+                icon: "/?t=__TOKEN__",
+                badge: "/?t=__TOKEN__",
+                tag: "jarvis-notice",
+                renotify: true,
+            }
+        )
+    );
+});
+
+self.addEventListener("notificationclick", event => {
+    event.notification.close();
+
+    event.waitUntil(
+        clients.matchAll({
+            type: "window",
+            includeUncontrolled: true
+        }).then(existing => {
+            for (const client of existing) {
+                if ("focus" in client) {
+                    return client.focus();
+                }
+            }
+
+            return clients.openWindow(
+                "/?t=__TOKEN__"
+            );
+        })
+    );
+});
+"""
+
 PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -719,6 +929,14 @@ PAGE = """<!DOCTYPE html>
     filter: grayscale(0);
   }
   #mute.off { filter: grayscale(1); opacity: 0.4; }
+  #notify {
+    background: none;
+    border: none;
+    padding: 0 0 0 12px;
+    font-size: 17px;
+    color: var(--ink);
+    line-height: 1;
+  }
   #reactor-wrap {
     position: relative; flex: none;
     height: 190px; display: flex; align-items: center;
@@ -794,6 +1012,7 @@ PAGE = """<!DOCTYPE html>
     <span class="dot" id="dot"></span>
     <h1>JARVIS</h1>
     <span id="state">connecting</span>
+    <button id="notify" title="notifications">🔔</button>
     <button id="mute" title="voice">&#128266;</button>
   </header>
 
@@ -818,6 +1037,7 @@ PAGE = """<!DOCTYPE html>
 
 <script>
 const TOKEN = "__TOKEN__";
+const VAPID_PUBLIC_KEY = "__VAPID_PUBLIC_KEY__";
 const log = document.getElementById("log");
 const box = document.getElementById("text");
 const send = document.getElementById("send");
@@ -828,6 +1048,127 @@ const hint = document.getElementById("hint");
 
 let alive = false;
 let voiceOn = true;
+
+let pushRegistration = null;
+
+async function registerPushWorker() {
+  if (!("serviceWorker" in navigator)) {
+    return false;
+  }
+
+  try {
+    pushRegistration = await navigator.serviceWorker.register(
+      "/service-worker.js"
+    );
+
+    await navigator.serviceWorker.ready;
+
+    return true;
+  } catch (error) {
+    console.error("[JARVIS] service worker registration failed:", error);
+    return false;
+  }
+}
+
+function urlBase64ToUint8Array(value) {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = (value + padding)
+    .replace(/-/g, "+")
+    .replace(/_/g, "/");
+
+  const raw = atob(base64);
+
+  return Uint8Array.from(
+    [...raw].map(char => char.charCodeAt(0))
+  );
+}
+
+async function enableNotifications() {
+  if (!("Notification" in window)) {
+    add(
+      "This browser does not support notifications, sir.",
+      "oops"
+    );
+    return;
+  }
+
+  if (!("PushManager" in window)) {
+    add(
+      "This browser does not support push notifications, sir.",
+      "oops"
+    );
+    return;
+  }
+
+  if (!VAPID_PUBLIC_KEY) {
+    add(
+      "Push notifications are not configured on JARVIS yet, sir.",
+      "oops"
+    );
+    return;
+  }
+
+  try {
+    const permission = await Notification.requestPermission();
+
+    if (permission !== "granted") {
+      add(
+        "Notifications were not enabled, sir.",
+        "oops"
+      );
+      return;
+    }
+
+    const registration = pushRegistration
+      || await navigator.serviceWorker.ready;
+
+    pushRegistration = registration;
+
+    let subscription = await registration.pushManager.getSubscription();
+
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(
+          VAPID_PUBLIC_KEY
+        )
+      });
+    }
+
+    const response = await fetch(
+      "/push/subscribe?t=" + encodeURIComponent(TOKEN),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          subscription: subscription.toJSON()
+        })
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error("JARVIS rejected the push subscription.");
+    }
+
+    add(
+      "Push notifications are enabled, sir.",
+      "jarvis"
+    );
+
+    notify.textContent = "🔔";
+    notify.title = "notifications enabled";
+
+  } catch (error) {
+    console.error("[JARVIS] notification setup failed:", error);
+
+    add(
+      "I couldn't enable notifications, sir.",
+      "oops"
+    );
+  }
+}
 
 // States the health poll must not overwrite, because something is
 // genuinely happening. Kept as one list so a new state cannot be added
@@ -1328,7 +1669,11 @@ async function submit() {
   box.focus();
 }
 
+const notify = document.getElementById("notify");
 const mute = document.getElementById("mute");
+notify.addEventListener("click", () => {
+  enableNotifications();
+});
 mute.addEventListener("click", () => {
   voiceOn = !voiceOn;
   mute.classList.toggle("off", !voiceOn);
@@ -1668,6 +2013,7 @@ box.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); unlockAudio(); submit(); }
 });
 
+registerPushWorker();
 ping();
 setInterval(ping, 5000);
 </script>

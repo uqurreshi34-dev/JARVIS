@@ -28,6 +28,7 @@ fsspec==2026.7.0
 groq==1.6.0
 h11==0.16.0
 hf-xet==1.6.0
+http_ece==1.2.1
 httpcore==1.0.9
 httpcore2==2.12.0
 httpx==0.28.1
@@ -59,6 +60,7 @@ pillow==12.3.0
 propcache==0.5.2
 protobuf==7.35.1
 psutil==7.2.2
+py-vapid==1.9.4
 pycaw==20251023
 pycparser==3.0
 pydantic==2.13.4
@@ -77,6 +79,7 @@ python-dateutil==2.9.0.post0
 python-docx==1.2.0
 python-dotenv==1.2.3
 pyttsx3==2.99
+pywebpush==2.4.0
 pywin32==312
 pywinauto==0.6.9
 PyYAML==6.0.3

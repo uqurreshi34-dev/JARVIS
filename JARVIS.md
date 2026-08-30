@@ -132,6 +132,30 @@ makes. The queue means the phone need not be connected when something
 is announced: open it later and the briefing is still waiting, with the
 time it was actually said. It is capped and held in memory only.
 
+The same announcements are also sent as a Web Push notification, so the
+phone is told immediately rather than on its next poll, and can be told
+while the page is closed. The two are deliberately kept separate
+because they answer different questions: push is "this just happened",
+the queue is "what did I miss while my phone was in a tunnel". Push is
+sent on its own thread and never blocks an announcement, and if it
+fails the queue still delivers -- so the phone can lose a notification
+without losing the news.
+
+Whether an announcement is allowed to buzz a phone at all is decided in
+one place, `_push_allowed`, which honours the same quiet hours as
+everything else rather than defining a second set. Keeping that
+decision in a single named function is what makes it possible later to
+say that some genuinely urgent thing may wake you while ordinary market
+chatter may not.
+
+This is the one part of JARVIS that involves anyone else. A Web Push
+message travels through the browser's own push service -- Google's, on
+Android -- so JARVIS needs outbound internet to send one, and the fact
+that a notification happened passes through them. The contents do not:
+the payload is encrypted with keys only the PC and the phone hold, and
+the VAPID private key never leaves the machine. Worth knowing plainly,
+since everything else here stays on your own hardware.
+
 Reading does not consume it: each device tracks how far it has got, so
 a phone and a tablet both see everything. Clearing the queue on
 collection meant whichever polled first took them and the other never
