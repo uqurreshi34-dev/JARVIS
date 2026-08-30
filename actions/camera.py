@@ -14,7 +14,7 @@ import threading
 import time
 import os
 from actions import files
-
+import re
 import numpy as np
 
 # pygrabber is Windows only and needs comtypes; both are optional so the rest
@@ -257,6 +257,8 @@ _last_question = "What am I holding?"
 # to write without triggering a fresh capture (and a fresh camera light).
 _last_image = None
 
+_last_description = None
+
 
 def brightness():
     """Average brightness of the last frame, or None."""
@@ -298,8 +300,42 @@ def save_last():
         print(f"[JARVIS] could not create the images folder: {error}")
         return None
 
+    description = (_last_description or "").strip()
+
+    # Build a short, useful filename from what JARVIS saw.
+    stem = re.sub(r"[^A-Za-z0-9\s-]", "", description)
+    stem = " ".join(stem.split()).strip()
+
+    # Drop common conversational wording.
+    prefixes = (
+        "you are holding ",
+        "you are looking at ",
+        "you are holding a ",
+        "you are holding an ",
+        "this is ",
+        "there is ",
+        "there's ",
+        "i can see ",
+        "i see ",
+    )
+
+    lowered = stem.casefold()
+
+    for prefix in prefixes:
+        if lowered.startswith(prefix):
+            stem = stem[len(prefix):].strip()
+            break
+
+    # Keep names short enough to remain useful as filenames.
+    words = stem.split()[:6]
+    stem = "-".join(words).lower()
+    stem = stem.strip("-")
+
+    if not stem:
+        stem = "photo"
+
     timestamp = time.strftime("%Y-%m-%d-%H%M%S")
-    path = os.path.join(folder, f"photo {timestamp}.png")
+    path = os.path.join(folder, f"{stem} {timestamp}.png")
 
     try:
         with open(path, "wb") as handle:
@@ -450,6 +486,9 @@ def describe_image(data, question=None):
             "I have the picture, sir, but couldn't get a description. "
             "The console has the detail."
         )
+
+    global _last_description
+    _last_description = answer
 
     return answer
 
