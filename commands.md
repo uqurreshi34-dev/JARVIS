@@ -328,7 +328,7 @@ Facts are kept in `memory.txt`, editable by hand.
 | I am from Madrid | weather follows it |
 | I prefer short answers | shortens spoken answers |
 | my default project is JARVIS | for "open my project" |
-| my calendar is local | stops pushing events to Outlook |
+| my calendar is local | stops pushing to Outlook |
 | what do you know about me | reads it back |
 | forget about London | removes it |
 
