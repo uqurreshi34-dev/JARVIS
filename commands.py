@@ -1482,16 +1482,18 @@ def look_at_phone_picture(image, question=None):
 
 
 def _save_picture():
-    """Save the camera's last picture to the JARVIS folder."""
+    """Save the camera's last picture to JARVIS/images."""
     image = camera.last_image()
 
     if not image:
         return "There's no picture to save yet, sir."
 
-    if not charts.save(image, "photo"):
-        return "I couldn't save that picture, sir."
+    path = camera.save_last()
 
-    return phrases.pick("saved")
+    if not path:
+        return "I couldn't save the picture, sir."
+
+    return "I've saved the picture, sir."
 
 
 def _click_now(name):

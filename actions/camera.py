@@ -12,6 +12,8 @@ turn it on rather than pretending it can ask.
 import io
 import threading
 import time
+import os
+from actions import files
 
 import numpy as np
 
@@ -271,6 +273,44 @@ def too_dark():
 def last_image():
     """The most recent picture captured, or None if nothing has been seen."""
     return _last_image
+
+
+_IMAGES_FOLDER = "images"
+
+
+def save_last():
+    """Save the most recent camera picture into ~/JARVIS/images."""
+    image = last_image()
+
+    if not image:
+        return None
+
+    base = files.root()
+
+    if not base:
+        return None
+
+    folder = os.path.join(base, _IMAGES_FOLDER)
+
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except OSError as error:
+        print(f"[JARVIS] could not create the images folder: {error}")
+        return None
+
+    timestamp = time.strftime("%Y-%m-%d-%H%M%S")
+    path = os.path.join(folder, f"photo {timestamp}.png")
+
+    try:
+        with open(path, "wb") as handle:
+            handle.write(image)
+    except OSError as error:
+        print(f"[JARVIS] could not save the picture: {error}")
+        return None
+
+    print(f"[JARVIS] picture saved to {path}")
+
+    return path
 
 
 def look(question=None):
