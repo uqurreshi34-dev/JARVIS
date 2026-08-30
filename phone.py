@@ -1838,11 +1838,31 @@ triangleSpin = (triangleSpin + triangleSpeed) % (Math.PI * 2);
   arc(R_RING3, sweep * 1.3, 150, colour, 0.35 + level * 0.4, 1.5);
 
   // The core: a filled glow that swells with whatever is happening.
-  const coreRadius = R_CORE * (0.72 + level * 0.42);
+  const coreRadius =
+  hudState === "speaking"
+    ? R_CORE * (0.72 + level * 0.65)
+    : R_CORE * (0.72 + level * 0.42);
   const glow = ctx2d.createRadialGradient(0, 0, 0, 0, 0, coreRadius * 2.2);
 
-  glow.addColorStop(0, rgba(colour, 0.55 + level * 0.4));
-  glow.addColorStop(0.5, rgba(colour, 0.16));
+    glow.addColorStop(
+    0,
+    rgba(
+      colour,
+      hudState === "speaking"
+        ? 0.75 + level * 0.55
+        : 0.55 + level * 0.4
+    )
+  );
+
+  glow.addColorStop(
+    0.5,
+    rgba(
+      colour,
+      hudState === "speaking"
+        ? 0.24 + level * 0.18
+        : 0.16
+    )
+  );
   glow.addColorStop(1, rgba(colour, 0));
 
   ctx2d.beginPath();
@@ -1857,7 +1877,7 @@ triangleSpin = (triangleSpin + triangleSpeed) % (Math.PI * 2);
 
   const triangleAlpha =
   hudState === "speaking"
-    ? 120 + level * 100
+    ? 45 + level * 35
     : 150 + level * 70;
 
   drawTriangle(
