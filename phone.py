@@ -864,16 +864,25 @@ class PhoneServer:
                     "error": "Something went wrong running that."
                 }), 500
 
-            # Coerced rather than trusted: a handler returning something
-            # unexpected should not take the whole request down with a
-            # serialisation error, when sending back what we have and
-            # letting the phone display it is perfectly serviceable.
+            # Phone actions return a structured result so the page can open
+            # tel:, sms: or WhatsApp links. Normal commands still return a
+            # plain string.
+            if isinstance(reply, dict):
+                return jsonify({
+                    "heard": text,
+                    "reply": reply.get("spoken", ""),
+                    "link": reply.get("link"),
+                })
+
             if reply is None:
                 reply = ""
             elif not isinstance(reply, str):
                 reply = str(reply)
 
-            return jsonify({"heard": text, "reply": reply})
+            return jsonify({
+                "heard": text,
+                "reply": reply,
+            })
 
         @app.post("/voice")
         def voice():
@@ -939,6 +948,16 @@ class PhoneServer:
                     }), 400
 
                 reply = self._handler(text)
+
+                # Phone actions return a structured result so the page can open
+                # tel:, sms: or WhatsApp links. Normal commands still return a
+                # plain string.
+                if isinstance(reply, dict):
+                    return jsonify({
+                        "heard": text,
+                        "reply": reply.get("spoken", ""),
+                        "link": reply.get("link"),
+                    })
 
                 if reply is None:
                     reply = ""

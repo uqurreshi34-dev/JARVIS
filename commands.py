@@ -2224,9 +2224,10 @@ _TEXT = re.compile(
 def _phone_action_request(text):
     """(action, name, message) for a phone request, or None.
 
-    Gated on the person actually being in contacts.txt, so "call the
-    police" or a mishearing resolves to nothing rather than to a
-    number. Nothing spoken is ever turned into a number.
+    Recognition is deliberately separate from contact lookup. The
+    contact layer performs the actual safety check against contacts.txt,
+    so a missing/invalid contact produces a useful spoken response
+    instead of falling through to the LLM.
     """
     for pattern, action in (
         (_CALL, "call"),
@@ -2239,17 +2240,20 @@ def _phone_action_request(text):
             continue
 
         spoken = match.group(1).strip()
+
+        if not spoken:
+            return None
+
         message = (
             match.group(2).strip()
-            if pattern is _TEXT and match.lastindex and match.lastindex > 1
+            if pattern is _TEXT
+            and match.lastindex
+            and match.lastindex > 1
             and match.group(2)
             else None
         )
 
-        name, number = contacts.find(spoken)
-
-        if number:
-            return action, name, message
+        return action, spoken, message
 
     return None
 
