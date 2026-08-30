@@ -40,6 +40,12 @@ KNOWN_KEYS = (
     # a git repository are different questions, and are not always the
     # same directory.
     "repo",
+    # Where home actually is, to within a few metres, captured from the
+    # phone rather than geocoded. Deliberately NOT the "latitude" and
+    # "longitude" above: those are the city the weather is fetched for,
+    # derived from your stated location, and overwriting them with a
+    # doorstep would quietly break the forecast.
+    "home latitude", "home longitude",
 )
 
 # How long an answer should be. Anything else is treated as medium.
@@ -304,6 +310,30 @@ def set_coordinates(latitude, longitude):
     """Remember where a place is, so it is only looked up once."""
     set_fact("latitude", f"{latitude:.4f}")
     set_fact("longitude", f"{longitude:.4f}")
+
+
+def home_coordinates():
+    """Where home is, or (None, None).
+
+    Separate from coordinates() above, which is the city used for
+    weather. This is a precise spot captured from a phone standing in
+    it, which is the only way to know it to within a few metres.
+    """
+    try:
+        return (
+            float(get("home latitude")),
+            float(get("home longitude")),
+        )
+    except (TypeError, ValueError):
+        return None, None
+
+
+def set_home_coordinates(latitude, longitude):
+    """Remember exactly where home is."""
+    set_fact("home latitude", f"{latitude:.6f}")
+    set_fact("home longitude", f"{longitude:.6f}")
+
+    return True
 
 
 def default_project():

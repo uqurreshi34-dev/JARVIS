@@ -31,6 +31,7 @@ from werkzeug.serving import make_server
 from pywebpush import webpush, WebPushException
 
 import transcriber
+from actions import location
 from voice import FILLERS, set_phone_active
 
 import speech
@@ -84,12 +85,48 @@ REQUEST_TIMEOUT = 60
 # running for days doesn't grow without limit.
 MAX_NOTICES = 40
 
+# Address prefixes that mean "on the home network".
+#
+# Worth knowing before relying on this: over Tailscale it tells you
+# nothing about location. A tailnet address identifies the device, not
+# where the device is, so a phone reports the same 100.x address on the
+# sofa and on a train -- measured, not assumed. It is still meaningful
+# for a phone reaching JARVIS directly over the LAN, which is why it is
+# kept and configurable, but GPS in actions/location.py is what actually
+# answers "am I home". /where reports what the server really sees, which
+# is how that was established in the first place.
+HOME_NETWORKS_ENV = "JARVIS_HOME_NETWORKS"
+DEFAULT_HOME_NETWORKS = "192.168.,10.,172.16.,127.0.0.1,::1"
+
 # Below this, a recording is too short to be a command. 16 kHz mono
 # 16-bit is 32000 bytes a second, so this is about a third of a second
 # of audio plus the WAV header -- shorter than anyone can say anything,
 # but long enough that a real short command like "stop" still gets
 # through.
 MIN_VOICE_BYTES = 44 + 32000 // 3
+
+
+def home_networks():
+    """Address prefixes counted as being at home."""
+    raw = os.getenv(HOME_NETWORKS_ENV) or DEFAULT_HOME_NETWORKS
+
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def at_home(address):
+    """Whether a client address looks like the home network.
+
+    Free, needs no permission and costs no battery -- the server sees
+    where a request came from regardless. It answers a coarser question
+    than GPS ("am I on my own wifi") but answers it without asking
+    anyone for anything.
+    """
+    address = (address or "").strip()
+
+    if not address:
+        return False
+
+    return any(address.startswith(prefix) for prefix in home_networks())
 
 
 def local_address():
@@ -510,6 +547,51 @@ class PhoneServer:
                 "Content-Type": "text/html; charset=utf-8"
             }
 
+        @app.get("/where")
+        def where():
+            """What the server sees about where this request came from.
+
+            Deliberately reports the raw address as well as the verdict.
+            Whether a phone at home arrives from a 192.168 address or a
+            Tailscale one depends on settings nobody should have to
+            guess at -- so this makes it observable, and the home
+            network list can then be set from what actually happens.
+            """
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            address = request.remote_addr or ""
+
+            return jsonify({
+                "address": address,
+                "home": at_home(address),
+                "networks": home_networks(),
+            })
+
+        @app.post("/location")
+        def location_report():
+            """Where the phone says it is.
+
+            Sent only when asked for: a browser cannot report position
+            in the background anyway, and asking continuously would
+            cost battery for readings nobody wanted.
+            """
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            payload = request.get_json(silent=True) or {}
+
+            accepted = location.remember_position(
+                payload.get("latitude"),
+                payload.get("longitude"),
+                payload.get("accuracy"),
+            )
+
+            if not accepted:
+                return jsonify({"error": "Unusable position."}), 400
+
+            return jsonify({"ok": True, "home": location.is_home()})
+
         @app.get("/health")
         def health():
             # Deliberately open: the page polls this to tell "JARVIS
@@ -929,6 +1011,12 @@ PAGE = """<!DOCTYPE html>
     filter: grayscale(0);
   }
   #mute.off { filter: grayscale(1); opacity: 0.4; }
+  #locate {
+    background: none; border: none; padding: 0 0 0 10px;
+    font-size: 16px; color: var(--ink); line-height: 1;
+  }
+  #locate.sent { filter: none; opacity: 1; }
+  #locate.idle { opacity: 0.45; }
   #notify {
     background: none;
     border: none;
@@ -1017,6 +1105,7 @@ PAGE = """<!DOCTYPE html>
     <span id="state">connecting</span>
     <button id="notify" title="notifications">🔔</button>
     <button id="mute" title="voice">&#128266;</button>
+    <button id="locate" title="send my location">&#128205;</button>
   </header>
 
   <div id="reactor-wrap">
@@ -1683,6 +1772,64 @@ async function submit() {
 }
 
 const notify = document.getElementById("notify");
+// Position is sent when asked for, never continuously. A browser stops
+// reporting the moment the page is backgrounded or the screen locks, so
+// a background watch would drain the battery for readings that stop
+// arriving exactly when they would have been interesting.
+const locate = document.getElementById("locate");
+locate.classList.add("idle");
+
+locate.addEventListener("click", () => {
+  if (!navigator.geolocation) {
+    add("This browser can't report a location, sir.", "oops");
+    return;
+  }
+
+  locate.textContent = "⏳";
+
+  navigator.geolocation.getCurrentPosition(
+    async (position) => {
+      try {
+        const res = await fetch(
+          "/location?t=" + encodeURIComponent(TOKEN),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+              accuracy: position.coords.accuracy
+            })
+          }
+        );
+
+        locate.textContent = "📍";
+
+        if (res.ok) {
+          locate.classList.remove("idle");
+          locate.classList.add("sent");
+          add("Location sent, sir.", "jarvis");
+        } else {
+          add("He couldn't use that position, sir.", "oops");
+        }
+      } catch (e) {
+        locate.textContent = "📍";
+        add("Couldn't send your location, sir.", "oops");
+      }
+    },
+    (error) => {
+      locate.textContent = "📍";
+      add(
+        error.code === error.PERMISSION_DENIED
+          ? "Location permission was refused, sir."
+          : "Couldn't get a location fix, sir.",
+        "oops"
+      );
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
+  );
+});
+
 const mute = document.getElementById("mute");
 notify.addEventListener("click", () => {
   enableNotifications();

@@ -35,6 +35,7 @@ from actions import (
     git_tasks,
     image_choices,
     images,
+    location,
     journal,
     market_report,
     markets,
@@ -358,6 +359,19 @@ _FAST_PHRASES = (
       "how many documents do i have", "what have you read",
       "what documents are loaded", "list my documents",
       "list the documents"), "list_documents"),
+    # Deliberately not "I'm home": that far more often announces an
+    # arrival than redefines where home is, and getting it wrong
+    # overwrites the one fact this depends on. Setting home should
+    # sound like setting home.
+    (("this is home", "this is my home", "remember this as home",
+      "set this as home", "remember where i am",
+      "save this as home"), "set_home"),
+    (("where am i", "where am i now", "whats my location",
+      "what is my location", "where is my phone"), "where_am_i"),
+    (("how far am i from home", "how far from home am i",
+      "how far away am i", "am i far from home",
+      "how far is home"), "distance_from_home"),
+    (("am i home", "am i at home"), "am_i_home"),
     (("what patterns have you noticed", "what have you noticed about me",
       "what patterns do you know", "list my patterns",
       "list the patterns", "what patterns are there"),
@@ -4121,6 +4135,29 @@ def _handle_command(command):
 
     if intent == "list_documents":
         return _query(intent, documents.status)
+
+    if intent == "set_home":
+        return _query(intent, location.set_home)
+
+    if intent == "where_am_i":
+        return _query(intent, location.describe_position)
+
+    if intent == "distance_from_home":
+        return _query(intent, location.describe_distance)
+
+    if intent == "am_i_home":
+        def _say_home():
+            state = location.is_home()
+
+            if state is None:
+                return location.describe_position()
+
+            return (
+                "You were home, sir." if state
+                else location.describe_distance()
+            )
+
+        return _query(intent, _say_home)
 
     if intent == "list_patterns":
         return _query(intent, patterns.describe)
