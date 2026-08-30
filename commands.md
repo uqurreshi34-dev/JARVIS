@@ -213,7 +213,7 @@ still works.
 | plot my sales csv | asks which columns |
 | names on x axis and salary on y axis | draws it |
 | save the chart | keeps it, any time later |
-| close the chart | dismisses the panel |
+| close the chart | dismisses it |
 
 ## News
 
@@ -223,7 +223,7 @@ still works.
 | show me america news | also world, europe, tech, business, sport, science, politics, health |
 | expand story 3 | reads it out |
 | show me the picture for story 2 | shows the photograph |
-| close the news | dismisses the panel |
+| close the news | dismisses it |
 
 ## Calendar
 
@@ -386,8 +386,8 @@ from the page, so he tells you *when* the reading was taken rather than
 pretending to know where you are this second.
 
 Anywhere within about 120 metres counts as home. Phone GPS isn't precise
-enough to do better, and a tighter radius would say you were out while you
-sat in your own front room.
+enough to do better, and a tighter radius would say you were out while
+you sat in your own front room.
 
 Note he won't take "I'm home" as setting home — that far more often
 means you've just arrived, and getting it wrong would overwrite the one
