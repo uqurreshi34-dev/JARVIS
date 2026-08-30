@@ -4253,58 +4253,66 @@ def _handle_command(command):
             suggestions = contacts.close_matches(verbatim_text or "")
 
             if suggestions:
+                # Only the best one is offered, so the reply can be a
+                # plain yes or no. Asking the user to say the name
+                # again would be asking them to repeat the exact word
+                # that was just misheard -- and it would very likely be
+                # misheard the same way twice.
+                suggested = suggestions[0]
                 action_asked = application
+                # The message lives in "project"; "text" is the
+                # (misheard) contact name, which would otherwise be
+                # sent as the body of the message.
+                message_asked = project
 
-                def _use_suggestion(reply):
-                    # "no", "none", "never mind" -- and a bare "no"
-                    # would otherwise be looked up as a contact name.
-                    if _is_choice_cancel(reply) or reply.strip().casefold() in (
-                        "no", "nope", "neither", "nobody",
-                    ):
+                def _confirm_suggestion(reply):
+                    answer = (reply or "").strip().casefold()
+
+                    if answer in _YES:
+                        return {
+                            "kind": "query",
+                            "intent": "phone_action",
+                            "response": None,
+                            "application": action_asked,
+                            "text": suggested,
+                            "project": message_asked,
+                            "action": lambda: contacts.desk_reply(
+                                action_asked, suggested
+                            ),
+                        }
+
+                    if answer in _NO:
                         return _query(
                             "phone_action_ask",
                             lambda: "Very good, sir.",
                         )
 
-                    name, number = contacts.find(reply)
+                    # Not a yes or a no, so treated as naming someone
+                    # else -- "no, mum" and simply "mum" both work.
+                    name, number = contacts.find(answer)
 
-                    if not number:
-                        return _query(
-                            "phone_action_ask",
-                            lambda: (
-                                f"I don't have {safety.clean(reply, 40)} "
-                                "either, sir."
+                    if number:
+                        return {
+                            "kind": "query",
+                            "intent": "phone_action",
+                            "response": None,
+                            "application": action_asked,
+                            "text": name,
+                            "project": message_asked,
+                            "action": lambda: contacts.desk_reply(
+                                action_asked, name
                             ),
-                        )
+                        }
 
-                    # Same shape the phone_action branch returns:
-                    # spoken words for the desk, and the fields main.py
-                    # needs to turn it into a link on the phone.
-                    return {
-                        "kind": "query",
-                        "intent": "phone_action",
-                        "response": None,
-                        "application": action_asked,
-                        "text": name,
-                        "project": None,
-                        "action": lambda: contacts.desk_reply(
-                            action_asked, name
-                        ),
-                    }
+                    return _query(
+                        "phone_action_ask",
+                        lambda: "Never mind, sir.",
+                    )
 
-                listed = " or ".join(suggestions)
-
-                # Deliberately a different intent from phone_action.
-                # main.py intercepts every phone_action result and
-                # replaces it with a dialling link, which would swallow
-                # this question before it was ever asked -- the answer
-                # below carries the real intent once there is something
-                # to dial.
                 return _ask(
                     "phone_action_ask",
-                    f"I don't have that in your contacts, sir. "
-                    f"Did you mean {listed}?",
-                    _use_suggestion,
+                    f"Did you mean {suggested}, sir?",
+                    _confirm_suggestion,
                 )
 
         # commands.py has no idea which device asked. main.py does, and
