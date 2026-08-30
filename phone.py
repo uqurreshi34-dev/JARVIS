@@ -1703,6 +1703,7 @@ let energy = 0;        // 0..1, what the rings actually react to
 let target = 0;        // where energy is heading
 let sweep = 0;         // rotating arc position
 let phase = 0;         // slow idle breath
+let triangleSpin = 0;
 
 // Reading the real output while it plays, so the rings move with the
 // voice rather than to a guess about how long it might last.
@@ -1769,6 +1770,30 @@ function drawTicks(colour) {
   }
 }
 
+function drawTriangle(colour, alpha, rotation, radius) {
+  ctx2d.save();
+  ctx2d.rotate(rotation);
+
+  ctx2d.strokeStyle = rgba(colour, alpha);
+  ctx2d.lineWidth = 1.4;
+
+  for (let angle = 0; angle < 360; angle += 120) {
+    ctx2d.save();
+    ctx2d.rotate((angle * Math.PI) / 180);
+
+    ctx2d.beginPath();
+    ctx2d.moveTo(0, -radius * 0.78);
+    ctx2d.lineTo(radius * 0.62, radius * 0.42);
+    ctx2d.lineTo(-radius * 0.62, radius * 0.42);
+    ctx2d.closePath();
+    ctx2d.stroke();
+
+    ctx2d.restore();
+  }
+
+  ctx2d.restore();
+}
+
 function drawFrame() {
   const colour = PALETTE[hudState];
 
@@ -1777,6 +1802,12 @@ function drawFrame() {
   energy += (target - energy) * (target > energy ? 0.35 : 0.08);
   sweep = (sweep + 1.1) % 360;
   phase += 0.02;
+  const triangleSpeed =
+  hudState === "thinking" ? 0.085 :
+  hudState === "speaking" ? 0.035 :
+  0.010;
+
+triangleSpin = (triangleSpin + triangleSpeed) % (Math.PI * 2);
 
   // Idle has no input of its own, so it breathes slowly rather than
   // sitting perfectly still, which reads as switched off.
@@ -1823,6 +1854,18 @@ function drawFrame() {
   ctx2d.fillStyle = rgba([235, 250, 255], 0.55 + level * 0.45);
   ctx2d.arc(0, 0, coreRadius * 0.42, 0, Math.PI * 2);
   ctx2d.fill();
+
+  const triangleAlpha =
+  hudState === "speaking"
+    ? 120 + level * 100
+    : 150 + level * 70;
+
+  drawTriangle(
+    colour,
+    triangleAlpha,
+    triangleSpin,
+    coreRadius * 0.95
+  );
 
   arc(coreRadius, 0, 360, colour, 0.8, 1.6);
 
