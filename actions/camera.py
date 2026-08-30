@@ -332,6 +332,88 @@ def look(question=None):
     return answer, image
 
 
+def remember_image(data):
+    """Record a picture taken somewhere else, as if it were just seen.
+
+    The phone has its own camera and JARVIS has no way to reach it, so
+    the phone captures and sends the picture here. Storing it as the
+    last image means everything else -- saving it, asking about it
+    again -- works on it unchanged, rather than needing a second set of
+    commands that happen to mean the same thing.
+    """
+    global _last_image
+
+    _last_image = data
+
+    # Brightness normally comes from the raw frame during encoding.
+    # A picture that arrived already encoded has to be measured here,
+    # or the darkness check would silently use the last webcam frame's
+    # reading and answer about the wrong picture.
+    _brightness["value"] = _measure_brightness(data)
+
+    return True
+
+
+def _measure_brightness(data):
+    """Average brightness of encoded image bytes, or None."""
+    if not _PIL or not data:
+        return None
+
+    try:
+        image = Image.open(io.BytesIO(data)).convert("L")
+
+        return float(np.asarray(image).mean())
+    except Exception:
+        return None
+
+
+def describe_image(data, question=None):
+    """Answer a question about a picture taken elsewhere.
+
+    The same prompt and the same darkness check as look(), without the
+    capture: the picture is already here. Kept beside look() rather
+    than in the phone code so both eyes describe what they see the same
+    way, and a change to the wording reaches both.
+    """
+    global _last_question
+
+    if not data:
+        return "I didn't get a picture, sir."
+
+    remember_image(data)
+
+    if too_dark():
+        level = brightness()
+
+        if level is not None:
+            print(f"[JARVIS] the picture is too dark (brightness {level:.0f})")
+
+        return (
+            "It's too dark for me to see anything, sir. "
+            "A light would help."
+        )
+
+    try:
+        from providers import vision
+    except Exception as error:
+        print(f"[JARVIS] vision unavailable: {error}")
+
+        return "I can see it, but I can't describe it, sir."
+
+    asked = (question or "").strip() or _last_question
+    _last_question = asked
+
+    answer = vision(f"{_SYSTEM_PROMPT}\n\nQuestion: {asked}", data)
+
+    if not answer:
+        return (
+            "I have the picture, sir, but couldn't get a description. "
+            "The console has the detail."
+        )
+
+    return answer
+
+
 def permission_hint():
     """What to tell the user when the camera cannot be reached."""
     return (

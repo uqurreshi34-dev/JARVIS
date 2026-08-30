@@ -1453,6 +1453,34 @@ def _stop_looking():
     return True
 
 
+def look_at_phone_picture(image, question=None):
+    """Describe a picture the phone took, and offer to keep it.
+
+    The offer is a real pending confirmation, so "yes" and "no" are
+    handled by the same machinery as every other confirmation rather
+    than a second yes/no of its own. Saying nothing leaves the picture
+    unsaved, which is the right default for something taken by
+    accident.
+    """
+    answer = camera.describe_image(image, question)
+
+    if not camera.last_image():
+        return answer
+
+    _confirm(
+        "save_picture",
+        "",
+        _save_picture,
+        yes_text="Saving it, sir.",
+        no_text="Very good, sir.",
+    )
+
+    # The description already ends with "sir", so the offer does not
+    # repeat it -- "a mug of tea, sir. Shall I keep it, sir?" reads
+    # like a butler with a stammer.
+    return f"{answer} Shall I keep it?"
+
+
 def _save_picture():
     """Save the camera's last picture to the JARVIS folder."""
     image = camera.last_image()

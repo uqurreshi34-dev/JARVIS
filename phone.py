@@ -91,6 +91,9 @@ REQUEST_TIMEOUT = 60
 # running for days doesn't grow without limit.
 MAX_NOTICES = 40
 
+# Maximum size of a picture sent from the phone camera.
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
 # Address prefixes that mean "on the home network".
 #
 # Worth knowing before relying on this: over Tailscale it tells you
@@ -489,6 +492,7 @@ class PhoneServer:
         self._handler = None
         self._server = None
         self._thread = None
+        self._look_handler = None
 
         # Things JARVIS said unprompted that the phone hasn't collected
         # yet. Battery warnings, market alerts, pattern runs and the
@@ -638,6 +642,13 @@ class PhoneServer:
                     if item.get("endpoint") not in expired
                 ]
 
+    def set_look_handler(self, handler):
+        """Register what describes a picture from the phone.
+
+        Takes (image bytes, question) and returns what to say.
+        """
+        self._look_handler = handler
+
     def set_handler(self, handler):
         """Register what actually runs a command.
 
@@ -720,6 +731,67 @@ class PhoneServer:
                 "home": at_home(address),
                 "networks": home_networks(),
             })
+
+        @app.post("/transcribe")
+        def transcribe_only():
+            """Turn speech into words without acting on them.
+
+            /voice transcribes and then runs the result as a command, which is
+            wrong for a question about a picture: "what am I holding" should
+            be asked of the photograph, not carried out by the desk.
+            """
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            audio = request.get_data()
+
+            if not audio or len(audio) < MIN_VOICE_BYTES:
+                return jsonify({"heard": ""})
+
+            set_phone_active(True)
+
+            try:
+                text = transcriber.transcribe_wav(audio)
+            except Exception as error:
+                print(f"[JARVIS] phone transcription failed: {error}")
+                return jsonify({"heard": ""})
+
+            return jsonify({"heard": text or ""})
+
+        @app.post("/look")
+        def look():
+            """A picture from the phone camera, and what to make of it.
+            """
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            if not self._look_handler:
+                return jsonify({
+                    "error": "JARVIS is still starting up."
+                }), 503
+
+            image = request.get_data()
+
+            if not image:
+                return jsonify({"error": "No picture received."}), 400
+
+            if len(image) > MAX_IMAGE_BYTES:
+                return jsonify({
+                    "error": "That picture is too large, sir."
+                }), 413
+
+            question = (request.args.get("q") or "").strip()
+
+            try:
+                reply = self._look_handler(image, question)
+            except Exception as error:
+                print(f"[JARVIS] phone camera failed: {error}")
+
+                return jsonify({
+                    "error": "I couldn't look at that."
+                }), 500
+
+            return jsonify({"reply": reply or ""})
 
         @app.post("/location")
         def location_report():
@@ -1197,6 +1269,63 @@ PAGE = """<!DOCTYPE html>
     color: var(--ink);
     line-height: 1;
   }
+  #camera {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: #000;
+  flex-direction: column;
+}
+
+#camera.open {
+  display: flex;
+}
+
+#preview {
+  flex: 1;
+  width: 100%;
+  object-fit: cover;
+  min-height: 0;
+}
+
+#camera-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  padding: 18px 12px calc(18px + env(safe-area-inset-bottom));
+  background: #000;
+}
+
+#camera-bar button {
+  background: none;
+  border: none;
+  color: var(--ink);
+  font-size: 22px;
+  padding: 8px 18px;
+  border-radius: 50%;
+}
+
+#shutter {
+  font-size: 46px !important;
+  color: var(--ink);
+  line-height: 1;
+  padding: 0 !important;
+}
+
+#camera-ask.recording {
+  color: var(--bad);
+}
+
+#camera-hint {
+  position: absolute;
+  bottom: 92px;
+  width: 100%;
+  text-align: center;
+  color: var(--dim);
+  font-size: 12px;
+  pointer-events: none;
+}
   #reactor-wrap {
     position: relative; flex: none;
     height: 190px; display: flex; align-items: center;
@@ -1283,7 +1412,22 @@ PAGE = """<!DOCTYPE html>
     <button id="notify" title="notifications">🔔</button>
     <button id="mute" title="voice">&#128266;</button>
     <button id="locate" title="send my location">&#128205;</button>
+    <button id="camera-open" title="look at something">&#128247;</button>
   </header>
+
+  <div id="camera">
+    <video id="preview" playsinline autoplay muted></video>
+
+    <div id="camera-bar">
+      <button id="camera-close" type="button" title="close">&#10005;</button>
+      <button id="shutter" type="button" title="look">&#9679;</button>
+      <button id="camera-ask" type="button" title="ask about this">&#127908;</button>
+    </div>
+
+    <div id="camera-hint">
+      Tap the circle, or the microphone to ask
+    </div>
+  </div>
 
   <div id="reactor-wrap">
     <canvas id="reactor"></canvas>
@@ -1314,6 +1458,15 @@ const mic = document.getElementById("mic");
 const dot = document.getElementById("dot");
 const state = document.getElementById("state");
 const hint = document.getElementById("hint");
+const cameraPanel = document.getElementById("camera");
+const preview = document.getElementById("preview");
+const cameraOpen = document.getElementById("camera-open");
+const cameraClose = document.getElementById("camera-close");
+const shutter = document.getElementById("shutter");
+const cameraAsk = document.getElementById("camera-ask");
+
+let cameraStream = null;
+let askingAboutFrame = null;
 
 let alive = false;
 let voiceOn = true;
@@ -2056,6 +2209,158 @@ mute.addEventListener("click", () => {
   unlockAudio();
 });
 
+async function openCamera() {
+  if (!navigator.mediaDevices) {
+    add("This browser won't give me the camera, sir.", "oops");
+    return;
+  }
+
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } },
+      audio: false
+    });
+
+    preview.srcObject = cameraStream;
+    cameraPanel.classList.add("open");
+  } catch (e) {
+    add(
+      e && e.name === "NotAllowedError"
+        ? "Camera permission was refused, sir."
+        : "I couldn't open the camera, sir.",
+      "oops"
+    );
+  }
+}
+
+function closeCamera() {
+  cameraPanel.classList.remove("open");
+
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(track => track.stop());
+    cameraStream = null;
+  }
+
+  preview.srcObject = null;
+  askingAboutFrame = null;
+}
+
+function grabFrame() {
+  if (!preview.videoWidth) return null;
+
+  const canvas = document.createElement("canvas");
+  const width = Math.min(1280, preview.videoWidth);
+
+  canvas.width = width;
+  canvas.height = Math.round(
+    preview.videoHeight * width / preview.videoWidth
+  );
+
+  canvas.getContext("2d").drawImage(
+    preview,
+    0,
+    0,
+    canvas.width,
+    canvas.height
+  );
+
+  return canvas;
+}
+
+async function transcribeOnly(wav) {
+  try {
+    const res = await fetch(
+      "/transcribe?t=" + encodeURIComponent(TOKEN),
+      {
+        method: "POST",
+        headers: { "Content-Type": "audio/wav" },
+        body: wav
+      }
+    );
+
+    if (!res.ok) return "";
+
+    const data = await res.json();
+
+    return (data.heard || "").trim();
+  } catch (e) {
+    return "";
+  }
+}
+
+async function sendLook(canvas, question) {
+  setState("busy", "thinking");
+
+  const blob = await new Promise(resolve =>
+    canvas.toBlob(resolve, "image/jpeg", 0.85)
+  );
+
+  if (!blob) {
+    add("I couldn't read that picture, sir.", "oops");
+    setState("live", "ready");
+    return;
+  }
+
+  add(question || "What am I looking at?", "me");
+
+  try {
+    const res = await fetch(
+      "/look?t=" + encodeURIComponent(TOKEN) +
+      (question ? "&q=" + encodeURIComponent(question) : ""),
+      {
+        method: "POST",
+        headers: { "Content-Type": "image/jpeg" },
+        body: blob
+      }
+    );
+
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      add(data.error || "I couldn't look at that, sir.", "oops");
+    } else if (data.reply) {
+      add(data.reply, "jarvis");
+      await speak(data.reply);
+    }
+  } catch (e) {
+    add("No reply from your PC, sir.", "oops");
+  }
+
+  setState("live", "ready");
+}
+
+cameraOpen.addEventListener("click", () => {
+  unlockAudio();
+  openCamera();
+});
+
+cameraClose.addEventListener("click", closeCamera);
+
+shutter.addEventListener("click", async () => {
+  const canvas = grabFrame();
+
+  if (!canvas) return;
+
+  closeCamera();
+  await sendLook(canvas, "");
+});
+
+cameraAsk.addEventListener("click", async () => {
+  if (recording) {
+    cameraAsk.classList.remove("recording");
+    await stopRecording();
+    return;
+  }
+
+  askingAboutFrame = grabFrame();
+
+  if (!askingAboutFrame) return;
+
+  cameraAsk.classList.add("recording");
+  unlockAudio();
+  startRecording();
+});
+
 function encodeWav(samples, sampleRate) {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
   const view = new DataView(buffer);
@@ -2319,6 +2624,7 @@ async function stopRecording() {
 
   stopRecordingUI();
 
+
   // A tap rather than a hold. Caught here as well as on the server so
   // a stray touch costs nothing at all -- no upload, no transcription,
   // and no wait while the PC works out that a fraction of a second of
@@ -2330,6 +2636,29 @@ async function stopRecording() {
     // coming to release it.
     await setPhoneActive(false);
     setState("live", "ready");
+    return;
+  }
+
+    if (askingAboutFrame) {
+    const frame = askingAboutFrame;
+    askingAboutFrame = null;
+
+    cameraAsk.classList.remove("recording");
+    closeCamera();
+
+    const spoken = await transcribeOnly(
+      encodeWav(resample16k(combined, sourceRate), 16000)
+    );
+
+    await setPhoneActive(false);
+
+    if (!spoken) {
+      add("I didn't catch the question, sir.", "oops");
+      setState("live", "ready");
+      return;
+    }
+
+    await sendLook(frame, spoken);
     return;
   }
 

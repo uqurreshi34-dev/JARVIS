@@ -22,6 +22,7 @@ from image_panel import ImagePanel
 import commands
 from commands import (
     handle_command,
+    look_at_phone_picture,
     reminder_manager,
     select_image_choice,
     set_brain_listener,
@@ -295,6 +296,7 @@ class Assistant:
         # handler runs on the server's own thread, which is why
         # handle_command serialises itself -- see _command_lock.
         phone_server.set_handler(self._on_phone_command)
+        phone_server.set_look_handler(look_at_phone_picture)
         phone_server.start()
 
         self._say(_greeting())
