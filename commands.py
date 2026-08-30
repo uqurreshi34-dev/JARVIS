@@ -4266,7 +4266,18 @@ def _handle_command(command):
                 message_asked = project
 
                 def _confirm_suggestion(reply):
-                    answer = (reply or "").strip().casefold()
+                    # _normalise, not a bare casefold: the transcriber
+                    # returns "Yes." with a full stop, which a plain
+                    # comparison misses -- so a yes was being read as
+                    # someone's name and coming back "never mind".
+                    # This is what _resolve_pending has always used.
+                    answer = _normalise(reply)
+
+                    # _normalise strips some short words as filler --
+                    # "yeah" reduces to nothing at all -- so the raw
+                    # reply is checked too before giving up on it.
+                    if not answer:
+                        answer = (reply or "").strip().casefold().strip(".,!?")
 
                     if answer in _YES:
                         return {
