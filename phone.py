@@ -21,6 +21,7 @@ import json
 import os
 import secrets
 import socket
+import subprocess
 import threading
 import time
 
@@ -71,6 +72,11 @@ VAPID_SUBJECT_ENV = "JARVIS_VAPID_SUBJECT"
 # name the certificate is actually issued for; a bare IP would fail
 # validation however good the certificate is.
 HOST_ENV = "JARVIS_PHONE_HOST"
+
+# Any further addresses or names the certificate should vouch for,
+# comma separated. Rarely needed: the LAN and Tailscale addresses are
+# found automatically.
+EXTRA_ADDRESSES_ENV = "JARVIS_EXTRA_ADDRESSES"
 CA_FILE = os.path.join(
     os.path.dirname(__file__),
     "jarvis-phone-ca.cer"
@@ -149,6 +155,100 @@ def local_address():
         probe.close()
 
 
+def _certificate_covers(path, addresses):
+    """Whether an existing certificate vouches for every address.
+
+    Cheap to check and worth checking: a certificate that predates the
+    machine joining a Tailnet has no idea about the new address, and
+    the only symptom is a browser warning that looks like something
+    else entirely.
+    """
+    if not addresses:
+        return True
+
+    try:
+        from cryptography import x509
+
+        with open(path, "rb") as handle:
+            certificate = x509.load_pem_x509_certificate(handle.read())
+
+        names = certificate.extensions.get_extension_for_class(
+            x509.SubjectAlternativeName
+        ).value
+
+        covered = {str(entry) for entry in names.get_values_for_type(
+            x509.IPAddress
+        )}
+        covered |= set(names.get_values_for_type(x509.DNSName))
+
+    except Exception:
+        # Unreadable, or built without the extension. Treated as not
+        # covering, so it gets replaced rather than silently kept.
+        return False
+
+    return all(address in covered for address in addresses)
+
+
+def tailscale_address():
+    """This machine's Tailscale address, or None.
+
+    Asks Tailscale rather than guessing: the CLI is the only thing that
+    reliably knows, and the address matters because a certificate has
+    to name it or the browser refuses to trust the connection.
+    """
+    candidates = [
+        "tailscale",
+        r"C:\Program Files\Tailscale\tailscale.exe",
+        "/usr/bin/tailscale",
+        "/usr/local/bin/tailscale",
+        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    ]
+
+    for command in candidates:
+        try:
+            result = subprocess.run(
+                [command, "ip", "-4"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+
+        address = (result.stdout or "").strip().splitlines()
+
+        if result.returncode == 0 and address:
+            return address[0].strip()
+
+    return None
+
+
+def certificate_addresses():
+    """Every address the certificate should vouch for.
+
+    The LAN address alone is not enough. Reached over Tailscale the
+    connection arrives on a different address entirely, and a
+    certificate that does not name it makes the browser warn -- which
+    on Android matters more than it should, because a MagicDNS bug
+    there can leave the address as the only way in.
+    """
+    addresses = []
+
+    for candidate in (local_address(), tailscale_address()):
+        if candidate and candidate not in addresses:
+            addresses.append(candidate)
+
+    extra = os.getenv(EXTRA_ADDRESSES_ENV) or ""
+
+    for candidate in extra.split(","):
+        candidate = candidate.strip()
+
+        if candidate and candidate not in addresses:
+            addresses.append(candidate)
+
+    return addresses
+
+
 def ensure_certificate():
     """Create a local CA and a server certificate for JARVIS HTTPS."""
 
@@ -157,7 +257,28 @@ def ensure_certificate():
         and os.path.exists(KEY_FILE)
         and os.path.exists(CA_FILE)
     ):
-        return True
+        if _certificate_covers(CERT_FILE, certificate_addresses()):
+            return True
+
+        # An address JARVIS can now be reached on that the existing
+        # certificate says nothing about -- a Tailscale address added
+        # after it was first generated, typically. Regenerated rather
+        # than left to warn, since a browser warning is the difference
+        # between the phone working and not.
+        print(
+            "[JARVIS] the certificate does not cover every address; "
+            "regenerating it."
+        )
+        print(
+            "[JARVIS] you will need to install the new "
+            f"{os.path.basename(CA_FILE)} on your phone."
+        )
+
+        for path in (CERT_FILE, KEY_FILE, CA_FILE):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     print("[JARVIS] generating local HTTPS certificates...")
 
@@ -170,8 +291,34 @@ def ensure_certificate():
         from cryptography.hazmat.primitives.asymmetric import rsa
         from cryptography.x509.oid import NameOID
 
-        hostname = local_address()
         now = datetime.utcnow()
+
+        # Everything JARVIS can be reached on, so the browser trusts
+        # the connection whichever route it arrives by.
+        alternative_names = [x509.DNSName("localhost")]
+
+        for address in certificate_addresses():
+            try:
+                alternative_names.append(
+                    x509.IPAddress(ipaddress.ip_address(address))
+                )
+            except ValueError:
+                # A name rather than an address, which is equally
+                # usable -- a Tailscale MagicDNS name, for instance.
+                alternative_names.append(x509.DNSName(address))
+
+        configured_host = os.getenv(HOST_ENV)
+
+        if configured_host:
+            try:
+                ipaddress.ip_address(configured_host)
+            except ValueError:
+                alternative_names.append(x509.DNSName(configured_host))
+
+        print(
+            "[JARVIS] certificate will cover: "
+            + ", ".join(str(n.value) for n in alternative_names)
+        )
 
         # -------------------------------------------------------------
         # 1. Create the local JARVIS Certificate Authority.
@@ -183,7 +330,18 @@ def ensure_certificate():
         )
 
         ca_subject = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, "JARVIS Local CA"),
+            # Dated, so a regenerated authority is a visibly different
+            # entry on the phone. Every one used to be called exactly
+            # "JARVIS Local CA", which meant a new one installed
+            # alongside an old one collided -- Android files them by a
+            # hash of the subject name, so two identically named
+            # authorities land on the same entry and it may check
+            # against the wrong one. The symptom is a certificate
+            # error that looks like a name mismatch and isn't.
+            x509.NameAttribute(
+                NameOID.COMMON_NAME,
+                f"JARVIS Local CA {now.strftime('%Y-%m-%d %H%M')}",
+            ),
         ])
 
         ca_certificate = (
@@ -226,12 +384,7 @@ def ensure_certificate():
             .not_valid_before(now - timedelta(minutes=1))
             .not_valid_after(now + timedelta(days=3650))
             .add_extension(
-                x509.SubjectAlternativeName([
-                    x509.DNSName("localhost"),
-                    x509.IPAddress(
-                        ipaddress.ip_address(hostname)
-                    ),
-                ]),
+                x509.SubjectAlternativeName(alternative_names),
                 critical=False,
             )
             .add_extension(

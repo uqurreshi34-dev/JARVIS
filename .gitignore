@@ -8,3 +8,7 @@ model/
 jarvis-phone-cert.pem
 jarvis-phone-key.pem
 jarvis-phone-ca.cer
+*.ts.net.crt
+*.ts.net.key
+jarvis-phone-*.pem
+jarvis-phone-*.cer
