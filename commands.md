@@ -213,7 +213,7 @@ still works.
 | plot my sales csv | asks which columns |
 | names on x axis and salary on y axis | draws it |
 | save the chart | keeps it, any time later |
-| close the chart | dismisses it |
+| close the chart | dismisses the panel |
 
 ## News
 
@@ -328,7 +328,7 @@ Facts are kept in `memory.txt`, editable by hand.
 | I am from Madrid | weather follows it |
 | I prefer short answers | shortens spoken answers |
 | my default project is JARVIS | for "open my project" |
-| my calendar is local | stops pushing to Outlook |
+| my calendar is local | stops pushing events to Outlook |
 | what do you know about me | reads it back |
 | forget about London | removes it |
 
