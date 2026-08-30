@@ -784,6 +784,7 @@ class PhoneServer:
 
             try:
                 reply = self._look_handler(image, question)
+
             except Exception as error:
                 print(f"[JARVIS] phone camera failed: {error}")
 
@@ -791,7 +792,16 @@ class PhoneServer:
                     "error": "I couldn't look at that."
                 }), 500
 
-            return jsonify({"reply": reply or ""})
+            if isinstance(reply, dict):
+                return jsonify({
+                    "reply": reply.get("reply", ""),
+                    "speak": reply.get("speak", []),
+                })
+
+            return jsonify({
+                "reply": reply or "",
+                "speak": [],
+            })
 
         @app.post("/location")
         def location_report():
@@ -2320,7 +2330,24 @@ async function sendLook(canvas, question) {
       add(data.error || "I couldn't look at that, sir.", "oops");
     } else if (data.reply) {
       add(data.reply, "jarvis");
-      await speak(data.reply);
+
+      const speechParts = Array.isArray(data.speak) && data.speak.length
+        ? data.speak
+        : [data.reply];
+
+      for (let index = 0; index < speechParts.length; index++) {
+        const part = (speechParts[index] || "").trim();
+
+        if (!part) {
+          continue;
+        }
+
+        await speak(part);
+
+        if (index < speechParts.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 900));
+        }
+      }
     }
   } catch (e) {
     add("No reply from your PC, sir.", "oops");

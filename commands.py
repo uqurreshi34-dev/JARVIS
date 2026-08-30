@@ -1478,7 +1478,13 @@ def look_at_phone_picture(image, question=None):
     # The description already ends with "sir", so the offer does not
     # repeat it -- "a mug of tea, sir. Shall I keep it, sir?" reads
     # like a butler with a stammer.
-    return f"{answer} Shall I keep it?"
+    return {
+        "reply": f"{answer} Shall I keep it?",
+        "speak": [
+            answer,
+            "Shall I keep it?",
+        ],
+    }
 
 
 def _save_picture():
