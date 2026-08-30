@@ -178,6 +178,16 @@ there is a timer pretending to be activity.
 Phone commands are still ordinary JARVIS commands: they use the same memory,
 actions, journal and command history as commands spoken at the desk.
 
+The phone camera is part of the same interface. Open it with the camera
+button to use the phone's rear camera, tap the shutter to capture a frame
+and have JARVIS describe it, or tap the microphone to keep the current
+frame and speak a question about exactly that picture. The spoken
+description and the confirmation "Shall I keep it?" are separate utterances,
+so JARVIS pauses naturally between them. Camera pictures are held as the
+current image until the save decision is made; saying yes saves the picture
+under `C:\Users\<you>\JARVIS\images\` using a short descriptive filename
+plus a timestamp, rather than exposing the PC path in JARVIS's spoken reply.
+
 ### Files — `actions/files.py`
 Everything lives in `C:\Users\<you>\JARVIS\`. Nothing outside it can be
 touched; every path is resolved and checked against that root.
@@ -367,7 +377,7 @@ machine — worth knowing plainly rather than discovering later.
 
 Signed commits keep working: JARVIS runs real git, so a GPG passphrase
 prompt appears exactly as it would from a terminal. It never types into
-a terminal and doesn't care which window has focus.
+ a terminal and doesn't care which window has focus.
 
 ### Calendar — `actions/diary.py`
 JARVIS keeps his own calendar in `calendar.txt`, so it works whether or not
@@ -405,6 +415,12 @@ their pictures shown.
 Captures through pygrabber (pure Python DirectShow). Sends one frame to a
 vision model and says what it sees. Detects a too-dark frame locally and
 says so rather than paying for an answer that cannot exist.
+
+Phone camera use is part of the same capability. The phone can capture a
+frame, ask the vision model what it sees, or keep the current frame and
+speak a question about that exact picture. A saved camera picture goes into
+`C:\Users\<you>\JARVIS\images\` only after confirmation and gets a short
+descriptive filename plus a timestamp.
 
 ### Images — `actions/images.py`, `actions/image_choices.py`
 Fetches from Unsplash (a free request, not a paid one — see the cost note
@@ -643,9 +659,7 @@ Microsoft's own DLLs are signed, so anything reaching them through `ctypes`
 or `comtypes` always works. This is why capture uses pygrabber, not OpenCV.
 
 **An API beats an automation interface.** Outlook COM was unavailable on
-this machine ("Invalid class string"), and no code could fix that. The
-Graph API writes to the account rather than the application, so it reaches
-new Outlook, classic Outlook and the web alike.
+this machine ("Invalid class string"), and no code could fix that. The Graph API writes to the account rather than the application, so it reaches new Outlook, classic Outlook and the web alike.
 
 **Measure before fixing.** An eight-second delay was blamed on
 transcription, then synthesis, then the audio device. It was the microphone

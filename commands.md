@@ -265,6 +265,20 @@ Costs an API call, since it needs a vision model.
 | save the picture | keeps it — or saves a fetched image instead, if one's on screen; see Images below |
 | close the camera | releases it |
 
+From the phone, tap the camera button to open the rear camera. Tap the
+shutter to capture a picture and have JARVIS describe it, or tap the camera
+microphone to keep the current frame and ask a spoken question about that
+exact picture. The question is transcribed without being run as a desktop
+command, so "what am I holding?" is asked of the photograph itself.
+
+When JARVIS is asked to keep a phone picture, he confirms first. Saying
+"yes" saves it into `JARVIS\images\` with a short descriptive filename and
+a timestamp; saying no leaves it unsaved. The saved filename is based on
+what the vision model described, but no extra vision request is made just
+to name the file. Camera replies on the phone keep the description and
+"Shall I keep it?" as separate spoken utterances so there is a deliberate
+breath between them.
+
 ## Screen control
 
 Works on whatever window is focused — any application, including a
@@ -429,8 +443,7 @@ out and he'll ask first; set it to `no` for things like tests that are
 safe to just run.
 
 Tasks run in the background and he tells you when they finish, with the
-last few lines of output. The full output goes to a file in your JARVIS
-folder.
+last few lines of output. The full output goes to a file in your JARVIS folder.
 
 ## Git
 
@@ -514,7 +527,7 @@ Nothing non-urgent between 10pm and 8am; it waits.
 ## When something doesn't work
 
 **The phone won't let you grant microphone access, or notifications.** If Chrome says "this
-site can't ask for your permission, close any bubbles or overlays from
+site can't ask you for your permission, close any bubbles or overlays from
 other apps", something on your phone is drawing over the screen and
 Android is blocking the prompt. It names no app, and it is often not one
 you would suspect — a screen recorder, a blue light filter, chat bubbles,
