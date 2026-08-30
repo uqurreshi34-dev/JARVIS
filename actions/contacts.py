@@ -23,6 +23,7 @@ you were about to ring is a record worth not keeping.
 
 import os
 import re
+from difflib import SequenceMatcher
 
 from actions import files, safety
 
@@ -104,6 +105,26 @@ def find(spoken):
     "mum mobile" wins over "mum" when both exist.
     """
     wanted = (spoken or "").strip().casefold()
+
+    # Common spoken variants for the same contact name. These are only
+    # aliases for names already present in contacts.txt; they never create
+    # or infer a new contact.
+    aliases = {
+        "mom": "mum",
+        "mommy": "mum",
+        "mummy": "mum",
+
+        # Common speech-recognition variants for "dad". These are
+        # deliberately scoped to contact lookup, never global command
+        # normalisation.
+        "daddy": "dad",
+        "dadd": "dad",
+        "dan": "dad",
+        "dat": "dad",
+        "done": "dad",
+    }
+
+    wanted = aliases.get(wanted, wanted)
 
     if not wanted:
         return None, None

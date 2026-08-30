@@ -2216,8 +2216,17 @@ _WHATSAPP = re.compile(
     r"(?:my\s+)?(.+?)$"
 )
 _TEXT = re.compile(
-    r"^(?:text|sms|send a text to|send a message to)\s+"
-    r"(?:my\s+)?(.+?)(?:\s+saying\s+(.+))?$"
+    r"^(?:"
+    r"text|txt|tx|sms"
+    r")\s+"
+    r"(?:my\s+)?(.+?)"
+    r"(?:\s+(?:saying|that)\s+(.+)|\s*:\s*(.+))?$"
+)
+
+_SEND_TEXT = re.compile(
+    r"^send\s+(?:a\s+)?(?:text|txt|message)\s+to\s+"
+    r"(?:my\s+)?(.+?)"
+    r"(?:\s+(?:saying|that)\s+(.+)|\s*:\s*(.+))?$"
 )
 
 
@@ -2233,6 +2242,7 @@ def _phone_action_request(text):
         (_CALL, "call"),
         (_WHATSAPP, "whatsapp"),
         (_TEXT, "text"),
+        (_SEND_TEXT, "text"),
     ):
         match = pattern.match(text)
 
@@ -2244,14 +2254,19 @@ def _phone_action_request(text):
         if not spoken:
             return None
 
-        message = (
-            match.group(2).strip()
-            if pattern is _TEXT
-            and match.lastindex
-            and match.lastindex > 1
-            and match.group(2)
-            else None
-        )
+        message = None
+
+        if action == "text":
+            candidates = []
+
+            for index in (2, 3):
+                if match.lastindex and match.lastindex >= index:
+                    value = match.group(index)
+
+                    if value:
+                        candidates.append(value.strip())
+
+            message = candidates[0] if candidates else None
 
         return action, spoken, message
 
@@ -4232,10 +4247,21 @@ def _handle_command(command):
         # commands.py has no idea which device asked. main.py does, and
         # overrides this for the phone -- so the desk answer is the
         # honest default rather than something that looks broken.
-        return _query(
-            intent,
-            lambda: contacts.desk_reply(application, verbatim_text or ""),
-        )
+        # Keep the resolved phone-action fields on the result. main.py
+        # needs them to replace the desk-only response with the real
+        # phone link when the request came from the phone.
+        return {
+            "kind": "query",
+            "intent": intent,
+            "response": None,
+            "action": lambda: contacts.desk_reply(
+                application,
+                verbatim_text or "",
+            ),
+            "application": application,
+            "text": verbatim_text or "",
+            "project": project,
+        }
 
     if intent == "list_contacts":
         return _query(intent, contacts.describe)
