@@ -67,3 +67,15 @@ def describe_capture():
         return None
 
     return "Screenshot saved to your JARVIS folder, sir."
+
+
+# Visual screen inspection is layered on top of this existing screenshot
+# capability. Normal screen-control matching remains local/UIA; the visual
+# layer only takes over when rendered content is worth sending to the vision
+# model, such as a browser or code editor.
+try:
+    from actions import screen_control, screen_vision
+
+    screen_vision.install(screen_control)
+except Exception as error:
+    print(f"[JARVIS] screen vision integration unavailable: {error}")
