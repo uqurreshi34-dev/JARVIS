@@ -377,7 +377,7 @@ machine — worth knowing plainly rather than discovering later.
 
 Signed commits keep working: JARVIS runs real git, so a GPG passphrase
 prompt appears exactly as it would from a terminal. It never types into
- a terminal and doesn't care which window has focus.
+a terminal and doesn't care which window has focus.
 
 ### Calendar — `actions/diary.py`
 JARVIS keeps his own calendar in `calendar.txt`, so it works whether or not
@@ -659,7 +659,9 @@ Microsoft's own DLLs are signed, so anything reaching them through `ctypes`
 or `comtypes` always works. This is why capture uses pygrabber, not OpenCV.
 
 **An API beats an automation interface.** Outlook COM was unavailable on
-this machine ("Invalid class string"), and no code could fix that. The Graph API writes to the account rather than the application, so it reaches new Outlook, classic Outlook and the web alike.
+this machine ("Invalid class string"), and no code could fix that. The
+Graph API writes to the account rather than the application, so it reaches
+new Outlook, classic Outlook and the web alike.
 
 **Measure before fixing.** An eight-second delay was blamed on
 transcription, then synthesis, then the audio device. It was the microphone

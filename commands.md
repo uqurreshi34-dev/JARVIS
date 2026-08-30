@@ -223,7 +223,7 @@ still works.
 | show me america news | also world, europe, tech, business, sport, science, politics, health |
 | expand story 3 | reads it out |
 | show me the picture for story 2 | shows the photograph |
-| close the news | dismisses it |
+| close the news | dismisses the panel |
 
 ## Calendar
 
@@ -386,8 +386,8 @@ from the page, so he tells you *when* the reading was taken rather than
 pretending to know where you are this second.
 
 Anywhere within about 120 metres counts as home. Phone GPS isn't precise
-enough to do better, and a tighter radius would say you were out while
-you sat in your own front room.
+enough to do better, and a tighter radius would say you were out while you
+sat in your own front room.
 
 Note he won't take "I'm home" as setting home — that far more often
 means you've just arrived, and getting it wrong would overwrite the one
@@ -443,7 +443,8 @@ out and he'll ask first; set it to `no` for things like tests that are
 safe to just run.
 
 Tasks run in the background and he tells you when they finish, with the
-last few lines of output. The full output goes to a file in your JARVIS folder.
+last few lines of output. The full output goes to a file in your JARVIS
+folder.
 
 ## Git
 
@@ -527,7 +528,7 @@ Nothing non-urgent between 10pm and 8am; it waits.
 ## When something doesn't work
 
 **The phone won't let you grant microphone access, or notifications.** If Chrome says "this
-site can't ask you for your permission, close any bubbles or overlays from
+site can't ask for your permission, close any bubbles or overlays from
 other apps", something on your phone is drawing over the screen and
 Android is blocking the prompt. It names no app, and it is often not one
 you would suspect — a screen recorder, a blue light filter, chat bubbles,
