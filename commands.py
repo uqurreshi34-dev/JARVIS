@@ -1478,10 +1478,15 @@ def look_at_phone_picture(image, question=None):
     # The description already ends with "sir", so the offer does not
     # repeat it -- "a mug of tea, sir. Shall I keep it, sir?" reads
     # like a butler with a stammer.
+    description = (answer or "").strip()
+
+    if description and description[-1] not in ".!?":
+        description += "."
+
     return {
-        "reply": f"{answer} Shall I keep it?",
+        "reply": f"{description} Shall I keep it?",
         "speak": [
-            answer,
+            description,
             "Shall I keep it?",
         ],
     }

@@ -1867,7 +1867,7 @@ sizeCanvas();
 requestAnimationFrame(drawFrame);
 
 
-async function speak(text) {
+async function speak(text, preloadedBlob = null) {
   if (!voiceOn || !text) return;
 
   // Only reset the state at the end if we actually set it, so a
@@ -1875,13 +1875,19 @@ async function speak(text) {
   let speaking = false;
 
   try {
-    const res = await fetch("/audio?t=" + encodeURIComponent(TOKEN), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: text })
-    });
-    if (!res.ok) return;
-    const blob = await res.blob();
+    let blob = preloadedBlob;
+
+    if (!blob) {
+      const res = await fetch("/audio?t=" + encodeURIComponent(TOKEN), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text })
+      });
+
+      if (!res.ok) return;
+
+      blob = await res.blob();
+    }
     if (player.src) URL.revokeObjectURL(player.src);
     player.src = URL.createObjectURL(blob);
 
@@ -2298,6 +2304,25 @@ async function transcribeOnly(wav) {
   }
 }
 
+async function fetchSpeechAudio(text) {
+  try {
+    const res = await fetch(
+      "/audio?t=" + encodeURIComponent(TOKEN),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text })
+      }
+    );
+
+    if (!res.ok) return null;
+
+    return await res.blob();
+  } catch (e) {
+    return null;
+  }
+}
+
 async function sendLook(canvas, question) {
   setState("busy", "thinking");
 
@@ -2335,6 +2360,12 @@ async function sendLook(canvas, question) {
         ? data.speak
         : [data.reply];
 
+      // Fetch all TTS audio before starting playback.
+      // This prevents a silence while the second sentence is being generated.
+      const audioParts = await Promise.all(
+        speechParts.map(part => fetchSpeechAudio(part))
+      );
+
       for (let index = 0; index < speechParts.length; index++) {
         const part = (speechParts[index] || "").trim();
 
@@ -2342,10 +2373,10 @@ async function sendLook(canvas, question) {
           continue;
         }
 
-        await speak(part);
+        await speak(part, audioParts[index]);
 
         if (index < speechParts.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 900));
+          await new Promise(resolve => setTimeout(resolve, 100));
         }
       }
     }
