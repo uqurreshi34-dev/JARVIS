@@ -26,6 +26,7 @@ the same JARVIS, not a smaller version of him.
 | hold 🎙, speak, release | same, spoken |
 | tap 🔊 | turns the spoken reply on or off |
 | tap 🔔 | once, to allow notifications |
+| tap 📍 | sends where you are |
 
 **No wake word on the phone.** Holding the microphone button already
 says you're talking to him, which is the only job "Jarvis" ever did.
@@ -320,6 +321,31 @@ Facts are kept in `memory.txt`, editable by hand.
 "Remember that…" is optional. He confirms what he understood — if he says
 the vague *"I'll remember that"* rather than *"Your location is Madrid"*,
 that phrasing didn't land.
+
+## Where you are
+
+Only the phone can answer this — your PC has no idea where you are. Tap
+📍 to send your position, then ask.
+
+| Say | Does |
+|---|---|
+| this is home | remembers where you're standing as home |
+| where am I | tells you, and how far from home |
+| how far am I from home | the distance |
+| am I home | yes or how far off you are |
+
+Set home once, standing in it. He needs a fresh 📍 tap before each
+question — a phone stops reporting position the moment you switch away
+from the page, so he tells you *when* the reading was taken rather than
+pretending to know where you are this second.
+
+Anywhere within about 120 metres counts as home. Phone GPS isn't precise
+enough to do better, and a tighter radius would say you were out while
+you sat in your own front room.
+
+Note he won't take "I'm home" as setting home — that far more often
+means you've just arrived, and getting it wrong would overwrite the one
+thing everything else here depends on.
 
 ## Patterns
 

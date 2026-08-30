@@ -121,6 +121,15 @@ as "run the tests" or "run my build". Put the task name in "text". Only
 tasks the user has defined in tasks.txt can be run; never use this to
 invent a command.
 
+Use set_home when the user says the phone is standing in their home and
+wants that remembered, such as "this is home" or "remember this as
+home". Never use it for "I'm home", which announces an arrival far more
+often than it redefines where home is.
+Use where_am_i when the user asks where they are or where their phone
+is. Use distance_from_home for "how far am I from home", and am_i_home
+for "am I home". These rely on a position the phone has reported; if
+none has been, JARVIS says so rather than guessing.
+
 Use git_status when the user asks what has changed in their code, what
 is staged, or for the state of their repository, such as "what have I
 changed" or "what's staged".
@@ -367,6 +376,10 @@ _SCHEMA = {
                 "forget_all_patterns",
                 "list_tasks",
                 "run_task",
+                "set_home",
+                "where_am_i",
+                "distance_from_home",
+                "am_i_home",
                 "git_status",
                 "propose_commit",
                 "proofread",

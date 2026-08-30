@@ -36,7 +36,7 @@ This prevents speech intended for the phone from being heard or acted on by
 the desktop listener. When the phone interaction finishes, the desktop
 microphone is restored.
 
-**100 intents. 473 spoken phrases resolve locally with no API call.**
+**104 intents. 491 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -142,8 +142,9 @@ fails the queue still delivers -- so the phone can lose a notification
 without losing the news.
 
 Whether an announcement is allowed to buzz a phone at all is decided in
-one place, `_push_allowed`, which honours the same quiet hours as
-everything else rather than defining a second set. Keeping that
+one place, `_push_allowed`, which calls `watch.quiet_hours()` rather
+than defining a second set of hours -- so the desk and the phone cannot
+drift apart on when JARVIS goes quiet. Keeping that
 decision in a single named function is what makes it possible later to
 say that some genuinely urgent thing may wake you while ordinary market
 chatter may not.
@@ -220,6 +221,37 @@ editable by hand. Some facts change behaviour rather than being recited:
 Facts are data, never instructions: anything shaped like an order is
 refused at the point of storing, so memory cannot become a way round the
 rules.
+
+### Location — `actions/location.py`
+Where you are, when the phone has said so. The desk cannot answer this:
+a PC knows the city it was told about and nothing more, so this is the
+one capability the phone has that the desk fundamentally lacks.
+
+Position is sent only when the location button is tapped. A browser
+stops reporting the moment its page is backgrounded or the screen
+locks, so a background watch would drain the battery for readings that
+stop arriving exactly when they would be interesting. Answers are
+therefore always dated -- "you were home just now" rather than "you are
+home" -- because claiming present-tense knowledge would be a lie.
+
+Home is captured by standing in it and saying "this is home", and lives
+under its own `home latitude` and `home longitude` in memory. It is
+deliberately not the existing `latitude` and `longitude`, which are the
+city geocoded for the weather: reusing them would point the forecast at
+a doorstep, and a city is nowhere near precise enough to tell whether
+you are home anyway. Within 120 metres counts as home, which is
+generous on purpose -- phone GPS is routinely out by twenty metres and
+much worse indoors, so a tight radius would report you out while you
+sat on your own sofa.
+
+An earlier approach is worth recording because it looked sound and was
+not: the server can see which address a request came from, so home wifi
+should have been distinguishable from being away. Over Tailscale it is
+not. A tailnet address identifies the device rather than its location,
+and measurement showed the same address on the sofa and on mobile data.
+`at_home()` and `/where` remain for a phone reaching JARVIS directly
+over the LAN, and `/where` reports what the server actually sees, which
+is how that was established.
 
 ### Patterns — `actions/patterns.py`
 Habits JARVIS notices from what you actually do, in `patterns.txt`,
@@ -533,6 +565,25 @@ later can't resurrect it.
 ## Things learned the hard way
 
 Each of these cost real time. They are here so they are not repeated.
+
+**A certificate has to name every address, and two authorities must not
+share a name.** Reached over Tailscale a connection arrives on a
+different address from the LAN one, and a certificate naming only the
+LAN address warns on every connection. Worse, every JARVIS certificate
+authority was called exactly "JARVIS Local CA": Android files
+authorities by a hash of that name, so installing a regenerated one
+beside the old one put both in the same slot and it could validate
+against the wrong one. The error that produces reads as a name
+mismatch, which sends you looking at the address rather than the trust
+store. Authorities are now dated, and the certificate covers every
+address JARVIS can be reached on.
+
+**Android's Tailscale client may not resolve MagicDNS names at all.**
+A known bug (tailscale/tailscale#14109) breaks name resolution on
+Android when MagicDNS is enabled -- including names outside the tailnet,
+so ordinary websites fail too and it looks like the phone has lost the
+internet. Other platforms are unaffected. The address works regardless,
+which is why the certificate covers it.
 
 **An Android overlay silently blocks every browser permission prompt.**
 Chrome refuses to ask for the microphone while any app holds "appear on
