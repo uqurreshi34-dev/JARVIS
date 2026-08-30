@@ -993,6 +993,9 @@ PAGE = """<!DOCTYPE html>
   }
   button:disabled { opacity: 0.4; }
   #mic {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
   width: 48px;
   padding: 0;
   font-size: 18px;
@@ -1190,6 +1193,16 @@ try {
   noticeRun = null;
 }
 let recording = false;
+
+// Speaking is what starts and ends a recording, not the button. Above
+// this level counts as speech; the numbers are in milliseconds.
+const SPEECH_LEVEL = 0.02;
+const SILENCE_AFTER_SPEECH = 1200;   // end of a sentence
+const SILENCE_BEFORE_SPEECH = 2000;  // a tap with nothing behind it
+
+let heardSpeech = false;
+let lastSoundAt = 0;
+let startedAt = 0;
 let audioContext = null;
 let inputNode = null;
 let processor = null;
@@ -1828,6 +1841,10 @@ async function startRecording() {
     recordedChunks = [];
     recording = true;
 
+    heardSpeech = false;
+    startedAt = Date.now();
+    lastSoundAt = startedAt;
+
     mic.classList.add("recording");
     mic.textContent = "■";
 
@@ -1850,7 +1867,33 @@ async function startRecording() {
       // showing that recording is switched on.
       let sum = 0;
       for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
-      setEnergy(Math.sqrt(sum / input.length) * 6);
+
+      const level = Math.sqrt(sum / input.length);
+      setEnergy(level * 6);
+
+      // Stop on your own silence rather than on a second tap. The
+      // level is already being measured for the rings, so listening
+      // for the end of a sentence costs nothing extra.
+      const now = Date.now();
+
+      if (level > SPEECH_LEVEL) {
+        heardSpeech = true;
+        lastSoundAt = now;
+        return;
+      }
+
+      if (!heardSpeech) {
+        // Nothing said at all yet. A tap with no sentence behind it
+        // should give up rather than sit there recording the room.
+        if (now - startedAt > SILENCE_BEFORE_SPEECH) {
+          cancelRecording();
+        }
+        return;
+      }
+
+      if (now - lastSoundAt > SILENCE_AFTER_SPEECH) {
+        stopRecording();
+      }
     };
 
     inputNode.connect(processor);
@@ -1870,6 +1913,23 @@ async function startRecording() {
 
     stopRecordingUI();
   }
+}
+
+// A tap with no sentence behind it. Everything is torn down and the
+// voice channel handed back, but nothing is sent -- there is no
+// command here, and asking the PC to transcribe a second of room noise
+// wastes its time and yours.
+function cancelRecording() {
+  if (!recording) {
+    return;
+  }
+
+  recording = false;
+  recordedChunks = [];
+
+  stopRecordingUI();
+  setPhoneActive(false);
+  setState("live", "ready");
 }
 
 async function stopRecording() {
@@ -1991,22 +2051,27 @@ async function stopRecording() {
   // appear every time the microphone is used.
 }
 
-mic.addEventListener("pointerdown", (event) => {
+// Tap to start, and it ends when you stop talking. Holding the button
+// down was the previous behaviour and had a real cost on a phone: a
+// long press is also the gesture for the text-selection bubble, which
+// appeared over the top every time.
+mic.addEventListener("click", (event) => {
   event.preventDefault();
 
   unlockAudio();
-  startRecording();
+
+  if (recording) {
+    // Tapping again is still allowed, for ending a sentence early
+    // rather than waiting out the silence.
+    stopRecording();
+  } else {
+    startRecording();
+  }
 });
 
-mic.addEventListener("pointerup", (event) => {
-  event.preventDefault();
-
-  stopRecording();
-});
-
-mic.addEventListener("pointercancel", () => {
-  stopRecording();
-});
+// A long press on a button still raises the copy/paste bubble on
+// Android, so it is refused outright here.
+mic.addEventListener("contextmenu", (event) => event.preventDefault());
 
 send.addEventListener("click", () => { unlockAudio(); submit(); });
 box.addEventListener("keydown", (e) => {
