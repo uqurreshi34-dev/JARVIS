@@ -4256,32 +4256,52 @@ def _handle_command(command):
                 action_asked = application
 
                 def _use_suggestion(reply):
-                    if _is_choice_cancel(reply):
+                    # "no", "none", "never mind" -- and a bare "no"
+                    # would otherwise be looked up as a contact name.
+                    if _is_choice_cancel(reply) or reply.strip().casefold() in (
+                        "no", "nope", "neither", "nobody",
+                    ):
                         return _query(
-                            "phone_action", lambda: "Very good, sir."
+                            "phone_action_ask",
+                            lambda: "Very good, sir.",
                         )
 
                     name, number = contacts.find(reply)
 
                     if not number:
                         return _query(
-                            "phone_action",
+                            "phone_action_ask",
                             lambda: (
                                 f"I don't have {safety.clean(reply, 40)} "
                                 "either, sir."
                             ),
                         )
 
-                    return _blank_result(
-                        "phone_action",
-                        text=name,
-                        application=action_asked,
-                    )
+                    # Same shape the phone_action branch returns:
+                    # spoken words for the desk, and the fields main.py
+                    # needs to turn it into a link on the phone.
+                    return {
+                        "kind": "query",
+                        "intent": "phone_action",
+                        "response": None,
+                        "application": action_asked,
+                        "text": name,
+                        "project": None,
+                        "action": lambda: contacts.desk_reply(
+                            action_asked, name
+                        ),
+                    }
 
                 listed = " or ".join(suggestions)
 
+                # Deliberately a different intent from phone_action.
+                # main.py intercepts every phone_action result and
+                # replaces it with a dialling link, which would swallow
+                # this question before it was ever asked -- the answer
+                # below carries the real intent once there is something
+                # to dial.
                 return _ask(
-                    "phone_action",
+                    "phone_action_ask",
                     f"I don't have that in your contacts, sir. "
                     f"Did you mean {listed}?",
                     _use_suggestion,
