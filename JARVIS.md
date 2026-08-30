@@ -222,6 +222,40 @@ Facts are data, never instructions: anything shaped like an order is
 refused at the point of storing, so memory cannot become a way round the
 rules.
 
+### Contacts — `actions/contacts.py`
+Calling, WhatsApp and texting, from the phone only. The desk has no SIM,
+so those commands answer "ask me from your phone" rather than failing in
+a way that looks like a fault. `commands.py` cannot know which device
+asked, so it gives the desk answer and `main.py`, which does know,
+replaces it with a link when the request came from the phone.
+
+Numbers live in a hand-written `contacts.txt` and belong in
+`.gitignore`. Speech only ever matches a name against that file: a
+number is never assembled from anything spoken, so a mishearing can at
+worst pick the wrong person off your own list. Not journalled either --
+offering to open a dialler changes nothing, and a record of who you were
+about to ring is worth not keeping.
+
+Names are matched by how they sound rather than against a list of known
+mishearings. A list would only ever describe one voice on one
+microphone; comparing consonant skeletons -- the same trick `voice.py`
+uses to accept "jovis" as the wake word -- works for a contact added
+tomorrow. The thresholds were measured rather than chosen, and the
+measurement found a real limit: "done" against "dad" and "murk" against
+"work" score identically, so no threshold separates a genuine
+mishearing from a coincidence at three letters. Above that band it
+dials; within it, JARVIS asks "did you mean dad?" and a plain yes is
+enough -- asking the user to repeat the name would be asking them to
+repeat the word that was just misheard.
+
+Contact names are also fed to the transcriber, so "call dad" is less
+likely to arrive as "call that" in the first place. Fixing it at the
+source beats correcting it afterwards.
+
+The phone opens what it is given; it never dials or sends by itself.
+Android does not permit a web page to, and the tap is also the last
+look at what is about to go out in your name.
+
 ### Location — `actions/location.py`
 Where you are, when the phone has said so. The desk cannot answer this:
 a PC knows the city it was told about and nothing more, so this is the

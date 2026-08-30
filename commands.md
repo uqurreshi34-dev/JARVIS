@@ -322,6 +322,38 @@ Facts are kept in `memory.txt`, editable by hand.
 the vague *"I'll remember that"* rather than *"Your location is Madrid"*,
 that phrasing didn't land.
 
+## Calling, WhatsApp and texting
+
+Only from the phone — your PC has no SIM. Ask at the desk and he says so
+rather than pretending.
+
+Put people in `contacts.txt` in your JARVIS folder, one per line:
+
+    mum: +447700900123
+    dad: +447700900456
+    work: +441214960000
+
+Numbers must start with `+` and the country code. **Add `contacts.txt` to
+your `.gitignore`.**
+
+| Say | Does |
+|---|---|
+| call mum | opens the dialler with her number ready |
+| ring dad / phone work | same |
+| whatsapp dad | opens his WhatsApp conversation |
+| text mum saying running late | opens a text with the message written |
+| who are my contacts | lists who he can reach |
+
+He opens it; you tap to send or call. Android won't let a web page dial
+or send on its own, which is also your last look at what's about to go
+out in your name.
+
+**He matches names by how they sound**, so "dan", "done" and "daddy" all
+find Dad without any of them being written down. When he's not sure he
+asks — *"did you mean dad?"* — and a plain **yes** is enough. Say a
+different name instead and he'll use that. Nothing is ever dialled from
+a name that isn't in your file.
+
 ## Where you are
 
 Only the phone can answer this — your PC has no idea where you are. Tap
