@@ -2211,8 +2211,12 @@ def _run_task_request(text):
 _CALL = re.compile(
     r"^(?:call|ring|phone|dial)\s+(?:my\s+)?(.+?)$"
 )
+# "whatsapp" is reliably heard as "what's up", which normalises to
+# "whats up". Both are accepted, and a name has to follow either way,
+# so a bare "what's up" is still just a greeting and not a command.
 _WHATSAPP = re.compile(
-    r"^(?:whatsapp|whats app|message|whatsapp message)\s+"
+    r"^(?:whatsapp|whats app|whatsup|whats up|what sup|"
+    r"whatsapp message|message)\s+"
     r"(?:my\s+)?(.+?)$"
 )
 _TEXT = re.compile(
