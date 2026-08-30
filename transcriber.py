@@ -73,16 +73,37 @@ def _known_names():
     if _names["words"] and now - _names["at"] < NAME_REFRESH_SECONDS:
         return _names["words"]
 
+    words = []
+
     try:
         from actions.proofread import ignored_words
 
-        words = sorted(
+        words.extend(
             word for word in ignored_words()
             if word and word.isalpha() and len(word) > 2
         )
 
     except Exception:
-        words = []
+        pass
+
+    try:
+        # Contact names, for the same reason. "call dad" arriving as
+        # "call that" is the identical failure to "Jarvis" arriving as
+        # "java's": the decoder had no reason to expect the word. Fixing
+        # it here means correcting the transcription rather than
+        # maintaining a list of the ways it can go wrong -- which would
+        # only ever describe one voice on one microphone anyway.
+        from actions.contacts import names as contact_names
+
+        words.extend(
+            name for name in contact_names()
+            if name and name.replace(" ", "").isalpha()
+        )
+
+    except Exception:
+        pass
+
+    words = sorted(set(words))
 
     _names["words"] = tuple(words[-MAX_PROMPT_NAMES:])
     _names["at"] = now

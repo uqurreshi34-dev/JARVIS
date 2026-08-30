@@ -4244,6 +4244,49 @@ def _handle_command(command):
         return _query(intent, patterns.describe)
 
     if intent == "phone_action":
+        # Heard as a phone command, but the name reached nobody. Rather
+        # than refuse outright, offer the closest contacts: a mishearing
+        # is far likelier than a request to ring a stranger, and one
+        # word confirms it. Nothing is dialled without that word, so a
+        # wrong guess here costs nothing.
+        if application and not contacts.find(verbatim_text or "")[1]:
+            suggestions = contacts.close_matches(verbatim_text or "")
+
+            if suggestions:
+                action_asked = application
+
+                def _use_suggestion(reply):
+                    if _is_choice_cancel(reply):
+                        return _query(
+                            "phone_action", lambda: "Very good, sir."
+                        )
+
+                    name, number = contacts.find(reply)
+
+                    if not number:
+                        return _query(
+                            "phone_action",
+                            lambda: (
+                                f"I don't have {safety.clean(reply, 40)} "
+                                "either, sir."
+                            ),
+                        )
+
+                    return _blank_result(
+                        "phone_action",
+                        text=name,
+                        application=action_asked,
+                    )
+
+                listed = " or ".join(suggestions)
+
+                return _ask(
+                    "phone_action",
+                    f"I don't have that in your contacts, sir. "
+                    f"Did you mean {listed}?",
+                    _use_suggestion,
+                )
+
         # commands.py has no idea which device asked. main.py does, and
         # overrides this for the phone -- so the desk answer is the
         # honest default rather than something that looks broken.

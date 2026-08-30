@@ -40,6 +40,25 @@ _LINE = re.compile(r"^\s*([^:]{1,40}?)\s*:\s*(.+)$")
 # once rather than on every lookup.
 _warned = set()
 
+_VOWELS = re.compile(r"[aeiou]")
+_DOUBLES = re.compile(r"(.)\1+")
+
+# Taken as certain: dial without asking.
+#
+# Measured rather than guessed, and the measurement showed a real
+# limit. Genuine mishearings of a short name ("done" for "dad") score
+# about 0.63, and so does "murk" against "work" -- a word that has
+# nothing to do with any contact. No single threshold separates them,
+# because at three letters there simply isn't enough signal.
+#
+# So this sits above that band, and the band below it asks instead of
+# assuming. Being asked "did you mean Dad?" costs a word; ringing the
+# wrong person costs rather more.
+CERTAIN_THRESHOLD = 0.72
+
+# Worth offering, not worth assuming.
+SUGGEST_THRESHOLD = 0.55
+
 
 def _path():
     base = files.root()
@@ -98,47 +117,101 @@ def contacts():
     return found
 
 
+def _skeleton(word):
+    """A word's consonant skeleton, ignoring vowels and repeats.
+
+    The same trick voice.py uses to accept "jovis" and "java's" as the
+    wake word: what survives a mishearing is usually the consonants.
+    """
+    return _DOUBLES.sub(r"\1", _VOWELS.sub("", word.casefold()))
+
+
+def _closeness(heard, name):
+    """How alike two names sound, from 0 to 1.
+
+    Compared both as written and as consonant skeletons, because a
+    mishearing mangles vowels far more readily than consonants. The
+    skeleton is weighted slightly lower so an exact spelling still
+    wins when both match.
+    """
+    written = SequenceMatcher(None, heard, name).ratio()
+    sounded = SequenceMatcher(
+        None, _skeleton(heard), _skeleton(name)
+    ).ratio()
+
+    return max(written, sounded * 0.95)
+
+
 def find(spoken):
     """(name, number) for a spoken name, or (None, None).
 
-    Matched only against names already in the file. Longest first, so
-    "mum mobile" wins over "mum" when both exist.
+    Matched only against names already in contacts.txt. Exact first,
+    then containment, then by how alike they sound -- which is what
+    lets "dan", "dat", "done" and "daddy" all reach Dad without any of
+    them being written down as special cases. A list of known
+    mishearings would only ever describe one person's voice on one
+    phone; comparing sounds works for a contact added tomorrow.
+
+    Nothing here can invent a contact. Every route returns a name that
+    is already in the file, or nothing at all.
     """
     wanted = (spoken or "").strip().casefold()
-
-    # Common spoken variants for the same contact name. These are only
-    # aliases for names already present in contacts.txt; they never create
-    # or infer a new contact.
-    aliases = {
-        "mom": "mum",
-        "mommy": "mum",
-        "mummy": "mum",
-
-        # Common speech-recognition variants for "dad". These are
-        # deliberately scoped to contact lookup, never global command
-        # normalisation.
-        "daddy": "dad",
-        "dadd": "dad",
-        "dan": "dad",
-        "dat": "dad",
-        "done": "dad",
-    }
-
-    wanted = aliases.get(wanted, wanted)
 
     if not wanted:
         return None, None
 
     known = contacts()
 
+    if not known:
+        return None, None
+
     if wanted in known:
         return wanted, known[wanted]
 
+    # Longest first, so "mum mobile" wins over "mum" when both exist.
     for name in sorted(known, key=len, reverse=True):
         if name in wanted or wanted in name:
             return name, known[name]
 
+    best_name = None
+    best_score = 0.0
+
+    for name in known:
+        score = _closeness(wanted, name)
+
+        if score > best_score:
+            best_name, best_score = name, score
+
+    if best_score >= CERTAIN_THRESHOLD:
+        return best_name, known[best_name]
+
     return None, None
+
+
+def close_matches(spoken, limit=3):
+    """Contacts that sound somewhat like this, best first.
+
+    For asking "did you mean Dad?" rather than refusing outright --
+    a lower bar than find() uses, because a suggestion the user has to
+    confirm can afford to be wrong.
+    """
+    wanted = (spoken or "").strip().casefold()
+
+    if not wanted:
+        return []
+
+    scored = [
+        (_closeness(wanted, name), name)
+        for name in contacts()
+    ]
+
+    scored = [
+        (score, name) for score, name in scored
+        if score >= SUGGEST_THRESHOLD
+    ]
+    scored.sort(reverse=True)
+
+    return [name for _, name in scored[:limit]]
 
 
 def names():
