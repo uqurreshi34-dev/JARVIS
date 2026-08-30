@@ -1211,6 +1211,11 @@ PAGE = """<!DOCTYPE html>
             border: 1px solid rgba(255, 180, 65, 0.30);
             color: #ffe0ad; font-size: 14px; }
   .notice .when { color: var(--dim); font-size: 12px; margin-right: 8px; }
+  .action {
+    display: inline-block; padding: 12px 22px; border-radius: 22px;
+    background: var(--idle); color: #04121c; font-weight: 600;
+    text-decoration: none; font-size: 16px;
+  }
   .oops { align-self: flex-start; background: rgba(255, 110, 110, 0.12);
           border: 1px solid rgba(255, 110, 110, 0.35); color: #ffc9c9; }
   .hint { color: var(--dim); font-size: 13px; text-align: center;
@@ -1765,6 +1770,36 @@ function setState(kind, label) {
   if (mapped === "idle" || mapped === "thinking") setEnergy(0);
 }
 
+// Opening a dialler, a chat or a text. Tried directly first, because
+// when the browser allows it that is one fewer tap -- but a link
+// followed after an async reply often looks like an unsolicited
+// redirect and is refused, and there is no way to ask beforehand. So a
+// button always appears too: if the direct attempt worked you never
+// look at it, and if it didn't, the action is still one tap away
+// rather than lost.
+function offerLink(link, label) {
+  if (hint) hint.remove();
+
+  const row = document.createElement("div");
+  row.className = "turn jarvis";
+
+  const button = document.createElement("a");
+  button.className = "action";
+  button.href = link;
+  button.textContent = label;
+  button.rel = "noopener";
+
+  row.appendChild(button);
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+
+  try {
+    window.location.href = link;
+  } catch (e) {
+    // Refused; the button above is the fallback.
+  }
+}
+
 function add(text, cls) {
   if (hint) hint.remove();
   const el = document.createElement("div");
@@ -1905,6 +1940,14 @@ async function submit() {
       add(data.error || "That didn't work, sir.", "oops");
     } else if (data.reply) {
       add(data.reply, "jarvis");
+
+      if (data.link) {
+        offerLink(
+          data.link,
+          data.reply.replace(/,? sir\\.?$/i, "")
+        );
+      }
+
       // Awaited, so "ready" is not set over the top of "speaking"
       // before the reply has actually been heard.
       await speak(data.reply);
@@ -2320,6 +2363,13 @@ async function stopRecording() {
 
     if (data.reply) {
       add(data.reply, "jarvis");
+
+      if (data.link) {
+        offerLink(
+          data.link,
+          data.reply.replace(/,? sir\\.?$/i, "")
+        );
+      }
 
       // Keep the PC microphone disabled while JARVIS's answer
       // is actually being played on the phone.

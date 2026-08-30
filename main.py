@@ -6,7 +6,7 @@ from datetime import datetime
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
-from actions import camera, diary, memory, documents
+from actions import camera, contacts, diary, memory, documents
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
 import phrases
@@ -232,6 +232,23 @@ class Assistant:
             self._state(IDLE)
 
             return phrases.pick("wrong")
+
+        # Calling, WhatsApp and texting can only happen on the device
+        # holding the SIM. commands.py cannot know which device asked,
+        # so it answers for the desk; here we do know, and replace that
+        # with the link the phone should open.
+
+        if result and result.get("intent") == "phone_action":
+            prepared = contacts.prepare(
+                result.get("application"),
+                result.get("text") or "",
+                result.get("project"),
+            )
+
+            self._reply(prepared["spoken"])
+            self._state(IDLE)
+
+            return prepared
 
         if not result:
             self._state(IDLE)

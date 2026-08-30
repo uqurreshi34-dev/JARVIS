@@ -29,6 +29,7 @@ from actions import (
     camera,
     charts,
     clipboard,
+    contacts,
     diary,
     documents,
     files,
@@ -388,6 +389,9 @@ _FAST_PHRASES = (
       "what's my git status", "whats my git status", "git status",
       "what's staged", "whats staged", "what have i staged"),
      "git_status"),
+    (("who are my contacts", "what contacts do i have",
+      "list my contacts", "who can you call",
+      "who do you know"), "list_contacts"),
     (("what tasks do i have", "what tasks are there", "list my tasks",
       "list the tasks", "what can you run", "what tasks can you run"),
      "list_tasks"),
@@ -2204,6 +2208,52 @@ def _run_task_request(text):
     return tasks.find(match.group(1).strip())
 
 
+_CALL = re.compile(
+    r"^(?:call|ring|phone|dial)\s+(?:my\s+)?(.+?)$"
+)
+_WHATSAPP = re.compile(
+    r"^(?:whatsapp|whats app|message|whatsapp message)\s+"
+    r"(?:my\s+)?(.+?)$"
+)
+_TEXT = re.compile(
+    r"^(?:text|sms|send a text to|send a message to)\s+"
+    r"(?:my\s+)?(.+?)(?:\s+saying\s+(.+))?$"
+)
+
+
+def _phone_action_request(text):
+    """(action, name, message) for a phone request, or None.
+
+    Gated on the person actually being in contacts.txt, so "call the
+    police" or a mishearing resolves to nothing rather than to a
+    number. Nothing spoken is ever turned into a number.
+    """
+    for pattern, action in (
+        (_CALL, "call"),
+        (_WHATSAPP, "whatsapp"),
+        (_TEXT, "text"),
+    ):
+        match = pattern.match(text)
+
+        if not match:
+            continue
+
+        spoken = match.group(1).strip()
+        message = (
+            match.group(2).strip()
+            if pattern is _TEXT and match.lastindex and match.lastindex > 1
+            and match.group(2)
+            else None
+        )
+
+        name, number = contacts.find(spoken)
+
+        if number:
+            return action, name, message
+
+    return None
+
+
 # "forget the markets report pattern" -- gated on the word "pattern",
 # the same way _READ_FILE_EXPLICIT is gated on "file", so this can only
 # ever match a genuine attempt to name one, never something else that
@@ -2836,6 +2886,18 @@ def _fast_path(command):
 
     if to_clipboard:
         return _blank_result("file_to_clipboard", text=to_clipboard)
+
+    phone_request = _phone_action_request(text)
+
+    if phone_request:
+        action, name, message = phone_request
+
+        return _blank_result(
+            "phone_action",
+            text=name,
+            application=action,
+            project=message,
+        )
 
     task = _run_task_request(text)
 
@@ -4161,6 +4223,18 @@ def _handle_command(command):
 
     if intent == "list_patterns":
         return _query(intent, patterns.describe)
+
+    if intent == "phone_action":
+        # commands.py has no idea which device asked. main.py does, and
+        # overrides this for the phone -- so the desk answer is the
+        # honest default rather than something that looks broken.
+        return _query(
+            intent,
+            lambda: contacts.desk_reply(application, verbatim_text or ""),
+        )
+
+    if intent == "list_contacts":
+        return _query(intent, contacts.describe)
 
     if intent == "list_tasks":
         return _query(intent, tasks.describe)

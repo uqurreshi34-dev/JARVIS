@@ -12,3 +12,5 @@ jarvis-phone-ca.cer
 *.ts.net.key
 jarvis-phone-*.pem
 jarvis-phone-*.cer
+
+contacts.txt

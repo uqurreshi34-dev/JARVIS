@@ -121,6 +121,15 @@ as "run the tests" or "run my build". Put the task name in "text". Only
 tasks the user has defined in tasks.txt can be run; never use this to
 invent a command.
 
+Use phone_action when the user wants to call, WhatsApp or text someone
+in their contacts, such as "call mum", "whatsapp dad" or "text mum
+saying running late". Put the person's name in "text", one of call,
+whatsapp or text in "application", and any message in "project". Only
+people in the user's contacts file can be reached; never invent a
+number or use this for a name you were not given.
+Use list_contacts when the user asks who they can call or who is in
+their contacts.
+
 Use set_home when the user says the phone is standing in their home and
 wants that remembered, such as "this is home" or "remember this as
 home". Never use it for "I'm home", which announces an arrival far more
@@ -376,6 +385,8 @@ _SCHEMA = {
                 "forget_all_patterns",
                 "list_tasks",
                 "run_task",
+                "phone_action",
+                "list_contacts",
                 "set_home",
                 "where_am_i",
                 "distance_from_home",
