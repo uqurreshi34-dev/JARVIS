@@ -2374,10 +2374,6 @@ async function sendLook(canvas, question) {
         }
 
         await speak(part, audioParts[index]);
-
-        if (index < speechParts.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
       }
     }
   } catch (e) {
