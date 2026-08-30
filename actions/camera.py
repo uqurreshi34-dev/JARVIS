@@ -306,14 +306,32 @@ def save_last():
     stem = re.sub(r"[^A-Za-z0-9\s-]", "", description)
     stem = " ".join(stem.split()).strip()
 
-    # Drop common conversational wording.
+    # Strip conversational descriptions so the filename names the object,
+    # not the sentence JARVIS used to describe it.
     prefixes = (
         "you are holding ",
-        "you are looking at ",
         "you are holding a ",
         "you are holding an ",
+        "you appear to be holding ",
+        "you appear to be holding a ",
+        "you appear to be holding an ",
+        "you seem to be holding ",
+        "you seem to be holding a ",
+        "you seem to be holding an ",
+        "you are looking at ",
+        "you are looking at a ",
+        "you are looking at an ",
+        "you appear to be looking at ",
+        "you appear to be looking at a ",
+        "you appear to be looking at an ",
+        "you seem to be looking at ",
+        "you seem to be looking at a ",
+        "you seem to be looking at an ",
+        "it looks like you are holding ",
+        "it looks like you're holding ",
         "this is ",
         "there is ",
+        "there are ",
         "there's ",
         "i can see ",
         "i see ",
@@ -326,10 +344,17 @@ def save_last():
             stem = stem[len(prefix):].strip()
             break
 
+    # Remove a leading article left behind after the conversational prefix.
+    lowered = stem.casefold()
+
+    for article in ("a ", "an ", "the "):
+        if lowered.startswith(article):
+            stem = stem[len(article):].strip()
+            break
+
     # Keep names short enough to remain useful as filenames.
     words = stem.split()[:6]
-    stem = "-".join(words).lower()
-    stem = stem.strip("-")
+    stem = "-".join(words).lower().strip("-")
 
     if not stem:
         stem = "photo"
@@ -451,12 +476,13 @@ def describe_image(data, question=None):
     than in the phone code so both eyes describe what they see the same
     way, and a change to the wording reaches both.
     """
-    global _last_question
+    global _last_question, _last_description
 
     if not data:
         return "I didn't get a picture, sir."
 
     remember_image(data)
+    _last_description = None
 
     if too_dark():
         level = brightness()
@@ -487,7 +513,6 @@ def describe_image(data, question=None):
             "The console has the detail."
         )
 
-    global _last_description
     _last_description = answer
 
     return answer
