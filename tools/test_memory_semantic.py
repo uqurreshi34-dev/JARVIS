@@ -14,7 +14,16 @@ no model API request is made by this test.
 
 import os
 import sys
+from pathlib import Path
 from unittest.mock import patch
+
+
+# Running this file directly puts tools/ on sys.path rather than the JARVIS
+# project root, so add the repository root before importing project modules.
+ROOT = Path(__file__).resolve().parents[1]
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 # Keep provider construction happy while ensuring every actual model call in
