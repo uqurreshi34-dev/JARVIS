@@ -86,17 +86,39 @@ def main():
             assert memory.remember("my new gym routine is Tuesday and Saturday")
             assert memory.get("gym days") == "Tuesday and Saturday"
 
-            # Historical questions use archived values, not the current one.
-            semantic_memory._semantic_rank = lambda query, documents: (
-                [(0, 0.91)] if documents else []
-            )
-            historical = memory.relevant_summary("what were my old gym days?")
-            assert "Sunday, Tuesday, Thursday and Saturday" in historical
+            store = _load_json(root)
+            assert any(
+                item["value"] == "Monday, Wednesday and Friday"
+                for item in store["history"]
+            ), "intermediate gym value was not archived"
+
+            # Historical queries must retrieve the matching archived state,
+            # not merely whichever historical record happens to rank first.
+            def historical_rank(query, documents):
+                lowered = query.casefold()
+
+                target = (
+                    "Sunday, Tuesday, Thursday and Saturday"
+                    if "gym days" in lowered
+                    else "Monday, Wednesday and Friday"
+                )
+
+                for index, document in enumerate(documents):
+                    if document[1] == target:
+                        return [(index, 0.91)]
+
+                return []
+
+            semantic_memory._semantic_rank = historical_rank
+
+            historical_days = memory.relevant_summary("what were my old gym days?")
+            assert "Sunday, Tuesday, Thursday and Saturday" in historical_days
 
             historical_routine = memory.relevant_summary("what was my old gym routine?")
             assert "Monday, Wednesday and Friday" in historical_routine
 
             # A project activity is additive and does not replace the default project.
+            memory_lifecycle._best_related = original_best_related
             assert memory.remember("I'm working on a Python project")
             assert memory.get("project") == "JARVIS"
             assert any(
