@@ -6,6 +6,8 @@ command router: yes/no personal-memory questions and fuzzy matches that are
 actually personal-memory questions.
 """
 
+import re
+
 _EXTRA_MEMORY_QUESTION_WORDS = frozenset({
     "do", "does", "did", "can", "could", "would", "have", "has",
 })
@@ -17,6 +19,12 @@ _MEMORY_QUESTION_WORDS = frozenset({
 _MEMORY_PERSONAL_WORDS = frozenset({
     "my", "mine", "me", "i", "im", "ive",
 })
+
+_BARE_MEMORY_UPDATE = re.compile(
+    r"^(?:my\s+new\s+.+?\s+(?:is|are)\s+.+|"
+    r"my\s+.+?\s+(?:is|are)\s+now\s+.+)$",
+    re.I,
+)
 
 _installed = False
 
@@ -33,8 +41,6 @@ def _local_memory_question(text):
 
     if not text:
         return False
-
-    import re
 
     words = re.findall(r"[a-z0-9]+", text)
 
@@ -87,6 +93,27 @@ def _guarded_fuzzy(commands, original):
     return guarded
 
 
+def _guarded_fast_path(commands, original):
+    """Route generic replacement statements through the existing remember intent."""
+    def guarded(command):
+        result = original(command)
+
+        if result is not None:
+            return result
+
+        text = commands._normalise(command)
+
+        if not _BARE_MEMORY_UPDATE.match(text):
+            return None
+
+        return commands._blank_result(
+            "remember",
+            text=(command or "").strip(),
+        )
+
+    return guarded
+
+
 def install(commands):
     """Install routing safeguards once, after commands.py is fully loaded."""
     global _installed
@@ -95,12 +122,20 @@ def install(commands):
         return
 
     import llm
+    from actions import memory_history
+
+    memory_history.install()
 
     # Keep the original detector's vocabulary available to callers, but make
     # its final confidence decision semantic rather than lexical. This is the
     # same local retrieval path used by the answer and offline fallback.
     llm._MEMORY_QUESTION_WORDS = _MEMORY_QUESTION_WORDS
     llm._local_memory_question = _local_memory_question
+
+    commands._fast_path = _guarded_fast_path(
+        commands,
+        commands._fast_path,
+    )
 
     commands._fuzzy_intent = _guarded_fuzzy(
         commands,
