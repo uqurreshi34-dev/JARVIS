@@ -208,7 +208,7 @@ _KEYED_PATTERNS = (
      "repo"),
     (re.compile(
         r"^(?:my (?:default|main|current) project is|"
-        r"i(?:'m| am) working on)\s+(.+)$", re.I),
+        r"i(?:'m|m| am) working on)\s+(.+)$", re.I),
      "project"),
     (re.compile(
         r"^(?:to )?(open|dont open|do not open)\s+my invites$", re.I),
