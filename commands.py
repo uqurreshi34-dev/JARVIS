@@ -884,8 +884,47 @@ _CLICK_PATTERNS = (
 _TYPE_PATTERN = re.compile(r"^(?:type|dictate)\s+(.+)$")
 
 
+_VISUAL_CLICK_DESCRIPTORS = frozenset({
+    "green", "red", "blue", "yellow", "orange", "purple",
+    "pink", "black", "white", "grey", "gray",
+    "top", "bottom", "left", "right",
+    "upper", "lower", "first", "second", "third",
+})
+
+
+def _visual_click_request(text):
+    """Preserve descriptive click targets for the vision fallback.
+
+    The normal click parser intentionally strips words such as 'button'
+    and 'icon' because UIA control names usually omit them. Keep the
+    original descriptive target only when it contains a visual descriptor,
+    so vision receives 'green button' rather than just 'green'.
+    """
+    match = re.match(
+        r"^(?:click|press|select|tap|hit|choose)(?:\s+on)?\s+"
+        r"(?:the\s+)?(.+?)\s+(?:button|link|icon|option)$",
+        text,
+    )
+
+    if not match:
+        return None
+
+    target = match.group(1).strip()
+    words = set(target.split())
+
+    if words & _VISUAL_CLICK_DESCRIPTORS:
+        return f"{target} {text.rsplit(' ', 1)[-1]}"
+
+    return None
+
+
 def _click_request(text):
     """Extract what to click, or None."""
+    visual_target = _visual_click_request(text)
+
+    if visual_target:
+        return visual_target
+
     for pattern in _CLICK_PATTERNS:
         match = pattern.match(text)
 
