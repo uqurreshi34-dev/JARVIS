@@ -295,6 +295,15 @@ A freshly loaded Chrome tab can briefly show nothing to click while its
 own accessibility tree wakes up; a click that misses for that reason is
 retried once automatically before giving up.
 
+**Visual fallback:** if Windows UI Automation cannot find the requested
+visible target, JARVIS captures the active window and asks the vision model
+once to locate it. The model returns a confidence score and low-confidence
+targets are rejected. The located target is cached briefly so a confirmation
+does not trigger another vision request. UI Automation remains the preferred
+local/free path; vision is a fallback, not a replacement. This also works
+when the command comes from the phone, so the phone can remotely control the
+PC without using its camera.
+
 ## Browsing
 
 Read-only: goes somewhere and reads what's there. Needs the JARVIS Chrome
@@ -528,10 +537,10 @@ Nothing non-urgent between 10pm and 8am; it waits.
 ## When something doesn't work
 
 **The phone won't let you grant microphone access, or notifications.** If Chrome says "this
-site can't ask for your permission, close any bubbles or overlays from
+site can't ask you for your permission, close any bubbles or overlays from
 other apps", something on your phone is drawing over the screen and
 Android is blocking the prompt. It names no app, and it is often not one
-you would suspect — a screen recorder, a blue light filter, chat bubbles,
+ you'd suspect — a screen recorder, a blue light filter, chat bubbles,
 a caller ID app. Look in Settings, Apps, Special access, Appear on top,
 and turn off whatever is listed. Alternatively, tap Block deliberately,
 then open the padlock menu in the address bar and set Microphone to
