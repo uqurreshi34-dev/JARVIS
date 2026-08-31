@@ -5,9 +5,15 @@ That rule is for the desk. On your phone, see below — the microphone
 button is itself the invocation, so no wake word is needed there.
 
 Anything marked **free** costs nothing — no API call. That is nearly
-everything. Four things cost: a general question, asking the camera what
-it sees, drafting a commit message, and a command phrased in a way not
-listed here (which falls through to the language model).
+everything. General-knowledge questions, asking the camera what it sees,
+and drafting a commit message need a live model request. A command phrased
+in a way not listed here may also fall through to the language model.
+
+Personal-memory questions are different: JARVIS retrieves remembered facts
+locally using semantic memory, so a strong match skips the command-classifier
+API call. When a language model is available, the final answer uses one model
+request. If both language-model providers are unavailable, JARVIS can still
+answer from the retrieved memory locally.
 
 Where a phrase is shown, close variations usually work too — "what's the
 time" and "what time is it" both land in the same place.
@@ -343,10 +349,28 @@ Facts are kept in `memory.txt`, editable by hand.
 | my calendar is local | stops pushing to Outlook |
 | what do you know about me | reads it back |
 | forget about London | removes it |
+| what are my gym days | retrieves the remembered gym schedule semantically |
+| when do I train | finds the same memory even though the wording differs |
+| what's my project | retrieves the remembered project locally |
+| do I have any projects | yes/no personal-memory question can be answered locally
 
 "Remember that…" is optional. He confirms what he understood — if he says
 the vague *"I'll remember that"* rather than *"Your location is Madrid"*,
 that phrasing didn't land.
+
+Memory retrieval is local and semantic. JARVIS compares the meaning of a
+question with the facts in `memory.txt`, rather than requiring the question
+to repeat the exact words used when the fact was stored. This means
+paraphrases such as "when do I train?" and "what's my workout schedule?" can
+retrieve the same remembered fact without a hard-coded list of synonyms.
+
+A strong personal-memory question bypasses the normal command-classifier
+model call. The answer normally uses one language-model request for natural
+wording, but if both providers are unavailable the best local memory match
+can still be spoken directly.
+
+The semantic retrieval system contains no personal facts itself. Facts remain
+in `memory.txt`; the local model is only used to find the relevant fact.
 
 ## Calling, WhatsApp and texting
 
