@@ -25,6 +25,7 @@ _model_session = None
 _tokenizer = None
 _lexical_relevant_summary = None
 _installed = False
+_original_local_memory_question = None
 _document_cache_key = None
 _document_cache_vectors = None
 
@@ -258,21 +259,78 @@ def relevant_summary(query, limit=6):
     )
 
 
+def _semantic_memory_question(command):
+    """Extend the existing local route with semantic memory confidence."""
+    if _original_local_memory_question is not None:
+        if _original_local_memory_question(command):
+            return True
+
+    text = (command or "").strip().casefold()
+
+    if not text:
+        return False
+
+    words = re.findall(r"[a-z0-9]+", text)
+
+    if not words:
+        return False
+
+    if words[0] not in {"what", "whats", "which", "when", "where", "who", "how"} \
+            and "?" not in (command or ""):
+        return False
+
+    if not {"my", "mine", "me", "i", "im", "ive"}.intersection(words):
+        return False
+
+    query_words = {
+        word
+        for word in words
+        if len(word) > 2
+        and word not in {
+            "the", "and", "are", "was", "were", "what", "when", "where",
+            "which", "who", "how", "does", "did", "do", "can", "could",
+            "would", "should", "have", "has", "had", "that", "this",
+            "about", "from", "with", "for", "into", "your", "you", "my",
+            "me", "i", "is", "am", "to", "of", "on", "in", "a", "an",
+        }
+    }
+
+    if not query_words:
+        return False
+
+    summary = relevant_summary(command, limit=1)
+
+    return any(
+        line.strip().startswith("- ")
+        for line in summary.splitlines()
+    )
+
+
 def install():
-    """Upgrade memory.relevant_summary while preserving its lexical fallback.
+    """Upgrade memory retrieval and the local memory question route.
 
     The existing public memory function is replaced only after its original
-    implementation has been captured. This keeps all current callers --
-    including the command router -- on one retrieval path without a broad
-    rewrite of the large routing files.
+    implementation has been captured. The command router's existing local
+    memory gate is also extended to accept semantic confidence, so paraphrases
+    such as "when do I train?" do not need a shared word with the memory key.
+    No facts or domains are hard-coded here.
     """
-    global _lexical_relevant_summary, _installed
+    global _lexical_relevant_summary, _installed, _original_local_memory_question
 
     if _installed:
         return
 
     _lexical_relevant_summary = memory.relevant_summary
     memory.relevant_summary = relevant_summary
+
+    try:
+        import llm
+
+        _original_local_memory_question = llm._local_memory_question
+        llm._local_memory_question = _semantic_memory_question
+    except Exception as error:
+        print(f"[JARVIS] semantic memory routing unavailable: {error}")
+
     _installed = True
 
 
