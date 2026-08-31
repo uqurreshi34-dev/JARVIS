@@ -48,6 +48,7 @@ def main():
         original_root = files.root
         original_rank = semantic_memory._semantic_rank
         original_chat = memory_lifecycle.chat
+        original_best_related = memory_lifecycle._best_related
 
         files.root = lambda: root
         _write_memory(
@@ -64,7 +65,8 @@ def main():
             store = _load_json(root)
             assert len(store["memories"]) == 2, "existing memories were not migrated"
 
-            # Explicit same-key replacement is local and archives the old value.
+            # "my gym days are now ..." updates locally and strips the generic
+            # "now" filler instead of storing it as part of the value.
             assert memory.remember(
                 "my gym days are now Monday, Wednesday and Friday"
             )
@@ -76,12 +78,23 @@ def main():
                 for item in store["history"]
             ), "old gym value was not archived"
 
-            # Historical questions use the archived value, not the current one.
+            # "my new gym routine is ..." is semantically related to the
+            # existing gym fact and uses the same local replacement path.
+            memory_lifecycle._best_related = lambda text: (
+                "gym days", "Monday, Wednesday and Friday", 0.91
+            )
+            assert memory.remember("my new gym routine is Tuesday and Saturday")
+            assert memory.get("gym days") == "Tuesday and Saturday"
+
+            # Historical questions use archived values, not the current one.
             semantic_memory._semantic_rank = lambda query, documents: (
                 [(0, 0.91)] if documents else []
             )
             historical = memory.relevant_summary("what were my old gym days?")
             assert "Sunday, Tuesday, Thursday and Saturday" in historical
+
+            historical_routine = memory.relevant_summary("what was my old gym routine?")
+            assert "Monday, Wednesday and Friday" in historical_routine
 
             # A project activity is additive and does not replace the default project.
             assert memory.remember("I'm working on a Python project")
@@ -92,8 +105,8 @@ def main():
                 if not record.get("key")
             ), "project activity was not added alongside default project"
 
-            # Ambiguous semantic relation uses one small model decision.
-            memory_lifecycle._best_related = lambda text, module: (
+            # An ambiguous semantic relation uses one small model decision.
+            memory_lifecycle._best_related = lambda text: (
                 "project", "JARVIS", 0.55
             )
             model_calls = []
@@ -119,9 +132,10 @@ def main():
             files.root = original_root
             semantic_memory._semantic_rank = original_rank
             memory_lifecycle.chat = original_chat
+            memory_lifecycle._best_related = original_best_related
             _reset()
 
-    print("PASSED: memory lifecycle migration, replacement, history, add, and outage-safe behaviour.")
+    print("PASSED: memory lifecycle migration, replacement, history, coexistence, and outage-safe behaviour.")
 
 
 if __name__ == "__main__":
