@@ -191,17 +191,17 @@ def _sync(memory_module, reason="sync"):
             record["confidence"] = 1.0
             changed = True
 
+    # Records deliberately removed from memory.txt disappear from the active
+    # set, but they are not archived: an explicit "forget" must stay forgotten.
     if len(used) != len(data["memories"]):
-        remaining = []
-
-        for index, record in enumerate(data["memories"]):
-            if index in used:
-                remaining.append(record)
-            else:
-                _archive(data, record, reason="removed")
-                changed = True
+        remaining = [
+            record
+            for index, record in enumerate(data["memories"])
+            if index in used
+        ]
 
         data["memories"] = remaining
+        changed = True
 
     if changed:
         _save(data)
