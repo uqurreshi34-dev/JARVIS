@@ -42,22 +42,34 @@ microphone is restored.
 
 ## The rule that shapes everything: the free path
 
-Every command is matched against a table of known phrases first. Only if
-nothing matches does it cost an API call.
+Every command is matched against a table of known phrases first. If nothing
+matches, JARVIS checks whether the utterance is a strong personal-memory
+question using its local semantic memory layer. Only when neither local path
+can handle it does it need a language-model request.
 
 ```
 you speak → Whisper (local) → phrase table (free) → fuzzy match (free)
-                                    ↓ no match
-                              language model (costs)
+                                      ↓ no command
+                              semantic memory (free)
+                                  ↙          ↘
+                         strong match       no match
+                              ↓                 ↓
+                       answer_question     language model
+                         ↙        ↘            (costs)
+                  provider up   providers down
+                       ↓              ↓
+                  one LLM call   local fallback
 ```
 
 In practice almost everything is free: apps, files, notes, clipboard, news,
-charts, spelling, screen control, calendar, memory, volume, timers. Three
-things always need a live request to actually carry out, even though
-recognising the command itself is free: a general question and the camera
-both cost money, through a language or vision model; finding a fetched
-image costs a request too, but not money — Unsplash's own call is free,
-just not local.
+charts, spelling, screen control, calendar, memory retrieval, volume, and
+timers. A general-knowledge answer still needs a live language-model request,
+and the camera needs a live vision request. A fetched image uses a free
+Unsplash request rather than the language model. Personal-memory questions
+are special: finding the memory is always local, and a strong match skips the
+classifier API call. When a provider is available, the final answer uses one
+language-model request; when both providers are unavailable, a local factual
+fallback can answer directly from the remembered fact.
 
 **When adding a capability, add its phrases to the free path.** An intent
 that only the model can reach is slower and costs money on every use.
@@ -240,6 +252,23 @@ editable by hand. Some facts change behaviour rather than being recited:
 Facts are data, never instructions: anything shaped like an order is
 refused at the point of storing, so memory cannot become a way round the
 rules.
+
+Memory retrieval is local and semantic. JARVIS uses a small ONNX sentence
+embedding model cached on the PC to compare the meaning of a question with
+stored memories rather than relying only on shared words. This means
+questions such as "what are my gym days?", "when do I train?", and "what's my
+workout schedule?" can retrieve the same fact without a hard-coded list of
+gym or training synonyms.
+
+A strong personal-memory question bypasses the normal command-classifier API
+call. The answer still uses the configured language model when one is
+available, so the response can remain natural. If both language-model
+providers are unavailable, JARVIS falls back to the best local memory match
+and can still state the remembered fact without an API call.
+
+The semantic model is retrieval machinery, not a source of personal facts.
+The facts themselves remain in `memory.txt`, editable by hand, and no API
+call is required to search them.
 
 ### Contacts — `actions/contacts.py`
 Calling, WhatsApp and texting, from the phone only. The desk has no SIM,
@@ -581,6 +610,15 @@ Panels (news, chart, camera) each have their own window and a projection
 beam joining them to the HUD.
 
 ---
+
+### Memory and routing regression checks
+
+The local memory layer has two small regression tests:
+
+```text
+python tools/test_memory_semantic.py
+python tools/test_routing_regressions.py
+```
 
 ## The rules that keep it safe
 
