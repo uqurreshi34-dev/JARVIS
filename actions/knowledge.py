@@ -1,7 +1,13 @@
 import re
 
-from actions import memory
+from actions import memory, semantic_memory
 from providers import chat
+
+
+# Keep one retrieval path for the command router, answer generation and the
+# no-LLM fallback. Semantic retrieval preserves the existing lexical scorer
+# when its local encoder is unavailable.
+semantic_memory.install()
 
 
 # Thinking models spend part of this budget on internal reasoning before
@@ -83,62 +89,8 @@ def _preferred_length():
 
 
 def _memory_fallback(question):
-    """Give a direct local answer when no language model is available.
-
-    Only used when the normal answer request fails. It relies on the same
-    local relevance retrieval as the successful path, so no fact or domain
-    is hard-coded here.
-    """
-    try:
-        summary = memory.relevant_summary(question, limit=1)
-    except Exception as error:
-        print(f"[JARVIS] could not build memory fallback: {error}")
-        return None
-
-    for line in summary.splitlines():
-        line = line.strip()
-
-        if not line.startswith("- "):
-            continue
-
-        remembered = line[2:].strip()
-
-        if not remembered:
-            continue
-
-        key, separator, value = remembered.partition(":")
-
-        if separator and key.strip() and value.strip():
-            key = key.strip()
-            value = value.strip()
-
-            # A simple list such as "Sunday, Tuesday and Thursday" is
-            # plural; a single value such as "Sunday" is singular. This
-            # stays generic rather than naming any particular memory key.
-            items = [
-                item.strip()
-                for item in re.split(r",|\band\b", value, flags=re.I)
-                if item.strip()
-            ]
-
-            if key.endswith("s") and len(items) == 1:
-                spoken_key = key[:-1]
-                verb = "is"
-            else:
-                spoken_key = key
-                verb = "are" if len(items) > 1 else "is"
-
-            return (
-                "I can't reach my language model right now, sir, but I do "
-                f"remember this: your {spoken_key} {verb} {value}."
-            )
-
-        return (
-            "I can't reach my language model right now, sir, but I do "
-            f"remember this: {remembered}."
-        )
-
-    return None
+    """Give a direct local answer when no language model is available."""
+    return semantic_memory.direct_fallback(question)
 
 
 def answer(question):
