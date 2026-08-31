@@ -444,61 +444,128 @@ def summary_for_prompt(limit=8):
     )
 
 
+def _retrieval_words(text):
+    """Normalised content words used by the local memory scorer."""
+    stopwords = {
+        "the", "and", "are", "was", "were", "what", "when", "where",
+        "which", "who", "how", "why", "does", "did", "do", "can", "could",
+        "would", "should", "have", "has", "had", "that", "this", "these",
+        "those", "about", "from", "with", "for", "into", "your", "you",
+        "my", "me", "i", "is", "am", "to", "of", "on", "in", "a", "an",
+        "tell", "remember", "know", "much", "many", "please", "sir",
+    }
+
+    words = []
+
+    for word in re.findall(r"[a-z0-9]+", (text or "").casefold()):
+        if len(word) <= 2 or word in stopwords:
+            continue
+
+        # Small, domain-free normalisation so train/trains/training and
+        # preference/preferences can meet without a hand-written synonym
+        # list. This is deliberately conservative rather than a full stemmer.
+        if word.endswith("ies") and len(word) > 4:
+            word = word[:-3] + "y"
+        elif word.endswith("ing") and len(word) > 5:
+            word = word[:-3]
+        elif word.endswith("ed") and len(word) > 4:
+            word = word[:-2]
+        elif word.endswith("es") and len(word) > 4:
+            word = word[:-2]
+        elif word.endswith("s") and len(word) > 3:
+            word = word[:-1]
+
+        words.append(word)
+
+    return words
+
+
 def relevant_summary(query, limit=6):
     """A short block containing memories relevant to a specific question.
 
     Selected entirely locally from memory.txt; retrieving a memory never
     requires an API call.
+
+    Retrieval v2 uses several local signals rather than raw word overlap:
+    content-word normalisation, inverse document frequency, key weighting,
+    query coverage, phrase matches and a small recency preference. No facts
+    or domains are hard-coded here.
     """
-    query_words = {
-        word
-        for word in re.findall(r"[a-z0-9]+", (query or "").casefold())
-        if len(word) > 2
-    }
+    query_words = _retrieval_words(query)
 
     if not query_words:
         return ""
 
+    entries = facts()
+    documents = []
+
+    for index, (key, value) in enumerate(entries):
+        key_words = _retrieval_words(key or "")
+        value_words = _retrieval_words(value or "")
+        words = key_words + value_words
+
+        if words:
+            documents.append((index, key, value, key_words, words))
+
+    if not documents:
+        return ""
+
+    query_set = set(query_words)
+    document_frequency = {}
+
+    for _, _, _, _, words in documents:
+        for word in set(words):
+            document_frequency[word] = document_frequency.get(word, 0) + 1
+
+    total_documents = len(documents)
     scored = []
 
-    for key, value in facts():
-        text = " ".join(
-            part
-            for part in (key or "", value or "")
-            if part
-        ).casefold()
-
-        words = {
-            word
-            for word in re.findall(r"[a-z0-9]+", text)
-            if len(word) > 2
-        }
-
-        overlap = query_words & words
+    for index, key, value, key_words, words in documents:
+        word_set = set(words)
+        key_set = set(key_words)
+        overlap = query_set & word_set
+        key_overlap = query_set & key_set
 
         if not overlap:
             continue
 
-        key_words = {
-            word
-            for word in re.findall(r"[a-z0-9]+", key or "")
-            if len(word) > 2
-        }
+        # Rare words carry more information than words shared by many
+        # memories. This is the local equivalent of an IDF-style signal.
+        lexical_score = sum(
+            math.log((total_documents + 1) / (document_frequency[word] + 1)) + 1
+            for word in overlap
+        )
 
-        key_overlap = query_words & key_words
+        coverage = len(overlap) / max(1, len(query_set))
+        key_score = 2.5 * len(key_overlap)
 
-        score = len(overlap) + (2 * len(key_overlap))
+        query_text = " ".join(query_words)
+        document_text = " ".join(words)
+        phrase_score = 2.0 if query_text and query_text in document_text else 0.0
 
-        scored.append((score, key, value))
+        # Newer memories get a gentle tie-breaker, never enough to beat a
+        # substantially better lexical match.
+        position = index / max(1, len(entries) - 1)
+        recency_score = 0.35 * position
 
-    scored.sort(key=lambda item: item[0], reverse=True)
+        score = (
+            lexical_score
+            + (2.0 * coverage)
+            + key_score
+            + phrase_score
+            + recency_score
+        )
+
+        scored.append((score, index, key, value))
 
     if not scored:
         return ""
 
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+
     lines = []
 
-    for _, key, value in scored[:max(1, limit)]:
+    for _, _, key, value in scored[:max(1, limit)]:
         lines.append(
             f"- {key}: {value}" if key else f"- {value}"
         )
