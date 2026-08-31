@@ -1,6 +1,7 @@
 import json
 
-from actions import safety
+from actions import memory, safety
+import re
 
 from providers import chat
 
@@ -506,8 +507,117 @@ def _parse(content):
     return result
 
 
+_MEMORY_QUESTION_WORDS = frozenset({
+    "what", "whats", "which", "when", "where", "who", "how",
+})
+
+_MEMORY_PERSONAL_WORDS = frozenset({
+    "my", "mine", "me", "i", "im", "ive",
+})
+
+
+def _local_memory_question(command):
+    """True when this is a confident personal-memory question.
+
+    This is intentionally conservative. It only bypasses the command
+    interpreter when the utterance looks like a personal question and the
+    existing local memory retriever can identify a strong keyed match.
+    No facts or domains are hard-coded here.
+    """
+    text = (command or "").strip().casefold()
+
+    if not text:
+        return False
+
+    words = re.findall(r"[a-z0-9]+", text)
+
+    if not words:
+        return False
+
+    question_like = (
+        words[0] in _MEMORY_QUESTION_WORDS
+        or "?" in (command or "")
+    )
+
+    if not question_like:
+        return False
+
+    if not _MEMORY_PERSONAL_WORDS.intersection(words):
+        return False
+
+    query_words = {
+        word
+        for word in words
+        if len(word) > 2
+        and word not in {
+            "the", "and", "are", "was", "were", "what", "when", "where",
+            "which", "who", "how", "does", "did", "do", "can", "could",
+            "would", "should", "have", "has", "had", "that", "this",
+            "about", "from", "with", "for", "into", "your", "you", "my",
+            "me", "i", "is", "am", "to", "of", "on", "in", "a", "an",
+        }
+    }
+
+    if not query_words:
+        return False
+
+    summary = memory.relevant_summary(command, limit=1)
+
+    if not summary:
+        return False
+
+    lines = [
+        line.strip()
+        for line in summary.splitlines()
+        if line.strip().startswith("- ")
+    ]
+
+    if not lines:
+        return False
+
+    top = lines[0][2:].strip()
+    key, _, _ = top.partition(":")
+
+    memory_words = set(re.findall(r"[a-z0-9]+", top.casefold()))
+    key_words = set(re.findall(r"[a-z0-9]+", key.casefold()))
+
+    overlap = query_words & memory_words
+
+    if not overlap:
+        return False
+
+    query_coverage = len(overlap) / len(query_words)
+
+    if query_coverage >= 0.5:
+        return True
+
+    # A multi-word memory key can still be a strong enough signal when
+    # most of that key appears in the question, even if the question
+    # contains extra wording such as "normally" or "usually".
+    key_overlap = query_words & key_words
+
+    return (
+        len(key_words) >= 2
+        and len(key_overlap) / len(key_words) >= 0.5
+    )
+
+
 class CommandInterpreter:
     def interpret(self, command, applications, projects=()):
+
+        if _local_memory_question(command):
+            print("[fast] answer_question (local memory route; no classifier API call)")
+
+            return {
+                "intent": "answer_question",
+                "application": None,
+                "website": None,
+                "project": None,
+                "amount": None,
+                "text": None,
+                "unit": None,
+            }
+
         # These names come from the machine, not from the user speaking, so
         # anything shaped like an instruction is dropped before it can be
         # interpolated into the prompt.
