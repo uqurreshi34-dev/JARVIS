@@ -88,13 +88,19 @@ def _guarded_fuzzy(commands, original):
 
 
 def install(commands):
-    """Install routing safeguards once, after commands.py is fully loaded."""
+    """Install routing and memory safeguards once, after commands.py is loaded."""
     global _installed
 
     if _installed:
         return
 
     import llm
+    from actions import memory_lifecycle
+
+    # Ensure existing memory.txt facts receive machine metadata before any
+    # new memory is written. memory.txt itself remains the human-readable
+    # source and is never replaced by the metadata file.
+    memory_lifecycle.install()
 
     # Keep the original detector's vocabulary available to callers, but make
     # its final confidence decision semantic rather than lexical. This is the
