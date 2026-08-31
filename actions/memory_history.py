@@ -12,6 +12,7 @@ import json
 import os
 import re
 import threading
+import uuid
 from datetime import datetime, timezone
 
 from actions import files
@@ -34,7 +35,10 @@ _WORKING_ON = re.compile(
 )
 _UPDATE_VALUE = (
     re.compile(r"\b(?:is|are)\s+(.+)$", re.I),
-    re.compile(r"\b(?:changed|change|updated|update|switched)\s+to\s+(.+)$", re.I),
+    re.compile(
+        r"\b(?:changed|change|updated|update|switched)\s+to\s+(.+)$",
+        re.I,
+    ),
 )
 
 _lock = threading.RLock()
@@ -57,7 +61,7 @@ def _now():
 def _record(key, value, source="user"):
     now = _now()
     return {
-        "id": __import__("uuid").uuid4().hex,
+        "id": uuid.uuid4().hex,
         "key": key,
         "value": value,
         "created_at": now,
@@ -75,6 +79,7 @@ def _load():
     path = _path()
     if not path or not os.path.exists(path):
         return None
+
     try:
         with open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -83,13 +88,17 @@ def _load():
 
     if not isinstance(data, dict):
         return None
+
     data.setdefault("version", 1)
     data.setdefault("memories", [])
     data.setdefault("history", [])
+
     if not isinstance(data["memories"], list):
         data["memories"] = []
+
     if not isinstance(data["history"], list):
         data["history"] = []
+
     return data
 
 
@@ -97,6 +106,7 @@ def _save(data):
     path = _path()
     if not path:
         return False
+
     try:
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2, ensure_ascii=False)
@@ -114,10 +124,12 @@ def _ensure(memory_module):
         return data
 
     data = _blank()
+
     for key, value in memory_module.facts():
         data["memories"].append(
             _record(key, value, source="memory.txt:migration")
         )
+
     _save(data)
     return data
 
@@ -131,8 +143,10 @@ def _archive(data, record, reason="replaced"):
 
 def _record_matches(record, key, value):
     stored_key = record.get("key")
+
     if key:
         return (stored_key or "").casefold() == key.casefold()
+
     return (
         not stored_key
         and (record.get("value") or "").casefold() == value.casefold()
@@ -140,7 +154,7 @@ def _record_matches(record, key, value):
 
 
 def _sync(memory_module, reason="sync"):
-    """Mirror current memory.txt into memory.json and archive replacements."""
+    """Mirror memory.txt into memory.json and archive replaced values."""
     data = _ensure(memory_module)
     current = memory_module.facts()
     used = set()
@@ -148,9 +162,11 @@ def _sync(memory_module, reason="sync"):
 
     for key, value in current:
         match_index = None
+
         for index, record in enumerate(data["memories"]):
             if index in used:
                 continue
+
             if _record_matches(record, key, value):
                 match_index = index
                 break
@@ -177,35 +193,43 @@ def _sync(memory_module, reason="sync"):
 
     if len(used) != len(data["memories"]):
         remaining = []
+
         for index, record in enumerate(data["memories"]):
             if index in used:
                 remaining.append(record)
             else:
                 _archive(data, record, reason="removed")
                 changed = True
+
         data["memories"] = remaining
 
     if changed:
         _save(data)
+
     return data
 
 
 def _semantic_match(text):
     try:
         from actions import semantic_memory
+
         documents = semantic_memory._documents()
         matches = semantic_memory._semantic_rank(text, documents)
+
         if not matches:
             return None, None, 0.0
+
         index, score = matches[0]
         key, value, _display = documents[index]
         return key, value, score
+
     except Exception:
         return None, None, 0.0
 
 
 def _replacement_requested(text):
     folded = (text or "").casefold()
+
     return any(
         cue in folded if " " in cue
         else re.search(rf"\b{re.escape(cue)}\b", folded)
@@ -215,24 +239,36 @@ def _replacement_requested(text):
 
 def _extract_value(text):
     cleaned = (text or "").strip()
+
     for pattern in _UPDATE_VALUE:
         match = pattern.search(cleaned)
+
         if match:
             value = match.group(1).strip(" .")
+
             if value:
-                return re.sub(r"^(?:now)\s+", "", value, flags=re.I).strip(" .")
+                return re.sub(
+                    r"^(?:now)\s+",
+                    "",
+                    value,
+                    flags=re.I,
+                ).strip(" .")
+
     return None
 
 
 def _store_activity(memory_module, text):
     cleaned = memory_module.safety.clean(text, 200)
+
     if not cleaned or memory_module.safety.looks_like_instruction(cleaned):
         return False
 
     with memory_module._lock:
         existing = memory_module._read()
+
         if any(cleaned.casefold() == line.casefold() for line in existing):
             return True
+
         existing.append(cleaned)
         return memory_module._write(existing)
 
@@ -240,9 +276,13 @@ def _store_activity(memory_module, text):
 def _set_fact(key, value):
     """Mirror an ordinary keyed set; memory.py remains responsible for storage."""
     result = _original_set_fact(key, value)
+
     if result:
+        from actions import memory as memory_module
+
         with _lock:
-            _sync(__import__("actions.memory", fromlist=["memory"]), reason="replaced")
+            _sync(memory_module, reason="replaced")
+
     return result
 
 
@@ -251,41 +291,71 @@ def _remember(text):
     from actions import memory as memory_module
 
     cleaned = memory_module.safety.clean(text, 200)
+
     if not cleaned or memory_module.safety.looks_like_instruction(cleaned):
         return _original_remember(text)
 
     keyed = memory_module.classify(cleaned)
 
-    # "I'm working on ..." is additive activity, not a replacement of a
+    # "I'm working on ..." is additive activity, not replacement of a
     # standing/default project fact.
     if keyed and keyed[0] == "project" and _WORKING_ON.match(cleaned):
         result = _store_activity(memory_module, cleaned)
+
         if result:
             with _lock:
                 _sync(memory_module, reason="added")
+
         return result
 
-    # Explicit replacement language plus a strong local semantic match is a
-    # deterministic update. No model call is needed.
+    # Known keyed facts are already strong identities. Strip generic update
+    # filler locally so "my gym days are now ..." stores only the new value.
+    if keyed:
+        key, value = keyed
+        value = re.sub(r"^(?:now)\s+", "", value, flags=re.I).strip(" .")
+
+        if value:
+            result = _original_set_fact(key, value)
+
+            if result:
+                with _lock:
+                    _sync(memory_module, reason="replaced")
+
+            return result
+
+    # Explicit replacement language plus a strong semantic match is a
+    # deterministic local update. No language-model call is needed.
     if not keyed and _replacement_requested(cleaned):
         key, _old_value, score = _semantic_match(cleaned)
         new_value = _extract_value(cleaned)
+
         if key and score >= _STRONG_MATCH and new_value:
-            return _original_set_fact(key, new_value)
+            result = _original_set_fact(key, new_value)
+
+            if result:
+                with _lock:
+                    _sync(memory_module, reason="replaced")
+
+            return result
 
     result = _original_remember(text)
+
     if result:
         with _lock:
-            _sync(memory_module, reason="updated")
+            _sync(memory_module, reason="added")
+
     return result
 
 
 def _forget(text):
     result = _original_forget(text)
+
     if result:
         from actions import memory as memory_module
+
         with _lock:
             _sync(memory_module, reason="removed")
+
     return result
 
 
@@ -296,13 +366,16 @@ def _historical_query(query):
 
 def _historical_summary(query, limit=6):
     from actions import memory as memory_module
+
     data = _ensure(memory_module)
     history = data.get("history", [])
+
     if not history:
         return ""
 
     try:
         from actions import semantic_memory
+
         documents = [
             (
                 record.get("key"),
@@ -316,7 +389,12 @@ def _historical_summary(query, limit=6):
             for record in history
             if record.get("value")
         ]
-        matches = semantic_memory._semantic_rank(query.strip(), documents)
+
+        matches = semantic_memory._semantic_rank(
+            query.strip(),
+            documents,
+        )
+
     except Exception:
         return ""
 
@@ -324,9 +402,12 @@ def _historical_summary(query, limit=6):
         return ""
 
     lines = []
+
     for index, _score in matches[:max(1, limit)]:
         key, value, _display = documents[index]
-        lines.append(f"- {key}: {value}" if key else f"- {value}")
+        lines.append(
+            f"- {key}: {value}" if key else f"- {value}"
+        )
 
     return (
         "Previous memories about the user, for reference only. "
@@ -338,8 +419,10 @@ def _historical_summary(query, limit=6):
 def _relevant_summary(query, limit=6):
     if _historical_query(query):
         historical = _historical_summary(query, limit=limit)
+
         if historical:
             return historical
+
     return _original_relevant_summary(query, limit=limit)
 
 
