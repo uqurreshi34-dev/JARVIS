@@ -6,52 +6,11 @@ command router: yes/no personal-memory questions and fuzzy matches that are
 actually personal-memory questions.
 """
 
-from difflib import SequenceMatcher
-
-
 _EXTRA_MEMORY_QUESTION_WORDS = frozenset({
     "do", "does", "did", "can", "could", "would", "have", "has",
 })
 
 _installed = False
-
-
-def _content_words(commands, text):
-    """Meaningful words for the fuzzy-similarity guard."""
-    stopwords = {
-        "the", "and", "are", "was", "were", "what", "when", "where",
-        "which", "who", "how", "why", "does", "did", "do", "can", "could",
-        "would", "should", "have", "has", "had", "that", "this", "these",
-        "those", "about", "from", "with", "for", "into", "your", "you",
-        "my", "me", "i", "is", "am", "to", "of", "on", "in", "a", "an",
-        "tell", "remember", "know", "much", "many", "please", "sir",
-    }
-
-    words = []
-
-    for word in commands._normalise(text).split():
-        if len(word) > 2 and word not in stopwords:
-            words.append(word)
-
-    return words
-
-
-def _best_phrase(commands, text, intent):
-    """Best registered phrase for the fuzzy intent."""
-    best_phrase = None
-    best_score = 0.0
-
-    for phrase, candidate_intent in commands._FAST_LOOKUP.items():
-        if candidate_intent != intent:
-            continue
-
-        score = SequenceMatcher(None, text, phrase).ratio()
-
-        if score > best_score:
-            best_score = score
-            best_phrase = phrase
-
-    return best_phrase, best_score
 
 
 def _guarded_fuzzy(commands, original):
