@@ -323,9 +323,22 @@ def chat(messages, response_format=None, temperature=0, max_tokens=None,
 _THINK_TAGS = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 
 
+# An opening think tag with no closing one, which is what a reply cut
+# off mid-thought looks like. The regex above cannot match that, so the
+# reasoning would survive untouched and be handed on as if it were the
+# answer.
+_OPEN_THINK = re.compile(r"<think>.*", re.IGNORECASE | re.DOTALL)
+
+
 def _strip_reasoning(text):
     """Remove any chain-of-thought a reasoning model didn't actually hide."""
     cleaned = _THINK_TAGS.sub("", text).strip()
+
+    # Truncated mid-thought: everything from the opening tag onward is
+    # reasoning that never finished, so nothing after it is worth
+    # keeping either.
+    if "<think>" in cleaned.lower():
+        cleaned = _OPEN_THINK.sub("", cleaned).strip()
 
     # Only trust the stripped version if something sensible is left; an
     # empty result means the whole reply was inside the tags, which is
@@ -334,7 +347,15 @@ def _strip_reasoning(text):
 
 
 def _describe_image(provider, prompt, image_bytes, mime, max_tokens):
-    """One vision request to a single provider."""
+    """One vision request to a single provider.
+
+    The budget matters more than it looks for a reasoning model. Hidden
+    reasoning is still generated and still spends tokens, so a ceiling
+    sized for the answer alone leaves nothing for the answer itself --
+    the model thinks until it runs out and returns an empty string,
+    with no error to explain it. That is what "returned nothing for the
+    image" means, and it is not a picture the model could not read.
+    """
     encoded = base64.b64encode(image_bytes).decode("ascii")
 
     kwargs = {
@@ -364,18 +385,45 @@ def _describe_image(provider, prompt, image_bytes, mime, max_tokens):
     if provider.vision_reasoning:
         kwargs["extra_body"] = {"reasoning_format": "hidden"}
 
+        # Hiding the reasoning does not shorten it. Without this the
+        # model thinks at full effort and spends the whole budget doing
+        # it, returning an empty answer with no error -- which reads as
+        # "the picture could not be read" and is nothing of the kind.
+        # chat() has always asked for low effort; vision never did.
+        kwargs["reasoning_effort"] = "low"
+
     try:
         response = provider._client.chat.completions.create(**kwargs)
     except Exception as error:
-        if "reasoning_format" in kwargs.get("extra_body", {}) and _is_parameter_error(error):
+        if not _is_parameter_error(error):
+            raise
+
+        # Drop whichever knob was refused and try again, rather than
+        # failing outright over a parameter that was only ever an
+        # optimisation.
+        retried = dict(kwargs)
+        changed = False
+
+        if "extra_body" in retried:
             print(
                 f"[JARVIS] {provider.name} rejected reasoning_format; "
                 "retrying without it"
             )
-            kwargs.pop("extra_body", None)
-            response = provider._client.chat.completions.create(**kwargs)
-        else:
+            retried.pop("extra_body", None)
+            changed = True
+
+        if "reasoning_effort" in retried:
+            print(
+                f"[JARVIS] {provider.name} rejected reasoning_effort; "
+                "retrying without it"
+            )
+            retried.pop("reasoning_effort", None)
+            changed = True
+
+        if not changed:
             raise
+
+        response = provider._client.chat.completions.create(**retried)
 
     message = response.choices[0].message
     content = (message.content or "").strip()
@@ -390,10 +438,20 @@ def _describe_image(provider, prompt, image_bytes, mime, max_tokens):
                 content = str(spare).strip()
                 break
 
+    if not content:
+        finish = getattr(response.choices[0], "finish_reason", None)
+
+        if finish == "length":
+            print(
+                f"[JARVIS] {provider.name} ran out of tokens before "
+                f"answering (max_tokens={max_tokens}). A reasoning model "
+                "spends this budget thinking as well as writing."
+            )
+
     return _strip_reasoning(content)
 
 
-def vision(prompt, image_bytes, mime="image/png", max_tokens=300):
+def vision(prompt, image_bytes, mime="image/png", max_tokens=3000):
     """Ask about an image, rotating providers exactly as chat does."""
     if not image_bytes:
         return None

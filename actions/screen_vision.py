@@ -280,6 +280,38 @@ def describe_active_window():
     return answer.strip() if answer else None
 
 
+def _embedded_json(text):
+    """The first JSON object containing "targets", or None.
+
+    Scans for a balanced object rather than using a regex, because the
+    coordinates make nesting real and a regex cannot count brackets.
+    """
+    for start in range(len(text)):
+        if text[start] != "{":
+            continue
+
+        depth = 0
+
+        for end in range(start, len(text)):
+            if text[end] == "{":
+                depth += 1
+            elif text[end] == "}":
+                depth -= 1
+
+                if depth == 0:
+                    try:
+                        found = json.loads(text[start:end + 1])
+                    except (TypeError, ValueError):
+                        break
+
+                    if isinstance(found, dict) and "targets" in found:
+                        return found
+
+                    break
+
+    return None
+
+
 def _parse_click_response(answer):
     """Parse one or more visual click candidates safely."""
     if not answer:
@@ -297,7 +329,15 @@ def _parse_click_response(answer):
     try:
         data = json.loads(text)
     except (TypeError, ValueError):
-        return []
+        # A reasoning model often writes its thinking around the answer
+        # rather than instead of it, so the JSON is in there somewhere
+        # even when the whole reply will not parse. Worth digging it
+        # out: refusing the lot because of a preamble throws away a
+        # perfectly good answer.
+        data = _embedded_json(text)
+
+        if data is None:
+            return []
 
     raw_targets = data.get("targets")
 
@@ -341,12 +381,19 @@ def locate_target(wanted):
     box, title, class_name = _active_window_box()
 
     if not box:
+        print("[JARVIS] vision click: no foreground window to look at")
         return None
 
     image = capture_active_window()
 
     if not image:
+        print("[JARVIS] vision click: could not capture the window")
+        _note_failure("I couldn't capture the screen, sir.")
         return None
+
+    _clear_failure()
+
+    print(f"[JARVIS] vision click: looking for {wanted!r} in {title!r}")
 
     try:
         from providers import vision
@@ -358,12 +405,42 @@ def locate_target(wanted):
 
     except Exception as error:
         print(f"[JARVIS] screen vision click unavailable: {error}")
+
+        text = str(error).lower()
+
+        if "429" in text or "rate_limit" in text or "quota" in text:
+            _note_failure(
+                "I've used up my daily vision allowance, sir. "
+                "It resets tomorrow."
+            )
+        else:
+            _note_failure("I can't see the screen at the moment, sir.")
+
         return None
 
     candidates = _parse_click_response(answer)
 
     if not candidates:
+        print(
+            "[JARVIS] vision click: no candidates parsed from the reply: "
+            f"{str(answer)[:200]!r}"
+        )
+
+        # No answer at all means no provider could see it -- every one
+        # was exhausted or refused. An answer that simply held no
+        # targets is a genuine "nothing there", which is different.
+        if not answer:
+            _note_failure(
+                "I couldn't get a look at the screen, sir. "
+                "My vision providers aren't answering."
+            )
+
         return None
+
+    print(
+        f"[JARVIS] vision click: {len(candidates)} candidate(s): "
+        + ", ".join(f"{c[2]!r}@{c[3]:.2f}" for c in candidates)
+    )
 
     left, top, right, bottom = box
     wanted_color = _requested_color(wanted)
@@ -396,6 +473,14 @@ def locate_target(wanted):
         return click_x, click_y, label, confidence, (
             win32gui.GetForegroundWindow()
         )
+
+    # Every candidate was rejected. Said out loud, because otherwise
+    # this is indistinguishable from vision never having run at all --
+    # which is exactly the confusion this cost.
+    print(
+        "[JARVIS] vision click: every candidate was rejected "
+        f"(wanted colour: {wanted_color})"
+    )
 
     return None
 
@@ -431,6 +516,27 @@ class _VisionClickTarget:
 
 
 _vision_click_cache = {}
+
+# Why the last look failed, when it failed for a reason worth telling
+# the user about. "I can't find anything called that on screen" is the
+# right answer to a search that came up empty, and quite the wrong one
+# to a quota that ran out -- they are indistinguishable from the
+# outside, and that cost a long evening of tuning colour thresholds
+# that were never the problem.
+_last_failure = {"reason": None}
+
+
+def last_failure():
+    """Why the last visual look failed, or None."""
+    return _last_failure["reason"]
+
+
+def _note_failure(reason):
+    _last_failure["reason"] = reason
+
+
+def _clear_failure():
+    _last_failure["reason"] = None
 
 
 def _cached_target(wanted):
@@ -495,11 +601,28 @@ def install(screen_control_module):
         return
 
     def find_clickable_with_vision(wanted):
-        # UIA remains the first and preferred path. It is free and exact.
-        result = original_find_clickable(wanted)
+        # Descriptive visual requests need vision first. UIA's fuzzy matcher
+        # can otherwise collapse "green Code button" to the shorter "Code"
+        # control and click the wrong thing.
+        words = set(str(wanted or "").casefold().split())
 
-        if result[0] is not None:
-            return result
+        visual_words = {
+            "red", "green", "blue", "yellow", "orange", "purple",
+            "pink", "black", "white", "grey", "gray",
+            "top", "bottom", "left", "right",
+            "upper", "lower", "first", "second", "third",
+            "button", "link", "icon", "option",
+        }
+
+        visual_request = bool(words & visual_words)
+
+        if not visual_request:
+            # Existing behaviour is completely unchanged for ordinary
+            # requests such as "click Code" or "click Edit".
+            result = original_find_clickable(wanted)
+
+            if result[0] is not None:
+                return result
 
         cached = _cached_target(wanted)
 
@@ -509,7 +632,27 @@ def install(screen_control_module):
         target_info = locate_target(wanted)
 
         if not target_info:
-            return result
+            # Vision found nothing. For a visual request UIA was skipped
+            # above, so without this there is no second chance at all --
+            # and "green code button" would fail even when a plainly
+            # named control exists. Retried with the colour and shape
+            # words removed, which is what UIA could have matched all
+            # along.
+            if visual_request:
+                plain = " ".join(
+                    word for word in str(wanted or "").split()
+                    if word.casefold() not in visual_words
+                ).strip()
+
+                if plain and plain.casefold() != str(wanted).casefold():
+                    print(
+                        "[JARVIS] vision found nothing; trying UIA for "
+                        f"{plain!r}"
+                    )
+
+                    return original_find_clickable(plain)
+
+            return None, None, False
 
         x, y, label, confidence, hwnd = target_info
         target = _VisionClickTarget(x, y, label, hwnd)

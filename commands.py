@@ -1569,6 +1569,22 @@ def _click_thing(name):
     element, label, risky = screen_control.find_clickable(name)
 
     if not element:
+        # "I can't find that on screen" is the right answer to a search
+        # that came up empty and quite the wrong one to a vision quota
+        # that ran out. They were indistinguishable, which sent a whole
+        # evening into tuning colour matching that was never at fault.
+        reason = None
+
+        try:
+            from actions import screen_vision
+
+            reason = screen_vision.last_failure()
+        except Exception:
+            reason = None
+
+        if reason:
+            return _query("click_thing", lambda: reason)
+
         return _query(
             "click_thing",
             lambda: f"I can't find anything called {name} on screen, sir.",
