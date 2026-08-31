@@ -87,13 +87,15 @@ def answer(question):
     if not question or not question.strip():
         return None
 
+    relevant_memory = memory.relevant_summary(question)
+
     try:
         raw = chat(
             messages=[
                 {"role": "system", "content": _system_prompt()},
                 {
                     "role": "system",
-                    "content": memory.relevant_summary(question),
+                    "content": relevant_memory,
                 },
                 {"role": "user", "content": question.strip()},
             ],

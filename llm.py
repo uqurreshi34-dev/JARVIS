@@ -204,6 +204,12 @@ Use recall_memory when they ask what JARVIS knows or remembers about them.
 Use open_default_project when they say "open my project" without naming
 which one.
 
+For questions about one specific personal fact that JARVIS may already
+remember, such as "what are my gym days?", "what is my default project?",
+or "what did I tell you about my preferred reply length?", use
+answer_question rather than a specialised command such as read_calendar.
+Specific remembered facts are questions to answer, not actions to perform.
+
 Use log_summary when the user asks how much JARVIS has done today or wants
 the log summarised.
 Use read_log when the user asks what JARVIS has been doing or wants the
