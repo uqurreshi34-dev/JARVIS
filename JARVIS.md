@@ -33,7 +33,7 @@ not speak the phone's reply.
 
 While the phone owns the voice channel, the desktop microphone is suppressed.
 This prevents speech intended for the phone from being heard or acted on by
-the desktop microphone. When the phone interaction finishes, the desktop
+the desktop listener. When the phone interaction finishes, the desktop
 microphone is restored.
 
 **104 intents. 491 spoken phrases resolve locally with no API call.**
@@ -188,16 +188,6 @@ current image until the save decision is made; saying yes saves the picture
 under `C:\Users\<you>\JARVIS\images\` using a short descriptive filename
 plus a timestamp, rather than exposing the PC path in JARVIS's spoken reply.
 
-Phone commands can also control the Windows PC remotely over the same
-command path used by desktop voice. Screen control is local-first: JARVIS
-tries Windows UI Automation first because it is free and precise. If UIA
-cannot find the requested visible target, the visual screen-control layer
-captures the active window once, asks the vision model to locate the target,
-and reuses that result for the click/confirmation path rather than making a
-second vision request. The existing UIA control and safety path remains in
-place; visual targeting is a fallback, not a replacement. Typing continues
-to use the focused Windows control locally.
-
 ### Files — `actions/files.py`
 Everything lives in `C:\Users\<you>\JARVIS\`. Nothing outside it can be
 touched; every path is resolved and checked against that root.
@@ -328,8 +318,8 @@ even eligible to be mentioned. Deliberately conservative: better to stay
 quiet a while longer than to announce a habit from a handful of
 occurrences in one busy afternoon. Where an intent needs a subject the
 subject is part of the pattern's identity, so a nine o'clock Bitcoin
-report and a five o'clock Ethereum report stay two separate habits rather
-than merging into one meaningless "market report" pattern.
+report and a five o'clock Ethereum report stay two separate habits
+rather than merging into one meaningless "market report" pattern.
 
 Nothing is ever promoted silently. A detected pattern is offered once,
 and only running it automatically after you say yes; declining removes
@@ -404,9 +394,9 @@ At startup he reads out what is due in the next two days, unprompted.
 
 ### Spelling — `actions/proofread.py`
 Local dictionary, no API. Checks a file or whatever is on screen. Lists
-findings, writes a report, or corrects in place — Word documents keep
-their formatting because replacements happen run by run, and capitalisation
-is preserved so "Thas" becomes "That". Screen text belongs to another
+findings, writes a report, or corrects in place — Word documents keep their
+formatting because replacements happen run by run, and capitalisation is
+preserved so "Thas" becomes "That". Screen text belongs to another
 application, so the corrected version goes on the clipboard rather than
 being typed over your work. `spelling-ignore.txt` holds words to leave
 alone, permanently.
@@ -492,16 +482,6 @@ Windows UI Automation. Describes the active window, clicks a named control,
 types into whatever has focus, and reads the text being written. Typing
 goes via the clipboard so special characters cannot be interpreted as key
 combinations.
-
-The screen-control layer is now local-first but vision-assisted. UI
-Automation remains the first path for ordinary named controls because it
-is free, precise, and does not require a model. When UIA cannot find a
-visible target, `actions/screen_vision.py` captures the active window and
-uses a single vision request to return normalized target coordinates and a
-confidence score. Targets below the confidence threshold are rejected.
-A short-lived target cache prevents a confirmation from causing a second
-vision request. If the active window changes, the cached target becomes
-invalid and no click is attempted.
 
 ### Machine — `actions/system.py`, `desktop.py`, `screen.py`
 Time, weather, CPU and memory, volume and media keys, screenshots,
@@ -596,8 +576,8 @@ wiped a notes file.
 
 **Anything hard to undo asks first.** Overwriting a file, clicking a control
 whose name suggests sending or deleting, correcting a document, clearing
- the calendar. The confirmation re-finds the control at the moment you say
- yes, so it cannot act on something that has since changed.
+the calendar. The confirmation re-finds the control at the moment you say
+yes, so it cannot act on something that has since changed.
 
 **Outside text is data, never instructions** — `actions/safety.py`. Folder
 names, file contents, dropped documents, stored facts and words held up to
@@ -640,12 +620,13 @@ Each of these cost real time. They are here so they are not repeated.
 share a name.** Reached over Tailscale a connection arrives on a
 different address from the LAN one, and a certificate naming only the
 LAN address warns on every connection. Worse, every JARVIS certificate
-authority was called exactly "JARVIS Local CA": Android files authorities
-by a hash of that name, so installing a regenerated one beside the old one
-put both in the same slot and it could validate against the wrong one. The
-error that produces reads as a name mismatch, which sends you looking at
-the address rather than the trust store. Authorities are now dated, and the
-certificate covers every address JARVIS can be reached on.
+authority was called exactly "JARVIS Local CA": Android files
+authorities by a hash of that name, so installing a regenerated one
+beside the old one put both in the same slot and it could validate
+against the wrong one. The error that produces reads as a name
+mismatch, which sends you looking at the address rather than the trust
+store. Authorities are now dated, and the certificate covers every
+address JARVIS can be reached on.
 
 **Android's Tailscale client may not resolve MagicDNS names at all.**
 A known bug (tailscale/tailscale#14109) breaks name resolution on
