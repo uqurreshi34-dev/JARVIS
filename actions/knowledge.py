@@ -109,9 +109,28 @@ def _memory_fallback(question):
         key, separator, value = remembered.partition(":")
 
         if separator and key.strip() and value.strip():
+            key = key.strip()
+            value = value.strip()
+
+            # A simple list such as "Sunday, Tuesday and Thursday" is
+            # plural; a single value such as "Sunday" is singular. This
+            # stays generic rather than naming any particular memory key.
+            items = [
+                item.strip()
+                for item in re.split(r",|\band\b", value, flags=re.I)
+                if item.strip()
+            ]
+
+            if key.endswith("s") and len(items) == 1:
+                spoken_key = key[:-1]
+                verb = "is"
+            else:
+                spoken_key = key
+                verb = "are" if len(items) > 1 else "is"
+
             return (
                 "I can't reach my language model right now, sir, but I do "
-                f"remember this: your {key.strip()} is {value.strip()}."
+                f"remember this: your {spoken_key} {verb} {value}."
             )
 
         return (
