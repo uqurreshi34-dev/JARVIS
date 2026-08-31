@@ -82,6 +82,46 @@ def _preferred_length():
         return "medium"
 
 
+def _memory_fallback(question):
+    """Give a direct local answer when no language model is available.
+
+    Only used when the normal answer request fails. It relies on the same
+    local relevance retrieval as the successful path, so no fact or domain
+    is hard-coded here.
+    """
+    try:
+        summary = memory.relevant_summary(question, limit=1)
+    except Exception as error:
+        print(f"[JARVIS] could not build memory fallback: {error}")
+        return None
+
+    for line in summary.splitlines():
+        line = line.strip()
+
+        if not line.startswith("- "):
+            continue
+
+        remembered = line[2:].strip()
+
+        if not remembered:
+            continue
+
+        key, separator, value = remembered.partition(":")
+
+        if separator and key.strip() and value.strip():
+            return (
+                "I can't reach my language model right now, sir, but I do "
+                f"remember this: your {key.strip()} is {value.strip()}."
+            )
+
+        return (
+            "I can't reach my language model right now, sir, but I do "
+            f"remember this: {remembered}."
+        )
+
+    return None
+
+
 def answer(question):
     """Answer a general question, or None if it cannot be answered."""
     if not question or not question.strip():
@@ -108,11 +148,14 @@ def answer(question):
 
     except Exception as error:
         print(f"[JARVIS] question lookup failed: {error}")
-        return None
+        return _memory_fallback(question)
 
     spoken = _for_speech(raw)
 
-    return spoken or None
+    if spoken:
+        return spoken
+
+    return _memory_fallback(question)
 
 
 def answer_with_documents(question, document_context):
