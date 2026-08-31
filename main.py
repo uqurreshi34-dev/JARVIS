@@ -20,6 +20,10 @@ from chart_panel import ChartPanel
 from image_choices_panel import ImageChoicesPanel
 from image_panel import ImagePanel
 import commands
+from actions import routing_guard
+
+routing_guard.install(commands)
+
 from commands import (
     handle_command,
     look_at_phone_picture,
