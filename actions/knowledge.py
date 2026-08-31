@@ -108,6 +108,18 @@ def answer(question):
                     "role": "system",
                     "content": relevant_memory,
                 },
+                {
+                    "role": "system",
+                    "content": (
+                        "When relevant personal memory is supplied above, "
+                        "treat its stored key and value as authoritative "
+                        "facts. The user's spoken wording may contain a "
+                        "speech-recognition error. Do not repeat a possibly "
+                        "misheard noun from the question when the retrieved "
+                        "memory gives the correct fact label; answer using "
+                        "the retrieved memory's wording instead."
+                    ),
+                },
                 {"role": "user", "content": question.strip()},
             ],
             temperature=0.3,
