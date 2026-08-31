@@ -385,6 +385,18 @@ def _describe_image(provider, prompt, image_bytes, mime, max_tokens):
     if provider.vision_reasoning:
         kwargs["extra_body"] = {"reasoning_format": "hidden"}
 
+        # Qwen3 reads /no_think in the prompt as an instruction not to
+        # reason at all. It matters because Groq refuses both of the
+        # parameters below for this model, leaving the prompt as the
+        # only way to ask -- and an unasked model thinks at length,
+        # visibly, until the budget runs out and the answer never
+        # arrives. Documented as working in the user message rather
+        # than a system one, which is where this prompt already goes.
+        text_part = kwargs["messages"][0]["content"][0]
+
+        if not text_part["text"].rstrip().endswith("/no_think"):
+            text_part["text"] = f"{text_part['text']}\n\n/no_think"
+
         # Hiding the reasoning does not shorten it. Without this the
         # model thinks at full effort and spends the whole budget doing
         # it, returning an empty answer with no error -- which reads as
