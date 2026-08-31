@@ -285,11 +285,23 @@ Works on whatever window is focused — any application, including a
 browser. "What's on my screen" is not a required first step; each command
 below looks at the live window itself, every time.
 
+Screen control is local-first. JARVIS tries Windows UI Automation first,
+because it is free and precise. If UI Automation cannot find a visible target,
+he captures the active window and uses the vision model once to locate it.
+The visual result is cached briefly so confirmation does not cause a second
+vision request. This same fallback works when the command comes from the
+phone, so the phone can remotely control the PC without using its camera.
+
 | Say | Does |
 |---|---|
 | what's on my screen | describes the window |
 | click send | clicks it — asks first if risky |
 | type hello world | types into whatever has focus |
+
+Examples of visual fallback commands include **"click File"**, **"click
+Edit"**, or **"click the green button"** when the requested target is visible
+but not exposed through Windows UI Automation. Typing still uses the currently
+focused control and does not require a vision request.
 
 A freshly loaded Chrome tab can briefly show nothing to click while its
 own accessibility tree wakes up; a click that misses for that reason is

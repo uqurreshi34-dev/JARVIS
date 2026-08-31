@@ -175,6 +175,15 @@ real throughout: the microphone's own level while recording, the
 reply's waveform while speaking, and a slow breath when idle. Nothing
 there is a timer pretending to be activity.
 
+Phone commands can also control the Windows PC remotely over the same command
+path used by desktop voice. Screen control is local-first: JARVIS tries
+Windows UI Automation first because it is free and precise. If UIA cannot
+find the requested visible target, the visual screen-control layer captures
+the active window once and asks the vision model to locate the target. The
+result is briefly cached so a confirmation does not trigger a second vision
+request. Visual targeting is a fallback, not a replacement for UIA. Typing
+continues to use the focused Windows control locally.
+
 Phone commands are still ordinary JARVIS commands: they use the same memory,
 actions, journal and command history as commands spoken at the desk.
 
@@ -482,6 +491,13 @@ Windows UI Automation. Describes the active window, clicks a named control,
 types into whatever has focus, and reads the text being written. Typing
 goes via the clipboard so special characters cannot be interpreted as key
 combinations.
+
+The screen-control layer also has a visual fallback. When UI Automation cannot
+find a visible target, `actions/screen_vision.py` captures the active window
+and uses one vision request to locate it by normalized screen coordinates.
+Low-confidence results are rejected, and the short-lived target cache prevents
+a confirmation from causing another vision request. The visual fallback also
+works for commands received remotely from the phone.
 
 ### Machine — `actions/system.py`, `desktop.py`, `screen.py`
 Time, weather, CPU and memory, volume and media keys, screenshots,
