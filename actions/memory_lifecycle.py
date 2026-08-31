@@ -191,7 +191,7 @@ def _historical_query(query):
     return bool(words & _HISTORY_WORDS)
 
 
-def _best_related(text, memory_module):
+def _best_related(text):
     """Return (key, value, score) for the best current semantic match."""
     try:
         from actions import semantic_memory
@@ -229,7 +229,7 @@ def _best_related(text, memory_module):
 
 
 def _extract_replacement_value(text):
-    """Extract a new value from common replacement wording, without facts."""
+    """Extract a new value from generic replacement wording."""
     cleaned = (text or "").strip()
 
     patterns = (
@@ -248,6 +248,13 @@ def _extract_replacement_value(text):
                 return value
 
     return None
+
+
+def _normalise_keyed_value(value):
+    """Remove generic update filler captured as part of a keyed value."""
+    cleaned = (value or "").strip(" .")
+
+    return re.sub(r"^(?:now)\s+", "", cleaned, flags=re.I).strip(" .")
 
 
 def _relationship_via_model(new_text, old_key, old_value):
@@ -387,6 +394,10 @@ def _remember(text):
 
         if keyed:
             key, value = keyed
+            value = _normalise_keyed_value(value)
+
+            if not value:
+                return False
 
             if _same_fact(cleaned, key, value):
                 return True
@@ -404,7 +415,7 @@ def _remember(text):
 
             return _store_replacement(memory_module, data, key, value)
 
-        key, old_value, score = _best_related(cleaned, memory_module)
+        key, old_value, score = _best_related(cleaned)
 
         if key is None and old_value is None:
             result = _store_unkeyed(memory_module, cleaned)
@@ -415,16 +426,14 @@ def _remember(text):
 
             return result
 
-        # Explicit replacement wording plus a strong semantic match is fully
-        # local. Only the value extraction is required; no model is involved.
+        # Strong semantic match plus explicit replacement wording is local.
         if key and score >= _STRONG_MATCH and _replacement_requested(cleaned):
             new_value = _extract_replacement_value(cleaned)
 
             if new_value:
                 return _store_replacement(memory_module, data, key, new_value)
 
-        # For a strong related statement without explicit replacement cues,
-        # make one small semantic relationship call. Failure always adds.
+        # An ambiguous related statement gets one small relationship call.
         if old_value and score >= _RELATED_MATCH:
             relationship, new_value = _relationship_via_model(
                 cleaned,
@@ -443,6 +452,7 @@ def _remember(text):
                     new_value,
                 )
 
+        # Failure or an "add" decision preserves both facts.
         result = _store_unkeyed(memory_module, cleaned)
 
         if result:
@@ -544,11 +554,11 @@ def relevant_summary(query, limit=6):
     except Exception as error:
         print(f"[JARVIS] historical semantic retrieval failed: {error}")
 
-    query_words = set(
+    query_words = {
         word
         for word in re.findall(r"[a-z0-9]+", (query or "").casefold())
         if len(word) > 2 and word not in _HISTORY_WORDS
-    )
+    }
 
     ranked = []
 
