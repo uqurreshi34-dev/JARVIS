@@ -402,7 +402,7 @@ def _describe_image(provider, prompt, image_bytes, mime, max_tokens):
         # it, returning an empty answer with no error -- which reads as
         # "the picture could not be read" and is nothing of the kind.
         # chat() has always asked for low effort; vision never did.
-        kwargs["reasoning_effort"] = "low"
+        kwargs["reasoning_effort"] = "none"
 
     try:
         response = provider._client.chat.completions.create(**kwargs)
