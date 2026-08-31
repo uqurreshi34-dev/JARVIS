@@ -91,6 +91,10 @@ def answer(question):
         raw = chat(
             messages=[
                 {"role": "system", "content": _system_prompt()},
+                {
+                    "role": "system",
+                    "content": memory.relevant_summary(question),
+                },
                 {"role": "user", "content": question.strip()},
             ],
             temperature=0.3,
