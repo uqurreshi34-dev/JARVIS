@@ -1238,7 +1238,7 @@ def _install_memory_wrappers():
         # Existing behaviour remains the fallback for non-keyed/unknown text.
         keyed = _original_memory_classify(text)
 
-        if not keyed:-
+        if not keyed:
             return None
 
         learned = schema(keyed[0])
