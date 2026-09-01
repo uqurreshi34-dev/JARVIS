@@ -22,11 +22,97 @@ _MEMORY_PERSONAL_WORDS = frozenset({
 
 _BARE_MEMORY_UPDATE = re.compile(
     r"^(?:my\s+new\s+.+?\s+(?:is|are)\s+.+|"
-    r"my\s+.+?\s+(?:is|are)\s+now\s+.+)$",
+    r"my\s+.+?\s+(?:is|are)\s+now\s+.+|"
+    r"my\s+project\s+is\s+.+)$",
+    re.I,
+)
+
+_DEFAULT_PROJECT_PATTERN = re.compile(
+    r"^my\s+(?:default|main|current)\s+project\s+is\s+(.+)$",
+    re.I,
+)
+
+_WORKING_ON_PATTERN = re.compile(
+    r"^i(?:'m|m| am)\s+working on\s+(.+)$",
     re.I,
 )
 
 _installed = False
+
+
+def _prepare_default_project_memory():
+    """Make the legacy project fact explicitly mean the default project."""
+    from actions import memory, memory_history
+
+    if "default project" not in memory.KNOWN_KEYS:
+        memory.KNOWN_KEYS = tuple(memory.KNOWN_KEYS) + ("default project",)
+
+    memory._KEYED_PATTERNS = tuple(
+        pattern
+        for pattern in memory._KEYED_PATTERNS
+        if pattern[1] != "project"
+    )
+    memory._KEYED_PATTERNS = (
+        (_DEFAULT_PROJECT_PATTERN, "default project"),
+        (_WORKING_ON_PATTERN, "project"),
+        *memory._KEYED_PATTERNS,
+    )
+
+    with memory._lock:
+        existing = memory._read()
+        has_default = any(
+            (match := memory._LINE.match(line))
+            and match.group(1).strip().casefold() == "default project"
+            for line in existing
+        )
+
+        changed = False
+        kept = []
+
+        for line in existing:
+            match = memory._LINE.match(line)
+
+            if match and match.group(1).strip().casefold() == "project":
+                if has_default:
+                    changed = True
+                    continue
+
+                line = f"default project: {match.group(2).strip()}"
+                has_default = True
+                changed = True
+
+            kept.append(line)
+
+        if changed:
+            memory._write(kept)
+
+    data = memory_history._load()
+
+    if data is not None:
+        has_default = any(
+            (record.get("key") or "").casefold() == "default project"
+            for record in data.get("memories", [])
+        )
+        changed = False
+        kept = []
+
+        for record in data.get("memories", []):
+            key = (record.get("key") or "").casefold()
+
+            if key == "project":
+                if has_default:
+                    changed = True
+                    continue
+
+                record["key"] = "default project"
+                has_default = True
+                changed = True
+
+            kept.append(record)
+
+        if changed:
+            data["memories"] = kept
+            memory_history._save(data)
 
 
 def _local_memory_question(text):
@@ -74,14 +160,9 @@ def _guarded_fuzzy(commands, original):
         if not intent:
             return None
 
-        # Exact matches are resolved before fuzzy matching, but keep this
-        # guard explicit so the rule remains safe if call order changes.
         if commands._FAST_LOOKUP.get(text) == intent:
             return intent
 
-        # A strong local semantic memory match is more trustworthy than a
-        # character-level fuzzy collision with a command such as read_notes.
-        # Let the normal memory route answer it instead.
         try:
             if _local_memory_question(text):
                 return None
@@ -103,10 +184,6 @@ def _guarded_fast_path(commands, original):
 
         text = commands._normalise(command)
 
-        # Do not treat questions as memory writes. For non-question
-        # statements, let the existing classifier determine whether this is
-        # a known keyed personal fact. This adds no vocabulary and no new
-        # intent: it reuses memory.classify() and the existing remember path.
         if text.endswith("?") or text.split(" ", 1)[0] in _MEMORY_QUESTION_WORDS:
             return None
 
@@ -117,13 +194,19 @@ def _guarded_fast_path(commands, original):
         except Exception:
             keyed = None
 
-        if not keyed:
-            return None
+        if keyed:
+            return commands._blank_result(
+                "remember",
+                text=(command or "").strip(),
+            )
 
-        return commands._blank_result(
-            "remember",
-            text=(command or "").strip(),
-        )
+        if re.match(r"^my\s+project\s+is\s+.+$", text, re.I):
+            return commands._blank_result(
+                "remember",
+                text=(command or "").strip(),
+            )
+
+        return None
 
     return guarded
 
@@ -138,11 +221,9 @@ def install(commands):
     import llm
     from actions import memory_history
 
+    _prepare_default_project_memory()
     memory_history.install()
 
-    # Keep the original detector's vocabulary available to callers, but make
-    # its final confidence decision semantic rather than lexical. This is the
-    # same local retrieval path used by the answer and offline fallback.
     llm._MEMORY_QUESTION_WORDS = _MEMORY_QUESTION_WORDS
     llm._local_memory_question = _local_memory_question
 
