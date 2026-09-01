@@ -68,7 +68,8 @@ def _load_model():
             return True
 
         except Exception as error:
-            print(f"[JARVIS] semantic memory unavailable; using lexical retrieval: {error}")
+            print(
+                f"[JARVIS] semantic memory unavailable; using lexical retrieval: {error}")
             return False
 
 
@@ -132,7 +133,8 @@ def _encode(texts):
     elif hidden.ndim == 2:
         pooled = hidden
     else:
-        raise ValueError(f"unexpected semantic model output shape: {hidden.shape}")
+        raise ValueError(
+            f"unexpected semantic model output shape: {hidden.shape}")
 
     norms = np.linalg.norm(pooled, axis=1, keepdims=True)
     return pooled / np.clip(norms, 1e-9, None)
