@@ -1103,6 +1103,100 @@ def _collection_summary(query):
     return None
 
 
+def _collection_answer(query):
+    """Answer a learned collection question entirely locally."""
+    folded = _clean_example(query).casefold()
+
+    if re.search(r"\b(?:default|main|current)\b", folded):
+        return None
+
+    key, cardinality, _score = _collection_match(query)
+
+    if (
+        not key
+        or cardinality != memory_collections.CARDINALITY_COLLECTION
+    ):
+        return None
+
+    values = memory_collections.items(key)
+
+    # An explicitly learned collection still exists when its current item
+    # list is empty, so answer that locally too.
+    if not values:
+        return f"You don't currently have any {key} saved, sir."
+
+    example, example_items = _schema_detail(key)
+
+    if not example or not example_items:
+        return None
+
+    # Recover the learned sentence shape and use it as the answer's
+    # grammatical template. This lets "I like <item>", "I'm reading <item>",
+    # "I have <item>", etc. produce a natural local answer without a
+    # hardcoded list of verbs or domains.
+    first_item = sorted(
+        example_items,
+        key=len,
+        reverse=True,
+    )[0]
+
+    folded_example = example.casefold()
+    start = folded_example.find(first_item.casefold())
+
+    if start < 0:
+        return None
+
+    end = start + len(first_item)
+
+    prefix = example[:start].strip()
+    suffix = example[end:].strip()
+
+    if not prefix:
+        return None
+
+    answer_prefix = re.sub(
+        r"^i(?:'m|’m|m| am)\b",
+        "you're",
+        prefix,
+        count=1,
+        flags=re.I,
+    )
+
+    if answer_prefix == prefix:
+        answer_prefix = re.sub(
+            r"^i\b",
+            "you",
+            prefix,
+            count=1,
+            flags=re.I,
+        )
+
+    answer_prefix = re.sub(
+        r"^my\b",
+        "your",
+        answer_prefix,
+        count=1,
+        flags=re.I,
+    )
+
+    if len(values) == 1:
+        joined = values[0]
+    elif len(values) == 2:
+        joined = f"{values[0]} and {values[1]}"
+    else:
+        joined = f"{', '.join(values[:-1])}, and {values[-1]}"
+
+    answer = f"{answer_prefix} {joined}".strip()
+
+    if suffix:
+        answer = f"{answer} {suffix}"
+
+    if answer and answer[-1] not in ".!?":
+        answer += "."
+
+    return answer
+
+
 def _relevant_summary_intercept(query, limit=6):
     collection = _collection_summary(query)
 

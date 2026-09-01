@@ -98,6 +98,19 @@ def answer(question):
     if not question or not question.strip():
         return None
 
+    try:
+        from actions import memory_collection_intelligence
+
+        collection_answer = memory_collection_intelligence._collection_answer(
+            question
+        )
+
+        if collection_answer:
+            return collection_answer
+
+    except Exception as error:
+        print(f"[JARVIS] local collection answer failed: {error}")
+
     relevant_memory = memory.relevant_summary(question)
 
     historical_words = {
