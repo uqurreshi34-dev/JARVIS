@@ -1037,6 +1037,12 @@ def _collection_summary(query):
                 f"- {key}: {', '.join(values)}"
             )
 
+        return (
+            "Relevant background about the user, for reference only. "
+            "The learned collection exists but currently contains no items:\n"
+            f"- {key}: (none)"
+        )
+
     # A subject-less question such as "what am I reading?" can be a
     # perfectly valid query about a learned collection even when its
     # complete sentence scores below the normal schema threshold.
