@@ -281,14 +281,74 @@ def local_match(text):
     return key, cardinality, score
 
 
+def _collection_match(text):
+    """Find a learned collection using strict or relaxed local semantics."""
+    cleaned = _clean_example(text)
+
+    if not cleaned:
+        return None, None, 0.0
+
+    key, cardinality, score = local_match(cleaned)
+
+    if (
+        key
+        and cardinality == memory_collections.CARDINALITY_COLLECTION
+        and score >= _LOCAL_SCHEMA_SCORE
+    ):
+        return key, cardinality, score
+
+    # A learned collection can still be recognised locally when the complete
+    # sentence is below the normal schema threshold. Require semantic
+    # similarity plus overlap with meaningful vocabulary from a learned
+    # collection template.
+    documents = _schema_documents()
+
+    if not documents:
+        return None, None, 0.0
+
+    try:
+        from actions import semantic_memory
+
+        ranked = semantic_memory._semantic_rank(
+            cleaned,
+            documents,
+        )
+    except Exception:
+        return None, None, 0.0
+
+    query_words = set(memory._retrieval_words(cleaned))
+
+    if not query_words:
+        return None, None, 0.0
+
+    for index, candidate_score in ranked:
+        candidate_key, candidate_cardinality, document = documents[index]
+
+        if candidate_cardinality != memory_collections.CARDINALITY_COLLECTION:
+            continue
+
+        if candidate_score < 0.45:
+            continue
+
+        candidate_words = set(
+            memory._retrieval_words(document)
+        )
+
+        if not query_words.intersection(candidate_words):
+            continue
+
+        return candidate_key, candidate_cardinality, candidate_score
+
+    return None, None, 0.0
+
+
 def locally_known(text):
-    """True when a statement strongly matches a learned collection schema."""
-    key, cardinality, score = local_match(text)
+    """True when a statement matches a learned collection locally."""
+    key, cardinality, _score = _collection_match(text)
 
     return (
         key is not None
         and cardinality == memory_collections.CARDINALITY_COLLECTION
-        and score >= _LOCAL_SCHEMA_SCORE
     )
 
 
@@ -717,7 +777,7 @@ def _remember_intercept(text):
         # Single-valued memory continues through the original implementation.
         return None
 
-    key, cardinality, _score = schema_for_text(cleaned)
+    key, cardinality, _score = _collection_match(cleaned)
 
     if cardinality != memory_collections.CARDINALITY_COLLECTION or not key:
         return None
