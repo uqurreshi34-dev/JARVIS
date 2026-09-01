@@ -378,6 +378,15 @@ def direct_fallback(question):
     """Return a natural local factual answer, or None."""
     summary = relevant_summary(question, limit=1)
 
+    historical_words = {
+        "old", "older", "previous", "prior", "former", "past",
+        "before", "earlier", "history", "historical", "used",
+    }
+    question_words = set(
+        re.findall(r"[a-z0-9]+", (question or "").casefold())
+    )
+    historical = bool(question_words & historical_words)
+
     for line in summary.splitlines():
         line = line.strip()
 
@@ -396,7 +405,12 @@ def direct_fallback(question):
             value = value.strip()
             singular = _item_count(value) <= 1
             label = _singularise(key) if singular else key
-            verb = "is" if singular else "are"
+
+            if historical:
+                label = f"old {label}"
+                verb = "was" if singular else "were"
+            else:
+                verb = "is" if singular else "are"
 
             return (
                 "I can't reach my language model right now, sir, but I do "
