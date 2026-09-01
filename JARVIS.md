@@ -270,6 +270,36 @@ The semantic model is retrieval machinery, not a source of personal facts.
 The facts themselves remain in `memory.txt`, editable by hand, and no API
 call is required to search them.
 
+Memory now has two kinds of data:
+
+single-value memories
+    name, default project, location, etc.
+
+collections
+    memories that can contain multiple current items
+
+The language model teaches JARVIS what kind of memory a statement represents.
+The decision is stored as a learned schema with a small set of example phrases.
+Current collection items are stored separately from those examples.
+
+After a collection has been learned, adding, removing, replacing and querying
+its items can use the local semantic memory engine without another language
+model request.
+
+Collections are domain-neutral: JARVIS does not contain hard-coded lists for
+books, cars, foods, gym days, or similar subjects. The subject, cardinality and
+operation are learned from language.
+
+Learned examples describe how the user talks about a concept.
+They are not the current contents of that concept.
+
+For example, removing a book does not remove the language example that taught
+JARVIS how "I'm reading ..." maps to a books collection.
+
+Once a collection schema is learned, its current contents can be added,
+removed, replaced and queried locally, including when both language-model
+providers are unavailable.
+
 ### Contacts — `actions/contacts.py`
 Calling, WhatsApp and texting, from the phone only. The desk has no SIM,
 so those commands answer "ask me from your phone" rather than failing in
