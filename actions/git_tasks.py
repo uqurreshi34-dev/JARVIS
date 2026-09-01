@@ -91,6 +91,7 @@ def _run(args, path):
             capture_output=True,
             text=True,
             timeout=TIMEOUT_SECONDS,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except (OSError, subprocess.SubprocessError) as error:
         return False, str(error)
