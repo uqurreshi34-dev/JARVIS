@@ -230,7 +230,10 @@ def _guarded_fast_path(commands, original):
         # memory statements locally instead of sending them back to the
         # provider. This keeps later collection updates fast and prevents
         # the model from inventing a new synonymous key.
-        if not text.endswith("?"):
+        if not (
+            text.endswith("?")
+            or text.split(" ", 1)[0] in _MEMORY_QUESTION_WORDS
+        ):
             from actions import memory_collection_intelligence
 
             if memory_collection_intelligence.locally_known(text):
