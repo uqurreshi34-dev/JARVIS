@@ -512,6 +512,18 @@ def _extract_template_items(text, key):
         match = pattern.match(current)
 
         if not match:
+            # Allow common additive discourse wording without tying the
+            # collection system to any particular domain.
+            relaxed = re.sub(
+                r"\b(?:also|too|as well)\b",
+                "",
+                current,
+                flags=re.I,
+            )
+            relaxed = _clean_example(relaxed)
+            match = pattern.match(relaxed)
+
+        if not match:
             continue
 
         core = match.group(1).strip(" .")
