@@ -633,6 +633,116 @@ def _cleanup_decisions():
         _pending_decisions.pop(oldest, None)
 
 
+def _collection_concept_match(proposed_key, example, items):
+    """Find an existing collection with the same learned meaning locally."""
+    proposed_key = _key(proposed_key)
+    proposed_template = _clean_example(example)
+
+    if not proposed_key or not proposed_template:
+        return None
+
+    # Turn the new example into a reusable language template by replacing
+    # the particular items with a neutral placeholder.
+    for item in sorted(
+        {
+            _clean_example(value)
+            for value in (items or ())
+            if _clean_example(value)
+        },
+        key=len,
+        reverse=True,
+    ):
+        proposed_template = re.sub(
+            re.escape(item),
+            "<item>",
+            proposed_template,
+            flags=re.I,
+        )
+
+    documents = _schema_documents()
+
+    # One representative template per existing collection key.
+    candidates = {}
+
+    for candidate_key, cardinality, document in documents:
+        if cardinality != memory_collections.CARDINALITY_COLLECTION:
+            continue
+
+        if _key(candidate_key) == proposed_key:
+            continue
+
+        candidates.setdefault(
+            _key(candidate_key),
+            (candidate_key, cardinality, document),
+        )
+
+    if not candidates:
+        return None
+
+    candidate_list = list(candidates.values())
+
+    try:
+        from actions import semantic_memory
+
+        # Compare the category names themselves. This stops generic
+        # sentence shapes like "I like <item>" from merging unrelated
+        # collections such as food and cars.
+        key_documents = [
+            (candidate_key, cardinality, candidate_key)
+            for candidate_key, cardinality, _document in candidate_list
+        ]
+
+        key_ranked = semantic_memory._semantic_rank(
+            proposed_key,
+            key_documents,
+        )
+
+        # Compare the learned language pattern as a second signal.
+        template_documents = [
+            (candidate_key, cardinality, document)
+            for candidate_key, cardinality, document in candidate_list
+        ]
+
+        template_ranked = semantic_memory._semantic_rank(
+            f"{proposed_key}: {proposed_template}",
+            template_documents,
+        )
+
+    except Exception:
+        return None
+
+    key_scores = {
+        _key(key_documents[index][0]): score
+        for index, score in key_ranked
+    }
+
+    template_scores = {
+        _key(template_documents[index][0]): score
+        for index, score in template_ranked
+    }
+
+    best_key = None
+    best_score = 0.0
+
+    for candidate_key, _cardinality, _document in candidate_list:
+        normalized = _key(candidate_key)
+
+        key_score = key_scores.get(normalized, 0.0)
+        template_score = template_scores.get(normalized, 0.0)
+
+        # Require both concept similarity and learned-language similarity.
+        if key_score < 0.60 or template_score < 0.60:
+            continue
+
+        combined = (key_score * 0.65) + (template_score * 0.35)
+
+        if combined > best_score:
+            best_key = candidate_key
+            best_score = combined
+
+    return best_key
+
+
 def accept_model_result(command, result):
     """Capture the structured memory decision from the existing model call."""
     if not isinstance(result, dict) or result.get("intent") != "remember":
@@ -668,6 +778,8 @@ def accept_model_result(command, result):
     if cardinality == memory_collections.CARDINALITY_COLLECTION:
         existing_key, existing_cardinality, score = local_match(cleaned)
 
+        matched_key = None
+
         if (
             existing_key
             and existing_cardinality
@@ -675,9 +787,21 @@ def accept_model_result(command, result):
             and score >= _LOCAL_SCHEMA_SCORE
             and _key(existing_key) != key
         ):
+            matched_key = existing_key
+
+        # If the full sentence is too different for the normal matcher,
+        # compare the learned category and language template separately.
+        if not matched_key:
+            matched_key = _collection_concept_match(
+                key,
+                cleaned,
+                items,
+            )
+
+        if matched_key and _key(matched_key) != key:
             decision = copy.deepcopy(decision)
-            decision["key"] = existing_key
-            key = existing_key
+            decision["key"] = matched_key
+            key = matched_key
 
     # The model's "text" may contain the extracted fact rather than the
     # complete spoken command. Keep both forms available to the local
