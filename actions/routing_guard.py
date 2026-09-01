@@ -231,6 +231,57 @@ def _guarded_fast_path(commands, original):
     return guarded
 
 
+def _guarded_forget(memory_module, original):
+    """Try exact deletion first, then a strong local semantic match."""
+    def guarded(text):
+        removed = original(text)
+
+        if removed:
+            return removed
+
+        cleaned = memory_module.safety.clean(text, 200)
+
+        if not cleaned:
+            return 0
+
+        candidates = [cleaned]
+
+        # Speech recognition can leave a small connector in the deletion
+        # target. Try the meaningful content as well, still entirely locally.
+        if cleaned.casefold().startswith(("on ", "about ")):
+            candidates.append(cleaned.split(" ", 1)[1].strip())
+
+        try:
+            from actions import semantic_memory
+
+            documents = semantic_memory._documents()
+
+            for candidate in candidates:
+                matches = semantic_memory._semantic_rank(candidate, documents)
+
+                if not matches:
+                    continue
+
+                index, score = matches[0]
+
+                if score < 0.62:
+                    continue
+
+                _key, value, display = documents[index]
+                target = display if display else value
+                removed = original(target)
+
+                if removed:
+                    return removed
+
+        except Exception as error:
+            print(f"[JARVIS] semantic memory forget failed: {error}")
+
+        return 0
+
+    return guarded
+
+
 def install(commands):
     """Install routing safeguards once, after commands.py is fully loaded."""
     global _installed
@@ -239,7 +290,7 @@ def install(commands):
         return
 
     import llm
-    from actions import memory_history
+    from actions import memory, memory_history
 
     _prepare_default_project_memory()
     memory_history.install()
@@ -259,5 +310,7 @@ def install(commands):
         commands,
         commands._fuzzy_intent,
     )
+
+    memory.forget = _guarded_forget(memory, memory.forget)
 
     _installed = True
