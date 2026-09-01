@@ -200,6 +200,22 @@ Use remember when the user wants a durable fact about themselves kept, such
 as "remember that I prefer short answers" or "call me AvidCoder". Put the
 fact in "text". Do not use it for reminders with a time; those are
 set_reminder.
+
+For a remember intent, also return a "memory" object describing the
+structure of the fact. Use:
+- "key": a concise semantic category for the memory.
+- "cardinality": "single" when there is one current value, or "collection"
+  when multiple current items can coexist.
+- "operation": "add", "remove", or "replace".
+- "items": the individual values involved.
+
+Use "collection" because the meaning naturally allows multiple simultaneous
+items, not because of a hardcoded list of domains. Examples include several
+projects, books being read, or multiple training days. Use "single" for one
+current value such as a default project or favourite food.
+
+For non-remember intents, set "memory" to null.
+
 Use forget when they want something removed from that memory.
 Use recall_memory when they ask what JARVIS knows or remembers about them.
 Use open_default_project when they say "open my project" without naming
@@ -462,6 +478,35 @@ _SCHEMA = {
         "amount": {"type": ["string", "number", "null"]},
         "text": {"type": ["string", "null"]},
         "unit": {"type": ["string", "null"]},
+        "memory": {
+            "type": ["object", "null"],
+            "properties": {
+                "key": {
+                    "type": ["string", "null"],
+                },
+                "cardinality": {
+                    "type": ["string", "null"],
+                    "enum": ["single", "collection", None],
+                },
+                "operation": {
+                    "type": ["string", "null"],
+                    "enum": ["add", "remove", "replace", None],
+                },
+                "items": {
+                    "type": ["array", "null"],
+                    "items": {
+                        "type": "string",
+                    },
+                },
+            },
+            "required": [
+                "key",
+                "cardinality",
+                "operation",
+                "items",
+            ],
+            "additionalProperties": False,
+        },
     },
     "required": [
         "intent",
@@ -471,12 +516,13 @@ _SCHEMA = {
         "amount",
         "text",
         "unit",
+        "memory",
     ],
     "additionalProperties": False,
 }
 
 _FIELDS = ("intent", "application", "website", "project", "amount",
-           "text", "unit")
+           "text", "unit", "memory")
 
 
 def _parse(content):
