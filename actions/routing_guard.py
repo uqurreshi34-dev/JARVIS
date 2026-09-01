@@ -187,6 +187,32 @@ def _guarded_fuzzy(commands, original):
     return guarded
 
 
+def _project_inventory_request(text):
+    """Recognise a request for the user's Cursor project list locally."""
+    words = set(re.findall(r"[a-z0-9]+", (text or "").casefold()))
+
+    if not words & {"project", "projects"}:
+        return False
+
+    # These mean the question is about remembered/default work context,
+    # not the Cursor project inventory.
+    if words & {"working", "default", "main", "current"}:
+        return False
+
+    return bool(
+        words
+        & {
+            "have",
+            "recent",
+            "recently",
+            "opened",
+            "workspace",
+            "workspaces",
+            "list",
+        }
+    )
+
+
 def _guarded_fast_path(commands, original):
     """Route generic personal-memory statements through the existing remember intent."""
     def guarded(command):
@@ -196,6 +222,9 @@ def _guarded_fast_path(commands, original):
             return result
 
         text = commands._normalise(command)
+
+        if _project_inventory_request(text):
+            return commands._blank_result("list_projects")
 
         # Do not treat questions as memory writes. For non-question
         # statements, let the existing classifier determine whether this is
