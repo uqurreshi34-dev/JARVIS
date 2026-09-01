@@ -429,16 +429,32 @@ def _extract_template_items(text, key):
 
         prefix = example[:first]
         suffix = example[last:]
-        folded_current = current.casefold()
 
-        if not folded_current.startswith(prefix.casefold()):
+        # Speech recognition may omit apostrophes in contractions, e.g.
+        # "I'm" -> "im". Treat apostrophes as optional for matching only;
+        # keep the original text for extracting the actual item.
+        def _flexible_literal(value):
+            escaped = re.escape(value)
+
+            return escaped.replace(
+                r"\u2019",
+                r"(?:'|’)?",
+            ).replace(
+                r"'",
+                r"(?:'|’)?",
+            )
+
+        pattern = re.compile(
+            rf"^{_flexible_literal(prefix)}(.*?){_flexible_literal(suffix)}$",
+            re.I,
+        )
+
+        match = pattern.match(current)
+
+        if not match:
             continue
 
-        if suffix and not folded_current.endswith(suffix.casefold()):
-            continue
-
-        end = len(current) - len(suffix) if suffix else len(current)
-        core = current[len(prefix):end].strip(" .")
+        core = match.group(1).strip(" .")
 
         items = _split_items(core, example_items)
 
@@ -727,12 +743,77 @@ def _remember_intercept(text):
 
 def _forget_intercept(text):
     """Remove a named item from a known collection locally."""
-    key, cardinality, _score = schema_for_text(text)
+    cleaned = _clean_example(text)
 
-    if cardinality != memory_collections.CARDINALITY_COLLECTION or not key:
+    target = re.sub(
+        r"^(?:forget(?: about| that)?|stop remembering|remove|delete|"
+        r"drop|erase|take out)\s+",
+        "",
+        cleaned,
+        flags=re.I,
+    ).strip()
+
+    if not target:
         return None
 
-    items = _extract_items(text, key)
+    key, cardinality, score = local_match(target)
+
+    # Normal local schema match.
+    if (
+        not key
+        or cardinality != memory_collections.CARDINALITY_COLLECTION
+        or score < _LOCAL_SCHEMA_SCORE
+    ):
+        # Relax only this collection-removal lookup. Require semantic
+        # similarity plus overlap with a learned collection template.
+        documents = _schema_documents()
+
+        if not documents:
+            return None
+
+        try:
+            from actions import semantic_memory
+
+            ranked = semantic_memory._semantic_rank(
+                target,
+                documents,
+            )
+        except Exception:
+            return None
+
+        query_words = set(memory._retrieval_words(target))
+
+        matched = None
+
+        for index, candidate_score in ranked:
+            candidate_key, candidate_cardinality, document = documents[index]
+
+            if candidate_cardinality != memory_collections.CARDINALITY_COLLECTION:
+                continue
+
+            if candidate_score < 0.45:
+                continue
+
+            candidate_words = set(
+                memory._retrieval_words(document)
+            )
+
+            if not query_words.intersection(candidate_words):
+                continue
+
+            matched = (
+                candidate_key,
+                candidate_cardinality,
+                candidate_score,
+            )
+            break
+
+        if not matched:
+            return None
+
+        key, cardinality, score = matched
+
+    items = _extract_items(target, key)
 
     if not items:
         return None
