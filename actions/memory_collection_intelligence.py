@@ -424,12 +424,7 @@ def schema_for_text(text):
 
 
 def classification_for_text(text):
-    """Return a keyed classification only when its schema is already learned.
-
-    This is what keeps first-time memory statements on the existing model path
-    long enough to learn their cardinality, while subsequent statements can
-    stay entirely local.
-    """
+    """Return a keyed classification only when its schema is already learned."""
     cleaned = _clean_example(text)
 
     if not cleaned:
@@ -521,12 +516,41 @@ def accept_model_result(command, result):
 
     cleaned = _clean_example(command)
 
+    # Reuse an already-learned collection concept when the model invents
+    # a synonymous key such as "books_reading" for an existing "books"
+    # collection. This is local semantic matching, not a hardcoded alias.
+    if cardinality == memory_collections.CARDINALITY_COLLECTION:
+        existing_key, existing_cardinality, score = local_match(cleaned)
+
+        if (
+            existing_key
+            and existing_cardinality
+            == memory_collections.CARDINALITY_COLLECTION
+            and score >= _LOCAL_SCHEMA_SCORE
+            and _key(existing_key) != key
+        ):
+            decision = copy.deepcopy(decision)
+            decision["key"] = existing_key
+            key = existing_key
+
+    # The model's "text" may contain the extracted fact rather than the
+    # complete spoken command. Keep both forms available to the local
+    # hand-off so the collection mutation cannot miss the decision.
+    aliases = {cleaned.casefold()}
+
+    model_text = _clean_example(result.get("text"))
+
+    if model_text:
+        aliases.add(model_text.casefold())
+
     with _lock:
         _cleanup_decisions()
-        _pending_decisions[cleaned.casefold()] = {
-            "at": time.monotonic(),
-            "decision": copy.deepcopy(decision),
-        }
+
+        for alias in aliases:
+            _pending_decisions[alias] = {
+                "at": time.monotonic(),
+                "decision": copy.deepcopy(decision),
+            }
 
     learn(decision, example=cleaned)
 
@@ -565,6 +589,17 @@ def _apply_collection_decision(decision, example, learn_schema=True):
         return None
 
     if any(safety.looks_like_instruction(item) for item in items):
+        return False
+
+    # Keep the learned cardinality authoritative in the collection store as
+    # well as the schema-learning layer. This is idempotent and prevents a
+    # collection write from falling through simply because the two local
+    # metadata layers were initialised in different orders.
+    if not memory_collections.set_cardinality(
+        key,
+        memory_collections.CARDINALITY_COLLECTION,
+        source="language-model",
+    ):
         return False
 
     if learn_schema:
@@ -803,6 +838,6 @@ __all__ = [
 # Backwards-friendly name for callers that prefer a predicate-like API.
 learned_schema = schema
 
-# commands.py already imports this module, so the feature can install itself
-# without modifying the command router or any unrelated skill.
-install_runtime()
+# This module is initialised explicitly by routing_guard.install(), after the
+# memory history layer is installed, so collection wrappers sit on top of the
+# existing persistent-memory wrappers without changing unrelated commands.
