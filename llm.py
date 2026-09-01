@@ -201,6 +201,18 @@ as "remember that I prefer short answers" or "call me AvidCoder". Put the
 fact in "text". Do not use it for reminders with a time; those are
 set_reminder.
 
+Ordinary first-person statements that reveal a durable personal fact or
+preference should also use remember even when the user does not say
+"remember". For example, "I like apples", "I prefer tea", or "I'm reading
+Peter Pan" are statements to retain. Do not require an explicit request to
+remember them.
+
+When such a statement naturally describes a category that can contain
+multiple simultaneous values, use "collection". A single item in the current
+sentence does not make the memory "single". For example, "I like apples" can
+teach a collection of foods or fruits, while "my favourite food is apples"
+describes one current favourite and should be "single".
+
 For a remember intent, also return a "memory" object describing the
 structure of the fact. Use:
 - "key": a concise semantic category for the memory.

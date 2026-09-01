@@ -4096,9 +4096,11 @@ def _handle_command(command):
     if intent == "recall_memory":
         return _query(intent, memory.describe)
 
-    if intent == "remember" and text:
+    if intent == "remember" and (text or result.get("memory")):
         def store():
-            if memory.remember(verbatim_text or text):
+            remember_text = verbatim_text or text or command
+
+            if memory.remember(remember_text):
                 return True
 
             return False
