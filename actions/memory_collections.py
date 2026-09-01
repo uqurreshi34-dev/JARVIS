@@ -12,18 +12,26 @@ explicitly opts a memory key into collection behaviour.
 """
 
 import copy
+import os
 import re
 import threading
 import uuid
 from datetime import datetime, timezone
 
-from actions import memory_history
+from actions import files, memory_history
 
 
 CARDINALITY_SINGLE = "single"
 CARDINALITY_COLLECTION = "collection"
 
+_COLLECTION_HEADER = (
+    "# --- JARVIS collections (managed; structured data lives in memory.json) ---"
+)
+_COLLECTION_FOOTER = "# --- End JARVIS collections ---"
+
 _lock = threading.RLock()
+_installed = False
+_original_memory_write = None
 
 
 def _now():
@@ -38,6 +46,130 @@ def _normalise_item(value):
     return " ".join(
         re.findall(r"\S+", (value or "").strip())
     ).casefold()
+
+
+def _memory_path():
+    base = files.root()
+    return os.path.join(base, "memory.txt") if base else None
+
+
+def _sync_text(data=None):
+    """Mirror current collections into a managed, human-readable text block."""
+    path = _memory_path()
+
+    if not path:
+        return False
+
+    if data is None:
+        data = _ensure_data()
+
+    collections = data.get("collections", {})
+
+    if not isinstance(collections, dict):
+        collections = {}
+
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                lines = handle.read().splitlines()
+        else:
+            lines = [
+                "# What JARVIS knows about you. One fact per line.",
+                "# Edit or delete anything here; it is read at startup.",
+            ]
+
+        cleaned = []
+        inside = False
+
+        for line in lines:
+            stripped = line.strip()
+
+            if stripped == _COLLECTION_HEADER:
+                inside = True
+                continue
+
+            if stripped == _COLLECTION_FOOTER:
+                inside = False
+                continue
+
+            if not inside:
+                cleaned.append(line)
+
+        while cleaned and not cleaned[-1].strip():
+            cleaned.pop()
+
+        block = []
+
+        for key, raw_items in collections.items():
+            if not isinstance(raw_items, list):
+                continue
+
+            values = []
+
+            for entry in raw_items:
+                if isinstance(entry, dict):
+                    value = str(entry.get("value") or "").strip()
+                else:
+                    value = str(entry or "").strip()
+
+                if value:
+                    values.append(value)
+
+            if values:
+                block.append(f"# {key}: {', '.join(values)}")
+
+        if block:
+            if cleaned:
+                cleaned.append("")
+
+            cleaned.append(_COLLECTION_HEADER)
+            cleaned.extend(block)
+            cleaned.append(_COLLECTION_FOOTER)
+
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(cleaned).rstrip("\n") + "\n")
+
+        return True
+
+    except OSError as error:
+        print(f"[JARVIS] could not mirror collections to memory.txt: {error}")
+        return False
+
+
+def _install_memory_writer():
+    """Keep collection text in place when the ordinary memory writer runs."""
+    global _original_memory_write
+
+    from actions import memory
+
+    if getattr(memory, "_collection_text_sync_installed", False):
+        return
+
+    _original_memory_write = memory._write
+
+    def write_with_collections(lines):
+        result = _original_memory_write(lines)
+
+        if result:
+            _sync_text()
+
+        return result
+
+    memory._write = write_with_collections
+    memory._collection_text_sync_installed = True
+
+
+def install():
+    """Install collection-to-memory.txt mirroring exactly once."""
+    global _installed
+
+    with _lock:
+        if _installed:
+            return
+
+        _install_memory_writer()
+        _sync_text()
+        _installed = True
 
 
 def _ensure_data():
@@ -113,6 +245,7 @@ def set_cardinality(key, value, source="local"):
         }
 
         memory_history._save(data)
+        _sync_text(data)
         return True
 
 
@@ -204,6 +337,7 @@ def add(key, value, source="user"):
         })
 
         memory_history._save(data)
+        _sync_text(data)
         return True
 
 
@@ -243,6 +377,7 @@ def remove(key, value):
 
         data["collections"][wanted] = kept
         memory_history._save(data)
+        _sync_text(data)
         return True
 
 
@@ -286,4 +421,11 @@ def replace(key, values, source="user"):
         ]
 
         memory_history._save(data)
+        _sync_text(data)
         return True
+
+
+# The collection module is imported by the memory-intelligence layer during
+# normal startup, so install the human-readable mirror without adding another
+# command or routing hook.
+install()
