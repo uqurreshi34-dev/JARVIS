@@ -214,6 +214,13 @@ items, not because of a hardcoded list of domains. Examples include several
 projects, books being read, or multiple training days. Use "single" for one
 current value such as a default project or favourite food.
 
+Cardinality describes the kind of memory, not how many items appear in this
+particular utterance. A single sentence may introduce one item into a
+collection. For collection memories, choose a stable noun/category that
+groups future examples of the same kind; do not use the action verb as the
+key. For example, "I'm reading Peter Pan" should be understood as one item
+of the "books" collection, not as a single-valued "reading" memory.
+
 For non-remember intents, set "memory" to null.
 
 Use forget when they want something removed from that memory.

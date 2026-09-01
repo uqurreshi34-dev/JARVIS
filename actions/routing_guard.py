@@ -323,8 +323,8 @@ def install(commands):
     from actions import memory_collection_intelligence
 
     _prepare_default_project_memory()
-    memory_collection_intelligence.install_runtime()
     memory_history.install()
+    memory_collection_intelligence.install_runtime()
 
     # Keep the original detector's vocabulary available to callers, but make
     # its final confidence decision semantic rather than lexical. This is the
