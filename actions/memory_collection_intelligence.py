@@ -171,7 +171,7 @@ def learn(decision, example=None, source="language-model"):
 
 
 def _schema_documents():
-    """Schemas as semantic-search documents."""
+    """Schemas as semantic-search documents, abstracting away item values."""
     documents = []
 
     with _lock:
@@ -182,18 +182,59 @@ def _schema_documents():
                 continue
 
             examples = value.get("examples") or []
+            details = value.get("example_details") or []
+
+            detail_map = {}
+
+            for detail in details:
+                if not isinstance(detail, dict):
+                    continue
+
+                text = _clean_example(detail.get("text"))
+
+                if text:
+                    detail_map[text.casefold()] = detail
 
             for example in examples:
                 cleaned = _clean_example(example)
 
-                if cleaned:
-                    documents.append(
-                        (
-                            key,
-                            value.get("cardinality"),
-                            cleaned,
-                        )
+                if not cleaned:
+                    continue
+
+                detail = detail_map.get(cleaned.casefold())
+                items = []
+
+                if isinstance(detail, dict):
+                    items = [
+                        _clean_example(item)
+                        for item in (detail.get("items") or ())
+                        if _clean_example(item)
+                    ]
+
+                template = cleaned
+
+                # Replace the values learned from the example with a neutral
+                # placeholder so matching focuses on the memory meaning,
+                # not the particular item mentioned in that example.
+                for item in sorted(
+                    set(items),
+                    key=len,
+                    reverse=True,
+                ):
+                    template = re.sub(
+                        re.escape(item),
+                        "<item>",
+                        template,
+                        flags=re.I,
                     )
+
+                documents.append(
+                    (
+                        key,
+                        value.get("cardinality"),
+                        f"{key}: {template}",
+                    )
+                )
 
     return documents
 
@@ -817,7 +858,8 @@ def install_runtime():
 
             _install_interpreter_wrapper(llm)
         except Exception as error:
-            print(f"[JARVIS] collection intelligence model hook unavailable: {error}")
+            print(
+                f"[JARVIS] collection intelligence model hook unavailable: {error}")
 
         _installed = True
 

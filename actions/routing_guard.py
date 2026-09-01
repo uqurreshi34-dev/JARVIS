@@ -226,6 +226,24 @@ def _guarded_fast_path(commands, original):
         if _project_inventory_request(text):
             return commands._blank_result("list_projects")
 
+        # Once a collection meaning has been learned, route matching
+        # memory statements locally instead of sending them back to the
+        # provider. This keeps later collection updates fast and prevents
+        # the model from inventing a new synonymous key.
+        if not text.endswith("?"):
+            from actions import memory_collection_intelligence
+
+            if memory_collection_intelligence.locally_known(text):
+                print(
+                    "[fast] remember "
+                    "(learned collection; no API call)"
+                )
+
+                return commands._blank_result(
+                    "remember",
+                    text=(command or "").strip(),
+                )
+
         # Do not treat questions as memory writes. For non-question
         # statements, let the existing classifier determine whether this is
         # a known keyed personal fact. This adds no vocabulary and no new
