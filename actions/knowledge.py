@@ -100,6 +100,22 @@ def answer(question):
 
     relevant_memory = memory.relevant_summary(question)
 
+    historical_words = {
+        "old", "older", "previous", "prior", "former",
+        "past", "before", "earlier", "history", "historical",
+    }
+
+    question_words = set(
+        re.findall(r"[a-z0-9]+", question.casefold())
+    )
+
+    if relevant_memory and question_words & historical_words:
+        relevant_memory += (
+            "\nThe user is asking about a past version of the memory. "
+            "Keep that distinction explicit in the answer, using wording "
+            "such as \"your old ...\" or \"your previous ...\" where natural."
+        )
+
     try:
         raw = chat(
             messages=[

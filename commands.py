@@ -4107,7 +4107,28 @@ def _handle_command(command):
 
         if keyed:
             key, value = keyed
-            spoken = f"Noted, sir. Your {key} is {value}."
+
+            parts = [
+                part.strip()
+                for part in re.split(r"\s*(?:,|\band\b)\s*", value)
+                if part.strip()
+            ]
+
+            singular = len(parts) == 1
+            label = key
+
+            if singular:
+                if label.casefold().endswith("ies"):
+                    label = label[:-3] + "y"
+                elif (
+                    label.casefold().endswith("s")
+                    and not label.casefold().endswith("ss")
+                ):
+                    label = label[:-1]
+
+            verb = "is" if singular else "are"
+
+            spoken = f"Noted, sir. Your {label} {verb} {value}."
         else:
             spoken = "I'll remember that, sir."
 
