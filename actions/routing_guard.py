@@ -94,7 +94,7 @@ def _guarded_fuzzy(commands, original):
 
 
 def _guarded_fast_path(commands, original):
-    """Route generic replacement statements through the existing remember intent."""
+    """Route generic personal-memory statements through the existing remember intent."""
     def guarded(command):
         result = original(command)
 
@@ -103,7 +103,21 @@ def _guarded_fast_path(commands, original):
 
         text = commands._normalise(command)
 
-        if not _BARE_MEMORY_UPDATE.match(text):
+        # Do not treat questions as memory writes. For non-question
+        # statements, let the existing classifier determine whether this is
+        # a known keyed personal fact. This adds no vocabulary and no new
+        # intent: it reuses memory.classify() and the existing remember path.
+        if text.endswith("?") or text.split(" ", 1)[0] in _MEMORY_QUESTION_WORDS:
+            return None
+
+        from actions import memory
+
+        try:
+            keyed = memory.classify(text)
+        except Exception:
+            keyed = None
+
+        if not keyed:
             return None
 
         return commands._blank_result(
