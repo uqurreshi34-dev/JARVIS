@@ -374,49 +374,78 @@ def _split_items(text, example_items=()):
 
 
 def _extract_template_items(text, key):
-    """Extract replacement/addition items from a learned language template."""
+    """Extract collection items using every learned language template."""
     current = _clean_example(text)
-    example, example_items = _schema_detail(key)
 
-    if not current or not example or not example_items:
+    if not current:
         return []
 
-    folded_example = example.casefold()
-    first = None
-    last = None
+    data = schema(key) or {}
+    details = data.get("example_details") or []
 
-    for item in example_items:
-        folded_item = _clean_example(item).casefold()
-        start = folded_example.find(folded_item)
-
-        if start < 0:
+    # Try the newest learned templates first. Each successful model example
+    # becomes another locally reusable way of expressing the same memory.
+    for detail in reversed(details):
+        if not isinstance(detail, dict):
             continue
 
-        end = start + len(folded_item)
+        example = _clean_example(detail.get("text"))
+        example_items = [
+            _clean_example(item)
+            for item in (detail.get("items") or ())
+            if _clean_example(item)
+        ]
 
-        if first is None or start < first:
-            first = start
+        if not example or not example_items:
+            continue
 
-        if last is None or end > last:
-            last = end
+        folded_example = example.casefold()
+        first = None
+        last = None
 
-    if first is None or last is None:
-        return []
+        # Treat the learned item values as placeholders and keep the rest of
+        # the user's wording as the template.
+        for item in sorted(
+            set(example_items),
+            key=len,
+            reverse=True,
+        ):
+            folded_item = item.casefold()
+            start = folded_example.find(folded_item)
 
-    prefix = example[:first]
-    suffix = example[last:]
-    folded_current = current.casefold()
+            if start < 0:
+                continue
 
-    if not folded_current.startswith(prefix.casefold()):
-        return []
+            end = start + len(item)
 
-    if suffix and not folded_current.endswith(suffix.casefold()):
-        return []
+            if first is None or start < first:
+                first = start
 
-    end = len(current) - len(suffix) if suffix else len(current)
-    core = current[len(prefix):end].strip(" .")
+            if last is None or end > last:
+                last = end
 
-    return _split_items(core, example_items)
+        if first is None or last is None:
+            continue
+
+        prefix = example[:first]
+        suffix = example[last:]
+        folded_current = current.casefold()
+
+        if not folded_current.startswith(prefix.casefold()):
+            continue
+
+        if suffix and not folded_current.endswith(suffix.casefold()):
+            continue
+
+        end = len(current) - len(suffix) if suffix else len(current)
+        core = current[len(prefix):end].strip(" .")
+
+        items = _split_items(core, example_items)
+
+        if items:
+            return items
+
+    return []
 
 
 def _extract_items(text, key):
