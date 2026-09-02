@@ -343,13 +343,15 @@ def _collection_match(text):
 
 
 def locally_known(text):
-    """True when a statement matches a learned collection locally."""
     key, cardinality, _score = _collection_match(text)
 
-    return (
-        key is not None
-        and cardinality == memory_collections.CARDINALITY_COLLECTION
-    )
+    if (
+        key is None
+        or cardinality != memory_collections.CARDINALITY_COLLECTION
+    ):
+        return False
+
+    return bool(_extract_items(text, key))
 
 
 def operation_for_text(text, key=None):
@@ -649,6 +651,11 @@ def _collection_concept_match(proposed_key, example, items):
     """Find an existing collection with the same learned meaning locally."""
     proposed_key = _key(proposed_key)
     proposed_template = _clean_example(example)
+    proposed_items = [
+        _clean_example(item)
+        for item in (items or ())
+        if _clean_example(item)
+    ]
 
     if not proposed_key or not proposed_template:
         return None
@@ -656,11 +663,7 @@ def _collection_concept_match(proposed_key, example, items):
     # Turn the new example into a reusable language template by replacing
     # the particular items with a neutral placeholder.
     for item in sorted(
-        {
-            _clean_example(value)
-            for value in (items or ())
-            if _clean_example(value)
-        },
+        set(proposed_items),
         key=len,
         reverse=True,
     ):
@@ -673,7 +676,6 @@ def _collection_concept_match(proposed_key, example, items):
 
     documents = _schema_documents()
 
-    # One representative template per existing collection key.
     candidates = {}
 
     for candidate_key, cardinality, document in documents:
@@ -696,9 +698,8 @@ def _collection_concept_match(proposed_key, example, items):
     try:
         from actions import semantic_memory
 
-        # Compare the category names themselves. This stops generic
-        # sentence shapes like "I like <item>" from merging unrelated
-        # collections such as food and cars.
+        # Signal 1: how close is the proposed category to the learned
+        # collection category?
         key_documents = [
             (candidate_key, cardinality, candidate_key)
             for candidate_key, cardinality, _document in candidate_list
@@ -709,7 +710,7 @@ def _collection_concept_match(proposed_key, example, items):
             key_documents,
         )
 
-        # Compare the learned language pattern as a second signal.
+        # Signal 2: how close is the learned language pattern?
         template_documents = [
             (candidate_key, cardinality, document)
             for candidate_key, cardinality, document in candidate_list
@@ -719,6 +720,34 @@ def _collection_concept_match(proposed_key, example, items):
             f"{proposed_key}: {proposed_template}",
             template_documents,
         )
+
+        # Signal 3: how close are the actual things being stored?
+        #
+        # This is what prevents two collections that merely share a sentence
+        # shape such as "I like <item>" from being merged incorrectly.
+        item_documents = []
+
+        for candidate_key, cardinality, _document in candidate_list:
+            current_items = memory_collections.items(candidate_key)
+
+            if not current_items:
+                continue
+
+            item_documents.append(
+                (
+                    candidate_key,
+                    cardinality,
+                    f"{candidate_key}: {', '.join(current_items)}",
+                )
+            )
+
+        item_ranked = []
+
+        if proposed_items and item_documents:
+            item_ranked = semantic_memory._semantic_rank(
+                f"{proposed_key}: {', '.join(proposed_items)}",
+                item_documents,
+            )
 
     except Exception:
         return None
@@ -733,6 +762,11 @@ def _collection_concept_match(proposed_key, example, items):
         for index, score in template_ranked
     }
 
+    item_scores = {
+        _key(item_documents[index][0]): score
+        for index, score in item_ranked
+    }
+
     best_key = None
     best_score = 0.0
 
@@ -741,12 +775,21 @@ def _collection_concept_match(proposed_key, example, items):
 
         key_score = key_scores.get(normalized, 0.0)
         template_score = template_scores.get(normalized, 0.0)
+        item_score = item_scores.get(normalized, 0.0)
 
-        # Require both concept similarity and learned-language similarity.
-        if key_score < 0.60 or template_score < 0.60:
+        # Similar language alone is not enough. We need the collection
+        # category and/or the actual stored items to provide corroboration.
+        if (
+            template_score < 0.60
+            or (key_score < 0.45 and item_score < 0.55)
+        ):
             continue
 
-        combined = (key_score * 0.65) + (template_score * 0.35)
+        combined = (
+            key_score * 0.45
+            + item_score * 0.40
+            + template_score * 0.15
+        )
 
         if combined > best_score:
             best_key = candidate_key
@@ -1117,12 +1160,13 @@ def _collection_summary(query):
 
 def _collection_answer(query):
     """Answer a learned collection question entirely locally."""
-    folded = _clean_example(query).casefold()
+    cleaned = _clean_example(query)
+    folded = cleaned.casefold()
 
     if re.search(r"\b(?:default|main|current)\b", folded):
         return None
 
-    key, cardinality, _score = _collection_match(query)
+    key, cardinality, _score = _collection_match(cleaned)
 
     if (
         not key
@@ -1132,71 +1176,107 @@ def _collection_answer(query):
 
     values = memory_collections.items(key)
 
-    # An explicitly learned collection still exists when its current item
-    # list is empty, so answer that locally too.
     if not values:
         return f"You don't currently have any {key} saved, sir."
 
-    example, example_items = _schema_detail(key)
+    # Build the answer from the grammar of the QUESTION rather than copying
+    # the wording of whichever example happened to teach the collection.
+    answer_prefix = None
 
-    if not example or not example_items:
-        return None
-
-    # Recover the learned sentence shape and use it as the answer's
-    # grammatical template. This lets "I like <item>", "I'm reading <item>",
-    # "I have <item>", etc. produce a natural local answer without a
-    # hardcoded list of verbs or domains.
-    first_item = sorted(
-        example_items,
-        key=len,
-        reverse=True,
-    )[0]
-
-    folded_example = example.casefold()
-    start = folded_example.find(first_item.casefold())
-
-    if start < 0:
-        return None
-
-    end = start + len(first_item)
-
-    prefix = example[:start].strip()
-    suffix = example[end:].strip()
-
-    if not prefix:
-        return None
-
-    answer_prefix = re.sub(
-        r"^i(?:'m|’m|m| am)\b",
-        "you're",
-        prefix,
-        count=1,
-        flags=re.I,
+    patterns = (
+        (r"\bdo\s+i\b(.*)$", lambda rest: f"You {rest.strip()}"),
+        (r"\bdid\s+i\b(.*)$", lambda rest: f"You {rest.strip()}"),
+        (r"\bam\s+i\b(.*)$", lambda rest: f"You are {rest.strip()}"),
+        (r"\bwas\s+i\b(.*)$", lambda rest: f"You were {rest.strip()}"),
+        (r"\bwere\s+i\b(.*)$", lambda rest: f"You were {rest.strip()}"),
+        (r"\bhave\s+i\b(.*)$", lambda rest: f"You have {rest.strip()}"),
+        (r"\bhas\s+i\b(.*)$", lambda rest: f"You have {rest.strip()}"),
+        (r"\bhad\s+i\b(.*)$", lambda rest: f"You had {rest.strip()}"),
+        (r"\bcan\s+i\b(.*)$", lambda rest: f"You can {rest.strip()}"),
+        (r"\bcould\s+i\b(.*)$", lambda rest: f"You could {rest.strip()}"),
+        (r"\bwill\s+i\b(.*)$", lambda rest: f"You will {rest.strip()}"),
+        (r"\bwould\s+i\b(.*)$", lambda rest: f"You would {rest.strip()}"),
+        (r"\bshould\s+i\b(.*)$", lambda rest: f"You should {rest.strip()}"),
     )
 
-    if answer_prefix == prefix:
+    for pattern, builder in patterns:
+        match = re.search(pattern, cleaned, re.I)
+
+        if not match:
+            continue
+
+        rest = match.group(1).strip()
+
+        if rest:
+            answer_prefix = builder(rest)
+            break
+
+    # Generic conversational fillers should not leak into the answer.
+    if answer_prefix:
         answer_prefix = re.sub(
-            r"^i\b",
-            "you",
+            r"\b(?:also|too|as well)\b\s*",
+            "",
+            answer_prefix,
+            flags=re.I,
+        ).strip()
+
+    # Extremely defensive fallback: use the learned example only when the
+    # question form could not be transformed safely.
+    if not answer_prefix:
+        example, example_items = _schema_detail(key)
+
+        if not example or not example_items:
+            return None
+
+        first_item = sorted(
+            example_items,
+            key=len,
+            reverse=True,
+        )[0]
+
+        folded_example = example.casefold()
+        start = folded_example.find(first_item.casefold())
+
+        if start < 0:
+            return None
+
+        end = start + len(first_item)
+        prefix = example[:start].strip()
+
+        if not prefix:
+            return None
+
+        answer_prefix = re.sub(
+            r"^i(?:'m|’m|m| am)\b",
+            "You're",
             prefix,
             count=1,
             flags=re.I,
         )
 
-    answer_prefix = re.sub(
-        r"^my\b",
-        "your",
-        answer_prefix,
-        count=1,
-        flags=re.I,
-    )
+        if answer_prefix == prefix:
+            answer_prefix = re.sub(
+                r"^i\b",
+                "You",
+                prefix,
+                count=1,
+                flags=re.I,
+            )
 
-    answer_prefix = re.sub(
-        r"\b(?:also)\b\s*",
-        "",
-        answer_prefix,
-        flags=re.I,
-    ).strip()
+        answer_prefix = re.sub(
+            r"^my\b",
+            "your",
+            answer_prefix,
+            count=1,
+            flags=re.I,
+        )
+
+        answer_prefix = re.sub(
+            r"\b(?:also|too|as well)\b\s*",
+            "",
+            answer_prefix,
+            flags=re.I,
+        ).strip()
 
     if len(values) == 1:
         joined = values[0]
@@ -1206,9 +1286,6 @@ def _collection_answer(query):
         joined = f"{', '.join(values[:-1])}, and {values[-1]}"
 
     answer = f"{answer_prefix} {joined}".strip()
-
-    if suffix:
-        answer = f"{answer} {suffix}"
 
     if answer and answer[-1] not in ".!?":
         answer += "."
