@@ -32,11 +32,6 @@ _DEFAULT_PROJECT_PATTERN = re.compile(
     re.I,
 )
 
-_WORKING_ON_PATTERN = re.compile(
-    r"^i(?:'m|m| am)\s+working on\s+(.+)$",
-    re.I,
-)
-
 _installed = False
 
 
@@ -57,7 +52,6 @@ def _prepare_default_project_memory():
     )
     memory._KEYED_PATTERNS = (
         (_DEFAULT_PROJECT_PATTERN, "default project"),
-        (_WORKING_ON_PATTERN, "project"),
         *memory._KEYED_PATTERNS,
     )
 

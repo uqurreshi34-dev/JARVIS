@@ -29,10 +29,7 @@ _HISTORY_CUES = {
     "before", "earlier", "history", "historical", "used",
 }
 _STRONG_MATCH = 0.62
-_WORKING_ON = re.compile(
-    r"^i(?:'m|m| am)\s+working on\s+(.+)$",
-    re.I,
-)
+
 _UPDATE_VALUE = (
     re.compile(r"\b(?:is|are)\s+(.+)$", re.I),
     re.compile(
@@ -296,17 +293,6 @@ def _remember(text):
         return _original_remember(text)
 
     keyed = memory_module.classify(cleaned)
-
-    # "I'm working on ..." is additive activity, not replacement of a
-    # standing/default project fact.
-    if keyed and keyed[0] == "project" and _WORKING_ON.match(cleaned):
-        result = _store_activity(memory_module, cleaned)
-
-        if result:
-            with _lock:
-                _sync(memory_module, reason="added")
-
-        return result
 
     # Known keyed facts are already strong identities. Strip generic update
     # filler locally so "my gym days are now ..." stores only the new value.

@@ -229,6 +229,8 @@ def _is_format_error(error):
         "response_format" in text
         or "json_schema" in text
         or "schema" in text and "unsupported" in text
+        or "json_validate_failed" in text
+        or "failed_generation" in text
     )
 
 
