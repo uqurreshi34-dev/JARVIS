@@ -1,5 +1,6 @@
 """Offline regression tests for Chunk 2 connected memory."""
 
+import copy
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -33,8 +34,12 @@ def main():
         return data
 
     def save(updated):
+        # Simulate persistence without mutating the same object that the
+        # implementation just passed to us. The real JSON writer serialises
+        # the object; it does not clear it in place.
+        saved = copy.deepcopy(updated)
         data.clear()
-        data.update(updated)
+        data.update(saved)
         return True
 
     try:
