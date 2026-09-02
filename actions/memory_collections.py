@@ -28,6 +28,7 @@ _COLLECTION_HEADER = (
     "# --- JARVIS collections (managed; structured data lives in memory.json) ---"
 )
 _COLLECTION_FOOTER = "# --- End JARVIS collections ---"
+_GENERIC_ARTICLES = frozenset({"a", "an", "the"})
 
 _lock = threading.RLock()
 _installed = False
@@ -46,6 +47,66 @@ def _normalise_item(value):
     return " ".join(
         re.findall(r"\S+", (value or "").strip())
     ).casefold()
+
+
+def _collection_descriptor(key):
+    """Derive a singular trailing descriptor from the collection key.
+
+    This is deliberately linguistic rather than domain-specific: the key
+    supplies the type, so redundant item labels such as "react project" or
+    "audi car" can be stored simply as "react" and "audi".
+    """
+    words = re.findall(r"[a-z0-9]+", _normalise_key(key))
+
+    if not words:
+        return ""
+
+    word = words[-1]
+
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+
+    if len(word) > 4 and word.endswith(("sses", "shes", "ches", "xes", "zes")):
+        return word[:-2]
+
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+
+    return word
+
+
+def _canonical_item(key, value):
+    """Remove a redundant trailing collection descriptor from one item."""
+    cleaned = " ".join(str(value or "").strip().split())
+
+    if not cleaned:
+        return ""
+
+    descriptor = _collection_descriptor(key)
+
+    if not descriptor:
+        return cleaned
+
+    match = re.match(
+        rf"^(.+?)\s+{re.escape(descriptor)}$",
+        cleaned,
+        re.I,
+    )
+
+    if not match:
+        return cleaned
+
+    prefix = match.group(1).strip()
+
+    if not prefix or prefix.casefold() in _GENERIC_ARTICLES:
+        return cleaned
+
+    return prefix
+
+
+def _identity(value):
+    """Compare labels while ignoring case, spaces and punctuation."""
+    return "".join(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
 
 
 def _memory_path():
@@ -159,8 +220,110 @@ def _install_memory_writer():
     memory._collection_text_sync_installed = True
 
 
+def _migrate_redundant_item_labels(data):
+    """Canonicalise redundant collection descriptors without domain rules.
+
+    Existing records keep their metadata and ids. When canonicalisation makes
+    two records identical, the first record wins and the duplicate is dropped.
+    Relationship endpoints pointing at the old collection entity are updated
+    to the canonical entity so the migration is safe for already-linked data.
+    """
+    collections = data.get("collections", {})
+
+    if not isinstance(collections, dict):
+        return False
+
+    replacements = {}
+    changed = False
+
+    for key, raw_items in list(collections.items()):
+        if not isinstance(raw_items, list):
+            continue
+
+        seen = set()
+        migrated = []
+
+        for entry in raw_items:
+            if isinstance(entry, dict):
+                old_value = str(entry.get("value") or "").strip()
+                new_value = _canonical_item(key, old_value)
+
+                if not new_value:
+                    changed = True
+                    continue
+
+                marker = _identity(new_value)
+
+                if marker in seen:
+                    changed = True
+                    continue
+
+                seen.add(marker)
+
+                if new_value != old_value:
+                    entry["value"] = new_value
+                    changed = True
+
+                migrated.append(entry)
+                if old_value and old_value != new_value:
+                    replacements[
+                        f"collection:{key}:{old_value}"
+                    ] = f"collection:{key}:{new_value}"
+
+            else:
+                old_value = str(entry or "").strip()
+                new_value = _canonical_item(key, old_value)
+
+                if not new_value:
+                    changed = True
+                    continue
+
+                marker = _identity(new_value)
+
+                if marker in seen:
+                    changed = True
+                    continue
+
+                seen.add(marker)
+                migrated.append(new_value)
+
+                if old_value != new_value:
+                    changed = True
+                    replacements[
+                        f"collection:{key}:{old_value}"
+                    ] = f"collection:{key}:{new_value}"
+
+        if migrated != raw_items:
+            data["collections"][key] = migrated
+            changed = True
+
+    relations = data.get("relations", [])
+
+    if isinstance(relations, list) and replacements:
+        for record in relations:
+            if not isinstance(record, dict):
+                continue
+
+            for endpoint in ("from", "to"):
+                current = record.get(endpoint)
+
+                if not isinstance(current, str):
+                    continue
+
+                for old_entity, new_entity in replacements.items():
+                    if current.casefold() == old_entity.casefold():
+                        record[endpoint] = new_entity
+                        changed = True
+                        break
+
+    if changed:
+        memory_history._save(data)
+
+    return changed
+
+
 def install():
-    """Install collection-to-memory.txt mirroring exactly once."""
+    """Install collection mirroring and one-time canonicalisation."""
     global _installed
 
     with _lock:
@@ -168,7 +331,9 @@ def install():
             return
 
         _install_memory_writer()
-        _sync_text()
+        data = _ensure_data()
+        _migrate_redundant_item_labels(data)
+        _sync_text(data)
         _installed = True
 
 
@@ -297,7 +462,7 @@ def records(key):
 def add(key, value, source="user"):
     """Add one item to a collection, ignoring case/spacing duplicates."""
     wanted = _normalise_key(key)
-    cleaned = " ".join((value or "").strip().split())
+    cleaned = _canonical_item(wanted, value)
 
     if not wanted or not cleaned:
         return False
@@ -314,7 +479,7 @@ def add(key, value, source="user"):
             collection = []
             data["collections"][wanted] = collection
 
-        normalised = _normalise_item(cleaned)
+        normalised = _identity(cleaned)
 
         for entry in collection:
             existing = (
@@ -323,7 +488,7 @@ def add(key, value, source="user"):
                 else str(entry or "")
             )
 
-            if _normalise_item(existing) == normalised:
+            if _identity(_canonical_item(wanted, existing)) == normalised:
                 return True
 
         now = _now()
@@ -344,7 +509,7 @@ def add(key, value, source="user"):
 def remove(key, value):
     """Remove one matching collection item. Returns True when removed."""
     wanted = _normalise_key(key)
-    normalised = _normalise_item(value)
+    normalised = _identity(_canonical_item(wanted, value))
 
     if not wanted or not normalised:
         return False
@@ -366,7 +531,7 @@ def remove(key, value):
                 else str(entry or "")
             )
 
-            if not removed and _normalise_item(existing) == normalised:
+            if not removed and _identity(_canonical_item(wanted, existing)) == normalised:
                 removed = True
                 continue
 
@@ -392,8 +557,8 @@ def replace(key, values, source="user"):
     seen = set()
 
     for value in values or ():
-        cleaned = " ".join(str(value or "").strip().split())
-        normalised = _normalise_item(cleaned)
+        cleaned = _canonical_item(wanted, value)
+        normalised = _identity(cleaned)
 
         if not normalised or normalised in seen:
             continue
