@@ -42,9 +42,6 @@ def _prepare_default_project_memory():
     if "default project" not in memory.KNOWN_KEYS:
         memory.KNOWN_KEYS = tuple(memory.KNOWN_KEYS) + ("default project",)
 
-    # Replace only the old combined project classifier. "I'm working on ..."
-    # remains an additive activity record, while explicit default/main/current
-    # project wording becomes the standing default-project fact.
     memory._KEYED_PATTERNS = tuple(
         pattern
         for pattern in memory._KEYED_PATTERNS
@@ -55,8 +52,6 @@ def _prepare_default_project_memory():
         *memory._KEYED_PATTERNS,
     )
 
-    # Migrate the existing human-readable "project:" entry in place. This is
-    # a schema rename, not a new memory or a historical replacement.
     with memory._lock:
         existing = memory._read()
         has_default = any(
@@ -85,9 +80,6 @@ def _prepare_default_project_memory():
         if changed:
             memory._write(kept)
 
-    # Keep the existing metadata for the renamed record instead of creating a
-    # fresh timestamp on every migration. The sync below will then treat it as
-    # the same current memory under its new explicit key.
     data = memory_history._load()
 
     if data is not None:
@@ -118,13 +110,7 @@ def _prepare_default_project_memory():
 
 
 def _local_memory_question(text):
-    """Use semantic retrieval itself as the confidence check.
-
-    Once the local memory engine has returned a relevant memory, there is no
-    reason to demand literal word overlap here as well. That second lexical
-    gate defeats the point of semantic retrieval for paraphrases such as
-    "do I have any projects?" versus a stored "project" fact.
-    """
+    """Use semantic retrieval itself as the confidence check."""
     text = (text or "").strip().casefold()
 
     if not text:
@@ -162,14 +148,9 @@ def _guarded_fuzzy(commands, original):
         if not intent:
             return None
 
-        # Exact matches are resolved before fuzzy matching, but keep this
-        # guard explicit so the rule remains safe if call order changes.
         if commands._FAST_LOOKUP.get(text) == intent:
             return intent
 
-        # A strong local semantic memory match is more trustworthy than a
-        # character-level fuzzy collision with a command such as read_notes.
-        # Let the normal memory route answer it instead.
         try:
             if _local_memory_question(text):
                 return None
@@ -188,8 +169,6 @@ def _project_inventory_request(text):
     if not words & {"project", "projects"}:
         return False
 
-    # These mean the question is about remembered/default work context,
-    # not the Cursor project inventory.
     if words & {"working", "default", "main", "current"}:
         return False
 
@@ -220,10 +199,6 @@ def _guarded_fast_path(commands, original):
         if _project_inventory_request(text):
             return commands._blank_result("list_projects")
 
-        # Once a collection meaning has been learned, route matching
-        # memory statements locally instead of sending them back to the
-        # provider. This keeps later collection updates fast and prevents
-        # the model from inventing a new synonymous key.
         if not (
             text.endswith("?")
             or text.split(" ", 1)[0] in _MEMORY_QUESTION_WORDS
@@ -241,10 +216,6 @@ def _guarded_fast_path(commands, original):
                     text=(command or "").strip(),
                 )
 
-        # Do not treat questions as memory writes. For non-question
-        # statements, let the existing classifier determine whether this is
-        # a known keyed personal fact. This adds no vocabulary and no new
-        # intent: it reuses memory.classify() and the existing remember path.
         if text.endswith("?") or text.split(" ", 1)[0] in _MEMORY_QUESTION_WORDS:
             return None
 
@@ -261,9 +232,6 @@ def _guarded_fast_path(commands, original):
                 text=(command or "").strip(),
             )
 
-        # "my project is ..." is deliberately additive unless the user
-        # explicitly says default/main/current. It is stored as a plain
-        # memory entry beside the standing default project.
         if re.match(r"^my\s+project\s+is\s+.+$", text, re.I):
             return commands._blank_result(
                 "remember",
@@ -290,8 +258,6 @@ def _guarded_forget(memory_module, original):
 
         candidates = [cleaned]
 
-        # Speech recognition can leave a small connector in the deletion
-        # target. Try the meaningful content as well, still entirely locally.
         if cleaned.casefold().startswith(("on ", "about ")):
             candidates.append(cleaned.split(" ", 1)[1].strip())
 
@@ -335,15 +301,13 @@ def install(commands):
 
     import llm
     from actions import memory, memory_history
-    from actions import memory_collection_intelligence
+    from actions import memory_collection_intelligence, memory_relations
 
     _prepare_default_project_memory()
     memory_history.install()
     memory_collection_intelligence.install_runtime()
+    memory_relations.install_runtime(commands)
 
-    # Keep the original detector's vocabulary available to callers, but make
-    # its final confidence decision semantic rather than lexical. This is the
-    # same local retrieval path used by the answer and offline fallback.
     llm._MEMORY_QUESTION_WORDS = _MEMORY_QUESTION_WORDS
     llm._local_memory_question = _local_memory_question
 
