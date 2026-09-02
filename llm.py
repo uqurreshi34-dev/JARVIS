@@ -233,6 +233,17 @@ groups future examples of the same kind; do not use the action verb as the
 key. For example, "I'm reading Peter Pan" should be understood as one item
 of the "books" collection, not as a single-valued "reading" memory.
 
+Statements describing ongoing work, such as "I'm working on ...", "I am
+working on ...", or "I'm also working on ...", describe a collection of
+simultaneous work items when multiple projects can coexist. Do not turn
+"working on ..." into a single-valued key such as "current project", "active
+project", or another adjective-qualified project key. Use the stable plural
+category for the collection, normally a noun such as "projects".
+
+Only explicit wording that defines one standing project, such as "my default
+project is React", "my main project is React", or "my current project is
+React", should describe a single-valued project fact.
+
 For non-remember intents, set "memory" to null.
 
 Use forget when they want something removed from that memory.

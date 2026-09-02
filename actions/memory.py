@@ -207,9 +207,10 @@ _KEYED_PATTERNS = (
         r"my (?:git )?repo(?:sitory)? path is)\s+(.+)$", re.I),
      "repo"),
     (re.compile(
-        r"^(?:my (?:default|main|current) project is|"
-        r"i(?:'m|m| am) working on)\s+(.+)$", re.I),
-     "project"),
+        r"^my (?:default|main|current) project is\s+(.+)$",
+        re.I,
+    ),
+        "project"),
     (re.compile(
         r"^(?:to )?(open|dont open|do not open)\s+my invites$", re.I),
      "invites"),
@@ -532,7 +533,8 @@ def relevant_summary(query, limit=6):
         # Rare words carry more information than words shared by many
         # memories. This is the local equivalent of an IDF-style signal.
         lexical_score = sum(
-            math.log((total_documents + 1) / (document_frequency[word] + 1)) + 1
+            math.log((total_documents + 1) /
+                     (document_frequency[word] + 1)) + 1
             for word in overlap
         )
 

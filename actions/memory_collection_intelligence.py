@@ -339,6 +339,74 @@ def _collection_match(text):
 
         return candidate_key, candidate_cardinality, candidate_score
 
+    # If semantic scoring is inconclusive, an exact match against a
+    # learned collection language template is still strong local evidence.
+    # The item's value is intentionally treated as the variable part, so
+    # this remains domain-neutral.
+    template_candidates = []
+
+    for candidate_key, candidate_cardinality, document in documents:
+        if candidate_cardinality != memory_collections.CARDINALITY_COLLECTION:
+            continue
+
+        extracted = _extract_template_items(
+            cleaned,
+            candidate_key,
+        )
+
+        if extracted:
+            template_candidates.append(
+                (
+                    candidate_key,
+                    candidate_cardinality,
+                    document,
+                    extracted,
+                )
+            )
+
+    if len(template_candidates) == 1:
+        candidate_key, candidate_cardinality, _document, _items = (
+            template_candidates[0]
+        )
+        return candidate_key, candidate_cardinality, 1.0
+
+    if template_candidates:
+        try:
+            template_documents = [
+                (
+                    candidate_key,
+                    candidate_cardinality,
+                    f"{candidate_key}: {', '.join(extracted)}",
+                )
+                for (
+                    candidate_key,
+                    candidate_cardinality,
+                    _document,
+                    extracted,
+                ) in template_candidates
+            ]
+
+            ranked_templates = semantic_memory._semantic_rank(
+                cleaned,
+                template_documents,
+            )
+
+            if ranked_templates:
+                index, score = ranked_templates[0]
+                candidate_key, candidate_cardinality, _document = (
+                    template_documents[index]
+                )
+
+                if score >= 0.45:
+                    return (
+                        candidate_key,
+                        candidate_cardinality,
+                        score,
+                    )
+
+        except Exception:
+            pass
+
     return None, None, 0.0
 
 
@@ -538,6 +606,104 @@ def _extract_template_items(text, key):
     return []
 
 
+def _canonicalise_collection_items(key, items):
+    """Reuse an existing collection value when a new spelling means the same thing."""
+    cleaned_items = [
+        _clean_example(item)
+        for item in (items or ())
+        if _clean_example(item)
+    ]
+
+    existing = memory_collections.items(key)
+
+    if not cleaned_items or not existing:
+        return cleaned_items
+
+    try:
+        from difflib import SequenceMatcher
+        from actions import semantic_memory
+    except Exception:
+        return cleaned_items
+
+    documents = [
+        (value, "item", value)
+        for value in existing
+    ]
+
+    canonical = []
+
+    for item in cleaned_items:
+        item_squashed = re.sub(
+            r"[^a-z0-9]+",
+            "",
+            item.casefold(),
+        )
+
+        chosen = None
+
+        for value in existing:
+            value_squashed = re.sub(
+                r"[^a-z0-9]+",
+                "",
+                value.casefold(),
+            )
+
+            if item_squashed == value_squashed:
+                chosen = value
+                break
+
+        if chosen is None:
+            for value in existing:
+                value_squashed = re.sub(
+                    r"[^a-z0-9]+",
+                    "",
+                    value.casefold(),
+                )
+
+                if (
+                    SequenceMatcher(
+                        None,
+                        item_squashed,
+                        value_squashed,
+                    ).ratio()
+                    >= 0.86
+                ):
+                    chosen = value
+                    break
+
+        if chosen is None:
+            try:
+                ranked = semantic_memory._semantic_rank(
+                    item,
+                    documents,
+                )
+
+                if ranked:
+                    index, score = ranked[0]
+
+                    if score >= 0.78:
+                        chosen = existing[index]
+
+            except Exception:
+                pass
+
+        canonical.append(chosen or item)
+
+    unique = []
+    seen = set()
+
+    for item in canonical:
+        normalised = _key(item)
+
+        if not normalised or normalised in seen:
+            continue
+
+        seen.add(normalised)
+        unique.append(item)
+
+    return unique
+
+
 def _extract_items(text, key):
     """Extract current collection items from natural language locally."""
     cleaned = _clean_example(text)
@@ -548,9 +714,20 @@ def _extract_items(text, key):
         keyed = None
 
     if keyed and _key(keyed[0]) == _key(key):
-        return _split_items(keyed[1], (_schema_detail(key)[1]))
+        items = _split_items(
+            keyed[1],
+            (_schema_detail(key)[1]),
+        )
+    else:
+        items = _extract_template_items(
+            cleaned,
+            key,
+        )
 
-    return _extract_template_items(cleaned, key)
+    return _canonicalise_collection_items(
+        key,
+        items,
+    )
 
 
 def schema_for_text(text):
