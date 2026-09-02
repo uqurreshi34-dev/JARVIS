@@ -17,13 +17,13 @@ def main():
     data = {
         "version": 1,
         "memories": [
-            {"key": "default project", "value": "C-sharp"},
+            {"key": "default project", "value": "c sharp"},
         ],
         "history": [],
         "collections": {
             "projects": [
-                {"value": "react project"},
-                {"value": "C-sharp"},
+                {"value": "react"},
+                {"value": "c-sharp"},
             ],
         },
         "schemas": {"projects": {"cardinality": "collection"}},
@@ -47,7 +47,7 @@ def main():
              patch.object(memory_relations.memory_history, "_save", side_effect=save):
             added = memory_relations.sync_memberships()
 
-            expected_to = memory_relations.collection_entity("projects", "C-sharp")
+            expected_to = memory_relations.collection_entity("projects", "c-sharp")
             expected_from = memory_relations.memory_entity("default project")
 
             if added != 1:
