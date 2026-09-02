@@ -43,6 +43,11 @@ def _normalise(value):
     return _clean(value).casefold()
 
 
+def _identity(value):
+    """Compare labels while ignoring case, spacing and punctuation."""
+    return "".join(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
+
+
 def memory_entity(key):
     key = _clean(key)
     return f"memory:{key}" if key else ""
@@ -240,7 +245,7 @@ def _value_memories():
 
 
 def sync_memberships():
-    """Connect single memories to collection items with the same value."""
+    """Connect single memories to collection items with the same identity."""
     memories = _value_memories()
     collections = _data().get("collections", {})
     if not memories or not isinstance(collections, dict):
@@ -248,10 +253,10 @@ def sync_memberships():
 
     added = 0
     for key, value in memories:
-        wanted = _normalise(value)
+        wanted = _identity(value)
         for collection_key in list(collections):
             for item in memory_collections.items(collection_key):
-                if _normalise(item) != wanted:
+                if _identity(item) != wanted:
                     continue
                 from_entity = memory_entity(key)
                 to_entity = collection_entity(collection_key, item)
