@@ -1,9 +1,12 @@
 """Offline tests for generic collection item canonicalisation."""
 
 import copy
+import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
+
+os.environ["JARVIS_SKIP_COLLECTION_MIGRATION"] = "1"
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
