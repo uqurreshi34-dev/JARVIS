@@ -220,6 +220,29 @@ def _install_memory_writer():
     memory._collection_text_sync_installed = True
 
 
+def _ensure_data():
+    """Load memory metadata, creating only the collection containers."""
+    data = memory_history._load()
+
+    if data is None:
+        data = {
+            "version": 1,
+            "memories": [],
+            "history": [],
+        }
+
+    data.setdefault("schemas", {})
+    data.setdefault("collections", {})
+
+    if not isinstance(data["schemas"], dict):
+        data["schemas"] = {}
+
+    if not isinstance(data["collections"], dict):
+        data["collections"] = {}
+
+    return data
+
+
 def _migrate_redundant_item_labels(data):
     """Canonicalise redundant collection descriptors without domain rules.
 
@@ -332,32 +355,12 @@ def install():
 
         _install_memory_writer()
         data = _ensure_data()
-        _migrate_redundant_item_labels(data)
+
+        if os.environ.get("JARVIS_SKIP_COLLECTION_MIGRATION") != "1":
+            _migrate_redundant_item_labels(data)
+
         _sync_text(data)
         _installed = True
-
-
-def _ensure_data():
-    """Load memory metadata, creating only the collection containers."""
-    data = memory_history._load()
-
-    if data is None:
-        data = {
-            "version": 1,
-            "memories": [],
-            "history": [],
-        }
-
-    data.setdefault("schemas", {})
-    data.setdefault("collections", {})
-
-    if not isinstance(data["schemas"], dict):
-        data["schemas"] = {}
-
-    if not isinstance(data["collections"], dict):
-        data["collections"] = {}
-
-    return data
 
 
 def cardinality(key):
