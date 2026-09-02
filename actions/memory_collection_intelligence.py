@@ -566,12 +566,17 @@ def _extract_template_items(text, key):
         def _flexible_literal(value):
             escaped = re.escape(value)
 
-            return escaped.replace(
+            escaped = escaped.replace(
                 r"\u2019",
                 r"(?:'|’)?",
             ).replace(
                 r"'",
                 r"(?:'|’)?",
+            )
+
+            return escaped.replace(
+                r"i(?:'|’)?m",
+                r"(?:i(?:'|’)?m|i\s+am)",
             )
 
         pattern = re.compile(
