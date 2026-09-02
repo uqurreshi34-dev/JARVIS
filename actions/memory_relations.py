@@ -1,19 +1,34 @@
-"""Local relationship storage and traversal for connected JARVIS memory.
+"""Generic local relationships between existing JARVIS memory entities.
 
-Relationships point at existing memory entities instead of copying their
-values. This module deliberately knows nothing about books, projects, cars,
-or any other domain: relation labels and entity references are data.
+Relationships are a thin layer over memory.json. They do not own facts or
+collection values and they do not define a domain ontology. The first local
+inference is exact value membership: a single memory whose value is already
+present in a learned collection is linked to that collection item.
 """
 
 import copy
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
 
-from actions import memory_history
+from actions import memory, memory_collections, memory_history
 
 
 _lock = threading.RLock()
+_installed = False
+_original_set_fact = None
+_original_remember = None
+_original_add = None
+_original_remove = None
+_original_replace = None
+_original_answer = None
+
+_RELATION = "member_of"
+_RELATION_CUES = (
+    "related", "connected", "associated", "part of", "belong",
+    "belongs", "member", "one of", "same group",
+)
 
 
 def _now():
@@ -24,82 +39,74 @@ def _clean(value):
     return " ".join(str(value or "").strip().split())
 
 
-def _entity(value):
-    return _clean(value)
+def _normalise(value):
+    return _clean(value).casefold()
 
 
-def _blank_relations():
-    return []
+def memory_entity(key):
+    key = _clean(key)
+    return f"memory:{key}" if key else ""
+
+
+def collection_entity(key, item=None):
+    key = _clean(key)
+    if not key:
+        return ""
+    if item is None:
+        return f"collection:{key}"
+    item = _clean(item)
+    return f"collection:{key}:{item}" if item else f"collection:{key}"
 
 
 def _data():
     data = memory_history._load()
-
     if data is None:
-        data = {
-            "version": 1,
-            "memories": [],
-            "history": [],
-        }
-
-    relations = data.get("relations")
-
-    if not isinstance(relations, list):
-        data["relations"] = _blank_relations()
-
+        data = {"version": 1, "memories": [], "history": []}
+    if not isinstance(data.get("relations"), list):
+        data["relations"] = []
     return data
-
-
-def _same(left, right):
-    return _entity(left).casefold() == _entity(right).casefold()
 
 
 def records():
     """Return all relationship records as independent copies."""
     with _lock:
-        return copy.deepcopy(_data().get("relations", []))
+        return copy.deepcopy(_data()["relations"])
 
 
 def add(from_entity, relation, to_entity, confidence=1.0, source="user"):
-    """Create one generic relation, idempotently."""
-    source_from = _entity(from_entity)
-    source_relation = _entity(relation)
-    source_to = _entity(to_entity)
-
+    """Add one idempotent relationship between two entity references."""
+    source_from = _clean(from_entity)
+    source_relation = _clean(relation)
+    source_to = _clean(to_entity)
     if not source_from or not source_relation or not source_to:
         return False
 
     try:
-        confidence = float(confidence)
+        confidence = max(0.0, min(1.0, float(confidence)))
     except (TypeError, ValueError):
         confidence = 1.0
 
-    confidence = max(0.0, min(1.0, confidence))
-
     with _lock:
         data = _data()
-        relations = data["relations"]
-
-        for record in relations:
+        for record in data["relations"]:
             if not isinstance(record, dict):
                 continue
-
             if (
-                _same(record.get("from"), source_from)
-                and _same(record.get("relation"), source_relation)
-                and _same(record.get("to"), source_to)
+                _normalise(record.get("from")) == _normalise(source_from)
+                and _normalise(record.get("relation")) == _normalise(source_relation)
+                and _normalise(record.get("to")) == _normalise(source_to)
             ):
-                record["confidence"] = max(
-                    float(record.get("confidence", 0.0) or 0.0),
-                    confidence,
-                )
-                record["source"] = record.get("source") or source
+                try:
+                    old = float(record.get("confidence", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    old = 0.0
+                record["confidence"] = max(old, confidence)
                 record["updated_at"] = _now()
                 memory_history._save(data)
                 return True
 
         now = _now()
-        relations.append({
+        data["relations"].append({
             "id": uuid.uuid4().hex,
             "from": source_from,
             "relation": source_relation,
@@ -109,168 +116,286 @@ def add(from_entity, relation, to_entity, confidence=1.0, source="user"):
             "created_at": now,
             "updated_at": now,
         })
-
         memory_history._save(data)
         return True
 
 
 def remove(from_entity=None, relation=None, to_entity=None):
-    """Remove matching relationships; omitted fields act as wildcards."""
+    """Remove relationships matching the supplied fields."""
     with _lock:
         data = _data()
-        relations = data["relations"]
         kept = []
         removed = False
-
-        for record in relations:
+        for record in data["relations"]:
             if not isinstance(record, dict):
                 kept.append(record)
                 continue
-
             matches = (
-                (from_entity is None or _same(record.get("from"), from_entity))
-                and (relation is None or _same(record.get("relation"), relation))
-                and (to_entity is None or _same(record.get("to"), to_entity))
+                from_entity is None or _normalise(record.get("from")) == _normalise(from_entity)
+            ) and (
+                relation is None or _normalise(record.get("relation")) == _normalise(relation)
+            ) and (
+                to_entity is None or _normalise(record.get("to")) == _normalise(to_entity)
             )
-
             if matches:
                 removed = True
-                continue
-
-            kept.append(record)
-
+            else:
+                kept.append(record)
         if not removed:
             return False
-
         data["relations"] = kept
         memory_history._save(data)
         return True
 
 
 def outgoing(entity, relation=None):
-    """Return relations leaving an entity."""
-    wanted = _entity(entity)
-
+    wanted = _normalise(entity)
     if not wanted:
         return []
-
     with _lock:
-        result = []
-
-        for record in _data().get("relations", []):
-            if not isinstance(record, dict) or not _same(record.get("from"), wanted):
-                continue
-
-            if relation is not None and not _same(record.get("relation"), relation):
-                continue
-
-            result.append(copy.deepcopy(record))
-
-        return result
+        return [
+            copy.deepcopy(record)
+            for record in _data()["relations"]
+            if isinstance(record, dict)
+            and _normalise(record.get("from")) == wanted
+            and (relation is None or _normalise(record.get("relation")) == _normalise(relation))
+        ]
 
 
 def incoming(entity, relation=None):
-    """Return relations arriving at an entity."""
-    wanted = _entity(entity)
-
+    wanted = _normalise(entity)
     if not wanted:
         return []
-
     with _lock:
-        result = []
-
-        for record in _data().get("relations", []):
-            if not isinstance(record, dict) or not _same(record.get("to"), wanted):
-                continue
-
-            if relation is not None and not _same(record.get("relation"), relation):
-                continue
-
-            result.append(copy.deepcopy(record))
-
-        return result
+        return [
+            copy.deepcopy(record)
+            for record in _data()["relations"]
+            if isinstance(record, dict)
+            and _normalise(record.get("to")) == wanted
+            and (relation is None or _normalise(record.get("relation")) == _normalise(relation))
+        ]
 
 
 def related(entity, relation=None, direction="both"):
-    """Return directly related entities without performing recursive graph search."""
     result = []
-
     if direction in ("out", "both"):
         for record in outgoing(entity, relation=relation):
-            result.append({
-                "entity": record["to"],
-                "relation": record["relation"],
-                "direction": "out",
-                "record": record,
-            })
-
+            result.append({"entity": record.get("to"), "relation": record.get("relation"), "direction": "out", "record": record})
     if direction in ("in", "both"):
         for record in incoming(entity, relation=relation):
-            result.append({
-                "entity": record["from"],
-                "relation": record["relation"],
-                "direction": "in",
-                "record": record,
-            })
-
+            result.append({"entity": record.get("from"), "relation": record.get("relation"), "direction": "in", "record": record})
     return result
 
 
 def traverse(start, relation=None, direction="out", max_hops=1):
-    """Traverse a small local relationship graph, returning reachable entities.
-
-    The default is deliberately one hop. This is connected memory, not a
-    reasoning engine: callers must explicitly request deeper traversal.
-    """
-    current = [_entity(start)] if _entity(start) else []
-    visited = set(current)
-    found = []
-
+    """Traverse locally with a deliberately small hop limit."""
+    start = _clean(start)
+    if not start:
+        return []
     try:
         max_hops = max(1, min(4, int(max_hops)))
     except (TypeError, ValueError):
         max_hops = 1
 
+    current = [start]
+    visited = {start.casefold()}
+    found = []
     for _ in range(max_hops):
         next_entities = []
-
         for entity in current:
             for item in related(entity, relation=relation, direction=direction):
-                target = item["entity"]
+                target = _clean(item.get("entity"))
                 marker = target.casefold()
-
-                if marker in visited:
+                if not target or marker in visited:
                     continue
-
                 visited.add(marker)
                 next_entities.append(target)
                 found.append(item)
-
         if not next_entities:
             break
-
         current = next_entities
-
     return found
 
 
 def has(from_entity, relation, to_entity):
-    """Return whether an exact relationship exists."""
     return any(
-        _same(record.get("from"), from_entity)
-        and _same(record.get("relation"), relation)
-        and _same(record.get("to"), to_entity)
+        _normalise(record.get("from")) == _normalise(from_entity)
+        and _normalise(record.get("relation")) == _normalise(relation)
+        and _normalise(record.get("to")) == _normalise(to_entity)
         for record in records()
+        if isinstance(record, dict)
     )
 
 
+def _value_memories():
+    result = []
+    for record in _data().get("memories", []):
+        if not isinstance(record, dict):
+            continue
+        key = _clean(record.get("key"))
+        value = _clean(record.get("value"))
+        if key and value:
+            result.append((key, value))
+    return result
+
+
+def sync_memberships():
+    """Connect single memories to collection items with the same value."""
+    memories = _value_memories()
+    collections = _data().get("collections", {})
+    if not memories or not isinstance(collections, dict):
+        return 0
+
+    added = 0
+    for key, value in memories:
+        wanted = _normalise(value)
+        for collection_key in list(collections):
+            for item in memory_collections.items(collection_key):
+                if _normalise(item) != wanted:
+                    continue
+                from_entity = memory_entity(key)
+                to_entity = collection_entity(collection_key, item)
+                if has(from_entity, _RELATION, to_entity):
+                    continue
+                if add(from_entity, _RELATION, to_entity, source="inferred-local"):
+                    added += 1
+    return added
+
+
+def _answer_relation_question(query):
+    """Answer a small generic set of relationship questions locally."""
+    text = _clean(query)
+    folded = text.casefold()
+    if not any(cue in folded for cue in _RELATION_CUES):
+        return None
+
+    try:
+        summary = memory.relevant_summary(text, limit=1)
+    except Exception:
+        return None
+    if not summary:
+        return None
+
+    lines = [
+        line.strip()[2:]
+        for line in summary.splitlines()
+        if line.strip().startswith("- ")
+    ]
+    if not lines:
+        return None
+
+    key, separator, value = lines[0].partition(":")
+    if not separator:
+        return None
+    key = _clean(key)
+    value = _clean(value)
+    if not key or not value:
+        return None
+
+    links = outgoing(memory_entity(key), relation=_RELATION)
+    targets = []
+    for record in links:
+        match = re.match(r"^collection:(.+?):(.*)$", _clean(record.get("to")), re.I)
+        if match:
+            collection_key = _clean(match.group(1))
+            item = _clean(match.group(2))
+            if collection_key and item:
+                targets.append((collection_key, item))
+    if not targets:
+        return None
+
+    if len(targets) == 1:
+        collection_key, item = targets[0]
+        return f"Your {key} is {value}, and it is one of your {collection_key}."
+
+    grouped = {}
+    for collection_key, item in targets:
+        grouped.setdefault(collection_key, []).append(item)
+    parts = []
+    for collection_key, items in grouped.items():
+        if len(items) == 1:
+            joined = items[0]
+        elif len(items) == 2:
+            joined = f"{items[0]} and {items[1]}"
+        else:
+            joined = f"{', '.join(items[:-1])}, and {items[-1]}"
+        parts.append(f"{joined} in your {collection_key}")
+    return f"Your {key} is {value}, connected as {', '.join(parts)}."
+
+
+def _wrapped_answer(question):
+    local = _answer_relation_question(question)
+    if local:
+        return local
+    return _original_answer(question)
+
+
+def _after_memory_write(*args, **kwargs):
+    result = _original_set_fact(*args, **kwargs)
+    if result:
+        sync_memberships()
+    return result
+
+
+def _after_remember(*args, **kwargs):
+    result = _original_remember(*args, **kwargs)
+    if result:
+        sync_memberships()
+    return result
+
+
+def _after_collection_add(*args, **kwargs):
+    result = _original_add(*args, **kwargs)
+    if result:
+        sync_memberships()
+    return result
+
+
+def _after_collection_remove(*args, **kwargs):
+    result = _original_remove(*args, **kwargs)
+    if result:
+        sync_memberships()
+    return result
+
+
+def _after_collection_replace(*args, **kwargs):
+    result = _original_replace(*args, **kwargs)
+    if result:
+        sync_memberships()
+    return result
+
+
+def install_runtime(commands):
+    """Install relationship hooks after normal command modules exist."""
+    global _installed
+    global _original_set_fact, _original_remember
+    global _original_add, _original_remove, _original_replace
+    global _original_answer
+
+    with _lock:
+        if _installed:
+            return
+
+        _original_set_fact = memory.set_fact
+        _original_remember = memory.remember
+        _original_add = memory_collections.add
+        _original_remove = memory_collections.remove
+        _original_replace = memory_collections.replace
+        _original_answer = commands.answer
+
+        memory.set_fact = _after_memory_write
+        memory.remember = _after_remember
+        memory_collections.add = _after_collection_add
+        memory_collections.remove = _after_collection_remove
+        memory_collections.replace = _after_collection_replace
+        commands.answer = _wrapped_answer
+
+        sync_memberships()
+        _installed = True
+
+
 __all__ = [
-    "add",
-    "has",
-    "incoming",
-    "outgoing",
-    "records",
-    "related",
-    "remove",
-    "traverse",
+    "add", "collection_entity", "has", "incoming", "install_runtime",
+    "memory_entity", "outgoing", "records", "related", "remove",
+    "sync_memberships", "traverse",
 ]
