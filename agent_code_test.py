@@ -1,5 +1,5 @@
 def calculate_total(price, quantity):
-    return float(price) * quantity
+    return price * quantity
 
 
 price = "10"

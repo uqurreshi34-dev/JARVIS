@@ -211,6 +211,46 @@ def list_jarvis_files():
     return files.listing()
 
 
+def list_directory(path):
+    """Summarise the contents of any existing local directory."""
+    path = os.path.abspath(str(path or "").strip())
+
+    if not os.path.isdir(path):
+        return {
+            "path": path,
+            "error": "Directory not found.",
+        }
+
+    try:
+        entries = os.listdir(path)
+    except OSError as error:
+        return {
+            "path": path,
+            "error": str(error),
+        }
+
+    directories = []
+    file_counts = {}
+
+    for name in entries:
+        full_path = os.path.join(path, name)
+
+        if os.path.isdir(full_path):
+            directories.append(name)
+            continue
+
+        if os.path.isfile(full_path):
+            suffix = os.path.splitext(name)[1].casefold() or "[no extension]"
+            file_counts[suffix] = file_counts.get(suffix, 0) + 1
+
+    return {
+        "path": path,
+        "total_entries": len(entries),
+        "directories": sorted(directories),
+        "file_counts_by_extension": dict(sorted(file_counts.items())),
+    }
+
+
 def read_jarvis_file(name):
     """Read one file from JARVIS's private working folder."""
     return files.read(name)
@@ -293,6 +333,27 @@ TOOLS = [
             "additionalProperties": False,
         },
         "function": list_jarvis_files,
+    },
+    {
+        "name": "list_directory",
+        "description": (
+            "Inspect any local directory specified by the user. "
+            "Use this for requests about a specific folder, directory, "
+            "drive, or filesystem location. Return a concise summary "
+            "rather than enumerating every file."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The local directory path to inspect.",
+                },
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "function": list_directory,
     },
     {
         "name": "read_jarvis_file",
@@ -416,8 +477,10 @@ You investigate the user's computer using the read-only tools provided to you.
 The information returned by tools is evidence. Never invent facts that are
 not supported by that evidence.
 
-For broad folder or inventory questions, prefer summarising the information
-returned by list_jarvis_files and stop there. Do not read individual files
+For broad JARVIS-folder questions, use list_jarvis_files.
+For a specific folder, directory, drive, or filesystem path named by the user,
+use list_directory and summarise the returned evidence without enumerating
+every file. Do not read individual files
 unless the user's request explicitly asks you to inspect their contents, or
 the filenames alone are insufficient to answer the specific question.
 
