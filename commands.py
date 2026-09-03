@@ -562,12 +562,19 @@ def _normalise(command):
 
     return _trim_filler(text)
 
+
 _AGENT_PREFIXES = (
     "agent mode ",
     "agent ",
     "investigate ",
     "look into ",
     "look deeply into ",
+    "inspect ",
+    "summarise ",
+    "summarize ",
+    "analyse ",
+    "analyze ",
+    "review ",
 )
 
 
@@ -583,6 +590,75 @@ def _agent_task(command):
                 return task
 
     return None
+
+
+def _run_agent_investigation(task):
+    """Run Agent Mode, then offer an optional written report."""
+    global _awaiting
+
+    summary = run_agent(task)
+
+    if not summary:
+        return None
+
+    _awaiting = {
+        "intent": "agent_report_offer",
+        "handler": lambda reply: _agent_report_reply(task, reply),
+        "recognizes": (
+            lambda reply: _normalise(reply) in _YES
+            or _normalise(reply) in _NO
+        ),
+        "asked_at": time.monotonic(),
+    }
+
+    return (
+        f"{summary} "
+        "Would you like me to write that up as a report, sir?"
+    )
+
+
+def _agent_report_reply(task, reply):
+    """Handle the user's optional Agent Mode report request."""
+    answer = _normalise(reply)
+
+    if answer in _YES:
+        print("[agent] generating report")
+
+        report = run_agent(task, report=True)
+
+        if not report:
+            return _query(
+                "agent_report",
+                lambda: "I couldn't generate the report, sir.",
+            )
+
+        from agent import write_agent_report
+
+        path = write_agent_report(report)
+
+        if not path:
+            return _query(
+                "agent_report",
+                lambda: "I generated the report, but couldn't save it, sir.",
+            )
+
+        return _query(
+            "agent_report",
+            lambda: (
+                "Done, sir. I've written the report and saved it "
+                "in your JARVIS folder."
+            ),
+            detail="an Agent Mode report",
+        )
+
+    if answer in _NO:
+        return _query(
+            "cancelled",
+            lambda: phrases.pick("cancelled"),
+        )
+
+    return None
+
 
 _VOLUME_WORDS = {
     "half": 50, "full": 100, "max": 100, "maximum": 100,
@@ -3754,7 +3830,7 @@ def _handle_command(command):
 
         return _query(
             "agent_mode",
-            lambda: run_agent(agent_task),
+            lambda: _run_agent_investigation(agent_task),
             detail=agent_task,
         )
 

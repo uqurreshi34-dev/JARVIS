@@ -2,6 +2,7 @@
 
 import json
 import os
+from datetime import datetime
 
 from anthropic import AnthropicFoundry
 from dotenv import load_dotenv
@@ -55,9 +56,10 @@ TOOLS = [
     {
         "name": "read_jarvis_file",
         "description": (
-            "Read a named text, markdown, JSON, CSV, log, Word, or other "
-            "supported document from JARVIS's private working folder. "
-            "Use the exact filename returned by list_jarvis_files when possible."
+            "Read a supported document from JARVIS's private working folder. "
+            "Readable types include .txt, .md, .csv, .log, .json, .docx, and .pdf. "
+            "Do not call this tool for .chunk2-backup files or other unsupported "
+            "extensions; those files can be identified by filename but cannot be read."
         ),
         "input_schema": {
             "type": "object",
@@ -214,15 +216,17 @@ def run_agent(task, report=False):
         }
     ]
 
-    for _ in range(_AGENT_MAX_TURNS):
+    max_turns = _AGENT_MAX_TURNS
+
+    for _ in range(max_turns):
         kwargs = {
             "model": model,
-            "max_tokens": 3200 if report else 1800,
+            "max_tokens": 8000 if report else 1800,
             "system": _AGENT_SYSTEM_PROMPT,
             "tools": tool_defs,
             "tool_choice": {
                 "type": "auto",
-                "disable_parallel_tool_use": True,
+                "disable_parallel_tool_use": not report,
             },
             "messages": messages,
         }
@@ -320,3 +324,20 @@ def run_agent(task, report=False):
 
     print("[JARVIS] agent reached its turn limit")
     return "I couldn't finish that investigation within my limit, sir."
+
+
+def write_agent_report(report_text):
+    """Write an Agent Mode report into JARVIS's private folder."""
+    report_text = str(report_text or "").strip()
+
+    if not report_text:
+        return None
+
+    stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    name = f"JARVIS agent report {stamp}.docx"
+
+    return files.write(
+        name,
+        report_text,
+        default_suffix=".docx",
+    )
