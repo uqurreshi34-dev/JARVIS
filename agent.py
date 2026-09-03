@@ -619,6 +619,18 @@ def _tool_result_text(result):
     return text
 
 
+def _clean_spoken_response(text):
+    text = str(text or "").strip()
+
+    if text.lower().startswith("**spoken summary:**"):
+        text = text[len("**Spoken summary:**"):].strip()
+
+    elif text.lower().startswith("spoken summary:"):
+        text = text[len("Spoken summary:"):].strip()
+
+    return text
+
+
 def run_agent(task, report=False, fix=False, code_task=False):
     """Run bounded Agent Mode through the configured provider."""
     task = str(task or "").strip()
@@ -716,7 +728,7 @@ def run_agent(task, report=False, fix=False, code_task=False):
                         text = (block.text or "").strip()
 
                         if text:
-                            return text
+                            return _clean_spoken_response(text)
 
                 return None
 
@@ -801,7 +813,7 @@ def run_agent(task, report=False, fix=False, code_task=False):
             text = (message.content or "").strip()
 
             if text:
-                return text
+                return _clean_spoken_response(text)
 
             return None
 
