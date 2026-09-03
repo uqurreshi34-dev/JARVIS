@@ -53,30 +53,91 @@ _SKIP_CODE_DIRS = frozenset({
 
 
 def _active_code_filename(title):
-    """Extract a code filename from the active editor window title."""
+    """Extract a code filename from common editor window-title formats."""
     if not title:
         return None
 
-    first_part = str(title).split(" - ", 1)[0].strip()
-    first_part = first_part.lstrip("*").strip()
+    title = str(title).strip()
 
-    suffix = os.path.splitext(first_part)[1].casefold()
+    normalised = (
+        title
+        .replace(" — ", " - ")
+        .replace(" – ", " - ")
+        .replace(" | ", " - ")
+        .replace(" · ", " - ")
+    )
 
-    if suffix not in _CODE_SUFFIXES:
-        return None
+    parts = normalised.split(" - ")
 
-    return os.path.basename(first_part)
+    for part in parts:
+        candidate = part.strip().lstrip("*").strip()
+        suffix = os.path.splitext(candidate)[1].casefold()
+
+        if suffix in _CODE_SUFFIXES:
+            return os.path.basename(candidate)
+
+    return None
 
 
 def _read_saved_active_code(title):
-    """Read a uniquely identifiable saved code file from a recent project."""
+    """Read the active saved code file without an expensive project-wide scan."""
     filename = _active_code_filename(title)
 
     if not filename:
         return None
 
-    matches = []
     filename_key = filename.casefold()
+
+    # First try the directory JARVIS is currently running from.
+    # This is cheap and resolves files in the active project immediately.
+    current_directory = os.path.abspath(os.getcwd())
+    direct_path = os.path.join(current_directory, filename)
+
+    if os.path.isfile(direct_path):
+        try:
+            with open(
+                direct_path,
+                "r",
+                encoding="utf-8",
+                errors="ignore",
+            ) as handle:
+                return {
+                    "path": direct_path,
+                    "text": handle.read(),
+                }
+
+        except (OSError, UnicodeError):
+            pass
+
+    # Then try the directory containing agent.py.
+    # This also covers the normal JARVIS project when launched elsewhere.
+    module_directory = os.path.dirname(
+        os.path.abspath(__file__)
+    )
+    module_path = os.path.join(module_directory, filename)
+
+    if (
+        os.path.isfile(module_path)
+        and os.path.normcase(module_path) != os.path.normcase(direct_path)
+    ):
+        try:
+            with open(
+                module_path,
+                "r",
+                encoding="utf-8",
+                errors="ignore",
+            ) as handle:
+                return {
+                    "path": module_path,
+                    "text": handle.read(),
+                }
+
+        except (OSError, UnicodeError):
+            pass
+
+    # Finally use recent project roots, but only inspect the root itself
+    # before falling back to a bounded recursive search.
+    roots = []
 
     for project in _project_manager.projects(refresh=True):
         root = os.path.abspath(project.path)
@@ -84,6 +145,30 @@ def _read_saved_active_code(title):
         if not os.path.isdir(root):
             continue
 
+        roots.append(root)
+
+        candidate = os.path.join(root, filename)
+
+        if os.path.isfile(candidate):
+            try:
+                with open(
+                    candidate,
+                    "r",
+                    encoding="utf-8",
+                    errors="ignore",
+                ) as handle:
+                    return {
+                        "path": candidate,
+                        "text": handle.read(),
+                    }
+
+            except (OSError, UnicodeError):
+                continue
+
+    # Only recurse when necessary, and stop as soon as two matches exist.
+    matches = []
+
+    for root in roots:
         for current_root, directories, filenames in os.walk(root):
             directories[:] = [
                 directory

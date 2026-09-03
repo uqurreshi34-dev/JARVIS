@@ -851,7 +851,21 @@ def read_text():
     except Exception as error:
         print(f"[JARVIS] could not read the screen text: {error}")
 
-    return "\n".join(collected).strip(), title
+        text = "\n".join(collected).strip()
+
+    inaccessible_markers = (
+        "the editor is not accessible at this time",
+        "screen reader optimized mode",
+        "screen reader optimised mode",
+    )
+
+    if any(
+        marker in text.casefold()
+        for marker in inaccessible_markers
+    ):
+        return "", title
+
+    return text, title
 
 
 def describe():
