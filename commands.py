@@ -677,6 +677,21 @@ def _is_code_investigation(task):
     )
 
 
+def _is_directory_investigation(task):
+    """Return True when the user is explicitly investigating a folder or drive."""
+    text = _normalise(task)
+
+    directory_words = (
+        "folder",
+        "directory",
+        "drive",
+        "files in",
+        "contents of",
+    )
+
+    return any(word in text for word in directory_words)
+
+
 def _run_agent_investigation(task):
     """Run Agent Mode, then ask for the appropriate next action."""
     global _awaiting
@@ -706,6 +721,9 @@ def _run_agent_investigation(task):
             f"{summary} "
             "Would you like me to fix the code errors, sir?"
         )
+
+    if not _is_directory_investigation(task):
+        return summary
 
     _awaiting = {
         "intent": "agent_report_offer",
