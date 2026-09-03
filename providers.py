@@ -12,6 +12,7 @@ import time
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from anthropic import AnthropicFoundry
 
 
 load_dotenv()
@@ -40,6 +41,16 @@ PROVIDERS = {
         "default_model": "gemini-3.6-flash",
         "vision_env": "GEMINI_VISION_MODEL",
         "default_vision_model": "gemini-3.6-flash",
+        "reasoning": True,
+    },
+    "claude": {
+        "kind": "anthropic",
+        "base_url_env": "ANTHROPIC_FOUNDRY_BASE_URL",
+        "key_env": "ANTHROPIC_FOUNDRY_API_KEY",
+        "model_env": "ANTHROPIC_FOUNDRY_MODEL",
+        "default_model": "claude-opus-5",
+        "vision_env": "ANTHROPIC_FOUNDRY_VISION_MODEL",
+        "default_vision_model": "claude-opus-5",
         "reasoning": True,
     },
 }
@@ -102,6 +113,8 @@ def is_permission_error(error):
         or "permission" in text
         or "forbidden" in text
         or "unauthorized" in text
+        or "invalid api key" in text
+        or "valid api key" in text
     )
 
 
@@ -113,9 +126,95 @@ def should_failover(error):
     )
 
 
+def _claude_schema(schema, root=False):
+    """Adapt JARVIS JSON Schema to Claude's structured-output dialect."""
+    if isinstance(schema, list):
+        return [_claude_schema(item, root=False) for item in schema]
+
+    if not isinstance(schema, dict):
+        return schema
+
+    converted = {}
+
+    schema_type = schema.get("type")
+
+    if isinstance(schema_type, list):
+        non_null_types = [
+            value
+            for value in schema_type
+            if value != "null"
+        ]
+
+        if len(non_null_types) == 1:
+            converted["type"] = non_null_types[0]
+        else:
+            converted["type"] = non_null_types
+
+    elif schema_type is not None:
+        converted["type"] = schema_type
+
+    if "enum" in schema:
+        converted["enum"] = [
+            value
+            for value in schema["enum"]
+            if value is not None
+        ]
+
+    for key in ("description", "title", "format"):
+        if key in schema:
+            converted[key] = schema[key]
+
+    if schema_type == "object" or (
+        isinstance(schema_type, list) and "object" in schema_type
+    ):
+        properties = schema.get("properties", {})
+        converted["properties"] = {}
+
+        required = list(schema.get("required", []))
+
+        for name, property_schema in properties.items():
+            nullable = (
+                (
+                    isinstance(property_schema.get("type"), list)
+                    and "null" in property_schema["type"]
+                )
+                or (
+                    None in property_schema.get("enum", [])
+                )
+            )
+
+            converted["properties"][name] = _claude_schema(
+                property_schema,
+                root=False,
+            )
+
+            # Only top-level nullable fields become optional.
+            # Nested fields such as memory.key/cardinality/etc remain
+            # required when the memory object itself is present.
+            if root and nullable and name in required:
+                required.remove(name)
+
+        converted["additionalProperties"] = False
+
+        if required:
+            converted["required"] = required
+
+        return converted
+
+    if schema_type == "array":
+        if "items" in schema:
+            converted["items"] = _claude_schema(
+                schema["items"],
+                root=False,
+            )
+
+    return converted
+
+
 class Provider:
     def __init__(self, name, config, api_key):
         self.name = name
+        self.kind = config.get("kind", "openai")
         self.model = os.getenv(config["model_env"]) or config["default_model"]
         self.reasoning = config.get("reasoning", False)
 
@@ -126,10 +225,24 @@ class Provider:
         )
         self.vision_reasoning = config.get("vision_reasoning", False)
 
-        self._client = OpenAI(
-            api_key=api_key,
-            base_url=config["base_url"],
-        )
+        if self.kind == "anthropic":
+            base_url_env = config.get("base_url_env")
+            base_url = os.getenv(base_url_env) if base_url_env else None
+
+            if not base_url:
+                raise RuntimeError(
+                    f"{self.name} is configured but its base URL is missing"
+                )
+
+            self._client = AnthropicFoundry(
+                api_key=api_key,
+                base_url=base_url,
+            )
+        else:
+            self._client = OpenAI(
+                api_key=api_key,
+                base_url=config["base_url"],
+            )
 
         self._resting_until = 0.0
 
@@ -143,8 +256,110 @@ class Provider:
     def wake(self):
         self._resting_until = 0.0
 
+    def _chat_anthropic(
+        self,
+        messages,
+        response_format=None,
+        temperature=0,
+        max_tokens=None,
+        reasoning_effort=None,
+    ):
+        """Send a chat request through the native Anthropic Messages API."""
+        system_parts = []
+        anthropic_messages = []
+
+        for message in messages:
+            role = message.get("role", "user")
+            content = message.get("content", "")
+
+            if role == "system":
+                if isinstance(content, str) and content.strip():
+                    system_parts.append(content.strip())
+                continue
+
+            if isinstance(content, str):
+                normalized_content = content
+            elif isinstance(content, list):
+                text_parts = []
+
+                for item in content:
+                    if (
+                        isinstance(item, dict)
+                        and item.get("type") == "text"
+                        and item.get("text")
+                    ):
+                        text_parts.append(str(item["text"]))
+
+                normalized_content = "\n".join(text_parts)
+            else:
+                normalized_content = str(content)
+
+            anthropic_messages.append(
+                {
+                    "role": role,
+                    "content": normalized_content,
+                }
+            )
+
+        kwargs = {
+            "model": self.model,
+            "messages": anthropic_messages,
+            "max_tokens": max_tokens or 2048,
+        }
+
+        if system_parts:
+            kwargs["system"] = "\n\n".join(system_parts)
+
+        output_config = {}
+
+        if reasoning_effort:
+            output_config["effort"] = reasoning_effort
+
+        if response_format:
+            if response_format.get("type") != "json_schema":
+                raise ValueError(
+                    f"Unsupported Claude response format: "
+                    f"{response_format.get('type')!r}"
+                )
+
+            json_schema = response_format.get("json_schema") or {}
+            schema = json_schema.get("schema")
+
+            if not schema:
+                raise ValueError(
+                    "Claude response format is missing its schema")
+
+            output_config["format"] = {
+                "type": "json_schema",
+                "schema": _claude_schema(schema, root=True),
+            }
+
+        if output_config:
+            kwargs["output_config"] = output_config
+
+        response = self._client.messages.create(**kwargs)
+
+        for block in response.content:
+            if getattr(block, "type", None) == "text":
+                text = (block.text or "").strip()
+
+                if text:
+                    return text
+
+        return ""
+
     def chat(self, messages, response_format=None, temperature=0,
              max_tokens=None, reasoning_effort=None):
+
+        if self.kind == "anthropic":
+            return self._chat_anthropic(
+                messages,
+                response_format=response_format,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                reasoning_effort=reasoning_effort,
+            )
+
         kwargs = {
             "model": self.model,
             "messages": messages,
@@ -208,6 +423,49 @@ class Provider:
 
             if spare and str(spare).strip():
                 return _strip_reasoning(str(spare).strip())
+
+        return ""
+
+    def _vision_anthropic(
+        self,
+        prompt,
+        image_bytes,
+        mime,
+        max_tokens,
+    ):
+        """Send an image through the native Anthropic Messages API."""
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+
+        response = self._client.messages.create(
+            model=self.vision_model,
+            max_tokens=max_tokens,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt,
+                        },
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": mime,
+                                "data": encoded,
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+
+        for block in response.content:
+            if getattr(block, "type", None) == "text":
+                text = (block.text or "").strip()
+
+                if text:
+                    return text
 
         return ""
 
@@ -358,6 +616,14 @@ def _describe_image(provider, prompt, image_bytes, mime, max_tokens):
     with no error to explain it. That is what "returned nothing for the
     image" means, and it is not a picture the model could not read.
     """
+    if provider.kind == "anthropic":
+        return provider._vision_anthropic(
+            prompt,
+            image_bytes,
+            mime,
+            max_tokens,
+        )
+
     encoded = base64.b64encode(image_bytes).decode("ascii")
 
     kwargs = {
