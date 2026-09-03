@@ -660,7 +660,19 @@ def replace_focused_text(text):
     if not text:
         return False
 
-    _, title, unsaved = active_document_state()
+    window = _foreground_window()
+
+    if not window:
+        print("[JARVIS] could not identify the focused document")
+        return False
+
+    try:
+        raw_title = window.window_text().strip()
+    except Exception:
+        raw_title = ""
+
+    unsaved = raw_title.startswith("*")
+    title = raw_title.lstrip("*").strip()
 
     if not title:
         print("[JARVIS] could not identify the focused document")
@@ -704,9 +716,18 @@ def replace_focused_text(text):
         return False
 
     try:
+        # Restore keyboard focus after any inspection/tool activity.
+        window.set_focus()
+        time.sleep(0.1)
+
         with _TYPE_LOCK:
             send_keys("^a", pause=0.05)
-            return _type_via_paste(text)
+            time.sleep(0.05)
+
+            if _CLIPBOARD_AVAILABLE:
+                return _type_via_paste(text)
+
+            return _type_via_send_keys(text)
 
     except Exception as error:
         print(f"[JARVIS] could not replace focused code: {error}")

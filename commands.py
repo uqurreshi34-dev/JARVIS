@@ -681,12 +681,17 @@ def _run_agent_investigation(task):
     """Run Agent Mode, then ask for the appropriate next action."""
     global _awaiting
 
-    summary = run_agent(task)
+    is_code = _is_code_investigation(task)
+
+    summary = run_agent(
+        task,
+        code_task=is_code,
+    )
 
     if not summary:
         return None
 
-    if _is_code_investigation(task):
+    if is_code:
         _awaiting = {
             "intent": "agent_code_fix_offer",
             "handler": lambda reply: _agent_fix_reply(task, reply),
@@ -768,7 +773,11 @@ def _agent_fix_reply(task, reply):
     if answer in _YES:
         print("[agent] fixing code")
 
-        result = run_agent(task, fix=True)
+        result = run_agent(
+            task,
+            fix=True,
+            code_task=True,
+        )
 
         if not result:
             return _query(
@@ -3957,18 +3966,7 @@ def _handle_command(command):
     agent_task = _agent_task(command)
 
     if agent_task:
-        print("[agent] Claude Agent Mode")
-
-        return _query(
-            "agent_mode",
-            lambda: _run_agent_investigation(agent_task),
-            detail=agent_task,
-        )
-
-    agent_task = _agent_task(command)
-
-    if agent_task:
-        print("[agent] Claude Agent Mode")
+        print("[agent] Agent Mode")
 
         return _query(
             "agent_mode",

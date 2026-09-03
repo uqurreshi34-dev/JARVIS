@@ -397,6 +397,17 @@ TOOL_FUNCTIONS = {
 
 _AGENT_MAX_TURNS = 6
 
+_CODE_TOOL_NAMES = (
+    "inspect_screen",
+    "inspect_code_context",
+)
+
+_CODE_FIX_TOOL_NAMES = (
+    "inspect_screen",
+    "inspect_code_context",
+    "replace_focused_code",
+)
+
 _AGENT_SYSTEM_PROMPT = """
 You are JARVIS Agent Mode.
 
@@ -464,14 +475,27 @@ after replace_focused_code successfully completed.
 """
 
 
-def _tool_definitions(provider, allow_code_fix=False):
+def _tool_definitions(
+    provider,
+    allow_code_fix=False,
+    allowed_tool_names=None,
+):
     """Convert JARVIS tools to the schema expected by one provider."""
     available_tools = TOOLS
+
+    if allowed_tool_names is not None:
+        allowed = set(allowed_tool_names)
+
+        available_tools = [
+            tool
+            for tool in available_tools
+            if tool["name"] in allowed
+        ]
 
     if not allow_code_fix:
         available_tools = [
             tool
-            for tool in TOOLS
+            for tool in available_tools
             if tool["name"] != "replace_focused_code"
         ]
 
@@ -532,7 +556,7 @@ def _tool_result_text(result):
     return text
 
 
-def run_agent(task, report=False, fix=False):
+def run_agent(task, report=False, fix=False, code_task=False):
     """Run bounded Agent Mode through the configured provider."""
     task = str(task or "").strip()
 
@@ -544,9 +568,19 @@ def run_agent(task, report=False, fix=False):
 
     provider = providers._pool[0]
 
+    allowed_tool_names = None
+
+    if code_task:
+        allowed_tool_names = (
+            _CODE_FIX_TOOL_NAMES
+            if fix
+            else _CODE_TOOL_NAMES
+        )
+
     tool_defs = _tool_definitions(
         provider,
         allow_code_fix=fix,
+        allowed_tool_names=allowed_tool_names,
     )
 
     if fix:
