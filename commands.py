@@ -52,6 +52,7 @@ from actions import (
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
+from agent import run_agent
 
 
 _application_manager = ApplicationManager()
@@ -561,6 +562,27 @@ def _normalise(command):
 
     return _trim_filler(text)
 
+_AGENT_PREFIXES = (
+    "agent mode ",
+    "agent ",
+    "investigate ",
+    "look into ",
+    "look deeply into ",
+)
+
+
+def _agent_task(command):
+    """Return an explicit Agent Mode task, or None."""
+    text = _normalise(command)
+
+    for prefix in _AGENT_PREFIXES:
+        if text.startswith(prefix):
+            task = text[len(prefix):].strip()
+
+            if task:
+                return task
+
+    return None
 
 _VOLUME_WORDS = {
     "half": 50, "full": 100, "max": 100, "maximum": 100,
@@ -3724,6 +3746,17 @@ def _handle_command(command):
 
     if answered is not None:
         return answered
+
+    agent_task = _agent_task(command)
+
+    if agent_task:
+        print("[agent] Claude Agent Mode")
+
+        return _query(
+            "agent_mode",
+            lambda: run_agent(agent_task),
+            detail=agent_task,
+        )
 
     result = _fast_path(command)
     took_free_path = result is not None
