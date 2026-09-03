@@ -651,6 +651,68 @@ def type_text(text):
             return False
 
 
+def replace_focused_text(text):
+    """Replace the focused code document without saving it."""
+    if not _AVAILABLE or send_keys is None:
+        print("[JARVIS] cannot replace text: pywinauto is not available")
+        return False
+
+    if not text:
+        return False
+
+    _, title, unsaved = active_document_state()
+
+    if not title:
+        print("[JARVIS] could not identify the focused document")
+        return False
+
+    code_extensions = (
+        ".py",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".java",
+        ".cs",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".go",
+        ".rs",
+        ".rb",
+        ".php",
+        ".html",
+        ".css",
+        ".sql",
+        ".sh",
+        ".ps1",
+    )
+
+    if not any(
+        extension in title.casefold()
+        for extension in code_extensions
+    ):
+        print("[JARVIS] focused window does not appear to be a code document")
+        return False
+
+    if unsaved:
+        print(
+            "[JARVIS] code document has unsaved changes and its text "
+            "could not be verified"
+        )
+        return False
+
+    try:
+        with _TYPE_LOCK:
+            send_keys("^a", pause=0.05)
+            return _type_via_paste(text)
+
+    except Exception as error:
+        print(f"[JARVIS] could not replace focused code: {error}")
+        return False
+
+
 # Controls a person actually types into. "Text" is deliberately absent:
 # it is the type used for labels, and including it swept up Notepad's status
 # bar ("Ln 1, Col 67", "UTF-8") as though it were part of the document.
@@ -699,6 +761,25 @@ def _focused_among(elements):
             continue
 
     return None
+
+
+def active_document_state():
+    """Return focused document text, title, and whether it has unsaved changes."""
+    window = _foreground_window()
+
+    if not window:
+        return "", None, False
+
+    try:
+        raw_title = window.window_text().strip()
+    except Exception:
+        raw_title = ""
+
+    unsaved = raw_title.startswith("*")
+
+    text, title = read_text()
+
+    return text, title or raw_title.lstrip("*").strip(), unsaved
 
 
 def read_text():

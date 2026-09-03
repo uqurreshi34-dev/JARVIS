@@ -642,14 +642,65 @@ def _agent_task(command):
     return None
 
 
+def _is_code_investigation(task):
+    """True when an Agent Mode task is clearly about diagnosing code."""
+    text = _normalise(task)
+
+    diagnostic_words = (
+        "wrong",
+        "broken",
+        "problem",
+        "issue",
+        "error",
+        "failing",
+        "failed",
+        "diagnose",
+        "debug",
+        "why",
+        "figure out",
+    )
+
+    code_words = (
+        "code",
+        "script",
+        "program",
+        "function",
+        "python",
+        "javascript",
+        "typescript",
+        "class",
+    )
+
+    return (
+        any(word in text for word in diagnostic_words)
+        and any(word in text for word in code_words)
+    )
+
+
 def _run_agent_investigation(task):
-    """Run Agent Mode, then offer an optional written report."""
+    """Run Agent Mode, then ask for the appropriate next action."""
     global _awaiting
 
     summary = run_agent(task)
 
     if not summary:
         return None
+
+    if _is_code_investigation(task):
+        _awaiting = {
+            "intent": "agent_code_fix_offer",
+            "handler": lambda reply: _agent_fix_reply(task, reply),
+            "recognizes": (
+                lambda reply: _normalise(reply) in _YES
+                or _normalise(reply) in _NO
+            ),
+            "asked_at": time.monotonic(),
+        }
+
+        return (
+            f"{summary} "
+            "Would you like me to fix the code errors, sir?"
+        )
 
     _awaiting = {
         "intent": "agent_report_offer",
@@ -699,6 +750,36 @@ def _agent_report_reply(task, reply):
                 "in your JARVIS folder."
             ),
             detail="an Agent Mode report",
+        )
+
+    if answer in _NO:
+        return _query(
+            "cancelled",
+            lambda: phrases.pick("cancelled"),
+        )
+
+    return None
+
+
+def _agent_fix_reply(task, reply):
+    """Handle explicit approval to fix diagnosed code."""
+    answer = _normalise(reply)
+
+    if answer in _YES:
+        print("[agent] fixing code")
+
+        result = run_agent(task, fix=True)
+
+        if not result:
+            return _query(
+                "agent_code_fix",
+                lambda: "I couldn't fix the code, sir.",
+            )
+
+        return _query(
+            "agent_code_fix",
+            lambda: result,
+            detail="code",
         )
 
     if answer in _NO:

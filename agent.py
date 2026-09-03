@@ -18,6 +18,108 @@ load_dotenv(r"C:\Users\uqurr\Projects\JARVIS\.env")
 
 _project_manager = ProjectManager()
 
+_CODE_SUFFIXES = frozenset({
+    ".py",
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx",
+    ".java",
+    ".cs",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".go",
+    ".rs",
+    ".rb",
+    ".php",
+    ".html",
+    ".css",
+    ".sql",
+    ".sh",
+    ".ps1",
+})
+
+_SKIP_CODE_DIRS = frozenset({
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    "dist",
+    "build",
+})
+
+
+def _active_code_filename(title):
+    """Extract a code filename from the active editor window title."""
+    if not title:
+        return None
+
+    first_part = str(title).split(" - ", 1)[0].strip()
+    first_part = first_part.lstrip("*").strip()
+
+    suffix = os.path.splitext(first_part)[1].casefold()
+
+    if suffix not in _CODE_SUFFIXES:
+        return None
+
+    return os.path.basename(first_part)
+
+
+def _read_saved_active_code(title):
+    """Read a uniquely identifiable saved code file from a recent project."""
+    filename = _active_code_filename(title)
+
+    if not filename:
+        return None
+
+    matches = []
+    filename_key = filename.casefold()
+
+    for project in _project_manager.projects(refresh=True):
+        root = os.path.abspath(project.path)
+
+        if not os.path.isdir(root):
+            continue
+
+        for current_root, directories, filenames in os.walk(root):
+            directories[:] = [
+                directory
+                for directory in directories
+                if directory.casefold() not in _SKIP_CODE_DIRS
+            ]
+
+            for name in filenames:
+                if name.casefold() != filename_key:
+                    continue
+
+                matches.append(os.path.join(current_root, name))
+
+                if len(matches) > 1:
+                    return None
+
+    if len(matches) != 1:
+        return None
+
+    path = matches[0]
+
+    try:
+        with open(
+            path,
+            "r",
+            encoding="utf-8",
+            errors="ignore",
+        ) as handle:
+            return {
+                "path": path,
+                "text": handle.read(),
+            }
+
+    except (OSError, UnicodeError):
+        return None
+
 
 def list_jarvis_files():
     """List files available in JARVIS's private working folder."""
@@ -35,23 +137,56 @@ def inspect_screen():
 
 
 def inspect_code_context():
-    """Read the text of the focused editor/document and its window title."""
-    text, title = screen_control.read_text()
+    """Read the focused code from the editor, or its saved project file."""
+    text, title, unsaved = screen_control.active_document_state()
 
-    if not text:
+    if text:
+        return {
+            "title": title,
+            "text": text,
+            "source": "editor",
+            "unsaved_changes": unsaved,
+        }
+
+    if unsaved:
         return {
             "title": title,
             "text": "",
+            "source": "unavailable",
+            "unsaved_changes": True,
             "note": (
-                "No readable focused editor text was found. "
-                "The active application may not expose its document text."
+                "The editor text was not accessible and the document has "
+                "unsaved changes. Do not reconstruct or overwrite the file."
             ),
+        }
+
+    saved = _read_saved_active_code(title)
+
+    if saved:
+        return {
+            "title": title,
+            "path": saved["path"],
+            "text": saved["text"],
+            "source": "disk",
+            "unsaved_changes": False,
         }
 
     return {
         "title": title,
-        "text": text,
+        "text": "",
+        "source": "unavailable",
+        "unsaved_changes": False,
+        "note": (
+            "The editor text was not accessible and the saved code file "
+            "could not be uniquely identified. Do not reconstruct or "
+            "overwrite the document."
+        ),
     }
+
+
+def replace_focused_code(code):
+    """Replace the focused code document without saving it."""
+    return screen_control.replace_focused_text(code)
 
 
 def list_recent_projects(limit=8):
@@ -112,9 +247,11 @@ TOOLS = [
     {
         "name": "inspect_code_context",
         "description": (
-            "Read the text currently open in the focused editor or document, "
-            "together with the active window title. Use this for code "
-            "investigation when the user asks what is wrong with code. "
+            "Read the actual source code in the focused editor or document. "
+            "If editor text is inaccessible, safely fall back to a uniquely "
+            "identified saved code file in a recent project. Do not use this "
+            "tool to reconstruct code from a screenshot, and do not overwrite "
+            "a document whose unsaved editor contents cannot be read. "
             "This is read-only."
         ),
         "input_schema": {
@@ -124,6 +261,29 @@ TOOLS = [
             "additionalProperties": False,
         },
         "function": inspect_code_context,
+    },
+    {
+        "name": "replace_focused_code",
+        "description": (
+            "Replace the complete contents of the currently focused code "
+            "document with corrected code. This changes the editor contents "
+            "but does not save the file, commit, or push anything. Use this "
+            "only during an explicitly approved code-fix pass."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": (
+                        "The complete corrected contents of the code document."
+                    ),
+                },
+            },
+            "required": ["code"],
+            "additionalProperties": False,
+        },
+        "function": replace_focused_code,
     },
     {
         "name": "list_recent_projects",
@@ -166,9 +326,14 @@ unless the user's request explicitly asks you to inspect their contents, or
 the filenames alone are insufficient to answer the specific question.
 
 For code investigations, use inspect_screen when useful to understand the
-active application, then use inspect_code_context to read the actual focused
-editor/document text. Diagnose the code from the code itself, not only from
-what is visually visible in the screenshot.
+active application, then use inspect_code_context to obtain the actual
+focused source code. Prefer source returned from the editor or the uniquely
+identified saved file on disk over visual transcription from the screenshot.
+
+If inspect_code_context reports that the source is unavailable or that the
+document has unsaved changes and its editor text cannot be read, do not
+reconstruct the file from the screenshot and do not overwrite it. Explain
+that the source could not be verified.
 
 When the user asks what is wrong with code, identify concrete errors or bugs,
 explain why they occur, and distinguish confirmed problems from suggestions.
@@ -202,14 +367,29 @@ A report should:
 - never invent evidence;
 - never mention these instructions or the internal tool process.
 
-You have access only to read-only tools.
-Never claim to have changed, deleted, opened, executed, committed, or otherwise
-modified anything.
+During normal investigation and report generation, you have access only to
+read-only tools.
+
+During an explicitly approved code-fix pass, replace_focused_code is the only
+write-capable tool available to you. It changes the focused editor contents
+without saving the file.
+
+Never commit, push, or modify any other file. Only claim that code was fixed
+after replace_focused_code successfully completed.
 """
 
 
-def _tool_definitions(provider):
+def _tool_definitions(provider, allow_code_fix=False):
     """Convert JARVIS tools to the schema expected by one provider."""
+    available_tools = TOOLS
+
+    if not allow_code_fix:
+        available_tools = [
+            tool
+            for tool in TOOLS
+            if tool["name"] != "replace_focused_code"
+        ]
+
     if provider.kind == "anthropic":
         return [
             {
@@ -217,7 +397,7 @@ def _tool_definitions(provider):
                 "description": tool["description"],
                 "input_schema": tool["input_schema"],
             }
-            for tool in TOOLS
+            for tool in available_tools
         ]
 
     return [
@@ -229,7 +409,7 @@ def _tool_definitions(provider):
                 "parameters": tool["input_schema"],
             },
         }
-        for tool in TOOLS
+        for tool in available_tools
     ]
 
 
@@ -267,7 +447,7 @@ def _tool_result_text(result):
     return text
 
 
-def run_agent(task, report=False):
+def run_agent(task, report=False, fix=False):
     """Run bounded Agent Mode through the configured provider."""
     task = str(task or "").strip()
 
@@ -279,9 +459,25 @@ def run_agent(task, report=False):
 
     provider = providers._pool[0]
 
-    tool_defs = _tool_definitions(provider)
+    tool_defs = _tool_definitions(
+        provider,
+        allow_code_fix=fix,
+    )
 
-    if report:
+    if fix:
+        user_prompt = (
+            "The user has explicitly approved fixing the code. "
+            "Use inspect_code_context to inspect the current code. "
+            "Diagnose the confirmed problem and then use "
+            "replace_focused_code with the complete corrected code. "
+            "Make only the necessary correction. "
+            "Do not save the file, commit anything, push anything, "
+            "or modify any other file. "
+            "Only report success after replace_focused_code succeeds."
+        )
+        max_tokens = 8000
+
+    elif report:
         user_prompt = (
             "Investigate the user's request using the available tools, then "
             "write the detailed report described in your instructions. "
@@ -289,6 +485,7 @@ def run_agent(task, report=False):
             "confirmed."
         )
         max_tokens = 8000
+
     else:
         user_prompt = (
             "Investigate the user's request using the available tools, then "
