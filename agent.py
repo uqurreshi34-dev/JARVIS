@@ -8,6 +8,7 @@ import providers
 from dotenv import load_dotenv
 
 from actions import files
+from actions import screen_control
 from actions import screen_vision
 from actions.projects import ProjectManager
 
@@ -31,6 +32,26 @@ def read_jarvis_file(name):
 def inspect_screen():
     """Describe the active Windows window using JARVIS vision."""
     return screen_vision.describe_active_window()
+
+
+def inspect_code_context():
+    """Read the text of the focused editor/document and its window title."""
+    text, title = screen_control.read_text()
+
+    if not text:
+        return {
+            "title": title,
+            "text": "",
+            "note": (
+                "No readable focused editor text was found. "
+                "The active application may not expose its document text."
+            ),
+        }
+
+    return {
+        "title": title,
+        "text": text,
+    }
 
 
 def list_recent_projects(limit=8):
@@ -89,6 +110,22 @@ TOOLS = [
         "function": inspect_screen,
     },
     {
+        "name": "inspect_code_context",
+        "description": (
+            "Read the text currently open in the focused editor or document, "
+            "together with the active window title. Use this for code "
+            "investigation when the user asks what is wrong with code. "
+            "This is read-only."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+        "function": inspect_code_context,
+    },
+    {
         "name": "list_recent_projects",
         "description": (
             "List recent Cursor projects available on this computer."
@@ -127,6 +164,15 @@ For broad folder or inventory questions, prefer summarising the information
 returned by list_jarvis_files and stop there. Do not read individual files
 unless the user's request explicitly asks you to inspect their contents, or
 the filenames alone are insufficient to answer the specific question.
+
+For code investigations, use inspect_screen when useful to understand the
+active application, then use inspect_code_context to read the actual focused
+editor/document text. Diagnose the code from the code itself, not only from
+what is visually visible in the screenshot.
+
+When the user asks what is wrong with code, identify concrete errors or bugs,
+explain why they occur, and distinguish confirmed problems from suggestions.
+Do not claim that code is fixed during diagnosis.
 
 For a normal investigation, produce a SHORT spoken summary for the user.
 

@@ -608,6 +608,17 @@ def _agent_task(command):
         "display",
     )
 
+    code_words = (
+        "code",
+        "script",
+        "program",
+        "function",
+        "python",
+        "javascript",
+        "typescript",
+        "class",
+    )
+
     has_diagnostic_language = any(
         word in text
         for word in diagnostic_words
@@ -618,7 +629,14 @@ def _agent_task(command):
         for word in screen_words
     )
 
-    if has_diagnostic_language and has_screen_context:
+    has_code_context = any(
+        word in text
+        for word in code_words
+    )
+
+    if has_diagnostic_language and (
+        has_screen_context or has_code_context
+    ):
         return text
 
     return None
