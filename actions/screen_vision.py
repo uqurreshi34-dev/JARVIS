@@ -271,7 +271,11 @@ def describe_active_window():
     try:
         from providers import vision
 
-        answer = vision(_SYSTEM_PROMPT, image)
+        answer = vision(
+            _SYSTEM_PROMPT,
+            image,
+            mime="image/jpeg",
+        )
 
     except Exception as error:
         print(f"[JARVIS] screen vision unavailable: {error}")

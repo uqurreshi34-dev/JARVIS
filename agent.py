@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime
 
-from anthropic import AnthropicFoundry
+import providers
 from dotenv import load_dotenv
 
 from actions import files
@@ -162,39 +162,78 @@ modified anything.
 """
 
 
+def _tool_definitions(provider):
+    """Convert JARVIS tools to the schema expected by one provider."""
+    if provider.kind == "anthropic":
+        return [
+            {
+                "name": tool["name"],
+                "description": tool["description"],
+                "input_schema": tool["input_schema"],
+            }
+            for tool in TOOLS
+        ]
+
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool["description"],
+                "parameters": tool["input_schema"],
+            },
+        }
+        for tool in TOOLS
+    ]
+
+
+def _execute_tool_call(name, arguments):
+    """Execute one registered read-only JARVIS tool."""
+    function = TOOL_FUNCTIONS.get(name)
+
+    if function is None:
+        return {
+            "error": f"Unknown tool requested: {name}",
+        }
+
+    try:
+        return function(**arguments)
+
+    except Exception as error:
+        return {
+            "error": str(error),
+        }
+
+
+def _tool_result_text(result):
+    """Keep tool output JSON-safe and bounded."""
+    if isinstance(result, (dict, list)):
+        text = json.dumps(
+            result,
+            ensure_ascii=False,
+        )
+    else:
+        text = str(result)
+
+    if len(text) > 12_000:
+        text = text[:12_000] + "\n[tool result truncated]"
+
+    return text
+
+
 def run_agent(task, report=False):
-    """Run a bounded Claude tool-use loop for a read-only investigation."""
+    """Run bounded Agent Mode through the configured provider."""
     task = str(task or "").strip()
 
     if not task:
         return None
 
-    api_key = os.getenv("ANTHROPIC_FOUNDRY_API_KEY")
-    base_url = os.getenv("ANTHROPIC_FOUNDRY_BASE_URL")
-    model = os.getenv("ANTHROPIC_FOUNDRY_MODEL") or "claude-opus-5"
-    effort = (
-        os.getenv("CLAUDE_ANSWER_EFFORT")
-        or os.getenv("CLAUDE_DEFAULT_EFFORT")
-        or "high"
-    ).strip().casefold()
+    if not providers._pool:
+        return None
 
-    if not api_key or not base_url:
-        return "Claude Agent Mode is not configured, sir."
+    provider = providers._pool[0]
 
-    client = AnthropicFoundry(
-        api_key=api_key,
-        base_url=base_url,
-    )
-
-    tool_defs = [
-        {
-            "name": tool["name"],
-            "description": tool["description"],
-            "input_schema": tool["input_schema"],
-            "strict": True,
-        }
-        for tool in TOOLS
-    ]
+    tool_defs = _tool_definitions(provider)
 
     if report:
         user_prompt = (
@@ -203,11 +242,13 @@ def run_agent(task, report=False):
             "Do not ask whether the user wants a report; the user has already "
             "confirmed."
         )
+        max_tokens = 8000
     else:
         user_prompt = (
             "Investigate the user's request using the available tools, then "
             "give only the concise spoken summary described in your instructions."
         )
+        max_tokens = 1800
 
     messages = [
         {
@@ -216,113 +257,154 @@ def run_agent(task, report=False):
         }
     ]
 
-    max_turns = _AGENT_MAX_TURNS
+    for _ in range(_AGENT_MAX_TURNS):
+        try:
+            response = provider.agent_turn(
+                messages,
+                tool_defs,
+                max_tokens=max_tokens,
+                system=_AGENT_SYSTEM_PROMPT,
+            )
 
-    for _ in range(max_turns):
-        kwargs = {
-            "model": model,
-            "max_tokens": 8000 if report else 1800,
-            "system": _AGENT_SYSTEM_PROMPT,
-            "tools": tool_defs,
-            "tool_choice": {
-                "type": "auto",
-                "disable_parallel_tool_use": not report,
-            },
-            "messages": messages,
+        except Exception as error:
+            print(
+                f"[JARVIS] {provider.name} agent request failed: {error}"
+            )
+
+            if providers.should_failover(error):
+                provider.rest()
+                return None
+
+            return None
+
+        if provider.kind == "anthropic":
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": response.content,
+                }
+            )
+
+            if response.stop_reason == "end_turn":
+                for block in response.content:
+                    if getattr(block, "type", None) == "text":
+                        text = (block.text or "").strip()
+
+                        if text:
+                            return text
+
+                return None
+
+            if response.stop_reason != "tool_use":
+                print(
+                    f"[JARVIS] agent stopped unexpectedly: "
+                    f"{response.stop_reason}"
+                )
+                return None
+
+            results = []
+
+            for block in response.content:
+                if getattr(block, "type", None) != "tool_use":
+                    continue
+
+                result = _execute_tool_call(
+                    block.name,
+                    block.input,
+                )
+
+                print(f"[JARVIS] agent tool: {block.name}")
+
+                results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": _tool_result_text(result),
+                    }
+                )
+
+            if not results:
+                return None
+
+            messages.append(
+                {
+                    "role": "user",
+                    "content": results,
+                }
+            )
+
+            continue
+
+        message = response.choices[0].message
+        tool_calls = message.tool_calls or []
+
+        assistant_message = {
+            "role": "assistant",
+            "content": message.content or "",
         }
 
-        if effort:
-            kwargs["output_config"] = {
-                "effort": effort,
-            }
+        if tool_calls:
+            preserved_tool_calls = []
 
-        try:
-            response = client.messages.create(**kwargs)
-        except Exception as error:
-            print(f"[JARVIS] agent request failed: {error}")
+            for call in tool_calls:
+                tool_call = {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.function.name,
+                        "arguments": call.function.arguments,
+                    },
+                }
+
+                extra_content = getattr(call, "extra_content", None)
+
+                if extra_content is not None:
+                    if hasattr(extra_content, "model_dump"):
+                        extra_content = extra_content.model_dump(
+                            exclude_none=True
+                        )
+
+                    tool_call["extra_content"] = extra_content
+
+                preserved_tool_calls.append(tool_call)
+
+            assistant_message["tool_calls"] = preserved_tool_calls
+
+        messages.append(assistant_message)
+
+        if not tool_calls:
+            text = (message.content or "").strip()
+
+            if text:
+                return text
+
             return None
 
-        messages.append(
-            {
-                "role": "assistant",
-                "content": response.content,
-            }
-        )
+        for call in tool_calls:
+            try:
+                arguments = json.loads(call.function.arguments or "{}")
+            except json.JSONDecodeError:
+                arguments = {}
 
-        if response.stop_reason == "end_turn":
-            for block in response.content:
-                if getattr(block, "type", None) == "text":
-                    text = (block.text or "").strip()
+            result = _execute_tool_call(
+                call.function.name,
+                arguments,
+            )
 
-                    if text:
-                        return text
-
-            return None
-
-        if response.stop_reason != "tool_use":
             print(
-                f"[JARVIS] agent stopped unexpectedly: "
-                f"{response.stop_reason}"
+                f"[JARVIS] agent tool: {call.function.name}"
             )
-            return None
 
-        results = []
-
-        for block in response.content:
-            if getattr(block, "type", None) != "tool_use":
-                continue
-
-            tool_name = block.name
-            function = TOOL_FUNCTIONS.get(tool_name)
-
-            if function is None:
-                result = {
-                    "error": f"Unknown tool requested: {tool_name}"
-                }
-            else:
-                try:
-                    result = function(**block.input)
-                except Exception as error:
-                    result = {
-                        "error": str(error),
-                    }
-
-            if isinstance(result, (dict, list)):
-                result_text = json.dumps(
-                    result,
-                    ensure_ascii=False,
-                )
-            else:
-                result_text = str(result)
-
-            if len(result_text) > 12_000:
-                result_text = (
-                    result_text[:12_000]
-                    + "\n[tool result truncated]"
-                )
-
-            print(f"[JARVIS] agent tool: {tool_name}")
-
-            results.append(
+            messages.append(
                 {
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": result_text,
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": _tool_result_text(result),
                 }
             )
-
-        if not results:
-            print("[JARVIS] agent requested tools but supplied none")
-            return None
-
-        messages.append(
-            {
-                "role": "user",
-                "content": results,
-            }
-        )
 
     print("[JARVIS] agent reached its turn limit")
+
     return "I couldn't finish that investigation within my limit, sir."
 
 

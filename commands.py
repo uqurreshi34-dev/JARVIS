@@ -579,7 +579,7 @@ _AGENT_PREFIXES = (
 
 
 def _agent_task(command):
-    """Return an explicit Agent Mode task, or None."""
+    """Return an Agent Mode task, or None."""
     text = _normalise(command)
 
     for prefix in _AGENT_PREFIXES:
@@ -588,6 +588,38 @@ def _agent_task(command):
 
             if task:
                 return task
+
+    diagnostic_words = (
+        "wrong",
+        "broken",
+        "problem",
+        "issue",
+        "error",
+        "failing",
+        "failed",
+        "diagnose",
+        "why",
+        "figure out",
+    )
+
+    screen_words = (
+        "screen",
+        "window",
+        "display",
+    )
+
+    has_diagnostic_language = any(
+        word in text
+        for word in diagnostic_words
+    )
+
+    has_screen_context = any(
+        word in text
+        for word in screen_words
+    )
+
+    if has_diagnostic_language and has_screen_context:
+        return text
 
     return None
 
@@ -3834,7 +3866,19 @@ def _handle_command(command):
             detail=agent_task,
         )
 
+    agent_task = _agent_task(command)
+
+    if agent_task:
+        print("[agent] Claude Agent Mode")
+
+        return _query(
+            "agent_mode",
+            lambda: _run_agent_investigation(agent_task),
+            detail=agent_task,
+        )
+
     result = _fast_path(command)
+
     took_free_path = result is not None
 
     if result is not None:

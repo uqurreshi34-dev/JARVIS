@@ -533,6 +533,54 @@ class Provider:
 
         return ""
 
+    def agent_turn(self, messages, tools, max_tokens=1800, system=None):
+        """Run one tool-capable agent turn for this provider."""
+        if self.kind == "anthropic":
+            kwargs = {
+                "model": self.model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "tools": tools,
+                "tool_choice": {
+                    "type": "auto",
+                    "disable_parallel_tool_use": False,
+                },
+            }
+
+            if system:
+                kwargs["system"] = system
+
+            if self.answer_effort:
+                kwargs["output_config"] = {
+                    "effort": self.answer_effort,
+                }
+
+            return self._client.messages.create(**kwargs)
+
+        if system:
+            messages = [
+                {
+                    "role": "system",
+                    "content": system,
+                },
+                *messages,
+            ]
+
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": "auto",
+            "max_tokens": max_tokens,
+        }
+
+        effort = self.default_effort
+
+        if effort and self.reasoning:
+            kwargs["reasoning_effort"] = effort
+
+        return self._client.chat.completions.create(**kwargs)
+
 
 def _is_parameter_error(error):
     text = str(error).casefold()
