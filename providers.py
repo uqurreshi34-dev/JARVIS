@@ -33,6 +33,7 @@ PROVIDERS = {
         "default_vision_model": "qwen/qwen3.6-27b",
         # Qwen narrates its thinking unless told to hide it.
         "vision_reasoning": True,
+        "default_reasoning_effort": "low",
     },
     "gemini": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -42,6 +43,7 @@ PROVIDERS = {
         "vision_env": "GEMINI_VISION_MODEL",
         "default_vision_model": "gemini-3.6-flash",
         "reasoning": True,
+        "default_reasoning_effort": "low",
     },
     "claude": {
         "kind": "anthropic",
@@ -52,6 +54,9 @@ PROVIDERS = {
         "vision_env": "ANTHROPIC_FOUNDRY_VISION_MODEL",
         "default_vision_model": "claude-opus-5",
         "reasoning": True,
+        "default_effort_env": "CLAUDE_DEFAULT_EFFORT",
+        "answer_effort_env": "CLAUDE_ANSWER_EFFORT",
+        "vision_effort_env": "CLAUDE_VISION_EFFORT",
     },
 }
 
@@ -218,6 +223,54 @@ class Provider:
         self.model = os.getenv(config["model_env"]) or config["default_model"]
         self.reasoning = config.get("reasoning", False)
 
+        effort_env = config.get("default_effort_env")
+        self.default_effort = (
+            os.getenv(effort_env).strip().casefold()
+            if effort_env and os.getenv(effort_env)
+            else config.get("default_reasoning_effort")
+        )
+
+        if self.default_effort not in {
+            None, "low", "medium", "high", "xhigh", "max"
+        }:
+            print(
+                f"[JARVIS] {self.name} has invalid effort "
+                f"{self.default_effort!r}; ignoring it"
+            )
+            self.default_effort = None
+
+        answer_effort_env = config.get("answer_effort_env")
+        self.answer_effort = (
+            os.getenv(answer_effort_env).strip().casefold()
+            if answer_effort_env and os.getenv(answer_effort_env)
+            else self.default_effort
+        )
+
+        vision_effort_env = config.get("vision_effort_env")
+        self.vision_effort = (
+            os.getenv(vision_effort_env).strip().casefold()
+            if vision_effort_env and os.getenv(vision_effort_env)
+            else self.answer_effort
+        )
+
+        valid_efforts = {
+            None, "low", "medium", "high", "xhigh", "max"
+        }
+
+        if self.answer_effort not in valid_efforts:
+            print(
+                f"[JARVIS] {self.name} has invalid answer effort "
+                f"{self.answer_effort!r}; using default"
+            )
+            self.answer_effort = self.default_effort
+
+        if self.vision_effort not in valid_efforts:
+            print(
+                f"[JARVIS] {self.name} has invalid vision effort "
+                f"{self.vision_effort!r}; using answer effort"
+            )
+            self.vision_effort = self.answer_effort
+
         vision_env = config.get("vision_env")
         self.vision_model = (
             (os.getenv(vision_env) if vision_env else None)
@@ -312,8 +365,10 @@ class Provider:
 
         output_config = {}
 
-        if reasoning_effort:
-            output_config["effort"] = reasoning_effort
+        effort = reasoning_effort or self.answer_effort
+
+        if effort:
+            output_config["effort"] = effort
 
         if response_format:
             if response_format.get("type") != "json_schema":
@@ -375,8 +430,10 @@ class Provider:
         # Thinking models spend part of max_tokens on internal reasoning,
         # which can truncate a short answer. Keep that minimal where the
         # provider allows it.
-        if reasoning_effort and self.reasoning:
-            kwargs["reasoning_effort"] = reasoning_effort
+        effort = reasoning_effort or self.default_effort
+
+        if effort and self.reasoning:
+            kwargs["reasoning_effort"] = effort
 
         try:
             response = self._client.chat.completions.create(**kwargs)
@@ -436,10 +493,10 @@ class Provider:
         """Send an image through the native Anthropic Messages API."""
         encoded = base64.b64encode(image_bytes).decode("ascii")
 
-        response = self._client.messages.create(
-            model=self.vision_model,
-            max_tokens=max_tokens,
-            messages=[
+        kwargs = {
+            "model": self.vision_model,
+            "max_tokens": max_tokens,
+            "messages": [
                 {
                     "role": "user",
                     "content": [
@@ -458,7 +515,14 @@ class Provider:
                     ],
                 }
             ],
-        )
+        }
+
+        if self.vision_effort:
+            kwargs["output_config"] = {
+                "effort": self.vision_effort,
+            }
+
+        response = self._client.messages.create(**kwargs)
 
         for block in response.content:
             if getattr(block, "type", None) == "text":

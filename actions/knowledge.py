@@ -155,7 +155,6 @@ def answer(question):
             max_tokens=_LENGTH_BUDGET.get(
                 _preferred_length(), _MAX_TOKENS
             ),
-            reasoning_effort="low",
         )
 
     except Exception as error:
@@ -222,7 +221,6 @@ DOCUMENT CONTENT:
             max_tokens=_LENGTH_BUDGET.get(
                 _preferred_length(), _MAX_TOKENS
             ),
-            reasoning_effort="low",
         )
     except Exception as error:
         print(f"[JARVIS] document question failed: {error}")
