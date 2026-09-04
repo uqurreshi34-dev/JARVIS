@@ -3231,6 +3231,23 @@ def _blank_result(intent, **fields):
     return result
 
 
+_OPEN_PROJECT = re.compile(
+    r"^(?:open|launch|start|load)\s+(?:my|the)?\s*(.+?)\s+project$"
+)
+
+
+def _open_project_request(text):
+    """Return a named project from an explicit project request, or None."""
+    match = _OPEN_PROJECT.match(text)
+
+    if not match:
+        return None
+
+    name = match.group(1).strip()
+
+    return name or None
+
+
 def _fast_path(command):
     """Resolve an unambiguous command locally, or return None."""
     text = _normalise(command)
@@ -3496,6 +3513,11 @@ def _fast_path(command):
 
     if region:
         return _blank_result("show_news", text=region)
+
+    project = _open_project_request(text)
+
+    if project:
+        return _blank_result("open_project", project=project)
 
     # Last resort before the LLM: a near miss on a known phrase, which covers
     # speech-recognition slips like "how is my sister".

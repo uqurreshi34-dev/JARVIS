@@ -27,7 +27,7 @@ MAX_FACTS = 120
 # Facts are stored as "key: value" where a key is known, or as a plain
 # sentence otherwise.
 KNOWN_KEYS = (
-    "name", "job", "location", "timezone", "birthday",
+    "name", "job", "default project", "location", "timezone", "birthday",
     "email", "employer", "project", "gym days",
     # Preferences that change what JARVIS actually does, rather than facts
     # he can only recite back.
@@ -345,7 +345,7 @@ def set_home_coordinates(latitude, longitude):
 
 def default_project():
     """The project to open when none is named."""
-    return get("project")
+    return get("project") or get("default project")
 
 
 def repo_path():
