@@ -17,6 +17,7 @@ from actions import memory, memory_collections, memory_history, safety
 
 _SCHEMA_EXAMPLE_LIMIT = 8
 _LOCAL_SCHEMA_SCORE = 0.62
+_LOCAL_KEY_FALLBACK_SCORE = 0.40
 _DECISION_TTL = 60.0
 _DECISION_LIMIT = 24
 
@@ -217,6 +218,54 @@ def kind(key):
         return learned
 
     return None
+
+
+def classification_details_for_text(text):
+    """Return locally learned memory meaning for natural language."""
+    cleaned = _clean_example(text)
+
+    if not cleaned:
+        return None
+
+    key, cardinality, score = _collection_match(cleaned)
+
+    if (
+        not key
+        or cardinality != memory_collections.CARDINALITY_COLLECTION
+    ):
+        return None
+
+    learned = schema(key)
+
+    if not isinstance(learned, dict):
+        return None
+
+    learned_kind = learned.get("kind")
+
+    if learned_kind not in _MEMORY_KINDS:
+        return None
+
+    items = []
+
+    if cardinality == memory_collections.CARDINALITY_COLLECTION:
+        items = _extract_items(cleaned, key)
+
+    else:
+        try:
+            keyed = memory._as_keyed(cleaned)
+        except Exception:
+            keyed = None
+
+        if keyed and _key(keyed[0]) == _key(key):
+            items = [keyed[1]]
+
+    return {
+        "key": key,
+        "cardinality": cardinality,
+        "kind": learned_kind,
+        "score": score,
+        "items": items,
+    }
 
 
 def remember_schema(
@@ -440,6 +489,69 @@ def local_match(text):
     return key, cardinality, score
 
 
+def _hybrid_collection_match(text, documents):
+    """Match a learned collection using semantic category + language overlap."""
+    cleaned = _clean_example(text)
+
+    if not cleaned or not documents:
+        return None, None, 0.0
+
+    try:
+        from actions import semantic_memory
+
+        key_documents = [
+            (
+                key,
+                cardinality,
+                key,
+            )
+            for key, cardinality, _document in documents
+        ]
+
+        ranked = semantic_memory._semantic_rank(
+            cleaned,
+            key_documents,
+        )
+
+    except Exception:
+        return None, None, 0.0
+
+    query_words = set(memory._retrieval_words(cleaned))
+
+    if not query_words:
+        return None, None, 0.0
+
+    for index, key_score in ranked:
+        if key_score < _LOCAL_KEY_FALLBACK_SCORE:
+            continue
+
+        key, cardinality, _key_document = key_documents[index]
+
+        learned_words = set()
+
+        for (
+            candidate_key,
+            candidate_cardinality,
+            document,
+        ) in documents:
+            if (
+                _key(candidate_key) == _key(key)
+                and candidate_cardinality == cardinality
+            ):
+                learned_words.update(
+                    memory._retrieval_words(document)
+                )
+
+        overlap = query_words.intersection(learned_words)
+
+        if not overlap:
+            continue
+
+        return key, cardinality, key_score
+
+    return None, None, 0.0
+
+
 def _collection_match(text):
     """Find a learned collection using strict or relaxed local semantics."""
     cleaned = _clean_example(text)
@@ -497,6 +609,20 @@ def _collection_match(text):
             continue
 
         return candidate_key, candidate_cardinality, candidate_score
+
+    hybrid_key, hybrid_cardinality, hybrid_score = (
+        _hybrid_collection_match(
+            cleaned,
+            documents,
+        )
+    )
+
+    if hybrid_key:
+        return (
+            hybrid_key,
+            hybrid_cardinality,
+            hybrid_score,
+        )
 
     # If semantic scoring is inconclusive, an exact match against a
     # learned collection language template is still strong local evidence.
@@ -1955,6 +2081,7 @@ def install_runtime():
 
 __all__ = [
     "accept_model_result",
+    "classification_details_for_text",
     "install_runtime",
     "kind",
     "learn",
