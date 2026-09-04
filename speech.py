@@ -289,6 +289,9 @@ class SpeechEngine:
                 "text": str(entry.get("text") or ""),
             })
 
+        if not boundaries:
+            return None
+
         return boundaries
 
     def _audio_for(self, text):
@@ -302,10 +305,16 @@ class SpeechEngine:
             cached = self._memory.get(key)
 
             if cached is not None:
-                self._memory.move_to_end(key)
-                self._touch(path)
+                if len(cached) == 3 and cached[2]:
+                    self._memory.move_to_end(key)
+                    self._touch(path)
 
-                return cached
+                    return cached
+
+                # An older in-memory entry may have audio but no usable
+                # sentence timing metadata. Discard it so the disk metadata
+                # can be validated and, if necessary, regenerated.
+                self._memory.pop(key, None)
 
             started = time.monotonic()
             synthesised = False
@@ -394,7 +403,7 @@ class SpeechEngine:
     def _synthesize_to_cache(self, text, path, sidecar):
         """Synthesize one continuous utterance and cache sentence timings."""
         partial = f"{path}.partial"
-        metadata = f"{path}.json"
+        metadata = f"{os.path.splitext(path)[0]}.json"
         metadata_partial = f"{metadata}.partial"
         sidecar_partial = f"{sidecar}.partial"
 
