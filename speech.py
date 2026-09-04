@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import os
+import re
 import tempfile
 import threading
 import time
@@ -77,6 +78,23 @@ def _bump_epoch():
         _epoch += 1
 
 
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def _split_sentences(text):
+    """Split speech into sentence-sized playback units."""
+    text = " ".join((text or "").split()).strip()
+
+    if not text:
+        return []
+
+    return [
+        sentence.strip()
+        for sentence in _SENTENCE_SPLIT.split(text)
+        if sentence.strip()
+    ]
+
+
 class SpeechEngine:
     """Neural text-to-speech with caching and a local SAPI5 fallback.
 
@@ -88,6 +106,7 @@ class SpeechEngine:
         self.voice = voice
         self.rate = rate
         self._amplitude_listener = None
+        self._sentence_listener = None
 
         # Reminders fire on their own thread, so utterances must not overlap.
         self._lock = threading.Lock()
@@ -116,6 +135,17 @@ class SpeechEngine:
         """Register a callable taking a float 0..1, or None to clear."""
         self._amplitude_listener = listener
 
+    def set_sentence_listener(self, listener):
+        """Register a callable receiving the zero-based spoken sentence index."""
+        self._sentence_listener = listener
+
+    def _report_sentence(self, index):
+        if self._sentence_listener:
+            try:
+                self._sentence_listener(int(index))
+            except Exception:
+                pass
+
     def _report(self, value):
         if self._amplitude_listener:
             try:
@@ -126,17 +156,29 @@ class SpeechEngine:
     def speak(self, text):
         print(f"JARVIS: {text}", flush=True)
 
+        sentences = _split_sentences(text)
+
+        if not sentences:
+            return
+
         _priority.set()
 
         with self._lock:
             _speaking.set()
 
             try:
-                self._speak_neural(text)
-            except Exception as error:
-                print(
-                    f"[JARVIS] neural voice unavailable ({error}); using fallback.")
-                self._speak_fallback(text)
+                for index, sentence in enumerate(sentences):
+                    self._report_sentence(index)
+
+                    try:
+                        self._speak_neural(sentence)
+                    except Exception as error:
+                        print(
+                            f"[JARVIS] neural voice unavailable "
+                            f"({error}); using fallback."
+                        )
+                        self._speak_fallback(sentence)
+
             finally:
                 self._report(0.0)
                 _speaking.clear()
@@ -517,6 +559,10 @@ def invalidate(text):
 
 def set_amplitude_listener(listener):
     speech.set_amplitude_listener(listener)
+
+
+def set_sentence_listener(listener):
+    speech.set_sentence_listener(listener)
 
 
 def prewarm(lines=None):

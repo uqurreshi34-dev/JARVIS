@@ -1,3 +1,29 @@
+from pathlib import Path
+from voice import (
+    arm_follow_up,
+    listen,
+    set_level_listener,
+    set_status_listener,
+    set_wake_listener,
+)
+from speech import prewarm, set_amplitude_listener, speak, set_sentence_listener
+from news_panel import NewsPanel
+from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
+from commands import (
+    handle_command,
+    look_at_phone_picture,
+    reminder_manager,
+    select_image_choice,
+    set_brain_listener,
+    set_camera_listener,
+    set_chart_listener,
+    set_choices_listener,
+    set_highlight_listener,
+    set_image_listener,
+    set_news_listener,
+    set_picture_listener,
+    toggle_brain_view,
+)
 import sys
 import threading
 import time
@@ -23,34 +49,6 @@ import commands
 from actions import routing_guard
 
 routing_guard.install(commands)
-
-from commands import (
-    handle_command,
-    look_at_phone_picture,
-    reminder_manager,
-    select_image_choice,
-    set_brain_listener,
-    set_camera_listener,
-    set_chart_listener,
-    set_choices_listener,
-    set_highlight_listener,
-    set_image_listener,
-    set_news_listener,
-    set_picture_listener,
-    toggle_brain_view,
-)
-from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
-from news_panel import NewsPanel
-from speech import prewarm, set_amplitude_listener, speak
-from voice import (
-    arm_follow_up,
-    listen,
-    set_level_listener,
-    set_status_listener,
-    set_wake_listener,
-)
-
-from pathlib import Path
 
 
 # Set True to print how long each stage takes. Also enable the TIMING flags
@@ -426,6 +424,10 @@ def main():
 
     hud = Hud()
     hud.show()
+
+    set_sentence_listener(
+        lambda index: hud.reply_sentence_changed.emit(index)
+    )
 
     # The news panel lives on the main thread with the HUD. The worker only
     # ever emits signals to it, which is the one thread-safe way to drive a
