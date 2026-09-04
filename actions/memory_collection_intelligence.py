@@ -206,18 +206,15 @@ def schema(key):
 
 
 def kind(key):
-    """Return the semantic meaning of a learned collection."""
+    """Return the learned semantic meaning of a collection."""
     value = schema(key)
 
     if not isinstance(value, dict):
         return None
 
-    learned = value.get("kind")
+    learned = _clean_example(value.get("kind"))
 
-    if learned in _MEMORY_KINDS:
-        return learned
-
-    return None
+    return learned or None
 
 
 def classification_details_for_text(text):
@@ -275,7 +272,7 @@ def remember_schema(
     operation="add",
     source="language-model",
     items=None,
-    kind=None,
+    semantic_kind=None,
 ):
     """Cache a schema decision and useful language examples locally."""
     wanted = _key(key)
@@ -293,10 +290,11 @@ def remember_schema(
         if _clean_example(item)
     ]
 
+    explicit_kind = _clean_example(semantic_kind)
+
     inferred_kind = (
-        kind
-        if kind in _MEMORY_KINDS
-        else _infer_collection_kind(
+        explicit_kind
+        or _infer_collection_kind(
             wanted,
             cleaned,
             source,
@@ -310,12 +308,18 @@ def remember_schema(
         if not isinstance(existing, dict):
             existing = {}
 
-        existing_kind = existing.get("kind")
+        existing_kind = _clean_example(existing.get("kind"))
 
-        existing["kind"] = _merge_collection_kind(
-            existing_kind,
-            inferred_kind,
-        )
+        if explicit_kind:
+            # The model explicitly supplied the semantic meaning.
+            # Preserve it exactly; kinds are open-ended data.
+            existing["kind"] = explicit_kind
+        else:
+            existing["kind"] = _merge_collection_kind(
+                existing_kind,
+                inferred_kind,
+            )
+
         existing["cardinality"] = cardinality
         existing["source"] = source
         existing["examples"] = [
@@ -374,7 +378,7 @@ def learn(decision, example=None, source="language-model"):
         operation=decision.get("operation") or "add",
         source=source,
         items=decision.get("items") or (),
-        kind=decision.get("kind"),
+        semantic_kind=decision.get("kind"),
     )
 
 
@@ -1296,10 +1300,17 @@ def accept_model_result(command, result):
 
     decision = copy.deepcopy(decision)
 
-    decision["kind"] = _infer_collection_kind(
-        key,
-        cleaned,
-        "language-model",
+    model_kind = _clean_example(
+        decision.get("kind")
+    )
+
+    decision["kind"] = (
+        model_kind
+        or _infer_collection_kind(
+            key,
+            cleaned,
+            "language-model",
+        )
     )
 
     # Reuse an already-learned collection concept when the model invents

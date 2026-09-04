@@ -214,12 +214,20 @@ teach a collection of foods or fruits, while "my favourite food is apples"
 describes one current favourite and should be "single".
 
 For a remember intent, also return a "memory" object describing the
-structure of the fact. Use:
+structure and meaning of the fact. Use:
 - "key": a concise semantic category for the memory.
 - "cardinality": "single" when there is one current value, or "collection"
   when multiple current items can coexist.
 - "operation": "add", "remove", or "replace".
 - "items": the individual values involved.
+- "kind": a short, stable semantic label describing what the memory means.
+
+"kind" is open-ended metadata, not a fixed enum. Do not limit it to a
+hard-coded list and do not invent domain-specific rules. Use the most
+natural stable semantic label supported by the user's statement. For
+example, an explicit preference can use "preference", ongoing work can use
+"project", and learned reference facts can use "knowledge". Other kinds are
+allowed whenever the memory naturally needs them.
 
 Use "collection" because the meaning naturally allows multiple simultaneous
 items, not because of a hardcoded list of domains. Examples include several
@@ -528,12 +536,16 @@ _SCHEMA = {
                         "type": "string",
                     },
                 },
+                "kind": {
+                    "type": ["string", "null"],
+                },
             },
             "required": [
                 "key",
                 "cardinality",
                 "operation",
                 "items",
+                "kind",
             ],
             "additionalProperties": False,
         },
