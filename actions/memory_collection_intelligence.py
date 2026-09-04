@@ -109,24 +109,27 @@ def _infer_collection_kind(key, example="", source=""):
 
 
 def _merge_collection_kind(existing_kind, inferred_kind):
-    """Upgrade a collection kind only when new evidence is stronger."""
-    if inferred_kind == _KIND_PREFERENCE:
-        return _KIND_PREFERENCE
+    """Merge inferred meaning without restricting future semantic kinds."""
+    existing = _clean_example(existing_kind)
+    inferred = _clean_example(inferred_kind)
 
-    if inferred_kind == _KIND_PROJECT:
-        return _KIND_PROJECT
+    if not inferred:
+        return existing or _KIND_FACT
 
-    if inferred_kind == _KIND_KNOWLEDGE:
-        if existing_kind not in (
-            _KIND_PREFERENCE,
-            _KIND_PROJECT,
-        ):
-            return _KIND_KNOWLEDGE
+    # Explicitly recognised semantic evidence can upgrade old generic
+    # classifications.
+    if inferred in (
+        _KIND_PREFERENCE,
+        _KIND_PROJECT,
+    ):
+        return inferred
 
-    if existing_kind in _MEMORY_KINDS:
-        return existing_kind
+    # Never downgrade an existing semantic meaning because a later
+    # inference is less specific.
+    if existing:
+        return existing
 
-    return _KIND_FACT
+    return inferred
 
 
 def _load():
