@@ -53,19 +53,26 @@ _MEMORY_KINDS = frozenset({
 
 
 def _infer_collection_kind(key, example="", source=""):
-    """Infer what a collection means from its wording, locally."""
+    """Infer what a collection means from its learned language, locally."""
     key_text = _clean_example(key).casefold()
     example_text = _clean_example(example).casefold()
     source_text = _clean_example(source).casefold()
 
     combined = f"{key_text} {example_text}"
 
+    # Explicit preference language is the strongest semantic evidence.
+    # This intentionally covers natural speech such as:
+    # "I like..."
+    # "I really like..."
+    # "I've started liking..."
+    # "I love..."
+    # "my favourite..."
+    # "I prefer..."
     preference_patterns = (
         r"\bfavo[u]?rite(?:s)?\b",
-        r"\bprefer(?:s|red|ence)?\b",
-        r"\blike(?:s|d)?\b",
-        r"\blove(?:s|d)?\b",
-        r"\bfavourite(?:s)?\b",
+        r"\bprefer(?:s|red|ence|ring)?\b",
+        r"\b(?:like|likes|liked|liking)\b",
+        r"\b(?:love|loves|loved|loving)\b",
     )
 
     if any(
@@ -74,6 +81,7 @@ def _infer_collection_kind(key, example="", source=""):
     ):
         return _KIND_PREFERENCE
 
+    # Ongoing work belongs to the project semantic class.
     if (
         re.search(
             r"\b(?:working|work)\s+on\b",
@@ -84,6 +92,8 @@ def _infer_collection_kind(key, example="", source=""):
     ):
         return _KIND_PROJECT
 
+    # Provider-learned factual collections can be marked as knowledge,
+    # but only when there is no stronger semantic evidence above.
     if any(
         marker in source_text
         for marker in (
@@ -139,30 +149,33 @@ def _load():
         if not isinstance(value, dict):
             continue
 
-        if value.get("kind") in _MEMORY_KINDS:
-            continue
-
         examples = value.get("examples") or []
 
-        example = ""
-
-        if examples:
-            example = _clean_example(examples[-1])
+        # Re-evaluate the collection from ALL learned language examples.
+        # One weak/latest example must not erase stronger evidence from an
+        # earlier example such as "I like Mercedes".
+        example_text = " ".join(
+            _clean_example(example)
+            for example in examples
+            if isinstance(example, str) and example.strip()
+        )
 
         inferred_kind = _infer_collection_kind(
             key,
-            example,
+            example_text,
             value.get("source", ""),
         )
 
         existing_kind = value.get("kind")
 
-        value["kind"] = _merge_collection_kind(
+        new_kind = _merge_collection_kind(
             existing_kind,
             inferred_kind,
         )
 
-        changed = True
+        if existing_kind != new_kind:
+            value["kind"] = new_kind
+            changed = True
 
     if changed:
         _save(data)
