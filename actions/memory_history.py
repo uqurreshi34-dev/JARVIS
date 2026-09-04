@@ -55,17 +55,88 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def _record(key, value, source="user"):
+def _record(key, value, source="user", kind="fact"):
     now = _now()
+
     return {
         "id": uuid.uuid4().hex,
         "key": key,
         "value": value,
+        "kind": kind,
         "created_at": now,
         "updated_at": now,
         "confidence": 1.0,
         "source": source,
     }
+
+
+KIND_FACT = "fact"
+KIND_PREFERENCE = "preference"
+KIND_PROJECT = "project"
+KIND_KNOWLEDGE = "knowledge"
+KIND_EPISODE = "episode"
+
+_MEMORY_KINDS = frozenset({
+    KIND_FACT,
+    KIND_PREFERENCE,
+    KIND_PROJECT,
+    KIND_KNOWLEDGE,
+    KIND_EPISODE,
+})
+
+
+def _infer_kind(key, value, source=""):
+    """Infer a memory's semantic kind conservatively and locally."""
+    key_text = (key or "").strip().casefold()
+    value_text = (value or "").strip().casefold()
+    source_text = (source or "").strip().casefold()
+
+    preference_words = {
+        "favourite",
+        "favorite",
+        "prefer",
+        "preferred",
+        "preference",
+        "likes",
+        "love",
+        "loves",
+    }
+
+    if any(word in key_text for word in preference_words):
+        return KIND_PREFERENCE
+
+    if any(word in value_text for word in preference_words):
+        return KIND_PREFERENCE
+
+    if key_text in {
+        "reply length",
+        "gym days",
+        "calendar",
+        "invites",
+    }:
+        return KIND_PREFERENCE
+
+    if key_text in {
+        "project",
+        "default project",
+        "repo",
+    }:
+        return KIND_PROJECT
+
+    if (
+        "learned" in source_text
+        or "api" in source_text
+        or "language-model" in source_text
+    ):
+        return KIND_KNOWLEDGE
+
+    if (
+        "episode" in source_text
+        or "event" in source_text
+    ):
+        return KIND_EPISODE
+
+    return KIND_FACT
 
 
 def _blank():
@@ -95,6 +166,38 @@ def _load():
 
     if not isinstance(data["history"], list):
         data["history"] = []
+
+    for record in data["memories"]:
+        if not isinstance(record, dict):
+            continue
+
+        record.setdefault(
+            "kind",
+            _infer_kind(
+                record.get("key"),
+                record.get("value"),
+                record.get("source", ""),
+            ),
+        )
+
+        if record["kind"] not in _MEMORY_KINDS:
+            record["kind"] = KIND_FACT
+
+    for record in data["history"]:
+        if not isinstance(record, dict):
+            continue
+
+        record.setdefault(
+            "kind",
+            _infer_kind(
+                record.get("key"),
+                record.get("value"),
+                record.get("source", ""),
+            ),
+        )
+
+        if record["kind"] not in _MEMORY_KINDS:
+            record["kind"] = KIND_FACT
 
     return data
 
@@ -170,7 +273,16 @@ def _sync(memory_module, reason="sync"):
 
         if match_index is None:
             data["memories"].append(
-                _record(key, value, source="memory.txt:sync")
+                _record(
+                    key,
+                    value,
+                    source="memory.txt:sync",
+                    kind=_infer_kind(
+                        key,
+                        value,
+                        "memory.txt:sync",
+                    ),
+                )
             )
             used.add(len(data["memories"]) - 1)
             changed = True
@@ -184,6 +296,11 @@ def _sync(memory_module, reason="sync"):
         if old_value.casefold() != new_value.casefold():
             _archive(data, record, reason=reason)
             record["value"] = value
+            record["kind"] = _infer_kind(
+                key,
+                value,
+                record.get("source", reason),
+            )
             record["updated_at"] = _now()
             record["confidence"] = 1.0
             changed = True

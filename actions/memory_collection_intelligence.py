@@ -39,6 +39,85 @@ def _clean_example(value):
     return " ".join((value or "").strip().split())
 
 
+_KIND_FACT = "fact"
+_KIND_PREFERENCE = "preference"
+_KIND_PROJECT = "project"
+_KIND_KNOWLEDGE = "knowledge"
+
+_MEMORY_KINDS = frozenset({
+    _KIND_FACT,
+    _KIND_PREFERENCE,
+    _KIND_PROJECT,
+    _KIND_KNOWLEDGE,
+})
+
+
+def _infer_collection_kind(key, example="", source=""):
+    """Infer what a collection means from its wording, locally."""
+    key_text = _clean_example(key).casefold()
+    example_text = _clean_example(example).casefold()
+    source_text = _clean_example(source).casefold()
+
+    combined = f"{key_text} {example_text}"
+
+    preference_patterns = (
+        r"\bfavo[u]?rite(?:s)?\b",
+        r"\bprefer(?:s|red|ence)?\b",
+        r"\blike(?:s|d)?\b",
+        r"\blove(?:s|d)?\b",
+        r"\bfavourite(?:s)?\b",
+    )
+
+    if any(
+        re.search(pattern, combined, re.I)
+        for pattern in preference_patterns
+    ):
+        return _KIND_PREFERENCE
+
+    if (
+        re.search(
+            r"\b(?:working|work)\s+on\b",
+            combined,
+            re.I,
+        )
+        or key_text in {"project", "projects"}
+    ):
+        return _KIND_PROJECT
+
+    if any(
+        marker in source_text
+        for marker in (
+            "api",
+            "language-model",
+            "learned",
+        )
+    ):
+        return _KIND_KNOWLEDGE
+
+    return _KIND_FACT
+
+
+def _merge_collection_kind(existing_kind, inferred_kind):
+    """Upgrade a collection kind only when new evidence is stronger."""
+    if inferred_kind == _KIND_PREFERENCE:
+        return _KIND_PREFERENCE
+
+    if inferred_kind == _KIND_PROJECT:
+        return _KIND_PROJECT
+
+    if inferred_kind == _KIND_KNOWLEDGE:
+        if existing_kind not in (
+            _KIND_PREFERENCE,
+            _KIND_PROJECT,
+        ):
+            return _KIND_KNOWLEDGE
+
+    if existing_kind in _MEMORY_KINDS:
+        return existing_kind
+
+    return _KIND_FACT
+
+
 def _load():
     data = memory_history._load()
 
@@ -53,6 +132,40 @@ def _load():
 
     if not isinstance(data["schemas"], dict):
         data["schemas"] = {}
+
+    changed = False
+
+    for key, value in data["schemas"].items():
+        if not isinstance(value, dict):
+            continue
+
+        if value.get("kind") in _MEMORY_KINDS:
+            continue
+
+        examples = value.get("examples") or []
+
+        example = ""
+
+        if examples:
+            example = _clean_example(examples[-1])
+
+        inferred_kind = _infer_collection_kind(
+            key,
+            example,
+            value.get("source", ""),
+        )
+
+        existing_kind = value.get("kind")
+
+        value["kind"] = _merge_collection_kind(
+            existing_kind,
+            inferred_kind,
+        )
+
+        changed = True
+
+    if changed:
+        _save(data)
 
     return data
 
@@ -78,6 +191,21 @@ def schema(key):
         return copy.deepcopy(value)
 
 
+def kind(key):
+    """Return the semantic meaning of a learned collection."""
+    value = schema(key)
+
+    if not isinstance(value, dict):
+        return None
+
+    learned = value.get("kind")
+
+    if learned in _MEMORY_KINDS:
+        return learned
+
+    return None
+
+
 def remember_schema(
     key,
     cardinality,
@@ -85,6 +213,7 @@ def remember_schema(
     operation="add",
     source="language-model",
     items=None,
+    kind=None,
 ):
     """Cache a schema decision and useful language examples locally."""
     wanted = _key(key)
@@ -102,6 +231,16 @@ def remember_schema(
         if _clean_example(item)
     ]
 
+    inferred_kind = (
+        kind
+        if kind in _MEMORY_KINDS
+        else _infer_collection_kind(
+            wanted,
+            cleaned,
+            source,
+        )
+    )
+
     with _lock:
         data = _load()
         existing = data["schemas"].get(wanted)
@@ -109,6 +248,12 @@ def remember_schema(
         if not isinstance(existing, dict):
             existing = {}
 
+        existing_kind = existing.get("kind")
+
+        existing["kind"] = _merge_collection_kind(
+            existing_kind,
+            inferred_kind,
+        )
         existing["cardinality"] = cardinality
         existing["source"] = source
         existing["examples"] = [
@@ -167,6 +312,7 @@ def learn(decision, example=None, source="language-model"):
         operation=decision.get("operation") or "add",
         source=source,
         items=decision.get("items") or (),
+        kind=decision.get("kind"),
     )
 
 
@@ -1009,6 +1155,14 @@ def accept_model_result(command, result):
 
     cleaned = _clean_example(command)
 
+    decision = copy.deepcopy(decision)
+
+    decision["kind"] = _infer_collection_kind(
+        key,
+        cleaned,
+        "language-model",
+    )
+
     # Reuse an already-learned collection concept when the model invents
     # a synonymous key such as "books_reading" for an existing "books"
     # collection. This is local semantic matching, not a hardcoded alias.
@@ -1789,6 +1943,7 @@ def install_runtime():
 __all__ = [
     "accept_model_result",
     "install_runtime",
+    "kind",
     "learn",
     "learned_schema",
     "locally_known",
