@@ -1,3 +1,4 @@
+import json
 import re
 
 from actions import memory, semantic_memory
@@ -228,6 +229,104 @@ DOCUMENT CONTENT:
 
     spoken = _for_speech(raw)
     return spoken or None
+
+
+_LEARN_PROMPT = """
+You are supplying factual reference data that JARVIS will store locally.
+
+Subject: {subject}
+
+Return a JSON object with exactly one property:
+"facts": an array of up to 6 concise factual strings.
+
+Focus on stable, useful facts for later comparisons and decisions.
+For a vehicle, prioritise engine/fuel type, fuel economy, range, boot space,
+motorway comfort, seating, and other practical long-distance characteristics.
+
+Rules:
+- Each fact must be plain factual prose.
+- No numbering.
+- No bullets.
+- No headings.
+- No commentary about these instructions.
+- Do not describe your reasoning or check your own output.
+- Do not invent uncertain facts.
+- Keep each fact under 180 characters.
+""".strip()
+
+_LEARN_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "learned_facts",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "facts": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["facts"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def learn_subject(subject):
+    """Research a subject once and store the useful facts locally."""
+    subject = (subject or "").strip()
+
+    if not subject:
+        return None
+
+    try:
+        raw = chat(
+            messages=[
+                {
+                    "role": "system",
+                    "content": _LEARN_PROMPT.format(subject=subject),
+                },
+                {
+                    "role": "user",
+                    "content": f"Provide the factual reference data for {subject}.",
+                },
+            ],
+            response_format=_LEARN_RESPONSE_FORMAT,
+            temperature=0.1,
+            max_tokens=600,
+        )
+    except Exception as error:
+        print(f"[JARVIS] could not learn {subject!r}: {error}")
+        return None
+
+    try:
+        payload = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        print(f"[JARVIS] could not parse learned facts for {subject!r}")
+        return 0
+
+    facts = payload.get("facts")
+
+    if not isinstance(facts, list):
+        return 0
+
+    stored = 0
+
+    for fact in facts[:6]:
+        if not isinstance(fact, str):
+            continue
+
+        fact = " ".join(fact.strip().split()).strip()
+
+        if not fact or len(fact) > 180:
+            continue
+
+        if memory.remember(f"{subject}: {fact}"):
+            stored += 1
+
+    return stored
 
 
 _COMMIT_PROMPT = """

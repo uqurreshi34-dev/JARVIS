@@ -20,7 +20,12 @@ from actions.desktop import (
     volume_down,
     volume_up,
 )
-from actions.knowledge import answer, answer_with_documents, commit_message
+from actions.knowledge import (
+    answer,
+    answer_with_documents,
+    commit_message,
+    learn_subject,
+)
 from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
 import phrases
@@ -3021,6 +3026,24 @@ _BARE_FACT = re.compile(
 )
 
 
+_LEARN_SUBJECT = re.compile(
+    r"^(?:learn about|research|look up facts about)\s+(.+)$",
+    re.I,
+)
+
+
+def _learn_subject_request(text):
+    """Return the subject to learn about, or None."""
+    match = _LEARN_SUBJECT.match(text)
+
+    if not match:
+        return None
+
+    subject = match.group(1).strip(" .")
+
+    return subject or None
+
+
 def _memory_request(text):
     """Return ("remember"|"forget", value) or None."""
     # Stated plainly, without "remember" in front.
@@ -3347,6 +3370,14 @@ def _fast_path(command):
 
         return _blank_result("set_market_alert", text=coin, amount=percent)
 
+    subject = _learn_subject_request(text)
+
+    if subject:
+        return _blank_result(
+            "learn_subject",
+            text=_original_case(command, subject),
+        )
+
     remembering = _memory_request(text)
 
     if remembering:
@@ -3596,7 +3627,7 @@ _WRITE_INTENTS = frozenset({
     "save_image",
     "show_brain", "hide_brain",
     "proofread_fix", "proofread_report", "proofread_copy", "ignore_word",
-    "remember", "forget", "set_market_alert", "market_report",
+    "remember", "forget", "learn_subject", "set_market_alert", "market_report",
     "add_event", "remove_event", "clear_calendar",
 })
 
@@ -4385,6 +4416,23 @@ def _handle_command(command):
 
     if intent == "recall_memory":
         return _query(intent, memory.describe)
+
+    if intent == "learn_subject" and text:
+        def learn():
+            count = learn_subject(text)
+
+            if not count:
+                return (
+                    f"I couldn't find useful facts to learn about "
+                    f"{text}, sir."
+                )
+
+            return (
+                f"I've learned {count} facts about {text}, sir, "
+                "and stored them locally."
+            )
+
+        return _query(intent, learn, detail=text)
 
     if intent == "remember" and (text or result.get("memory")):
         def store():
