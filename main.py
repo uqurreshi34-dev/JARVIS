@@ -1,7 +1,9 @@
 from pathlib import Path
 from voice import (
     arm_follow_up,
+    consume_follow_up_answer,
     listen,
+    set_follow_up_expired_listener,
     set_level_listener,
     set_status_listener,
     set_wake_listener,
@@ -100,6 +102,12 @@ class Assistant:
         self._stop = threading.Event()
         self._current_state = IDLE
 
+        # Unsolicited announcements must never steal an active user interaction.
+        # They wait here until the follow-up is answered or expires.
+        self._alert_lock = threading.RLock()
+        self._interaction_open = False
+        self._queued_alerts = []
+
     def stop(self):
         self._stop.set()
 
@@ -117,6 +125,45 @@ class Assistant:
         self._reply(text)
         self._state(SPEAKING)
         speak(text)
+
+    def _begin_interaction(self):
+        with self._alert_lock:
+            self._interaction_open = True
+
+    def _speak_alert_locked(self, text):
+        """Speak one alert while holding the announcement lock."""
+        phone_server.announce(text)
+        self._reply(text)
+        self._state(SPEAKING)
+        speak(text)
+
+    def _flush_alerts_locked(self):
+        """Speak queued alerts in order, without allowing races between them."""
+        while self._queued_alerts:
+            text = self._queued_alerts.pop(0)
+            self._speak_alert_locked(text)
+
+    def _end_interaction(self):
+        """Close the interaction and release anything waiting behind it."""
+        with self._alert_lock:
+            self._interaction_open = False
+            self._flush_alerts_locked()
+
+    def _open_follow_up(self):
+        """Open a fresh follow-up window atomically with the alert gate."""
+        with self._alert_lock:
+            arm_follow_up()
+            self._interaction_open = True
+
+    def _finish_answered_follow_up(self):
+        """Finish the answered turn, flush alerts, then open the next turn."""
+        with self._alert_lock:
+            self._interaction_open = False
+            self._flush_alerts_locked()
+
+            if FOLLOW_UP:
+                arm_follow_up()
+                self._interaction_open = True
 
     def _run_action(self, result):
         """Commands that do something: act while the confirmation plays."""
@@ -167,23 +214,35 @@ class Assistant:
 
     def _on_alert(self, text):
         """Called from a reminder's own thread when one falls due.
-
-        speech.speak() holds a lock, so this cannot talk over a reply in
-        progress, and the listener discards audio while JARVIS speaks.
+        Unsolicited announcements wait behind an active user interaction.
+        Once the interaction closes, they are spoken in order.
         """
-        previous = self._current_state
 
-        # Held for the phone as well as said aloud. Every unprompted
-        # announcement passes through here -- battery, disk, market
-        # alerts, pattern runs, the morning diary -- so this one line
-        # covers all of them. Still spoken to the room regardless,
-        # since being at the desk is still the normal case.
-        phone_server.announce(text)
+        with self._alert_lock:
+            if self._interaction_open:
+                self._queued_alerts.append(text)
 
-        self._reply(text)
-        self._state(SPEAKING)
-        speak(text)
-        self._state(previous)
+                print(
+                    f"[JARVIS] announcement queued until follow-up ends: "
+                    f"{text[:80]!r}",
+                    flush=True,
+                )
+
+                return
+
+            previous = self._current_state
+
+            # Held for the phone as well as said aloud. Every unprompted
+            # announcement passes through here -- battery, disk, market
+            # alerts, pattern runs, the morning diary -- so this one line
+            # covers all of them. Still spoken to the room regardless,
+            # since being at the desk is still the normal case.
+            self._speak_alert_locked(text)
+            self._state(previous)
+
+    def _on_follow_up_expired(self):
+        """Release queued announcements when the follow-up expires."""
+        self._end_interaction()
 
     def _on_status(self, status):
         """Called by the listener when it starts or stops accepting a
@@ -278,6 +337,7 @@ class Assistant:
     def run(self):
         set_wake_listener(self._on_wake)
         set_status_listener(self._on_status)
+        set_follow_up_expired_listener(self._on_follow_up_expired)
         reminder_manager.set_alert_listener(self._on_alert)
 
         # Battery warnings share the reminder announcer, so they queue
@@ -347,6 +407,7 @@ class Assistant:
 
             try:
                 command = listen()
+                follow_up_answered = consume_follow_up_answer()
             except Exception as error:
                 print(f"[JARVIS] listener error: {error}")
                 continue
@@ -365,6 +426,7 @@ class Assistant:
                 self._say("Shutting down.")
                 break
 
+            self._begin_interaction()
             self._state(THINKING)
 
             try:
@@ -401,9 +463,15 @@ class Assistant:
                     f"total after speaking {_done_at - _heard_at:.2f}s"
                 )
 
-            # Stay listening briefly so a follow-up needs no wake word.
-            if FOLLOW_UP:
-                arm_follow_up()
+            # The interaction stays protected until the follow-up is
+            # answered or expires. Only then may unsolicited announcements
+            # speak.
+            if follow_up_answered:
+                self._finish_answered_follow_up()
+            elif FOLLOW_UP:
+                self._open_follow_up()
+            else:
+                self._end_interaction()
 
             self._state(IDLE)
 
