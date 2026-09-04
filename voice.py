@@ -116,6 +116,8 @@ _phone_active_until = 0.0
 _wake_listener = None
 _status_listener = None
 _level_listener = None
+_follow_up_expired_listener = None
+_follow_up_answered = False
 _last_status = None
 
 # Readings reported per audio block, so the waveform is smooth.
@@ -137,6 +139,32 @@ def set_status_listener(listener):
     """
     global _status_listener
     _status_listener = listener
+
+
+def set_follow_up_expired_listener(listener):
+    """Register a callable invoked when an unanswered follow-up expires."""
+    global _follow_up_expired_listener
+    _follow_up_expired_listener = listener
+
+
+def _notify_follow_up_expired():
+    if _follow_up_expired_listener:
+        try:
+            _follow_up_expired_listener()
+        except Exception as error:
+            print(
+                f"[JARVIS] follow-up expiry listener error: {error}"
+            )
+
+
+def consume_follow_up_answer():
+    """Return True once when the last command answered a follow-up."""
+    global _follow_up_answered
+
+    answered = _follow_up_answered
+    _follow_up_answered = False
+
+    return answered
 
 
 def set_level_listener(listener):
@@ -390,6 +418,8 @@ def listen():
     # seconds. Judging the follow-up window when the text finally arrives
     # would let it expire mid-transcription, so freeze it when speech starts.
     armed_at_start = _armed()
+    follow_up_started = armed_at_start
+    follow_up_expired_reported = False
 
     with sd.RawInputStream(
         samplerate=SAMPLE_RATE,
@@ -405,6 +435,16 @@ def listen():
                 _drain_queue()
                 time.sleep(0.05)
                 continue
+
+            if (
+                follow_up_started
+                and not getattr(engine, "active", False)
+                and not _armed()
+                and not follow_up_expired_reported
+            ):
+                follow_up_expired_reported = True
+                _report_status(force=True)
+                _notify_follow_up_expired()
 
             if speech_epoch() != epoch:
                 time.sleep(SETTLE_SECONDS)
@@ -469,6 +509,11 @@ def listen():
                 return text
 
             if armed_at_start or _armed():
+                global _follow_up_answered
+
+                if follow_up_started:
+                    _follow_up_answered = True
+
                 _disarm()
                 wake_pending = False
                 armed_at_start = False

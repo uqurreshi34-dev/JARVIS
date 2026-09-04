@@ -1,6 +1,7 @@
-import asyncio
 import hashlib
+import json
 import os
+import queue
 import tempfile
 import threading
 import time
@@ -88,6 +89,7 @@ class SpeechEngine:
         self.voice = voice
         self.rate = rate
         self._amplitude_listener = None
+        self._sentence_listener = None
 
         # Reminders fire on their own thread, so utterances must not overlap.
         self._lock = threading.Lock()
@@ -116,6 +118,17 @@ class SpeechEngine:
         """Register a callable taking a float 0..1, or None to clear."""
         self._amplitude_listener = listener
 
+    def set_sentence_listener(self, listener):
+        """Register a callable receiving the zero-based spoken sentence index."""
+        self._sentence_listener = listener
+
+    def _report_sentence(self, index):
+        if self._sentence_listener:
+            try:
+                self._sentence_listener(int(index))
+            except Exception:
+                pass
+
     def _report(self, value):
         if self._amplitude_listener:
             try:
@@ -126,17 +139,24 @@ class SpeechEngine:
     def speak(self, text):
         print(f"JARVIS: {text}", flush=True)
 
+        if not text or not text.strip():
+            return
+
         _priority.set()
 
         with self._lock:
             _speaking.set()
 
             try:
-                self._speak_neural(text)
-            except Exception as error:
-                print(
-                    f"[JARVIS] neural voice unavailable ({error}); using fallback.")
-                self._speak_fallback(text)
+                try:
+                    self._speak_neural(text)
+                except Exception as error:
+                    print(
+                        f"[JARVIS] neural voice unavailable "
+                        f"({error}); using fallback."
+                    )
+                    self._speak_fallback(text)
+
             finally:
                 self._report(0.0)
                 _speaking.clear()
@@ -198,7 +218,7 @@ class SpeechEngine:
             for name in entries[:overflow]:
                 stem = name[:-4]
 
-                for suffix in (".mp3", ".txt"):
+                for suffix in (".mp3", ".txt", ".json"):
                     try:
                         os.remove(os.path.join(_CACHE_DIR, f"{stem}{suffix}"))
                     except OSError:
@@ -216,11 +236,12 @@ class SpeechEngine:
         key = self._cache_key(text)
         path = os.path.join(_CACHE_DIR, f"{key}.mp3")
         sidecar = os.path.join(_CACHE_DIR, f"{key}.txt")
+        metadata = os.path.join(_CACHE_DIR, f"{key}.json")
 
         with self._cache_lock:
             removed = self._memory.pop(key, None) is not None
 
-            for target in (path, sidecar):
+            for target in (path, sidecar, metadata):
                 try:
                     os.remove(target)
                     removed = True
@@ -236,36 +257,85 @@ class SpeechEngine:
 
         return digest
 
+    def _load_boundaries(self, path):
+        """Load cached SentenceBoundary timings, or return None."""
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                entries = json.load(handle)
+        except (OSError, ValueError, TypeError):
+            return None
+
+        if not isinstance(entries, list):
+            return None
+
+        boundaries = []
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return None
+
+            try:
+                offset = float(entry["offset"])
+                duration = float(entry["duration"])
+            except (KeyError, TypeError, ValueError):
+                return None
+
+            if offset < 0 or duration < 0:
+                return None
+
+            boundaries.append({
+                "offset": offset,
+                "duration": duration,
+                "text": str(entry.get("text") or ""),
+            })
+
+        if not boundaries:
+            return None
+
+        return boundaries
+
     def _audio_for(self, text):
-        """Return (samples, samplerate), synthesising only when necessary."""
+        """Return (samples, samplerate, sentence boundaries)."""
         key = self._cache_key(text)
         path = os.path.join(_CACHE_DIR, f"{key}.mp3")
         sidecar = os.path.join(_CACHE_DIR, f"{key}.txt")
+        metadata = os.path.join(_CACHE_DIR, f"{key}.json")
 
         with self._cache_lock:
             cached = self._memory.get(key)
 
             if cached is not None:
-                self._memory.move_to_end(key)
-                self._touch(path)
-                return cached
+                if len(cached) == 3 and cached[2]:
+                    self._memory.move_to_end(key)
+                    self._touch(path)
+
+                    return cached
+
+                # An older in-memory entry may have audio but no usable
+                # sentence timing metadata. Discard it so the disk metadata
+                # can be validated and, if necessary, regenerated.
+                self._memory.pop(key, None)
 
             started = time.monotonic()
             synthesised = False
 
-            if not os.path.exists(path):
+            boundaries = self._load_boundaries(metadata)
+
+            # Old cache entries pre-date sentence timing metadata. Rebuild them
+            # once so playback and the HUD always share authoritative timings.
+            if not os.path.exists(path) or boundaries is None:
                 self._synthesize_to_cache(text, path, sidecar)
+                boundaries = self._load_boundaries(metadata) or []
                 synthesised = True
 
             data, samplerate = self._read_cached(text, path, sidecar)
 
             if not synthesised:
-                # Freshly-written files already have a current mtime;
-                # this marks an existing file as freshly used again,
-                # not just freshly created once, long ago.
                 self._touch(path)
 
-            self._memory[key] = (data, samplerate)
+            result = (data, samplerate, boundaries)
+
+            self._memory[key] = result
             self._memory.move_to_end(key)
 
             while len(self._memory) > _MEMORY_LIMIT:
@@ -273,13 +343,15 @@ class SpeechEngine:
 
             if TIMING:
                 source = "synthesised" if synthesised else "disk cache"
+
                 print(
                     f"[timing] {source} in "
-                    f"{time.monotonic() - started:.2f}s: {text[:40]!r}",
+                    f"{time.monotonic() - started:.2f}s: "
+                    f"{text[:40]!r}",
                     flush=True,
                 )
 
-            return data, samplerate
+            return result
 
     def audio_bytes(self, text):
         """The synthesised MP3 for some text, without playing it here.
@@ -329,25 +401,67 @@ class SpeechEngine:
             pass
 
     def _synthesize_to_cache(self, text, path, sidecar):
-        """Synthesise text, writing both the audio and its text sidecar.
+        """Synthesize one continuous utterance and cache sentence timings."""
+        partial = f"{path}.partial"
+        metadata = f"{os.path.splitext(path)[0]}.json"
+        metadata_partial = f"{metadata}.partial"
+        sidecar_partial = f"{sidecar}.partial"
 
-        The sidecar exists purely so a bad cache entry can be found and
-        removed by what it actually says ("bbc.co.uk") rather than
-        needing its SHA1 hash computed by hand -- see invalidate().
-        """
-        asyncio.run(self._synthesize(text, path))
+        options = {
+            "boundary": "SentenceBoundary",
+        }
+
+        if VOICE_RATE:
+            options["rate"] = VOICE_RATE
+
+        if VOICE_PITCH:
+            options["pitch"] = VOICE_PITCH
+
+        communicate = edge_tts.Communicate(
+            text,
+            self.voice,
+            **options,
+        )
+
+        boundaries = []
 
         try:
-            sidecar_partial = f"{sidecar}.partial"
+            with open(partial, "wb") as audio:
+                for chunk in communicate.stream_sync():
+                    if chunk["type"] == "audio":
+                        audio.write(chunk["data"])
+
+                    elif chunk["type"] == "SentenceBoundary":
+                        boundaries.append({
+                            "offset": float(chunk["offset"]) / 10_000_000.0,
+                            "duration": float(chunk["duration"]) / 10_000_000.0,
+                            "text": chunk.get("text", ""),
+                        })
+
+            os.replace(partial, path)
+
+            with open(metadata_partial, "w", encoding="utf-8") as handle:
+                json.dump(boundaries, handle)
+
+            os.replace(metadata_partial, metadata)
 
             with open(sidecar_partial, "w", encoding="utf-8") as handle:
                 handle.write(text)
 
             os.replace(sidecar_partial, sidecar)
-        except OSError as error:
-            # The sidecar is a convenience for humans, not something
-            # playback depends on -- losing it should never stop speech.
-            print(f"[JARVIS] could not write cache sidecar: {error}")
+
+        except Exception:
+            for target in (
+                partial,
+                metadata_partial,
+                sidecar_partial,
+            ):
+                try:
+                    os.remove(target)
+                except OSError:
+                    pass
+
+            raise
 
     def _read_cached(self, text, path, sidecar):
         """Read a cached file, recovering once from a corrupted one.
@@ -382,14 +496,40 @@ class SpeechEngine:
         return data, samplerate
 
     def _speak_neural(self, text):
-        data, samplerate = self._audio_for(text)
+        data, samplerate, boundaries = self._audio_for(text)
 
-        self._play_reactive(data, samplerate)
+        self._play_reactive(data, samplerate, boundaries)
 
-    def _play_reactive(self, data, samplerate):
-        """Stream the audio, reporting the envelope of each block as it plays."""
+    def _play_reactive(self, data, samplerate, boundaries):
+        """Play continuously and advance the HUD at sentence boundaries."""
         position = 0
         total = len(data)
+        next_boundary = 0
+
+        boundaries = list(boundaries or ())
+        boundary_queue = queue.SimpleQueue()
+
+        def queue_boundaries(seconds):
+            nonlocal next_boundary
+
+            while (
+                next_boundary < len(boundaries)
+                and boundaries[next_boundary]["offset"] <= seconds
+            ):
+                boundary_queue.put(next_boundary)
+                next_boundary += 1
+
+        def report_queued_boundaries():
+            while True:
+                try:
+                    index = boundary_queue.get_nowait()
+                except queue.Empty:
+                    return
+
+                self._report_sentence(index)
+
+        # The first sentence normally starts at zero.
+        queue_boundaries(0.0)
 
         def callback(outdata, frames, time_info, status):
             nonlocal position
@@ -407,10 +547,26 @@ class SpeechEngine:
                 outdata[:, 0] = chunk
 
             if len(chunk):
-                rms = float(np.sqrt(np.mean(np.square(chunk))))
-                self._report(min(1.0, rms * _GAIN))
+                rms = float(
+                    np.sqrt(
+                        np.mean(
+                            np.square(chunk)
+                        )
+                    )
+                )
+
+                self._report(
+                    min(
+                        1.0,
+                        rms * _GAIN,
+                    )
+                )
 
             position = end
+
+            # The audio callback only queues the boundary. GUI signalling
+            # stays on the normal playback thread.
+            queue_boundaries(position / samplerate)
 
             if position >= total:
                 raise sd.CallbackStop
@@ -430,39 +586,25 @@ class SpeechEngine:
                 print(
                     f"[timing] audio device opened in "
                     f"{time.monotonic() - opening:.2f}s, "
-                    f"playing {total / samplerate:.2f}s of speech",
+                    f"playing "
+                    f"{total / samplerate:.2f}s of speech",
                     flush=True,
                 )
 
             playing = time.monotonic()
 
             while stream.active:
+                report_queued_boundaries()
                 sd.sleep(20)
+
+            # Drain anything queued by the final audio callback.
+            report_queued_boundaries()
 
             if TIMING:
                 print(
                     f"[timing] playback took "
                     f"{time.monotonic() - playing:.2f}s"
                 )
-
-    async def _synthesize(self, text, path):
-        options = {}
-
-        if VOICE_RATE:
-            options["rate"] = VOICE_RATE
-
-        if VOICE_PITCH:
-            options["pitch"] = VOICE_PITCH
-
-        communicate = edge_tts.Communicate(text, self.voice, **options)
-
-        # Write to a temporary name first so an interrupted download cannot
-        # leave a corrupt file in the cache.
-        partial = f"{path}.partial"
-
-        await communicate.save(partial)
-
-        os.replace(partial, path)
 
     def _speak_fallback(self, text):
         engine = pyttsx3.init()
@@ -517,6 +659,10 @@ def invalidate(text):
 
 def set_amplitude_listener(listener):
     speech.set_amplitude_listener(listener)
+
+
+def set_sentence_listener(listener):
+    speech.set_sentence_listener(listener)
 
 
 def prewarm(lines=None):

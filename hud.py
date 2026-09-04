@@ -1,6 +1,7 @@
 import math
 
 import psutil
+import re
 from collections import deque
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
@@ -75,12 +76,29 @@ _WAVE_HEIGHT = 13
 _LEVEL_STALE_FRAMES = 3
 _LEVEL_DECAY = 0.72
 
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+
+
+def _split_sentences(text):
+    """Split spoken reply text into display-sized sentence units."""
+    text = " ".join((text or "").split()).strip()
+
+    if not text:
+        return []
+
+    return [
+        sentence.strip()
+        for sentence in _SENTENCE_END.split(text)
+        if sentence.strip()
+    ]
+
 
 class Hud(QWidget):
     """Frameless always-on-top JARVIS overlay in an Iron Man style."""
 
     state_changed = pyqtSignal(str)
     heard_changed = pyqtSignal(str)
+    reply_sentence_changed = pyqtSignal(int)
     reply_changed = pyqtSignal(str)
     documents_changed = pyqtSignal(int)
     amplitude_changed = pyqtSignal(float)
@@ -96,6 +114,8 @@ class Hud(QWidget):
         self._state = IDLE
         self._heard = ""
         self._reply = ""
+        self._reply_sentences = []
+        self._reply_index = 0
         self._documents_count = 0
         self._phase = 0.0
         self._sweep = 0.0
@@ -129,6 +149,7 @@ class Hud(QWidget):
         self.state_changed.connect(self._on_state)
         self.heard_changed.connect(self._on_heard)
         self.reply_changed.connect(self._on_reply)
+        self.reply_sentence_changed.connect(self._on_reply_sentence)
         self.documents_changed.connect(self._on_documents)
         self.amplitude_changed.connect(self._on_amplitude)
         self.level_changed.connect(self._on_level)
@@ -223,7 +244,19 @@ class Hud(QWidget):
         self.update()
 
     def _on_reply(self, text):
-        self._reply = text
+        self._reply = text or ""
+        self._reply_sentences = _split_sentences(self._reply)
+        self._reply_index = 0
+        self.update()
+
+    def _on_reply_sentence(self, index):
+        if not self._reply_sentences:
+            return
+
+        self._reply_index = max(
+            0,
+            min(int(index), len(self._reply_sentences) - 1),
+        )
         self.update()
 
     def _on_documents(self, count):
@@ -559,7 +592,12 @@ class Hud(QWidget):
         # telemetry. Text must never run into it, however long the reply.
         painter.setPen(QPen(self._tint(accent, 215)))
 
-        reply = self._reply or ""
+        if self._reply_sentences:
+            reply = " ".join(
+                self._reply_sentences[self._reply_index:]
+            )
+        else:
+            reply = self._reply or ""
 
         if len(reply) > 210:
             size = 7
