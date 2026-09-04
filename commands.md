@@ -372,6 +372,43 @@ can still be spoken directly.
 The semantic retrieval system contains no personal facts itself. Facts remain
 in `memory.txt`; the local model is only used to find the relevant fact.
 
+### Learning factual subjects
+
+This uses a live language-model request once to learn useful factual reference data, 
+then stores the results locally for later questions and comparisons.
+
+| Say                        | Does                                                  |
+| -------------------------- | ----------------------------------------------------- |
+| learn about Mercedes       | learns up to six useful facts and stores them locally |
+| research the BMW 3 Series  | same                                                  |
+| look up facts about Toyota | same                                                  |
+
+These are model-assisted learning commands, not part of the free path at learning time.
+
+
+### Collections
+
+JARVIS can learn that a memory is a collection rather than a single value. Once that 
+collection is learned, its current items can be added, removed, replaced and queried 
+locally without another language-model request.
+
+| Say                                                        | Does                                                                  |
+| ---------------------------------------------------------- | --------------------------------------------------------------------- |
+| what are my cars                                           | lists the current members of the learned cars collection              |
+| what am I reading                                          | queries the current members of a learned collection such as books     |
+| remove ferraris from my cars                               | removes that item locally                                             |
+| which of my cars is best suited to a long motorway journey | compares the cars using only locally learned factual evidence         |
+| which car would be best for a long distance trip           | the natural singular form can target the same learned cars collection |
+
+For comparisons, JARVIS ranks only collection members for which it has learned factual
+data. Members with no factual data are not guessed about, and a near-tie is reported as
+insufficient evidence rather than turned into a made-up winner.
+
+The collection name and its current items are learned from language rather than hard-coded 
+lists, so the same behaviour works for cars, books, foods, projects, or another collection 
+JARVIS has learned.
+
+
 ## Calling, WhatsApp and texting
 
 Only from the phone — your PC has no SIM. Ask at the desk and he says so

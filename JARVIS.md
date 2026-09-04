@@ -36,7 +36,7 @@ This prevents speech intended for the phone from being heard or acted on by
 the desktop listener. When the phone interaction finishes, the desktop
 microphone is restored.
 
-**104 intents. 491 spoken phrases resolve locally with no API call.**
+**105 intents. 491 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -299,6 +299,28 @@ JARVIS how "I'm reading ..." maps to a books collection.
 Once a collection schema is learned, its current contents can be added,
 removed, replaced and queried locally, including when both language-model
 providers are unavailable.
+
+JARVIS can also deliberately learn stable factual reference data about a subject 
+on request. Say “learn about <subject>”, “research <subject>”, or “look up facts 
+about <subject>”. JARVIS uses a language-model request at learning time to extract 
+up to six concise facts, then stores those facts locally so they can be retrieved 
+and used later for questions and comparisons. The learning step needs a live model; 
+using the stored facts afterwards does not.
+
+Collection questions can also compare the current members against locally learned 
+factual evidence. For a question such as “which of my cars is best suited to a long 
+motorway journey?” or “which car would be best for a long distance trip?”, JARVIS 
+compares only collection members it actually has factual data for, using the local 
+semantic memory engine. Members with no learned facts are explicitly left unranked 
+rather than guessed about. If the strongest local evidence is effectively tied, 
+JARVIS says it does not have enough evidence to pick a clear winner rather than 
+manufacturing one.
+
+Stored memory keys and collection item names are treated as data: JARVIS preserves 
+them as stored rather than grammatically singularising or otherwise rewriting their 
+names when speaking them.
+
+
 
 ### Contacts — `actions/contacts.py`
 Calling, WhatsApp and texting, from the phone only. The desk has no SIM,
