@@ -109,27 +109,37 @@ def _infer_collection_kind(key, example="", source=""):
 
 
 def _merge_collection_kind(existing_kind, inferred_kind):
-    """Merge inferred meaning without restricting future semantic kinds."""
+    """Merge semantic kinds without restricting future kinds."""
     existing = _clean_example(existing_kind)
     inferred = _clean_example(inferred_kind)
 
+    if not existing:
+        return inferred or _KIND_FACT
+
     if not inferred:
-        return existing or _KIND_FACT
-
-    # Explicitly recognised semantic evidence can upgrade old generic
-    # classifications.
-    if inferred in (
-        _KIND_PREFERENCE,
-        _KIND_PROJECT,
-    ):
-        return inferred
-
-    # Never downgrade an existing semantic meaning because a later
-    # inference is less specific.
-    if existing:
         return existing
 
-    return inferred
+    # Strong recognised evidence can upgrade an old generic classification.
+    if inferred == _KIND_PREFERENCE:
+        return _KIND_PREFERENCE
+
+    if inferred == _KIND_PROJECT:
+        return _KIND_PROJECT
+
+    # An already-learned kind may be something JARVIS has learned that the
+    # local fallback does not know about. Never replace such a kind merely
+    # because fallback inference says "fact" or "knowledge".
+    if existing not in _MEMORY_KINDS:
+        return existing
+
+    if inferred == _KIND_KNOWLEDGE:
+        if existing not in (
+            _KIND_PREFERENCE,
+            _KIND_PROJECT,
+        ):
+            return _KIND_KNOWLEDGE
+
+    return existing
 
 
 def _load():
@@ -240,9 +250,9 @@ def classification_details_for_text(text):
     if not isinstance(learned, dict):
         return None
 
-    learned_kind = learned.get("kind")
+    learned_kind = _clean_example(learned.get("kind"))
 
-    if learned_kind not in _MEMORY_KINDS:
+    if not learned_kind:
         return None
 
     items = []
