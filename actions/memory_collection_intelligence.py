@@ -1340,10 +1340,205 @@ def _collection_summary(query):
     return None
 
 
+def _collection_comparison_request(query):
+    """Return (collection_key, query) when a question targets a saved collection."""
+    cleaned = _clean_example(query)
+    folded = cleaned.casefold()
+
+    if "which" not in folded:
+        return None
+
+    candidates = []
+
+    for key, cardinality, _document in _schema_documents():
+        if cardinality != memory_collections.CARDINALITY_COLLECTION:
+            continue
+
+        key_text = _key(key)
+
+        if not key_text:
+            continue
+
+        # Accept the collection name itself, e.g. "cars" or "books".
+        variants = {key_text}
+
+        # Also accept its natural singular form, e.g. "car" or "book".
+        singular = memory_collections._collection_descriptor(key_text)
+
+        if singular:
+            variants.add(singular)
+
+        for variant in variants:
+            escaped = re.escape(variant)
+
+            # Natural forms such as:
+            # "which of my cars..."
+            # "which of my books..."
+            # "which one of my saved books..."
+            # "which car..."
+            # "which book..."
+            if re.search(
+                rf"\b(?:my|the)(?:\s+\w+){{0,3}}\s+{escaped}\b",
+                folded,
+            ) or re.search(
+                rf"\bwhich\s+(?:one\s+of\s+)?{escaped}\b",
+                folded,
+            ):
+                candidates.append(key)
+                break
+
+    if not candidates:
+        return None
+
+    # Prefer the most specific/longest learned collection key if more than
+    # one happens to match the wording.
+    key = max(candidates, key=len)
+
+    return key, cleaned
+
+
+def _collection_comparison_answer(query):
+    """Compare saved collection members using only locally learned facts."""
+    target = _collection_comparison_request(query)
+
+    if not target:
+        return None
+
+    key, cleaned = target
+    values = memory_collections.items(key)
+
+    if len(values) < 2:
+        return None
+
+    # Build factual evidence only from subjects that are actually members
+    # of this collection. A learned subject that is not in the collection
+    # must never be silently treated as one of the user's items.
+    evidence = {}
+
+    for item in values:
+        item_identity = memory_collections._identity(item)
+
+        for line in memory._read():
+            if ":" not in line:
+                continue
+
+            label, fact = line.split(":", 1)
+
+            if (
+                memory_collections._identity(label.strip())
+                != item_identity
+            ):
+                continue
+
+            fact = fact.strip()
+
+            if fact:
+                evidence.setdefault(item, []).append(fact)
+
+    covered = {
+        item: facts
+        for item, facts in evidence.items()
+        if facts
+    }
+
+    if len(covered) < 2:
+        return None
+
+    # The collection wording itself is not useful evidence. Rank the
+    # question against each member's learned facts using the existing
+    # local semantic encoder.
+    try:
+        from actions import semantic_memory
+    except Exception:
+        return None
+
+    scored = []
+
+    for item, facts in covered.items():
+        documents = [
+            (item, None, fact)
+            for fact in facts
+        ]
+
+        try:
+            ranked = semantic_memory._semantic_rank(
+                cleaned,
+                documents,
+            )
+        except Exception:
+            continue
+
+        if not ranked:
+            continue
+
+        _index, score = ranked[0]
+
+        scored.append((score, item, facts))
+
+    if len(scored) < 2:
+        return None
+
+    scored.sort(reverse=True)
+
+    best_score, best_item, best_facts = scored[0]
+    second_score = scored[1][0]
+
+    if best_score < 0.45:
+        return None
+
+    # Don't manufacture a winner when the local evidence is effectively
+    # tied.
+    if best_score - second_score < 0.04:
+        return (
+            f"I don't have enough local evidence to pick a clear winner "
+            f"among the {key} I've learned about, sir."
+        )
+
+    first_fact = best_facts[0]
+
+    # Prefer the fact that most closely matches the question.
+    try:
+        ranked_facts = semantic_memory._semantic_rank(
+            cleaned,
+            [
+                (best_item, None, fact)
+                for fact in best_facts
+            ],
+        )
+
+        if ranked_facts:
+            fact_index, _fact_score = ranked_facts[0]
+            first_fact = best_facts[fact_index]
+
+    except Exception:
+        pass
+
+    covered_names = list(covered)
+
+    result = (
+        f"Of the {key} I have local facts for, {best_item} is the "
+        f"strongest match, sir — {first_fact}"
+    )
+
+    if len(covered_names) < len(values):
+        result += (
+            f" I haven't learned enough factual data yet for "
+            f"{len(values) - len(covered_names)} other "
+            f"{key} in your collection, so I wouldn't rank those."
+        )
+
+    return result
+
+
 def _collection_answer(query):
     """Answer a learned collection question entirely locally."""
     cleaned = _clean_example(query)
     folded = cleaned.casefold()
+
+    comparison = _collection_comparison_answer(cleaned)
+
+    if comparison:
+        return comparison
 
     if re.search(r"\b(?:default|main|current)\b", folded):
         return None

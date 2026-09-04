@@ -464,7 +464,7 @@ def direct_fallback(question):
             key = key.strip()
             value = value.strip()
             singular = _item_count(value) <= 1
-            label = _singularise(key) if singular else key
+            label = key
 
             if historical:
                 label = f"old {label}"
