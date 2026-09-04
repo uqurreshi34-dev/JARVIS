@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import queue
 import tempfile
 import threading
 import time
@@ -497,18 +498,29 @@ class SpeechEngine:
         next_boundary = 0
 
         boundaries = list(boundaries or ())
+        boundary_queue = queue.SimpleQueue()
 
-        def report_boundaries(seconds):
+        def queue_boundaries(seconds):
             nonlocal next_boundary
 
             while (
                 next_boundary < len(boundaries)
                 and boundaries[next_boundary]["offset"] <= seconds
             ):
-                self._report_sentence(next_boundary)
+                boundary_queue.put(next_boundary)
                 next_boundary += 1
 
-        report_boundaries(0.0)
+        def report_queued_boundaries():
+            while True:
+                try:
+                    index = boundary_queue.get_nowait()
+                except queue.Empty:
+                    return
+
+                self._report_sentence(index)
+
+        # The first sentence normally starts at zero.
+        queue_boundaries(0.0)
 
         def callback(outdata, frames, time_info, status):
             nonlocal position
@@ -543,9 +555,9 @@ class SpeechEngine:
 
             position = end
 
-            report_boundaries(
-                position / samplerate
-            )
+            # The audio callback only queues the boundary. GUI signalling
+            # stays on the normal playback thread.
+            queue_boundaries(position / samplerate)
 
             if position >= total:
                 raise sd.CallbackStop
@@ -573,65 +585,11 @@ class SpeechEngine:
             playing = time.monotonic()
 
             while stream.active:
+                report_queued_boundaries()
                 sd.sleep(20)
 
-            if TIMING:
-                print(
-                    f"[timing] playback took "
-                    f"{time.monotonic() - playing:.2f}s"
-                )
-
-        def callback(outdata, frames, time_info, status):
-            nonlocal position
-
-            if status:
-                print(status)
-
-            end = position + frames
-            chunk = data[position:end]
-
-            if len(chunk) < frames:
-                outdata[:len(chunk), 0] = chunk
-                outdata[len(chunk):, 0] = 0.0
-            else:
-                outdata[:, 0] = chunk
-
-            if len(chunk):
-                rms = float(np.sqrt(np.mean(np.square(chunk))))
-                self._report(min(1.0, rms * _GAIN))
-
-            position = end
-
-            # The Edge-TTS offsets are authoritative; the audio position tells
-            # us when the corresponding boundary is actually about to play.
-            report_boundaries(position / samplerate)
-
-            if position >= total:
-                raise sd.CallbackStop
-
-        opening = time.monotonic()
-
-        stream = sd.OutputStream(
-            samplerate=samplerate,
-            channels=1,
-            blocksize=_BLOCK,
-            dtype="float32",
-            callback=callback,
-        )
-
-        with stream:
-            if TIMING:
-                print(
-                    f"[timing] audio device opened in "
-                    f"{time.monotonic() - opening:.2f}s, "
-                    f"playing {total / samplerate:.2f}s of speech",
-                    flush=True,
-                )
-
-            playing = time.monotonic()
-
-            while stream.active:
-                sd.sleep(20)
+            # Drain anything queued by the final audio callback.
+            report_queued_boundaries()
 
             if TIMING:
                 print(
