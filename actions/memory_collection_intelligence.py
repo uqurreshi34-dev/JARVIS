@@ -18,6 +18,7 @@ from actions import memory, memory_collections, memory_history, safety
 _SCHEMA_EXAMPLE_LIMIT = 8
 _LOCAL_SCHEMA_SCORE = 0.62
 _LOCAL_KEY_FALLBACK_SCORE = 0.40
+_LOCAL_ITEM_COMPATIBILITY_SCORE = 0.78
 _DECISION_TTL = 60.0
 _DECISION_LIMIT = 24
 
@@ -259,6 +260,12 @@ def classification_details_for_text(text):
 
     if cardinality == memory_collections.CARDINALITY_COLLECTION:
         items = _extract_items(cleaned, key)
+
+        if (
+            not _collection_key_is_mentioned(cleaned, key)
+            and not _items_fit_collection(key, items)
+        ):
+            return None
 
     else:
         try:
@@ -712,7 +719,74 @@ def _collection_match(text):
     return None, None, 0.0
 
 
+def _items_fit_collection(key, items):
+    """Return True when the new items semantically fit existing collection items."""
+    cleaned_items = [
+        _clean_example(item)
+        for item in (items or ())
+        if _clean_example(item)
+    ]
+
+    if not cleaned_items:
+        return False
+
+    existing = memory_collections.items(key)
+
+    if not existing:
+        return False
+
+    documents = [
+        (value, "item", value)
+        for value in existing
+    ]
+
+    try:
+        from actions import semantic_memory
+
+        for item in cleaned_items:
+            ranked = semantic_memory._semantic_rank(
+                item,
+                documents,
+            )
+
+            if not ranked:
+                return False
+
+            _index, score = ranked[0]
+
+            if score < _LOCAL_ITEM_COMPATIBILITY_SCORE:
+                return False
+
+    except Exception:
+        return False
+
+    return True
+
+
+def _collection_key_is_mentioned(text, key):
+    """Return True when the user's wording explicitly names the collection."""
+    query_words = set(memory._retrieval_words(text))
+    key_words = set(memory._retrieval_words(key))
+
+    if query_words.intersection(key_words):
+        return True
+
+    # Match ordinary singular/plural forms for comparison only. Stored names
+    # are never modified.
+    for query_word in query_words:
+        for key_word in key_words:
+            if len(query_word) > 3 and len(key_word) > 3:
+                if query_word.endswith("s") and query_word[:-1] == key_word:
+                    return True
+
+                if key_word.endswith("s") and key_word[:-1] == query_word:
+                    return True
+
+    return False
+
+
 def locally_known(text):
+    """Return True only when local collection meaning is sufficiently supported."""
     key, cardinality, _score = _collection_match(text)
 
     if (
@@ -721,7 +795,15 @@ def locally_known(text):
     ):
         return False
 
-    return bool(_extract_items(text, key))
+    items = _extract_items(text, key)
+
+    if not items:
+        return False
+
+    if _collection_key_is_mentioned(text, key):
+        return True
+
+    return _items_fit_collection(key, items)
 
 
 def operation_for_text(text, key=None):
