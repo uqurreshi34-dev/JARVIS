@@ -78,6 +78,7 @@ recognisable first-pass 3D model from the modelling brief below.
 Requirements:
 - Build the described object as actual editable Blender geometry.
 - Prioritise recognisable silhouette and major forms over tiny details.
+- Keep the generated script concise; avoid lengthy comments, redundant helpers, and unnecessary boilerplate.
 - Use sensible primitives, bevels, curves, modifiers, materials and linked
   duplicates where appropriate.
 - Create useful materials matching the visible reference.
@@ -609,7 +610,7 @@ def _generate_scene_script(brief):
                 },
             ],
             temperature=0,
-            max_tokens=6000,
+            max_tokens=8000,
             reasoning_effort="low",
         )
         print("[JARVIS] Blender scene script received.", flush=True)
