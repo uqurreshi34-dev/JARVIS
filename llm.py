@@ -56,6 +56,13 @@ comes from JARVIS's image working set. Put the user's modelling request
 in "text". Do not invent a project name, application, website, amount,
 or unit.
 
+Use inspect_blender when the user asks what is currently open in Blender,
+what objects are in the Blender scene, or whether JARVIS can inspect the
+current Blender model. This is a read-only query.
+
+Use Blender modification intents only when the user wants to change the
+current Blender model.
+
 Use these for sound and media control:
 volume_up when the user wants the volume raised or something louder.
 volume_down when the user wants the volume lowered or something quieter.
@@ -424,6 +431,7 @@ _SCHEMA = {
                 "list_projects",
                 "setup_project",
                 "model_in_blender",
+                "inspect_blender",
                 "volume_up",
                 "volume_down",
                 "set_volume",

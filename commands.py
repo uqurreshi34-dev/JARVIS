@@ -1620,6 +1620,31 @@ def _select_image_choice(text):
     return _query("show_image", lambda: "Here you are, sir.")
 
 
+def _inspect_blender():
+    """Describe the live Blender scene without modifying it."""
+    context = blender.modeling_context()
+
+    objects = context["objects"]
+
+    if not objects:
+        return (
+            "Blender is open, sir, but the current scene "
+            "contains no objects."
+        )
+
+    mesh_count = sum(
+        1
+        for obj in objects
+        if obj.get("type") == "MESH"
+    )
+
+    return (
+        f"Blender is running, sir. "
+        f"The current scene contains {len(objects)} objects, "
+        f"including {mesh_count} meshes."
+    )
+
+
 def _model_in_blender(request):
     """Analyse the current reference image for future Blender modelling."""
     if not images.has_image():
@@ -4906,6 +4931,9 @@ def _handle_command(command):
     if intent == "restore_image":
         return _query(intent, _restore_image)
 
+    if intent == "inspect_blender":
+        return _query(intent, _inspect_blender)
+        
     if intent == "model_in_blender":
         if not images.has_image():
             return _query(

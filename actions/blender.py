@@ -181,6 +181,37 @@ def scene_snapshot():
     return response
 
 
+def modeling_context():
+    """Return the live Blender scene for LLM modelling decisions."""
+    if not running():
+        raise RuntimeError(
+            "I'm sorry, sir. Blender isn't running."
+        )
+
+    scene = scene_snapshot()
+
+    return {
+        "blend_path": scene.get("blend_path"),
+        "scene": scene.get("scene"),
+        "active_object": scene.get("active_object"),
+        "selected_objects": scene.get("selected_objects") or (),
+        "objects": tuple(
+            {
+                "name": obj.get("name"),
+                "type": obj.get("type"),
+                "visible": obj.get("visible"),
+                "location": obj.get("location"),
+                "dimensions": obj.get("dimensions"),
+                "rotation": obj.get("rotation"),
+                "scale": obj.get("scale"),
+                "materials": obj.get("materials") or (),
+                "parent": obj.get("parent"),
+            }
+            for obj in scene.get("objects") or ()
+        ),
+    }
+
+
 def _launch_blender_gui(output_path):
     """Open a .blend and attach the JARVIS bridge."""
     try:
