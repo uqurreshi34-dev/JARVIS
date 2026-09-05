@@ -20,7 +20,9 @@ def main():
     failures = []
 
     live_context = {
-        "blend_path": r"C:\JARVIS\models\Mosque-2026-08-26-215515.blend",
+        "blend_path": (
+            r"C:\JARVIS\models\Mosque-2026-08-26-215515.blend"
+        ),
         "scene": "Scene",
         "objects": [
             {"name": "Dome", "type": "MESH"},
@@ -30,15 +32,18 @@ def main():
         "selected_objects": [],
     }
 
-    generated_script = """
-```python
-import bpy
-
-obj = bpy.data.objects.get("Dome")
-
-if obj is not None:
-    obj.scale *= 1.1
-"""
+    # Simulate a normal LLM response that incorrectly wraps the Python
+    # in a Markdown code fence.
+    generated_script = (
+        "```python\n"
+        "import bpy\n"
+        "\n"
+        "obj = bpy.data.objects.get(\"Dome\")\n"
+        "\n"
+        "if obj is not None:\n"
+        "    obj.scale *= 1.1\n"
+        "```\n"
+    )
 
     bridge_result = {
         "ok": True,
