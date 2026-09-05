@@ -1,0 +1,188 @@
+{
+    "version": 1,
+    "recipes": {
+      "python": {
+        "label": "Python",
+        "aliases": ["python", "py"],
+        "directory": "backend",
+        "prerequisites": [
+          {
+            "executable": "python",
+            "args": ["--version"]
+          }
+        ],
+        "questions": [
+          {
+            "id": "environment",
+            "prompt": "Which Python environment should I use?",
+            "default": "venv",
+            "options": [
+              {
+                "value": "venv",
+                "label": "Virtual environment"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "environment": "venv"
+        },
+        "steps": [
+          {
+            "name": "Create virtual environment",
+            "argv": [
+              "python",
+              "-m",
+              "venv",
+              "{recipe_dir}/.venv"
+            ]
+          },
+          {
+            "name": "Upgrade pip",
+            "argv": [
+              "{recipe_dir}/.venv/Scripts/python.exe",
+              "-m",
+              "pip",
+              "install",
+              "--upgrade",
+              "pip"
+            ]
+          }
+        ]
+      },
+      "react": {
+        "label": "React",
+        "aliases": ["react", "react.js"],
+        "directory": "frontend",
+        "prerequisites": [
+          {
+            "executable": "node",
+            "args": ["--version"]
+          },
+          {
+            "executable": "npm",
+            "args": ["--version"]
+          }
+        ],
+        "questions": [
+          {
+            "id": "language",
+            "prompt": "JavaScript or TypeScript?",
+            "default": "javascript",
+            "options": [
+              {
+                "value": "javascript",
+                "label": "JavaScript",
+                "set": {
+                  "template": "react"
+                }
+              },
+              {
+                "value": "typescript",
+                "label": "TypeScript",
+                "set": {
+                  "template": "react-ts"
+                }
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "language": "javascript",
+          "template": "react"
+        },
+        "steps": [
+          {
+            "name": "Scaffold React app",
+            "argv": [
+              "npm",
+              "create",
+              "vite@latest",
+              "{recipe_dir}",
+              "--",
+              "--template",
+              "{template}",
+              "--no-interactive"
+            ]
+          },
+          {
+            "name": "Install dependencies",
+            "argv": [
+              "npm",
+              "install"
+            ]
+          }
+        ]
+      },
+      "csharp": {
+        "label": "C#",
+        "aliases": ["c#", "csharp", "c-sharp", "dotnet"],
+        "directory": "csharp",
+        "prerequisites": [
+          {
+            "executable": "dotnet",
+            "args": ["--version"]
+          }
+        ],
+        "questions": [
+          {
+            "id": "project_type",
+            "prompt": "Which .NET project type should I use?",
+            "default": "console",
+            "options": [
+              {
+                "value": "console",
+                "label": "Console application",
+                "set": {
+                  "template": "console"
+                }
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "project_type": "console",
+          "template": "console"
+        },
+        "steps": [
+          {
+            "name": "Create .NET project",
+            "argv": [
+              "dotnet",
+              "new",
+              "{template}",
+              "--output",
+              "{recipe_dir}"
+            ]
+          }
+        ]
+      },
+      "node": {
+        "label": "Node.js",
+        "aliases": ["node", "node.js", "nodejs"],
+        "directory": "node",
+        "prerequisites": [
+          {
+            "executable": "node",
+            "args": ["--version"]
+          },
+          {
+            "executable": "npm",
+            "args": ["--version"]
+          }
+        ],
+        "questions": [],
+        "defaults": {},
+        "steps": [
+          {
+            "name": "Create package",
+            "argv": [
+              "npm",
+              "init",
+              "--yes"
+            ]
+          }
+        ]
+      }
+    }
+  }
