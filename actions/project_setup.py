@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import os
 
 _RECIPE_FILE = Path(__file__).with_name("project_setup_recipes.json")
 
@@ -404,6 +405,16 @@ def _defaults(selected):
     return values
 
 
+def _normalise_argv_value(value):
+    """Normalise absolute executable/file paths for the host OS."""
+    text = str(value)
+
+    if os.path.isabs(text):
+        return os.path.normpath(text)
+
+    return text
+
+
 def plan(names, project_dir, answers=None):
     selected = resolve_many(names)
 
@@ -437,7 +448,9 @@ def plan(names, project_dir, answers=None):
         for step in recipe.steps:
             try:
                 argv = tuple(
-                    value.format_map(values)
+                    _normalise_argv_value(
+                        value.format_map(values)
+                    )
                     for value in step["argv"]
                 )
             except KeyError as error:
@@ -513,14 +526,37 @@ def execute(plan_data):
             exist_ok=True,
         )
 
+        command = tuple(
+            str(value)
+            for value in argv
+        )
+
+        resolved_executable = shutil.which(command[0])
+
+        if resolved_executable:
+            suffix = Path(resolved_executable).suffix.casefold()
+
+            if suffix in {".cmd", ".bat"}:
+                command = (
+                    os.environ.get("COMSPEC", "cmd.exe"),
+                    "/d",
+                    "/c",
+                    command[0],
+                    *command[1:],
+                )
+            else:
+                command = (
+                    resolved_executable,
+                    *command[1:],
+                )
+
         completed = subprocess.run(
-            [str(value) for value in argv],
+            command,
             cwd=str(cwd),
             capture_output=True,
             text=True,
             check=False,
         )
-
         result = {
             "name": step.get("name"),
             "recipe": step.get("recipe"),
