@@ -3828,6 +3828,32 @@ def _setup_project_dir():
     )
 
 
+def _setup_answer_recognized(text):
+    """True when the reply matches an option for the current setup question."""
+    session = _setup_session
+
+    if not session:
+        return False
+
+    questions = session["questions"]
+    index = session["index"]
+
+    if index >= len(questions):
+        return False
+
+    spoken = _normalise(text).replace(" ", "")
+
+    for option in questions[index]["options"]:
+        for candidate in (
+            option["value"],
+            option["label"],
+        ):
+            if spoken == _normalise(candidate).replace(" ", ""):
+                return True
+
+    return False
+
+
 def _setup_start_questions(names, base_dir, project_name):
     """Begin the recipe-question phase after the user declines defaults."""
     global _setup_session
@@ -3877,6 +3903,7 @@ def _setup_start_questions(names, base_dir, project_name):
         "setup_project",
         question["prompt"],
         _setup_answer,
+        recognizes=_setup_answer_recognized,
     )
 
 
@@ -3898,11 +3925,11 @@ def _setup_answer(answer):
     selected = None
 
     for option in question["options"]:
-        if spoken == _normalise(option["value"]):
+        if spoken.replace(" ", "") == _normalise(option["value"]).replace(" ", ""):
             selected = option["value"]
             break
 
-        if spoken == _normalise(option["label"]):
+        if spoken.replace(" ", "") == _normalise(option["label"]).replace(" ", ""):
             selected = option["value"]
             break
 
@@ -3913,6 +3940,7 @@ def _setup_answer(answer):
             + ", ".join(option["label"] for option in question["options"])
             + ", sir.",
             _setup_answer,
+            recognizes=_setup_answer_recognized,
         )
 
     session["answers"][question["id"]] = selected
@@ -3925,6 +3953,7 @@ def _setup_answer(answer):
             "setup_project",
             next_question["prompt"],
             _setup_answer,
+            recognizes=_setup_answer_recognized,
         )
 
     names = session["names"]
