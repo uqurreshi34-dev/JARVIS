@@ -30,6 +30,7 @@ from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
 import phrases
 from actions import (
+    blender,
     browser,
     camera,
     charts,
@@ -460,8 +461,68 @@ _NEVER_FUZZY = frozenset({
 })
 
 
+def _token_similarity(left, right):
+    """Compare two individual words for a speech-recognition near miss."""
+    return SequenceMatcher(
+        None,
+        left,
+        right,
+        autojunk=False,
+    ).ratio()
+
+
+def _word_structural_similarity(left, right):
+    """Measure whether word-level structure supports a phrase similarity."""
+    left_tokens = left.split()
+    right_tokens = right.split()
+
+    if not left_tokens or not right_tokens:
+        return 0.0
+
+    matcher = SequenceMatcher(
+        None,
+        left_tokens,
+        right_tokens,
+        autojunk=False,
+    )
+
+    score = 0.0
+    weight = 0
+
+    for tag, left_start, left_end, right_start, right_end in (
+        matcher.get_opcodes()
+    ):
+        left_count = left_end - left_start
+        right_count = right_end - right_start
+
+        if tag == "equal":
+            score += left_count
+            weight += left_count
+            continue
+
+        if tag == "replace":
+            pair_count = min(left_count, right_count)
+
+            score += sum(
+                _token_similarity(left_token, right_token)
+                for left_token, right_token in zip(
+                    left_tokens[left_start:left_start + pair_count],
+                    right_tokens[right_start:right_start + pair_count],
+                )
+            )
+
+            weight += max(left_count, right_count)
+            continue
+
+        # Insertions and deletions provide no evidence that the changed
+        # words themselves are semantically similar.
+        weight += max(left_count, right_count)
+
+    return score / weight if weight else 0.0
+
+
 def _fuzzy_intent(text):
-    """Find a fast-path intent for a near miss, or None."""
+    """Find a fast-path intent for a structurally plausible near miss."""
     if len(text) < 6:
         return None
 
@@ -476,11 +537,28 @@ def _fuzzy_intent(text):
         if abs(len(phrase) - len(text)) > 6:
             continue
 
-        score = SequenceMatcher(None, text, phrase).ratio()
+        score = SequenceMatcher(
+            None,
+            text,
+            phrase,
+            autojunk=False,
+        ).ratio()
 
-        if score > best_score:
-            best_score = score
-            best_intent = intent
+        if score <= best_score:
+            continue
+
+        structural_score = _word_structural_similarity(
+            text,
+            phrase,
+        )
+
+        # Do not let common surrounding words make an unrelated word
+        # substitution look like a valid speech-recognition correction.
+        if structural_score < score:
+            continue
+
+        best_score = score
+        best_intent = intent
 
     if best_score >= _FUZZY_THRESHOLD:
         return best_intent
@@ -1619,6 +1697,50 @@ def _select_image_choice(text):
     return _query("show_image", lambda: "Here you are, sir.")
 
 
+def _inspect_blender():
+    """Describe the live Blender scene without modifying it."""
+    context = blender.modeling_context()
+
+    objects = context["objects"]
+
+    if not objects:
+        return (
+            "Blender is open, sir, but the current scene "
+            "contains no objects."
+        )
+
+    mesh_count = sum(
+        1
+        for obj in objects
+        if obj.get("type") == "MESH"
+    )
+
+    return (
+        f"Blender is running, sir. "
+        f"The current scene contains {len(objects)} objects, "
+        f"including {mesh_count} meshes."
+    )
+
+
+def _model_in_blender(request):
+    """Analyse the current reference image for future Blender modelling."""
+    if not images.has_image():
+        return (
+            "Please drop a reference image onto me first, sir. "
+            "Then tell me to model it in Blender."
+        )
+
+    analysis = blender.analyse_current_reference(request)
+
+    if not analysis:
+        return "I couldn't analyse the reference image, sir."
+
+    return (
+        f"Here's the modelling brief, sir.\n\n"
+        f"{analysis}"
+    )
+
+
 def _show_image(query):
     """Search Unsplash for up to three candidates and ask which to use.
 
@@ -1720,6 +1842,16 @@ def _save_image():
         return "There's no image on screen to save, sir."
 
     return "Saved to your JARVIS images folder, sir."
+
+
+def load_dropped_image(path):
+    """Make a dropped local image the current JARVIS reference image."""
+    if not images.load_file(path):
+        return False
+
+    _push_image()
+
+    return True
 
 
 def toggle_brain_view():
@@ -4875,6 +5007,40 @@ def _handle_command(command):
 
     if intent == "restore_image":
         return _query(intent, _restore_image)
+
+    if intent == "inspect_blender":
+        return _query(intent, _inspect_blender)
+
+    if intent == "model_in_blender":
+        if not images.has_image():
+            return _query(
+                intent,
+                lambda: (
+                    "Please drop a reference image onto me first, sir. "
+                    "Then tell me to model it in Blender."
+                ),
+            )
+
+        return _action(
+            intent,
+            "Modelling it in Blender, sir.",
+            lambda: blender.create_from_reference(
+                verbatim_text or text
+            ),
+            timeout=None,
+            success_response="Created the Blender model, sir.",
+        )
+
+    if intent == "modify_blender":
+        return _action(
+            intent,
+            "Modifying the Blender model, sir.",
+            lambda: blender.modify_current_scene(
+                verbatim_text or text
+            ),
+            timeout=None,
+            success_response="Done, sir.",
+        )
 
     if intent == "click_thing" and text:
         return _click_thing(text)

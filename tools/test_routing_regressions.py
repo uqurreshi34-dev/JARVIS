@@ -36,14 +36,31 @@ def main():
         if commands._fast_path("what are my projects") is not None:
             failures.append("project question was stolen by fuzzy fast path")
 
-    if commands._fast_path("what is my calendar") is None:
+    if commands._fast_path("what is on my calendar") is None:
         failures.append("calendar exact fast path disappeared")
-    elif commands._fast_path("what is my calendar")["intent"] != "read_calendar":
+    elif commands._fast_path("what is on my calendar")["intent"] != "read_calendar":
         failures.append("calendar exact fast path changed intent")
 
     with patch.object(memory, "relevant_summary", return_value=""):
         if commands._fuzzy_intent("how is my sister") != "get_system_status":
             failures.append("useful speech fuzzy match was lost")
+
+        if commands._fuzzy_intent("make the dome bigger") is not None:
+            failures.append(
+                "semantic noun substitution incorrectly "
+                "won the fuzzy fast path"
+            )
+
+        exact_image = commands._fast_path("make the image bigger")
+
+        if not exact_image:
+            failures.append(
+                "exact image enlargement fast path disappeared"
+            )
+        elif exact_image["intent"] != "enlarge_image":
+            failures.append(
+                "exact image enlargement changed intent"
+            )
 
     if failures:
         print("FAILED")

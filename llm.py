@@ -49,6 +49,21 @@ in "text", separated by commas, using recipe names/aliases such as
 "python,react". Do not invent technologies or recipe names.
 Leave "application", "website", "project", "amount" and "unit" null.
 
+Use model_in_blender when the user wants JARVIS to turn the current
+reference image into a Blender model, such as "model this in Blender",
+"turn this into a 3D model", or "make this in Blender". The current image
+comes from JARVIS's image working set. Put the user's modelling request
+in "text". Do not invent a project name, application, website, amount,
+or unit.
+
+Use inspect_blender when the user asks what is currently open in Blender,
+what objects are in the Blender scene, or whether JARVIS can inspect the
+current Blender model. This is a read-only query.
+
+Use modify_blender when the user wants to change the current Blender model
+using natural language. Put the complete requested change in "text".
+Do not invent object names or application names.
+
 Use these for sound and media control:
 volume_up when the user wants the volume raised or something louder.
 volume_down when the user wants the volume lowered or something quieter.
@@ -416,6 +431,9 @@ _SCHEMA = {
                 "close_project",
                 "list_projects",
                 "setup_project",
+                "model_in_blender",
+                "inspect_blender",
+                "modify_blender",
                 "volume_up",
                 "volume_down",
                 "set_volume",
