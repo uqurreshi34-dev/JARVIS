@@ -105,6 +105,24 @@ stays on the PC.
 | open youtube | a website, when no app matches |
 | open my project | your default project |
 | my default project is JARVIS | sets it |
+| set up a Python and React project | checks prerequisites, asks for a project name, then asks whether to use the recommended defaults |
+| yes | uses the recipe defaults and creates the project |
+| no | asks only the choices defined by the selected recipes |
+
+### Project setup
+
+New projects are created under `C:\Users\<you>\Projects\<project name>\`.
+
+JARVIS checks the prerequisites declared by each selected recipe before doing anything. 
+He asks for the project name, then asks whether to use the recommended defaults.
+
+For Python, the default creates a `.venv` and upgrades pip. It does not choose an 
+application framework or create application files.
+
+For React, the default creates a JavaScript Vite project. Declining the defaults allows 
+the recipe's own questions to choose TypeScript or other supported options.
+
+Nothing is created until the setup has been approved.
 
 ## Notes
 
