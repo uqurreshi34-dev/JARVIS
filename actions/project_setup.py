@@ -232,14 +232,45 @@ def check_prerequisites(names):
     return tuple(results)
 
 
+def resolve_project_dir(base_dir, project_name):
+    """Resolve a project name beneath the configured projects directory."""
+    name = str(project_name or "").strip()
+
+    if not name:
+        raise ValueError("A project name is required.")
+
+    if name in (".", "..") or "/" in name or "\\" in name:
+        raise ValueError(
+            "Project name must be a single folder name."
+        )
+
+    root = Path(base_dir).resolve()
+    target = (root / name).resolve()
+
+    try:
+        target.relative_to(root)
+    except ValueError as error:
+        raise ValueError(
+            "Project name must stay inside the projects directory."
+        ) from error
+
+    return target
+
+
 def setup_request(
     names,
-    project_dir,
+    base_dir,
+    project_name,
     use_defaults=None,
     answers=None,
 ):
     """Assess a setup request and resolve the default-choice decision."""
     selected = resolve_many(names)
+    project_path = resolve_project_dir(
+        base_dir,
+        project_name,
+    )
+
     prerequisite_results = check_prerequisites(names)
 
     missing = tuple(
@@ -252,9 +283,9 @@ def setup_request(
         "status": "blocked" if missing else "confirmation_required",
         "recipes": tuple(recipe.name for recipe in selected),
         "labels": tuple(recipe.label for recipe in selected),
-        "project_dir": str(
-            Path(project_dir).resolve()
-        ),
+        "project_name": str(project_name).strip(),
+        "base_dir": str(Path(base_dir).resolve()),
+        "project_dir": str(project_path),
         "prerequisites": prerequisite_results,
         "missing_prerequisites": missing,
         "prompt": None,
@@ -262,6 +293,18 @@ def setup_request(
         "defaults": _defaults(selected),
         "plan": None,
     }
+
+    if project_path.exists():
+        result["status"] = "blocked"
+        result["prompt"] = None
+        result["project_conflict"] = True
+        result["reason"] = (
+            "A project already exists at the requested location."
+        )
+        return result
+
+    result["project_conflict"] = False
+    result["reason"] = None
 
     if missing:
         return result
@@ -277,7 +320,7 @@ def setup_request(
         result["status"] = "ready"
         result["plan"] = plan(
             names,
-            project_dir,
+            project_path,
             answers=_defaults(selected),
         )
         return result
@@ -303,7 +346,7 @@ def setup_request(
     result["questions"] = required_questions
     result["plan"] = plan(
         names,
-        project_dir,
+        project_path,
         answers=supplied,
     )
 
@@ -316,6 +359,9 @@ def questions(names):
 
     for recipe in resolve_many(names):
         for question in recipe.questions:
+            if len(question.get("options") or ()) < 2:
+                continue
+
             question_id = question["id"]
 
             if question_id in seen:

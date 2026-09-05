@@ -199,6 +199,16 @@ def _guarded_fast_path(commands, original):
         if _project_inventory_request(text):
             return commands._blank_result("list_projects")
 
+        setup_request = re.match(
+            r"^(?:set\s+up|setup|create|make|build|scaffold|start)\b"
+            r".*\bprojects?\b",
+            text,
+            re.I,
+        )
+
+        if setup_request:
+            return None
+
         if not (
             text.endswith("?")
             or text.split(" ", 1)[0] in _MEMORY_QUESTION_WORDS

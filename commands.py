@@ -3819,7 +3819,7 @@ def _setup_project_dir():
     )
 
 
-def _setup_start_questions(names, project_dir):
+def _setup_start_questions(names, base_dir, project_name):
     """Begin the recipe-question phase after the user declines defaults."""
     global _setup_session
 
@@ -3827,7 +3827,8 @@ def _setup_start_questions(names, project_dir):
 
     _setup_session = {
         "names": names,
-        "project_dir": project_dir,
+        "base_dir": base_dir,
+        "project_name": project_name,
         "questions": required,
         "index": 0,
         "answers": {},
@@ -3836,7 +3837,8 @@ def _setup_start_questions(names, project_dir):
     if not required:
         request = project_setup.setup_request(
             names,
-            project_dir,
+            base_dir,
+            project_name,
             use_defaults=False,
             answers={},
         )
@@ -3844,8 +3846,13 @@ def _setup_start_questions(names, project_dir):
         if request["status"] != "ready":
             return _query(
                 "setup_project",
-                lambda: "I couldn't complete the setup questions, sir.",
+                lambda: (
+                    request.get("reason")
+                    or "I couldn't complete the setup questions, sir."
+                ),
             )
+
+        _setup_session = None
 
         return _action(
             "setup_project",
@@ -3910,14 +3917,16 @@ def _setup_answer(answer):
         )
 
     names = session["names"]
-    project_dir = session["project_dir"]
+    base_dir = session["base_dir"]
+    project_name = session["project_name"]
     answers = session["answers"]
 
     _setup_session = None
 
     request = project_setup.setup_request(
         names,
-        project_dir,
+        base_dir,
+        project_name,
         use_defaults=False,
         answers=answers,
     )
@@ -3935,43 +3944,54 @@ def _setup_answer(answer):
     )
 
 
-def _setup_request(result):
-    """Run the generic Phase 2/3 setup flow from a setup_project intent."""
-    names = _setup_names(result)
+def _setup_project_name_answer(answer):
+    """Store and validate the project name, then ask about defaults."""
+    global _setup_session
 
-    if not names:
+    session = _setup_session
+
+    if not session:
         return _query(
             "setup_project",
-            lambda: "Tell me which project technologies you want, sir.",
+            lambda: "There isn't a project setup waiting for a name, sir.",
         )
 
-    project_dir = _setup_project_dir()
+    project_name = (answer or "").strip()
+
+    try:
+        project_setup.resolve_project_dir(
+            session["base_dir"],
+            project_name,
+        )
+    except ValueError as error:
+        return _ask(
+            "setup_project_name",
+            str(error) + " Please give me another name, sir.",
+            _setup_project_name_answer,
+        )
+
+    session["project_name"] = project_name
 
     request = project_setup.setup_request(
-        names,
-        project_dir,
+        session["names"],
+        session["base_dir"],
+        project_name,
     )
 
     if request["status"] == "blocked":
-        missing = ", ".join(
-            item["executable"]
-            for item in request["missing_prerequisites"]
-            if item["executable"]
-        )
-
         return _query(
             "setup_project",
             lambda: (
-                f"I'm blocked, sir. I'm missing: {missing}."
-                if missing
-                else "I'm blocked by a missing project prerequisite, sir."
+                request.get("reason")
+                or "I'm blocked by a project setup prerequisite, sir."
             ),
         )
 
     def use_defaults():
         ready = project_setup.setup_request(
-            names,
-            project_dir,
+            session["names"],
+            session["base_dir"],
+            project_name,
             use_defaults=True,
         )
 
@@ -3984,10 +4004,44 @@ def _setup_request(result):
         yes_text="Using the recommended defaults, sir.",
         no_text="I'll ask for the recipe choices, sir.",
         no_action=lambda: _setup_start_questions(
-            names,
-            project_dir,
+            session["names"],
+            session["base_dir"],
+            project_name,
         ),
     )
+
+
+def _setup_request(result):
+    """Begin the generic project setup conversation."""
+    names = _setup_names(result)
+
+    if not names:
+        return _query(
+            "setup_project",
+            lambda: "Tell me which project technologies you want, sir.",
+        )
+
+    base_dir = _setup_project_dir()
+
+    def begin_name():
+        global _setup_session
+
+        _setup_session = {
+            "names": names,
+            "base_dir": base_dir,
+            "project_name": None,
+            "questions": (),
+            "index": 0,
+            "answers": {},
+        }
+
+        return _ask(
+            "setup_project_name",
+            "What should I call the project, sir?",
+            _setup_project_name_answer,
+        )
+
+    return begin_name()
 
 
 def _confirm(
@@ -4342,7 +4396,6 @@ def _handle_command(command):
 
     if intent == "setup_project":
         return _setup_request(result)
-
 
     if intent == "open_application" and application:
         return _action(
