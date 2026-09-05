@@ -1722,6 +1722,16 @@ def _save_image():
     return "Saved to your JARVIS images folder, sir."
 
 
+def load_dropped_image(path):
+    """Make a dropped local image the current JARVIS reference image."""
+    if not images.load_file(path):
+        return False
+
+    _push_image()
+
+    return True
+
+
 def toggle_brain_view():
     """Flip the mind view from outside a voice command — the HUD's own
     core click, specifically. Voice commands use the show_brain/hide_brain

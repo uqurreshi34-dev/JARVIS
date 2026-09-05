@@ -24,8 +24,9 @@ import io
 import os
 import re
 import threading
+from pathlib import Path
 import time
-
+import mimetypes
 import requests
 from PIL import Image
 
@@ -73,6 +74,8 @@ _current = {
     "photographer_link": None,
     "photo_link": None,
     "download_location": None,
+    "source_path": None,
+    "mime": None,
 }
 
 
@@ -118,9 +121,85 @@ def _commit_photo(photo, text, image_bytes, trigger=True):
         _current["download_location"] = (
             photo.get("links") or {}
         ).get("download_location")
+        _current["source_path"] = None
+        _current["mime"] = None
 
     if trigger and _current["download_location"]:
         _trigger_download(_current["download_location"])
+
+
+def supports_path(path):
+    """True when a local file can actually be decoded as an image."""
+    try:
+        resolved = Path(path).expanduser().resolve()
+
+        if not resolved.is_file():
+            return False
+
+        with Image.open(resolved) as image:
+            image.verify()
+
+        return True
+
+    except (OSError, ValueError):
+        return False
+
+
+def load_file(path):
+    """Load a local reference image without modifying its original bytes."""
+    try:
+        resolved = Path(path).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return False
+
+    if not resolved.is_file() or not supports_path(resolved):
+        return False
+
+    try:
+        original = resolved.read_bytes()
+
+        with Image.open(io.BytesIO(original)) as image:
+            image.verify()
+
+    except (OSError, ValueError):
+        return False
+
+    mime = (
+        mimetypes.guess_type(str(resolved))[0]
+        or "application/octet-stream"
+    )
+
+    with _lock:
+        _current["original"] = original
+        _current["rotation"] = 0
+        _current["scale"] = 1.0
+        _current["query"] = resolved.stem
+        _current["photographer"] = None
+        _current["photographer_link"] = None
+        _current["photo_link"] = None
+        _current["download_location"] = None
+        _current["source_path"] = str(resolved)
+        _current["mime"] = mime
+
+    return True
+
+
+def current_original_bytes():
+    """Return the untouched original reference-image bytes."""
+    with _lock:
+        return _current["original"]
+
+
+def current_source_path():
+    """Return the original local reference-image path, if one exists."""
+    with _lock:
+        return _current["source_path"]
+
+
+def current_mime():
+    """Return the MIME type of the current local reference image."""
+    with _lock:
+        return _current["mime"]
 
 
 def search(query):
@@ -501,3 +580,5 @@ def hide():
         _current["photographer_link"] = None
         _current["photo_link"] = None
         _current["download_location"] = None
+        _current["source_path"] = None
+        _current["mime"] = None

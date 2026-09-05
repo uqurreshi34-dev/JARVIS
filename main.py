@@ -14,6 +14,7 @@ from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
 from commands import (
     handle_command,
     look_at_phone_picture,
+    load_dropped_image,
     reminder_manager,
     select_image_choice,
     set_brain_listener,
@@ -34,7 +35,7 @@ from datetime import datetime
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
-from actions import camera, contacts, diary, memory, documents
+from actions import camera, contacts, diary, memory, documents, images
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
 import phrases
@@ -603,13 +604,42 @@ def main():
     def on_files_dropped(paths):
         def load():
             try:
-                result = documents.add_paths(paths)
+                image_paths = [
+                    path
+                    for path in paths
+                    if images.supports_path(path)
+                ]
 
-                if result:
-                    hud.reply_changed.emit(result)
+                document_paths = [
+                    path
+                    for path in paths
+                    if not images.supports_path(path)
+                ]
+
+                messages = []
+
+                if document_paths:
+                    result = documents.add_paths(document_paths)
+
+                    if result:
+                        messages.append(result)
+
+                for path in image_paths:
+                    if load_dropped_image(path):
+                        messages.append(
+                            f"Loaded {Path(path).stem} as the current reference image, sir."
+                        )
+                    else:
+                        messages.append(
+                            f"I couldn't load {Path(path).name} as an image, sir."
+                        )
+
+                if messages:
+                    hud.reply_changed.emit(" ".join(messages))
+
             except Exception as exc:
                 hud.reply_changed.emit(
-                    f"I couldn't load the documents: {exc}"
+                    f"I couldn't load the dropped files: {exc}"
                 )
 
         threading.Thread(target=load, daemon=True).start()
