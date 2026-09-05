@@ -17,6 +17,7 @@ from actions import memory, memory_collections, memory_history, safety
 
 _SCHEMA_EXAMPLE_LIMIT = 8
 _LOCAL_SCHEMA_SCORE = 0.62
+_LOCAL_KEY_FALLBACK_SCORE = 0.40
 _DECISION_TTL = 60.0
 _DECISION_LIMIT = 24
 
@@ -39,6 +40,108 @@ def _clean_example(value):
     return " ".join((value or "").strip().split())
 
 
+_KIND_FACT = "fact"
+_KIND_PREFERENCE = "preference"
+_KIND_PROJECT = "project"
+_KIND_KNOWLEDGE = "knowledge"
+
+_MEMORY_KINDS = frozenset({
+    _KIND_FACT,
+    _KIND_PREFERENCE,
+    _KIND_PROJECT,
+    _KIND_KNOWLEDGE,
+})
+
+
+def _infer_collection_kind(key, example="", source=""):
+    """Infer what a collection means from its learned language, locally."""
+    key_text = _clean_example(key).casefold()
+    example_text = _clean_example(example).casefold()
+    source_text = _clean_example(source).casefold()
+
+    combined = f"{key_text} {example_text}"
+
+    # Explicit preference language is the strongest semantic evidence.
+    # This intentionally covers natural speech such as:
+    # "I like..."
+    # "I really like..."
+    # "I've started liking..."
+    # "I love..."
+    # "my favourite..."
+    # "I prefer..."
+    preference_patterns = (
+        r"\bfavo[u]?rite(?:s)?\b",
+        r"\bprefer(?:s|red|ence|ring)?\b",
+        r"\b(?:like|likes|liked|liking)\b",
+        r"\b(?:love|loves|loved|loving)\b",
+    )
+
+    if any(
+        re.search(pattern, combined, re.I)
+        for pattern in preference_patterns
+    ):
+        return _KIND_PREFERENCE
+
+    # Ongoing work belongs to the project semantic class.
+    if (
+        re.search(
+            r"\b(?:working|work)\s+on\b",
+            combined,
+            re.I,
+        )
+        or key_text in {"project", "projects"}
+    ):
+        return _KIND_PROJECT
+
+    # Provider-learned factual collections can be marked as knowledge,
+    # but only when there is no stronger semantic evidence above.
+    if any(
+        marker in source_text
+        for marker in (
+            "api",
+            "language-model",
+            "learned",
+        )
+    ):
+        return _KIND_KNOWLEDGE
+
+    return _KIND_FACT
+
+
+def _merge_collection_kind(existing_kind, inferred_kind):
+    """Merge semantic kinds without restricting future kinds."""
+    existing = _clean_example(existing_kind)
+    inferred = _clean_example(inferred_kind)
+
+    if not existing:
+        return inferred or _KIND_FACT
+
+    if not inferred:
+        return existing
+
+    # Strong recognised evidence can upgrade an old generic classification.
+    if inferred == _KIND_PREFERENCE:
+        return _KIND_PREFERENCE
+
+    if inferred == _KIND_PROJECT:
+        return _KIND_PROJECT
+
+    # An already-learned kind may be something JARVIS has learned that the
+    # local fallback does not know about. Never replace such a kind merely
+    # because fallback inference says "fact" or "knowledge".
+    if existing not in _MEMORY_KINDS:
+        return existing
+
+    if inferred == _KIND_KNOWLEDGE:
+        if existing not in (
+            _KIND_PREFERENCE,
+            _KIND_PROJECT,
+        ):
+            return _KIND_KNOWLEDGE
+
+    return existing
+
+
 def _load():
     data = memory_history._load()
 
@@ -53,6 +156,43 @@ def _load():
 
     if not isinstance(data["schemas"], dict):
         data["schemas"] = {}
+
+    changed = False
+
+    for key, value in data["schemas"].items():
+        if not isinstance(value, dict):
+            continue
+
+        examples = value.get("examples") or []
+
+        # Re-evaluate the collection from ALL learned language examples.
+        # One weak/latest example must not erase stronger evidence from an
+        # earlier example such as "I like Mercedes".
+        example_text = " ".join(
+            _clean_example(example)
+            for example in examples
+            if isinstance(example, str) and example.strip()
+        )
+
+        inferred_kind = _infer_collection_kind(
+            key,
+            example_text,
+            value.get("source", ""),
+        )
+
+        existing_kind = value.get("kind")
+
+        new_kind = _merge_collection_kind(
+            existing_kind,
+            inferred_kind,
+        )
+
+        if existing_kind != new_kind:
+            value["kind"] = new_kind
+            changed = True
+
+    if changed:
+        _save(data)
 
     return data
 
@@ -78,6 +218,80 @@ def schema(key):
         return copy.deepcopy(value)
 
 
+def kind(key):
+    """Return the learned semantic meaning of a collection."""
+    value = schema(key)
+
+    if not isinstance(value, dict):
+        return None
+
+    learned = _clean_example(value.get("kind"))
+
+    return learned or None
+
+
+def classification_details_for_text(text):
+    """Return locally learned memory meaning for natural language."""
+    cleaned = _clean_example(text)
+
+    if not cleaned:
+        return None
+
+    key, cardinality, score = _collection_match(cleaned)
+
+    if (
+        not key
+        or cardinality != memory_collections.CARDINALITY_COLLECTION
+    ):
+        return None
+
+    learned = schema(key)
+
+    if not isinstance(learned, dict):
+        return None
+
+    learned_kind = _clean_example(learned.get("kind"))
+
+    if not learned_kind:
+        return None
+
+    items = []
+
+    if cardinality == memory_collections.CARDINALITY_COLLECTION:
+        items = _extract_items(cleaned, key)
+
+        known_items = {
+            _key(value)
+            for value in memory_collections.items(key)
+        }
+
+        if (
+            not _collection_key_is_mentioned(cleaned, key)
+            and not any(
+                _key(item) in known_items
+                for item in items
+            )
+        ):
+            return None
+
+    else:
+        try:
+            keyed = memory._as_keyed(cleaned)
+        except Exception:
+            keyed = None
+
+        if keyed and _key(keyed[0]) == _key(key):
+            items = [keyed[1]]
+
+    return {
+        "key": key,
+        "cardinality": cardinality,
+        "kind": learned_kind,
+        "score": score,
+        "items": items,
+    }
+
+
 def remember_schema(
     key,
     cardinality,
@@ -85,6 +299,7 @@ def remember_schema(
     operation="add",
     source="language-model",
     items=None,
+    semantic_kind=None,
 ):
     """Cache a schema decision and useful language examples locally."""
     wanted = _key(key)
@@ -102,12 +317,35 @@ def remember_schema(
         if _clean_example(item)
     ]
 
+    explicit_kind = _clean_example(semantic_kind)
+
+    inferred_kind = (
+        explicit_kind
+        or _infer_collection_kind(
+            wanted,
+            cleaned,
+            source,
+        )
+    )
+
     with _lock:
         data = _load()
         existing = data["schemas"].get(wanted)
 
         if not isinstance(existing, dict):
             existing = {}
+
+        existing_kind = _clean_example(existing.get("kind"))
+
+        if explicit_kind:
+            # The model explicitly supplied the semantic meaning.
+            # Preserve it exactly; kinds are open-ended data.
+            existing["kind"] = explicit_kind
+        else:
+            existing["kind"] = _merge_collection_kind(
+                existing_kind,
+                inferred_kind,
+            )
 
         existing["cardinality"] = cardinality
         existing["source"] = source
@@ -167,6 +405,7 @@ def learn(decision, example=None, source="language-model"):
         operation=decision.get("operation") or "add",
         source=source,
         items=decision.get("items") or (),
+        semantic_kind=decision.get("kind"),
     )
 
 
@@ -213,11 +452,33 @@ def _schema_documents():
 
                 template = cleaned
 
-                # Replace the values learned from the example with a neutral
-                # placeholder so matching focuses on the memory meaning,
-                # not the particular item mentioned in that example.
+                # Learned item text can contain descriptive words that are
+                # not actually part of the stored collection item.
+                # Example:
+                #   learned item = "react project"
+                #   stored item  = "react"
+                #
+                # Replace the canonical stored value in the example so the
+                # remaining words become reusable learned context.
+                replacements = []
+
+                for learned_item in items:
+                    mapped = _canonicalise_collection_items(
+                        key,
+                        [learned_item],
+                    )
+
+                    canonical = (
+                        mapped[0]
+                        if mapped
+                        else learned_item
+                    )
+
+                    if canonical:
+                        replacements.append(canonical)
+
                 for item in sorted(
-                    set(items),
+                    set(replacements),
                     key=len,
                     reverse=True,
                 ):
@@ -281,6 +542,69 @@ def local_match(text):
     return key, cardinality, score
 
 
+def _hybrid_collection_match(text, documents):
+    """Match a learned collection using semantic category + language overlap."""
+    cleaned = _clean_example(text)
+
+    if not cleaned or not documents:
+        return None, None, 0.0
+
+    try:
+        from actions import semantic_memory
+
+        key_documents = [
+            (
+                key,
+                cardinality,
+                key,
+            )
+            for key, cardinality, _document in documents
+        ]
+
+        ranked = semantic_memory._semantic_rank(
+            cleaned,
+            key_documents,
+        )
+
+    except Exception:
+        return None, None, 0.0
+
+    query_words = set(memory._retrieval_words(cleaned))
+
+    if not query_words:
+        return None, None, 0.0
+
+    for index, key_score in ranked:
+        if key_score < _LOCAL_KEY_FALLBACK_SCORE:
+            continue
+
+        key, cardinality, _key_document = key_documents[index]
+
+        learned_words = set()
+
+        for (
+            candidate_key,
+            candidate_cardinality,
+            document,
+        ) in documents:
+            if (
+                _key(candidate_key) == _key(key)
+                and candidate_cardinality == cardinality
+            ):
+                learned_words.update(
+                    memory._retrieval_words(document)
+                )
+
+        overlap = query_words.intersection(learned_words)
+
+        if not overlap:
+            continue
+
+        return key, cardinality, key_score
+
+    return None, None, 0.0
+
+
 def _collection_match(text):
     """Find a learned collection using strict or relaxed local semantics."""
     cleaned = _clean_example(text)
@@ -338,6 +662,20 @@ def _collection_match(text):
             continue
 
         return candidate_key, candidate_cardinality, candidate_score
+
+    hybrid_key, hybrid_cardinality, hybrid_score = (
+        _hybrid_collection_match(
+            cleaned,
+            documents,
+        )
+    )
+
+    if hybrid_key:
+        return (
+            hybrid_key,
+            hybrid_cardinality,
+            hybrid_score,
+        )
 
     # If semantic scoring is inconclusive, an exact match against a
     # learned collection language template is still strong local evidence.
@@ -410,7 +748,30 @@ def _collection_match(text):
     return None, None, 0.0
 
 
+def _collection_key_is_mentioned(text, key):
+    """Return True when the user's wording explicitly names the collection."""
+    query_words = set(memory._retrieval_words(text))
+    key_words = set(memory._retrieval_words(key))
+
+    if query_words.intersection(key_words):
+        return True
+
+    # Match ordinary singular/plural forms for comparison only. Stored names
+    # are never modified.
+    for query_word in query_words:
+        for key_word in key_words:
+            if len(query_word) > 3 and len(key_word) > 3:
+                if query_word.endswith("s") and query_word[:-1] == key_word:
+                    return True
+
+                if key_word.endswith("s") and key_word[:-1] == query_word:
+                    return True
+
+    return False
+
+
 def locally_known(text):
+    """Return True only when local collection meaning is sufficiently supported."""
     key, cardinality, _score = _collection_match(text)
 
     if (
@@ -419,7 +780,23 @@ def locally_known(text):
     ):
         return False
 
-    return bool(_extract_items(text, key))
+    items = _extract_items(text, key)
+
+    if not items:
+        return False
+
+    known_items = {
+        _key(value)
+        for value in memory_collections.items(key)
+    }
+
+    if _collection_key_is_mentioned(text, key):
+        return True
+
+    return any(
+        _key(item) in known_items
+        for item in items
+    )
 
 
 def operation_for_text(text, key=None):
@@ -503,6 +880,72 @@ def _split_items(text, example_items=()):
     return unique
 
 
+def _template_span_candidates(key, example, example_items):
+    """Return learned prefix/suffix pairs using raw and canonical item names."""
+    folded_example = example.casefold()
+    variants = []
+
+    canonical_items = []
+
+    for learned_item in example_items:
+        mapped = _canonicalise_collection_items(
+            key,
+            [learned_item],
+        )
+
+        canonical_items.append(
+            mapped[0]
+            if mapped
+            else learned_item
+        )
+
+    variants.append(canonical_items)
+
+    if canonical_items != example_items:
+        variants.append(example_items)
+
+    candidates = []
+
+    for variant in variants:
+        spans = []
+
+        for item in sorted(
+            set(variant),
+            key=len,
+            reverse=True,
+        ):
+            if not item:
+                continue
+
+            start = folded_example.find(item.casefold())
+
+            if start < 0:
+                continue
+
+            spans.append(
+                (
+                    start,
+                    start + len(item),
+                )
+            )
+
+        if not spans:
+            continue
+
+        first = min(start for start, _end in spans)
+        last = max(end for _start, end in spans)
+
+        candidate = (
+            example[:first],
+            example[last:],
+        )
+
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    return candidates
+
+
 def _extract_template_items(text, key):
     """Extract collection items using every learned language template."""
     current = _clean_example(text)
@@ -513,8 +956,6 @@ def _extract_template_items(text, key):
     data = schema(key) or {}
     details = data.get("example_details") or []
 
-    # Try the newest learned templates first. Each successful model example
-    # becomes another locally reusable way of expressing the same memory.
     for detail in reversed(details):
         if not isinstance(detail, dict):
             continue
@@ -529,40 +970,6 @@ def _extract_template_items(text, key):
         if not example or not example_items:
             continue
 
-        folded_example = example.casefold()
-        first = None
-        last = None
-
-        # Treat the learned item values as placeholders and keep the rest of
-        # the user's wording as the template.
-        for item in sorted(
-            set(example_items),
-            key=len,
-            reverse=True,
-        ):
-            folded_item = item.casefold()
-            start = folded_example.find(folded_item)
-
-            if start < 0:
-                continue
-
-            end = start + len(item)
-
-            if first is None or start < first:
-                first = start
-
-            if last is None or end > last:
-                last = end
-
-        if first is None or last is None:
-            continue
-
-        prefix = example[:first]
-        suffix = example[last:]
-
-        # Speech recognition may omit apostrophes in contractions, e.g.
-        # "I'm" -> "im". Treat apostrophes as optional for matching only;
-        # keep the original text for extracting the actual item.
         def _flexible_literal(value):
             escaped = re.escape(value)
 
@@ -579,36 +986,67 @@ def _extract_template_items(text, key):
                 r"(?:i(?:'|’)?m|i\s+am)",
             )
 
-        pattern = re.compile(
-            rf"^{_flexible_literal(prefix)}(.*?){_flexible_literal(suffix)}$",
-            re.I,
-        )
-
-        match = pattern.match(current)
-
-        if not match:
-            # Allow common additive discourse wording without tying the
-            # collection system to any particular domain.
-            relaxed = re.sub(
-                r"\b(?:also|too|as well)\b",
-                "",
-                current,
-                flags=re.I,
+        for prefix, suffix in _template_span_candidates(
+            key,
+            example,
+            example_items,
+        ):
+            pattern = re.compile(
+                rf"^{_flexible_literal(prefix)}"
+                rf"(.*?)"
+                rf"{_flexible_literal(suffix)}$",
+                re.I,
             )
-            relaxed = _clean_example(relaxed)
-            match = pattern.match(relaxed)
 
-        if not match:
+            match = pattern.match(current)
+
+            if not match:
+                relaxed = re.sub(
+                    r"\b(?:also|too|as well)\b",
+                    "",
+                    current,
+                    flags=re.I,
+                )
+                relaxed = _clean_example(relaxed)
+                match = pattern.match(relaxed)
+
+            if not match:
+                continue
+
+            core = match.group(1).strip(" .")
+
+            items = _split_items(
+                core,
+                example_items,
+            )
+
+            items = _canonicalise_collection_items(
+                key,
+                items,
+            )
+
+            if items:
+                return items
+
+    # A known collection item is strong local evidence even when the user's
+    # wording is shorter than every learned example.
+    existing = memory_collections.items(key)
+    found = []
+
+    for value in existing:
+        cleaned_value = _clean_example(value)
+
+        if not cleaned_value:
             continue
 
-        core = match.group(1).strip(" .")
+        if re.search(
+            rf"(?<!\w){re.escape(cleaned_value)}(?!\w)",
+            current,
+            re.I,
+        ):
+            found.append(value)
 
-        items = _split_items(core, example_items)
-
-        if items:
-            return items
-
-    return []
+    return found
 
 
 def _canonicalise_collection_items(key, items):
@@ -1008,6 +1446,21 @@ def accept_model_result(command, result):
         return
 
     cleaned = _clean_example(command)
+
+    decision = copy.deepcopy(decision)
+
+    model_kind = _clean_example(
+        decision.get("kind")
+    )
+
+    decision["kind"] = (
+        model_kind
+        or _infer_collection_kind(
+            key,
+            cleaned,
+            "language-model",
+        )
+    )
 
     # Reuse an already-learned collection concept when the model invents
     # a synonymous key such as "books_reading" for an existing "books"
@@ -1788,7 +2241,9 @@ def install_runtime():
 
 __all__ = [
     "accept_model_result",
+    "classification_details_for_text",
     "install_runtime",
+    "kind",
     "learn",
     "learned_schema",
     "locally_known",
