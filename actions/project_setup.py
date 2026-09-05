@@ -8,7 +8,8 @@ All stack-specific knowledge lives in project_setup_recipes.json.
 from dataclasses import dataclass
 import json
 from pathlib import Path
-
+import shutil
+import subprocess
 
 _RECIPE_FILE = Path(__file__).with_name("project_setup_recipes.json")
 
@@ -144,6 +145,169 @@ def resolve_many(names):
         )
 
     return tuple(selected)
+
+
+def check_prerequisites(names):
+    """Check every executable declared by the selected recipes."""
+    selected = resolve_many(names)
+    results = []
+
+    for recipe in selected:
+        for prerequisite in recipe.prerequisites:
+            executable = str(
+                prerequisite.get("executable") or ""
+            ).strip()
+
+            args = [
+                str(value)
+                for value in prerequisite.get("args") or ()
+            ]
+
+            if not executable:
+                results.append(
+                    {
+                        "recipe": recipe.name,
+                        "executable": "",
+                        "available": False,
+                        "reason": "Recipe prerequisite has no executable.",
+                    }
+                )
+                continue
+
+            path = shutil.which(executable)
+
+            if not path:
+                results.append(
+                    {
+                        "recipe": recipe.name,
+                        "executable": executable,
+                        "available": False,
+                        "reason": "Executable not found.",
+                    }
+                )
+                continue
+
+            try:
+                result = subprocess.run(
+                    [path, *args],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=10,
+                )
+            except (
+                OSError,
+                subprocess.SubprocessError,
+            ) as error:
+                results.append(
+                    {
+                        "recipe": recipe.name,
+                        "executable": executable,
+                        "available": False,
+                        "reason": str(error),
+                    }
+                )
+                continue
+
+            output = (
+                result.stdout.strip()
+                or result.stderr.strip()
+            )
+
+            results.append(
+                {
+                    "recipe": recipe.name,
+                    "executable": executable,
+                    "path": path,
+                    "available": result.returncode == 0,
+                    "reason": (
+                        output
+                        if result.returncode != 0
+                        else None
+                    ),
+                    "version": output or None,
+                }
+            )
+
+    return tuple(results)
+
+
+def setup_request(
+    names,
+    project_dir,
+    use_defaults=None,
+    answers=None,
+):
+    """Assess a setup request and resolve the default-choice decision."""
+    selected = resolve_many(names)
+    prerequisite_results = check_prerequisites(names)
+
+    missing = tuple(
+        result
+        for result in prerequisite_results
+        if not result["available"]
+    )
+
+    result = {
+        "status": "blocked" if missing else "confirmation_required",
+        "recipes": tuple(recipe.name for recipe in selected),
+        "labels": tuple(recipe.label for recipe in selected),
+        "project_dir": str(
+            Path(project_dir).resolve()
+        ),
+        "prerequisites": prerequisite_results,
+        "missing_prerequisites": missing,
+        "prompt": None,
+        "questions": (),
+        "defaults": _defaults(selected),
+        "plan": None,
+    }
+
+    if missing:
+        return result
+
+    result["prompt"] = (
+        "Shall I use the recommended defaults?"
+    )
+
+    if use_defaults is None:
+        return result
+
+    if use_defaults:
+        result["status"] = "ready"
+        result["plan"] = plan(
+            names,
+            project_dir,
+            answers=_defaults(selected),
+        )
+        return result
+
+    required_questions = questions(
+        [recipe.name for recipe in selected]
+    )
+
+    supplied = answers or {}
+
+    missing_answers = tuple(
+        question
+        for question in required_questions
+        if question["id"] not in supplied
+    )
+
+    if missing_answers:
+        result["status"] = "questions_required"
+        result["questions"] = missing_answers
+        return result
+
+    result["status"] = "ready"
+    result["questions"] = required_questions
+    result["plan"] = plan(
+        names,
+        project_dir,
+        answers=supplied,
+    )
+
+    return result
 
 
 def questions(names):
