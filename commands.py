@@ -461,8 +461,68 @@ _NEVER_FUZZY = frozenset({
 })
 
 
+def _token_similarity(left, right):
+    """Compare two individual words for a speech-recognition near miss."""
+    return SequenceMatcher(
+        None,
+        left,
+        right,
+        autojunk=False,
+    ).ratio()
+
+
+def _word_structural_similarity(left, right):
+    """Measure whether word-level structure supports a phrase similarity."""
+    left_tokens = left.split()
+    right_tokens = right.split()
+
+    if not left_tokens or not right_tokens:
+        return 0.0
+
+    matcher = SequenceMatcher(
+        None,
+        left_tokens,
+        right_tokens,
+        autojunk=False,
+    )
+
+    score = 0.0
+    weight = 0
+
+    for tag, left_start, left_end, right_start, right_end in (
+        matcher.get_opcodes()
+    ):
+        left_count = left_end - left_start
+        right_count = right_end - right_start
+
+        if tag == "equal":
+            score += left_count
+            weight += left_count
+            continue
+
+        if tag == "replace":
+            pair_count = min(left_count, right_count)
+
+            score += sum(
+                _token_similarity(left_token, right_token)
+                for left_token, right_token in zip(
+                    left_tokens[left_start:left_start + pair_count],
+                    right_tokens[right_start:right_start + pair_count],
+                )
+            )
+
+            weight += max(left_count, right_count)
+            continue
+
+        # Insertions and deletions provide no evidence that the changed
+        # words themselves are semantically similar.
+        weight += max(left_count, right_count)
+
+    return score / weight if weight else 0.0
+
+
 def _fuzzy_intent(text):
-    """Find a fast-path intent for a near miss, or None."""
+    """Find a fast-path intent for a structurally plausible near miss."""
     if len(text) < 6:
         return None
 
@@ -477,11 +537,28 @@ def _fuzzy_intent(text):
         if abs(len(phrase) - len(text)) > 6:
             continue
 
-        score = SequenceMatcher(None, text, phrase).ratio()
+        score = SequenceMatcher(
+            None,
+            text,
+            phrase,
+            autojunk=False,
+        ).ratio()
 
-        if score > best_score:
-            best_score = score
-            best_intent = intent
+        if score <= best_score:
+            continue
+
+        structural_score = _word_structural_similarity(
+            text,
+            phrase,
+        )
+
+        # Do not let common surrounding words make an unrelated word
+        # substitution look like a valid speech-recognition correction.
+        if structural_score < score:
+            continue
+
+        best_score = score
+        best_intent = intent
 
     if best_score >= _FUZZY_THRESHOLD:
         return best_intent

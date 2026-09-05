@@ -45,6 +45,23 @@ def main():
         if commands._fuzzy_intent("how is my sister") != "get_system_status":
             failures.append("useful speech fuzzy match was lost")
 
+        if commands._fuzzy_intent("make the dome bigger") is not None:
+            failures.append(
+                "semantic noun substitution incorrectly "
+                "won the fuzzy fast path"
+            )
+
+        exact_image = commands._fast_path("make the image bigger")
+
+        if not exact_image:
+            failures.append(
+                "exact image enlargement fast path disappeared"
+            )
+        elif exact_image["intent"] != "enlarge_image":
+            failures.append(
+                "exact image enlargement changed intent"
+            )
+
     if failures:
         print("FAILED")
         for failure in failures:

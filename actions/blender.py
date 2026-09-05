@@ -21,8 +21,16 @@ You are an expert procedural Blender artist modifying an EXISTING scene.
 
 The user wants to change the current Blender model.
 
-Use the supplied reference image and current Blender scene description
-to determine what the user means.
+Treat the current Blender scene description as the authoritative state.
+
+A reference image may be supplied as supplementary visual context when
+available. It is optional and must never be required for a modification.
+
+When no reference image is available, reason entirely from the live Blender
+scene description.
+
+Identify objects semantically from the live scene description rather than
+assuming names, ordering, or previously selected objects.
 
 Generate a complete Python script using bpy that performs ONLY the requested
 modification on the existing scene.
@@ -371,29 +379,38 @@ def _bridge_execute(script):
 def modify_current_scene(request):
     """Interpret and apply a natural-language modification to Blender."""
     context = modeling_context()
-
-    image_bytes = images.current_original_bytes()
-
-    if not image_bytes:
-        raise RuntimeError(
-            "Please keep the reference image loaded, sir."
-        )
-
     scene_text = json.dumps(
         context,
         indent=2,
     )
 
-    analysis = vision(
-        _MODIFY_PROMPT
-        + "\n\nUSER REQUEST:\n"
-        + request
-        + "\n\nCURRENT SCENE:\n"
+    image_bytes = images.current_original_bytes()
+    reference_analysis = None
+
+    if image_bytes:
+        reference_analysis = vision(
+            _MODIFY_PROMPT
+            + "\n\nUSER REQUEST:\n"
+            + request
+            + "\n\nCURRENT SCENE:\n"
+            + scene_text,
+            image_bytes,
+            mime=images.current_mime() or "image/png",
+            max_tokens=2500,
+        )
+
+    prompt_parts = [
+        "USER REQUEST:\n"
+        + request,
+        "CURRENT BLENDER SCENE:\n"
         + scene_text,
-        image_bytes,
-        mime=images.current_mime() or "image/png",
-        max_tokens=2500,
-    )
+    ]
+
+    if reference_analysis:
+        prompt_parts.append(
+            "REFERENCE IMAGE ANALYSIS:\n"
+            + reference_analysis
+        )
 
     script = chat(
         [
@@ -403,14 +420,7 @@ def modify_current_scene(request):
             },
             {
                 "role": "user",
-                "content": (
-                    "USER REQUEST:\n"
-                    + request
-                    + "\n\nSCENE ANALYSIS:\n"
-                    + analysis
-                    + "\n\nCURRENT SCENE:\n"
-                    + scene_text
-                ),
+                "content": "\n\n".join(prompt_parts),
             },
         ],
         temperature=0,
@@ -424,7 +434,10 @@ def modify_current_scene(request):
 
     if not result.get("ok"):
         raise RuntimeError(
-            result.get("error", "Blender rejected the modification.")
+            result.get(
+                "error",
+                "Blender rejected the modification.",
+            )
         )
 
     return True
