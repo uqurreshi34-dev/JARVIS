@@ -769,8 +769,26 @@ def create_from_reference(request=None):
         raise RuntimeError(detail)
 
     if not output_path.is_file():
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+
+        detail_parts = [
+            f"Expected output: {output_path}",
+        ]
+
+        if stdout:
+            detail_parts.append(
+                f"BLENDER STDOUT:\n{stdout}"
+            )
+
+        if stderr:
+            detail_parts.append(
+                f"BLENDER STDERR:\n{stderr}"
+            )
+
         raise RuntimeError(
-            "Blender finished, but the .blend file was not created."
+            "Blender finished, but the .blend file was not created.\n\n"
+            + "\n\n".join(detail_parts)
         )
 
     _launch_blender_gui(output_path)
