@@ -92,7 +92,7 @@ Requirements:
 - Do not save the .blend file; JARVIS will do that after the script runs.
 - The script must be self-contained and executable with Blender 5.2.
 - Return only the Python source code.
-- Use only bpy, math, and mathutils if imports are needed.
+- Use only bpy, math, mathutils, and random if imports are needed.
 - Every line must be valid Python 3 syntax.
 - Do not invent modules or conditional-import expressions.
 
@@ -103,6 +103,7 @@ _ALLOWED_IMPORTS = frozenset({
     "bpy",
     "math",
     "mathutils",
+    "random",
 })
 
 
