@@ -130,7 +130,7 @@ def _validate_script(source):
     tree = ast.parse(source)
 
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
+        if isinstance(node, ast.Import):
             for alias in node.names:
                 root = alias.name.split(".", 1)[0]
 
@@ -140,7 +140,22 @@ def _validate_script(source):
                         f"module: {alias.name}"
                     )
 
-        if isinstance(node, ast.Call):
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                raise ValueError(
+                    "Generated Blender script may not use relative imports."
+                )
+
+            module = node.module or ""
+            root = module.split(".", 1)[0]
+
+            if root not in _ALLOWED_IMPORTS:
+                raise ValueError(
+                    f"Generated Blender script imports disallowed "
+                    f"module: {module}"
+                )
+
+        elif isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name):
                 if node.func.id in _FORBIDDEN_CALLS:
                     raise ValueError(
