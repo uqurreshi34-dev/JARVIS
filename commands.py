@@ -30,6 +30,7 @@ from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
 import phrases
 from actions import (
+    blender,
     browser,
     camera,
     charts,
@@ -1617,6 +1618,25 @@ def _select_image_choice(text):
         )
 
     return _query("show_image", lambda: "Here you are, sir.")
+
+
+def _model_in_blender(request):
+    """Analyse the current reference image for future Blender modelling."""
+    if not images.has_image():
+        return (
+            "Please drop a reference image onto me first, sir. "
+            "Then tell me to model it in Blender."
+        )
+
+    analysis = blender.analyse_current_reference(request)
+
+    if not analysis:
+        return "I couldn't analyse the reference image, sir."
+
+    return (
+        f"Here's the modelling brief, sir.\n\n"
+        f"{analysis}"
+    )
 
 
 def _show_image(query):
@@ -4885,6 +4905,12 @@ def _handle_command(command):
 
     if intent == "restore_image":
         return _query(intent, _restore_image)
+
+    if intent == "model_in_blender":
+        return _query(
+            intent,
+            lambda: _model_in_blender(verbatim_text or text),
+        )
 
     if intent == "click_thing" and text:
         return _click_thing(text)
