@@ -541,7 +541,7 @@ def execute(plan_data):
                     os.environ.get("COMSPEC", "cmd.exe"),
                     "/d",
                     "/c",
-                    command[0],
+                    resolved_executable,
                     *command[1:],
                 )
             else:
