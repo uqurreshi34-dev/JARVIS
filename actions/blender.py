@@ -8,6 +8,9 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+import secrets
+import time
+import urllib.request
 
 from providers import chat, vision
 
@@ -115,6 +118,107 @@ def _find_blender():
 def available():
     """True when Blender can be found."""
     return _find_blender() is not None
+
+
+_BRIDGE_HOST = "127.0.0.1"
+_BRIDGE_SCRIPT = Path(__file__).with_name("blender_bridge.py")
+_BRIDGE_STATE = Path(files.root()) / ".blender-bridge.json"
+
+
+def _bridge_state():
+    """Read the current JARVIS↔Blender connection details."""
+    try:
+        return json.loads(
+            _BRIDGE_STATE.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _bridge_request(endpoint):
+    """Call the authenticated local Blender bridge."""
+    state = _bridge_state()
+
+    if not state:
+        return None
+
+    request = urllib.request.Request(
+        f"http://{_BRIDGE_HOST}:{int(state['port'])}{endpoint}",
+        headers={
+            "X-JARVIS-Token": state["token"],
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=2,
+        ) as response:
+            return json.loads(
+                response.read().decode("utf-8")
+            )
+
+    except Exception:
+        return None
+
+
+def running():
+    """True when a Blender instance is connected to JARVIS."""
+    response = _bridge_request("/health")
+
+    return bool(response and response.get("ok"))
+
+
+def scene_snapshot():
+    """Return the current Blender scene, or raise when Blender is absent."""
+    response = _bridge_request("/scene")
+
+    if not response or not response.get("ok", True):
+        raise RuntimeError(
+            "I'm sorry, sir. Blender isn't running."
+        )
+
+    return response
+
+
+def _launch_blender_gui(output_path):
+    """Open a .blend and attach the JARVIS bridge."""
+    try:
+        _BRIDGE_STATE.unlink()
+    except FileNotFoundError:
+        pass
+
+    token = secrets.token_urlsafe(32)
+
+    environment = os.environ.copy()
+    environment["JARVIS_BLENDER_TOKEN"] = token
+    environment["JARVIS_BLENDER_PORT"] = "0"
+    environment["JARVIS_BLENDER_STATE"] = str(_BRIDGE_STATE)
+
+    process = subprocess.Popen(
+        [
+            _find_blender(),
+            str(output_path),
+            "--python",
+            str(_BRIDGE_SCRIPT),
+        ],
+        env=environment,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # Wait only for the bridge to become ready. This is startup readiness,
+    # not an arbitrary limit on Blender modelling work.
+    while True:
+        if running():
+            return True
+
+        if process.poll() is not None:
+            raise RuntimeError(
+                "Blender closed before JARVIS could connect to it."
+            )
+
+        time.sleep(0.2)
 
 
 def _safe_stem(value):
@@ -340,14 +444,7 @@ def create_from_reference(request=None):
             "Blender finished, but the .blend file was not created."
         )
 
-    subprocess.Popen(
-        [
-            executable,
-            str(output_path),
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    _launch_blender_gui(output_path)
 
     print(f"[JARVIS] Blender model saved to {output_path}")
 
