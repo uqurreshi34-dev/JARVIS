@@ -183,12 +183,21 @@ class Assistant:
 
         self._say(result["response"])
 
-        worker.join(timeout=ACTION_TIMEOUT)
+        timeout = result.get("timeout", ACTION_TIMEOUT)
+
+        if timeout is None:
+            worker.join()
+        else:
+            worker.join(timeout=timeout)
 
         success = outcome.get("success", False)
 
         if success:
-            if CONFIRM_SUCCESS:
+            success_response = result.get("success_response")
+
+            if success_response:
+                self._say(success_response)
+            elif CONFIRM_SUCCESS:
                 self._say(phrases.pick("done"))
         elif result["intent"] in ("close_application", "close_project"):
             self._say(phrases.pick("cannot_close"))

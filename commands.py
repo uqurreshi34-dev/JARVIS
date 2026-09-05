@@ -126,13 +126,22 @@ def _record(intent, action, detail=None):
     return recorded
 
 
-def _action(intent, response, action, detail=None):
+def _action(
+    intent,
+    response,
+    action,
+    detail=None,
+    timeout=None,
+    success_response=None,
+):
     """A command that does something; JARVIS confirms when it succeeds."""
     return {
         "kind": "action",
         "intent": intent,
         "response": response,
         "action": _record(intent, action, detail),
+        "timeout": timeout,
+        "success_response": success_response,
     }
 
 
@@ -3858,6 +3867,8 @@ def _setup_start_questions(names, base_dir, project_name):
             "setup_project",
             "Setting it up, sir.",
             lambda: project_setup.execute(request["plan"]),
+            timeout=300,
+            success_response=f"Created the {project_name} project, sir.",
         )
 
     question = required[0]
@@ -3941,6 +3952,8 @@ def _setup_answer(answer):
         "setup_project",
         "Setting it up, sir.",
         lambda: project_setup.execute(request["plan"]),
+        timeout=300,
+        success_response=f"Created the {project_name} project, sir.",
     )
 
 

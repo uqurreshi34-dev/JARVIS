@@ -98,7 +98,7 @@
                 "npm",
                 "create",
                 "vite@latest",
-                "{recipe_dir}",
+                ".",
                 "--yes",
                 "--",
                 "--template",
