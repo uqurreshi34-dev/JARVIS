@@ -100,7 +100,7 @@ def _trigger_download(download_location):
     threading.Thread(target=fire, daemon=True).start()
 
 
-def _commit_photo(photo, text, image_bytes, trigger=True):
+def _commit_photo(photo, text, image_bytes, mime=None, trigger=True):
     """Make a fetched photo the current one — rotation/scale reset, its
     metadata recorded, and (unless told not to) Unsplash told it was
     used. Shared by search() and select_choice() so this exists in
@@ -122,7 +122,7 @@ def _commit_photo(photo, text, image_bytes, trigger=True):
             photo.get("links") or {}
         ).get("download_location")
         _current["source_path"] = None
-        _current["mime"] = None
+        _current["mime"] = mime
 
     if trigger and _current["download_location"]:
         _trigger_download(_current["download_location"])
@@ -248,13 +248,25 @@ def search(query):
     try:
         image_response = _session.get(image_url, timeout=TIMEOUT)
         image_response.raise_for_status()
+
         original = image_response.content
+        mime = (
+            image_response.headers.get("Content-Type", "")
+            .split(";", 1)[0]
+            .strip()
+            .lower()
+        )
 
     except requests.RequestException as error:
         print(f"[JARVIS] could not download the photo: {error}")
         return False
 
-    _commit_photo(photo, text, original)
+    _commit_photo(
+        photo,
+        text,
+        original,
+        mime=mime or None,
+    )
 
     return True
 
@@ -360,13 +372,25 @@ def select_choice(choice):
     try:
         image_response = _session.get(image_url, timeout=TIMEOUT)
         image_response.raise_for_status()
+
         original = image_response.content
+        mime = (
+            image_response.headers.get("Content-Type", "")
+            .split(";", 1)[0]
+            .strip()
+            .lower()
+        )
 
     except requests.RequestException as error:
         print(f"[JARVIS] could not download the photo: {error}")
         return False
 
-    _commit_photo(photo, choice.get("query") or "image", original)
+    _commit_photo(
+        photo,
+        choice.get("query") or "image",
+        original,
+        mime=mime or None,
+    )
 
     return True
 
