@@ -42,6 +42,13 @@ Use close_project when the user wants one of those project windows closed.
 Set "project" the same way.
 Use list_projects when the user asks what their recent projects are.
 
+Use setup_project when the user wants JARVIS to create a new software
+project or development stack, such as "set up a Python and React project"
+or "create a React project". Put the requested project setup recipe names
+in "text", separated by commas, using recipe names/aliases such as
+"python,react". Do not invent technologies or recipe names.
+Leave "application", "website", "project", "amount" and "unit" null.
+
 Use these for sound and media control:
 volume_up when the user wants the volume raised or something louder.
 volume_down when the user wants the volume lowered or something quieter.
@@ -408,6 +415,7 @@ _SCHEMA = {
                 "open_project",
                 "close_project",
                 "list_projects",
+                "setup_project",
                 "volume_up",
                 "volume_down",
                 "set_volume",
