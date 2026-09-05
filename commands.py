@@ -131,6 +131,8 @@ def _action(
     response,
     action,
     detail=None,
+    timeout=None,
+    success_response=None,
 ):
     """A command that does something; JARVIS confirms when it succeeds."""
     return {
@@ -3865,6 +3867,8 @@ def _setup_start_questions(names, base_dir, project_name):
             "setup_project",
             "Setting it up, sir.",
             lambda: project_setup.execute(request["plan"]),
+            timeout=None,
+            success_response=f"Created the {project_name} project, sir.",
         )
 
     question = required[0]
@@ -3948,6 +3952,8 @@ def _setup_answer(answer):
         "setup_project",
         "Setting it up, sir.",
         lambda: project_setup.execute(request["plan"]),
+        timeout=None,
+        success_response=f"Created the {project_name} project, sir.",
     )
 
 
@@ -4015,6 +4021,8 @@ def _setup_project_name_answer(answer):
             session["base_dir"],
             project_name,
         ),
+        timeout=None,
+        success_response=f"Created the {project_name} project, sir.",
     )
 
 
@@ -4058,6 +4066,8 @@ def _confirm(
     yes_text=None,
     no_text=None,
     no_action=None,
+    timeout=None,
+    success_response=None,
 ):
     """Ask before doing something, and remember what to do if approved."""
     global _pending, _awaiting
@@ -4069,6 +4079,8 @@ def _confirm(
         "yes": yes_text or phrases.pick("acknowledge"),
         "no": no_text or phrases.pick("cancelled"),
         "no_action": no_action,
+        "timeout": timeout,
+        "success_response": success_response,
     }
 
     return {
@@ -4259,6 +4271,8 @@ def _resolve_pending(text):
             "intent": pending["intent"],
             "response": pending.get("yes", "Very good, sir."),
             "action": pending["action"],
+            "timeout": pending.get("timeout"),
+            "success_response": pending.get("success_response"),
         }
 
     if answer in _NO:

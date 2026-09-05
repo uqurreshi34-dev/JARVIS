@@ -193,7 +193,11 @@ class Assistant:
         success = outcome.get("success", False)
 
         if success:
-            if CONFIRM_SUCCESS:
+            success_response = result.get("success_response")
+
+            if success_response:
+                self._say(success_response)
+            elif CONFIRM_SUCCESS:
                 self._say(phrases.pick("done"))
         elif result["intent"] in ("close_application", "close_project"):
             self._say(phrases.pick("cannot_close"))
