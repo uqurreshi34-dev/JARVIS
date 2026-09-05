@@ -232,6 +232,25 @@ Questions about the loaded documents use one normal language-model request with 
 
 Say "clear my documents" or "clear the documents" to empty the working set — exact phrase only, like clearing notes or the clipboard. Say "what documents do I have" to hear what's currently loaded without clearing it.
 
+### Project setup — `actions/project_setup.py`
+
+JARVIS can create a new development project from data-driven setup recipes.
+
+The flow is:
+
+`request → prerequisite check → project name → recommended defaults or recipe questions → approved plan → execution`
+
+Recipes declare their own prerequisites, defaults, questions, directories and commands. The executor does not contain Python-, React-, Node- or framework-specific logic.
+
+Projects are created under `C:\Users\<you>\Projects\<project name>\`.
+
+Python currently provisions a virtual environment and pip only; it does not choose a web framework or application structure.
+
+React currently uses Vite. The default is JavaScript; declining the recommended defaults exposes the recipe's own language choice, including TypeScript.
+
+A project is not created merely by asking for setup. Prerequisites must pass and the user must approve the setup before execution begins.
+
+
 ### Notes — `actions/notes.py`
 A timestamped list in `notes.txt`. Add, read, remove one entry, clear all.
 Distinct from files: "add milk to my notes" is the notes skill, "copy my
