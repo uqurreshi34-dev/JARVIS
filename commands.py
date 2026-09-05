@@ -53,6 +53,7 @@ from actions import (
     safety,
     screen_control,
     tasks,
+    project_setup,
 )
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
@@ -125,13 +126,22 @@ def _record(intent, action, detail=None):
     return recorded
 
 
-def _action(intent, response, action, detail=None):
+def _action(
+    intent,
+    response,
+    action,
+    detail=None,
+    timeout=None,
+    success_response=None,
+):
     """A command that does something; JARVIS confirms when it succeeds."""
     return {
         "kind": "action",
         "intent": intent,
         "response": response,
         "action": _record(intent, action, detail),
+        "timeout": timeout,
+        "success_response": success_response,
     }
 
 
@@ -3705,6 +3715,8 @@ def _resolve_pronouns(text):
     return " ".join(replaced)
 
 
+_setup_session = None
+
 # An action waiting on a spoken yes or no.
 _pending = None
 
@@ -3792,7 +3804,300 @@ def _resolve_awaiting(text):
         return None
 
 
-def _confirm(intent, question, action, yes_text=None, no_text=None):
+def _setup_names(result):
+    """Return recipe names from the interpreter's setup_project payload."""
+    text = (result.get("text") or "").strip()
+
+    if not text:
+        return None
+
+    names = tuple(
+        part.strip()
+        for part in text.split(",")
+        if part.strip()
+    )
+
+    return names or None
+
+
+def _setup_project_dir():
+    """Choose the root directory for newly created projects."""
+    return os.path.join(
+        os.path.expanduser("~"),
+        "Projects",
+    )
+
+
+def _setup_answer_recognized(text):
+    """True when the reply matches an option for the current setup question."""
+    session = _setup_session
+
+    if not session:
+        return False
+
+    questions = session["questions"]
+    index = session["index"]
+
+    if index >= len(questions):
+        return False
+
+    spoken = _normalise(text).replace(" ", "")
+
+    for option in questions[index]["options"]:
+        for candidate in (
+            option["value"],
+            option["label"],
+        ):
+            if spoken == _normalise(candidate).replace(" ", ""):
+                return True
+
+    return False
+
+
+def _setup_start_questions(names, base_dir, project_name):
+    """Begin the recipe-question phase after the user declines defaults."""
+    global _setup_session
+
+    required = project_setup.questions(names)
+
+    _setup_session = {
+        "names": names,
+        "base_dir": base_dir,
+        "project_name": project_name,
+        "questions": required,
+        "index": 0,
+        "answers": {},
+    }
+
+    if not required:
+        request = project_setup.setup_request(
+            names,
+            base_dir,
+            project_name,
+            use_defaults=False,
+            answers={},
+        )
+
+        if request["status"] != "ready":
+            return _query(
+                "setup_project",
+                lambda: (
+                    request.get("reason")
+                    or "I couldn't complete the setup questions, sir."
+                ),
+            )
+
+        _setup_session = None
+
+        return _action(
+            "setup_project",
+            "Setting it up, sir.",
+            lambda: project_setup.execute(request["plan"]),
+            timeout=None,
+            success_response=f"Created the {project_name} project, sir.",
+        )
+
+    question = required[0]
+
+    return _ask(
+        "setup_project",
+        question["prompt"],
+        _setup_answer,
+        recognizes=_setup_answer_recognized,
+    )
+
+
+def _setup_answer(answer):
+    """Store one recipe answer and ask the next question."""
+    global _setup_session
+
+    session = _setup_session
+
+    if not session:
+        return _query(
+            "setup_project",
+            lambda: "There isn't a project setup waiting for an answer, sir.",
+        )
+
+    question = session["questions"][session["index"]]
+    spoken = _normalise(answer)
+
+    selected = None
+
+    for option in question["options"]:
+        if spoken.replace(" ", "") == _normalise(option["value"]).replace(" ", ""):
+            selected = option["value"]
+            break
+
+        if spoken.replace(" ", "") == _normalise(option["label"]).replace(" ", ""):
+            selected = option["value"]
+            break
+
+    if selected is None:
+        return _ask(
+            "setup_project",
+            f"{question['prompt']} Please choose "
+            + ", ".join(option["label"] for option in question["options"])
+            + ", sir.",
+            _setup_answer,
+            recognizes=_setup_answer_recognized,
+        )
+
+    session["answers"][question["id"]] = selected
+    session["index"] += 1
+
+    if session["index"] < len(session["questions"]):
+        next_question = session["questions"][session["index"]]
+
+        return _ask(
+            "setup_project",
+            next_question["prompt"],
+            _setup_answer,
+            recognizes=_setup_answer_recognized,
+        )
+
+    names = session["names"]
+    base_dir = session["base_dir"]
+    project_name = session["project_name"]
+    answers = session["answers"]
+
+    _setup_session = None
+
+    request = project_setup.setup_request(
+        names,
+        base_dir,
+        project_name,
+        use_defaults=False,
+        answers=answers,
+    )
+
+    if request["status"] != "ready":
+        return _query(
+            "setup_project",
+            lambda: "I couldn't prepare the project setup, sir.",
+        )
+
+    return _action(
+        "setup_project",
+        "Setting it up, sir.",
+        lambda: project_setup.execute(request["plan"]),
+        timeout=None,
+        success_response=f"Created the {project_name} project, sir.",
+    )
+
+
+def _setup_project_name_answer(answer):
+    """Store and validate the project name, then ask about defaults."""
+    global _setup_session
+
+    session = _setup_session
+
+    if not session:
+        return _query(
+            "setup_project",
+            lambda: "There isn't a project setup waiting for a name, sir.",
+        )
+
+    project_name = (answer or "").strip()
+
+    try:
+        project_setup.resolve_project_dir(
+            session["base_dir"],
+            project_name,
+        )
+    except ValueError as error:
+        return _ask(
+            "setup_project_name",
+            str(error) + " Please give me another name, sir.",
+            _setup_project_name_answer,
+        )
+
+    session["project_name"] = project_name
+
+    request = project_setup.setup_request(
+        session["names"],
+        session["base_dir"],
+        project_name,
+    )
+
+    if request["status"] == "blocked":
+        return _query(
+            "setup_project",
+            lambda: (
+                request.get("reason")
+                or "I'm blocked by a project setup prerequisite, sir."
+            ),
+        )
+
+    def use_defaults():
+        ready = project_setup.setup_request(
+            session["names"],
+            session["base_dir"],
+            project_name,
+            use_defaults=True,
+        )
+
+        return project_setup.execute(ready["plan"])
+
+    return _confirm(
+        "setup_project",
+        request["prompt"],
+        use_defaults,
+        yes_text="Using the recommended defaults, sir.",
+        no_text="I'll ask for the recipe choices, sir.",
+        no_action=lambda: _setup_start_questions(
+            session["names"],
+            session["base_dir"],
+            project_name,
+        ),
+        timeout=None,
+        success_response=f"Created the {project_name} project, sir.",
+    )
+
+
+def _setup_request(result):
+    """Begin the generic project setup conversation."""
+    names = _setup_names(result)
+
+    if not names:
+        return _query(
+            "setup_project",
+            lambda: "Tell me which project technologies you want, sir.",
+        )
+
+    base_dir = _setup_project_dir()
+
+    def begin_name():
+        global _setup_session
+
+        _setup_session = {
+            "names": names,
+            "base_dir": base_dir,
+            "project_name": None,
+            "questions": (),
+            "index": 0,
+            "answers": {},
+        }
+
+        return _ask(
+            "setup_project_name",
+            "What should I call the project, sir?",
+            _setup_project_name_answer,
+        )
+
+    return begin_name()
+
+
+def _confirm(
+    intent,
+    question,
+    action,
+    yes_text=None,
+    no_text=None,
+    no_action=None,
+    timeout=None,
+    success_response=None,
+):
     """Ask before doing something, and remember what to do if approved."""
     global _pending, _awaiting
 
@@ -3802,6 +4107,9 @@ def _confirm(intent, question, action, yes_text=None, no_text=None):
         "action": action,
         "yes": yes_text or phrases.pick("acknowledge"),
         "no": no_text or phrases.pick("cancelled"),
+        "no_action": no_action,
+        "timeout": timeout,
+        "success_response": success_response,
     }
 
     return {
@@ -3992,11 +4300,18 @@ def _resolve_pending(text):
             "intent": pending["intent"],
             "response": pending.get("yes", "Very good, sir."),
             "action": pending["action"],
+            "timeout": pending.get("timeout"),
+            "success_response": pending.get("success_response"),
         }
 
     if answer in _NO:
-        message = _pending.get("no", "Cancelled, sir.")
+        pending = _pending
         _pending = None
+
+        if pending.get("no_action"):
+            return pending["no_action"]()
+
+        message = pending.get("no", "Cancelled, sir.")
 
         return _query("cancelled", lambda: message)
 
@@ -4128,6 +4443,9 @@ def _handle_command(command):
     text = _trim_filler(_normalise(raw_text)) or None
     verbatim_text = raw_text or None
     unit = result.get("unit")
+
+    if intent == "setup_project":
+        return _setup_request(result)
 
     if intent == "open_application" and application:
         return _action(
