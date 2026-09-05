@@ -11,10 +11,37 @@ from pathlib import Path
 import secrets
 import time
 import urllib.request
+import urllib.error
 
 from providers import chat, vision
 
 from actions import files, images
+
+_MODIFY_PROMPT = """
+You are an expert procedural Blender artist modifying an EXISTING scene.
+
+The user wants to change the current Blender model.
+
+Use the supplied reference image and current Blender scene description
+to determine what the user means.
+
+Generate a complete Python script using bpy that performs ONLY the requested
+modification on the existing scene.
+
+Rules:
+- Do not rebuild the scene.
+- Do not delete unrelated objects.
+- Identify objects semantically from the supplied scene description.
+- Preserve existing geometry unless the request requires changing it.
+- Make the smallest sensible modification that fulfills the request.
+- Use only bpy, math, and mathutils.
+- Do not import or use os, pathlib, subprocess, socket, requests, urllib,
+  open, exec, eval, compile, or __import__.
+- Do not save the .blend; the JARVIS Blender bridge saves it.
+- Return only valid Python source.
+
+CURRENT BLENDER SCENE:
+"""
 
 
 _REFERENCE_PROMPT = """
@@ -278,6 +305,130 @@ def _launch_blender_gui(output_path):
     raise RuntimeError(
         "Blender opened, but the JARVIS Blender Bridge is not enabled."
     )
+
+
+def _bridge_execute(script):
+    """Execute validated modelling code in the live Blender instance."""
+    for path in _bridge_states():
+        state = _read_bridge_state(path)
+
+        if not state:
+            continue
+
+        try:
+            port = int(state["port"])
+        except (TypeError, ValueError):
+            continue
+
+        request = urllib.request.Request(
+            f"http://{_BRIDGE_HOST}:{port}/execute",
+            data=json.dumps(
+                {
+                    "script": script,
+                }
+            ).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-JARVIS-Token": str(state["token"]),
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=10,
+            ) as response:
+                payload = json.loads(
+                    response.read().decode("utf-8")
+                )
+
+            if payload.get("ok"):
+                return payload
+
+            raise RuntimeError(
+                payload.get("error", "Blender rejected the script.")
+            )
+
+        except urllib.error.HTTPError as error:
+            body = error.read().decode("utf-8", errors="replace")
+
+            try:
+                payload = json.loads(body)
+                raise RuntimeError(
+                    payload.get("error", str(error))
+                ) from error
+            except json.JSONDecodeError:
+                raise RuntimeError(str(error)) from error
+
+        except OSError:
+            continue
+
+    raise RuntimeError(
+        "I'm sorry, sir. Blender isn't running."
+    )
+
+
+def modify_current_scene(request):
+    """Interpret and apply a natural-language modification to Blender."""
+    context = modeling_context()
+
+    image_bytes = images.current_original_bytes()
+
+    if not image_bytes:
+        raise RuntimeError(
+            "Please keep the reference image loaded, sir."
+        )
+
+    scene_text = json.dumps(
+        context,
+        indent=2,
+    )
+
+    analysis = vision(
+        _MODIFY_PROMPT
+        + "\n\nUSER REQUEST:\n"
+        + request
+        + "\n\nCURRENT SCENE:\n"
+        + scene_text,
+        image_bytes,
+        mime=images.current_mime() or "image/png",
+        max_tokens=2500,
+    )
+
+    script = chat(
+        [
+            {
+                "role": "system",
+                "content": _MODIFY_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": (
+                    "USER REQUEST:\n"
+                    + request
+                    + "\n\nSCENE ANALYSIS:\n"
+                    + analysis
+                    + "\n\nCURRENT SCENE:\n"
+                    + scene_text
+                ),
+            },
+        ],
+        temperature=0,
+        max_tokens=4000,
+        reasoning_effort="low",
+    )
+
+    _validate_script(script)
+
+    result = _bridge_execute(script)
+
+    if not result.get("ok"):
+        raise RuntimeError(
+            result.get("error", "Blender rejected the modification.")
+        )
+
+    return True
 
 
 def _safe_stem(value):

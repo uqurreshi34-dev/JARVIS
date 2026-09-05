@@ -60,8 +60,9 @@ Use inspect_blender when the user asks what is currently open in Blender,
 what objects are in the Blender scene, or whether JARVIS can inspect the
 current Blender model. This is a read-only query.
 
-Use Blender modification intents only when the user wants to change the
-current Blender model.
+Use modify_blender when the user wants to change the current Blender model
+using natural language. Put the complete requested change in "text".
+Do not invent object names or application names.
 
 Use these for sound and media control:
 volume_up when the user wants the volume raised or something louder.
@@ -432,6 +433,7 @@ _SCHEMA = {
                 "setup_project",
                 "model_in_blender",
                 "inspect_blender",
+                "modify_blender",
                 "volume_up",
                 "volume_down",
                 "set_volume",

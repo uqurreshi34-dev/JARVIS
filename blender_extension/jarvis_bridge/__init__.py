@@ -6,6 +6,7 @@ import atexit
 import hmac
 import json
 import os
+import ast
 import queue
 import secrets
 import threading
@@ -13,6 +14,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import bpy
+
+_ALLOWED_IMPORTS = frozenset({
+    "bpy",
+    "math",
+    "mathutils",
+})
+
+_FORBIDDEN_NAMES = frozenset({
+    "exec",
+    "eval",
+    "open",
+    "compile",
+    "__import__",
+    "subprocess",
+    "socket",
+    "requests",
+    "urllib",
+    "os",
+    "pathlib",
+})
 
 
 _HOST = "127.0.0.1"
@@ -93,6 +114,43 @@ def _scene_snapshot():
         ],
         "objects": objects,
     }
+
+
+def _validate_script(source):
+    """Reject generated code that can escape the Blender modelling task."""
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".", 1)[0]
+
+                if root not in _ALLOWED_IMPORTS:
+                    raise ValueError(
+                        f"Disallowed import: {alias.name}"
+                    )
+
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                raise ValueError(
+                    "Relative imports are not allowed."
+                )
+
+            module = node.module or ""
+            root = module.split(".", 1)[0]
+
+            if root not in _ALLOWED_IMPORTS:
+                raise ValueError(
+                    f"Disallowed import: {module}"
+                )
+
+        elif isinstance(node, ast.Name):
+            if node.id in _FORBIDDEN_NAMES:
+                raise ValueError(
+                    f"Disallowed name: {node.id}"
+                )
+
+    return True
 
 
 def _run_pending():
@@ -221,6 +279,77 @@ class _Handler(BaseHTTPRequestHandler):
                 "error": "Unknown bridge endpoint.",
             },
         )
+
+    def do_POST(self):
+        if not self._authorized():
+            self._send(
+                403,
+                {
+                    "ok": False,
+                    "error": "Forbidden.",
+                },
+            )
+            return
+
+        if self.path != "/execute":
+            self._send(
+                404,
+                {
+                    "ok": False,
+                    "error": "Unknown bridge endpoint.",
+                },
+            )
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+
+            if length <= 0 or length > _MAX_BODY:
+                raise ValueError("Invalid request size.")
+
+            payload = json.loads(
+                self.rfile.read(length).decode("utf-8")
+            )
+
+            script = payload.get("script")
+
+            if not isinstance(script, str) or not script.strip():
+                raise ValueError("Missing Blender script.")
+
+            _validate_script(script)
+
+            def execute():
+                namespace = {
+                    "bpy": bpy,
+                }
+
+                exec(
+                    compile(script, "<jarvis-blender>", "exec"),
+                    namespace,
+                    namespace,
+                )
+
+                bpy.ops.wm.save_as_mainfile(
+                    filepath=bpy.data.filepath
+                )
+
+                return {
+                    "ok": True,
+                    "blend_path": bpy.data.filepath,
+                }
+
+            result = _submit(execute)
+
+            self._send(200, result)
+
+        except Exception as error:
+            self._send(
+                400,
+                {
+                    "ok": False,
+                    "error": str(error),
+                },
+            )
 
 
 def _write_state(port):

@@ -4954,6 +4954,17 @@ def _handle_command(command):
             success_response="Created the Blender model, sir.",
         )
 
+    if intent == "modify_blender":
+        return _action(
+            intent,
+            "Modifying the Blender model, sir.",
+            lambda: blender.modify_current_scene(
+                verbatim_text or text
+            ),
+            timeout=None,
+            success_response="Done, sir.",
+        )
+
     if intent == "click_thing" and text:
         return _click_thing(text)
 
