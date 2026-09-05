@@ -2,11 +2,11 @@
 
 """Persistent JARVIS bridge for Blender."""
 
+import ast
 import atexit
 import hmac
 import json
 import os
-import ast
 import queue
 import secrets
 import threading

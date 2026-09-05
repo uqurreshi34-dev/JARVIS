@@ -7,11 +7,10 @@ import re
 import shutil
 import subprocess
 import tempfile
-from pathlib import Path
-import secrets
 import time
-import urllib.request
 import urllib.error
+import urllib.request
+from pathlib import Path
 
 from providers import chat, vision
 
