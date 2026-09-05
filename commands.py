@@ -4933,7 +4933,7 @@ def _handle_command(command):
 
     if intent == "inspect_blender":
         return _query(intent, _inspect_blender)
-        
+
     if intent == "model_in_blender":
         if not images.has_image():
             return _query(
