@@ -92,7 +92,7 @@ Requirements:
 - Do not save the .blend file; JARVIS will do that after the script runs.
 - The script must be self-contained and executable with Blender 5.2.
 - Return only the Python source code.
-- Use only bpy, math, and mathutils if imports are needed.
+- Use only bpy, math, mathutils, and random if imports are needed.
 - Every line must be valid Python 3 syntax.
 - Do not invent modules or conditional-import expressions.
 
@@ -103,6 +103,7 @@ _ALLOWED_IMPORTS = frozenset({
     "bpy",
     "math",
     "mathutils",
+    "random",
 })
 
 
@@ -113,6 +114,27 @@ _FORBIDDEN_CALLS = frozenset({
     "__import__",
     "compile",
 })
+
+_FORBIDDEN_BPY_OPERATIONS = frozenset({
+    ("bpy", "ops", "wm", "quit_blender"),
+    ("bpy", "ops", "wm", "save_as_mainfile"),
+})
+
+
+def _attribute_chain(node):
+    """Return a dotted attribute chain such as ('bpy', 'ops', 'wm', 'quit_blender')."""
+    parts = []
+
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+
+    if not isinstance(node, ast.Name):
+        return ()
+
+    parts.append(node.id)
+
+    return tuple(reversed(parts))
 
 
 def _find_blender():
@@ -539,6 +561,14 @@ def _validate_script(source):
                 )
 
         elif isinstance(node, ast.Call):
+            chain = _attribute_chain(node.func)
+
+            if chain in _FORBIDDEN_BPY_OPERATIONS:
+                raise ValueError(
+                    "Generated Blender script uses a JARVIS-owned "
+                    f"Blender operation: {'.'.join(chain)}"
+                )
+
             if isinstance(node.func, ast.Name):
                 if node.func.id in _FORBIDDEN_CALLS:
                     raise ValueError(
@@ -740,8 +770,26 @@ def create_from_reference(request=None):
         raise RuntimeError(detail)
 
     if not output_path.is_file():
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+
+        detail_parts = [
+            f"Expected output: {output_path}",
+        ]
+
+        if stdout:
+            detail_parts.append(
+                f"BLENDER STDOUT:\n{stdout}"
+            )
+
+        if stderr:
+            detail_parts.append(
+                f"BLENDER STDERR:\n{stderr}"
+            )
+
         raise RuntimeError(
-            "Blender finished, but the .blend file was not created."
+            "Blender finished, but the .blend file was not created.\n\n"
+            + "\n\n".join(detail_parts)
         )
 
     _launch_blender_gui(output_path)
