@@ -36,9 +36,9 @@ def main():
         if commands._fast_path("what are my projects") is not None:
             failures.append("project question was stolen by fuzzy fast path")
 
-    if commands._fast_path("what is my calendar") is None:
+    if commands._fast_path("what is on my calendar") is None:
         failures.append("calendar exact fast path disappeared")
-    elif commands._fast_path("what is my calendar")["intent"] != "read_calendar":
+    elif commands._fast_path("what is on my calendar")["intent"] != "read_calendar":
         failures.append("calendar exact fast path changed intent")
 
     with patch.object(memory, "relevant_summary", return_value=""):
