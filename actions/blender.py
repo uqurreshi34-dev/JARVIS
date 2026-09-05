@@ -114,6 +114,27 @@ _FORBIDDEN_CALLS = frozenset({
     "compile",
 })
 
+_FORBIDDEN_BPY_OPERATIONS = frozenset({
+    ("bpy", "ops", "wm", "quit_blender"),
+    ("bpy", "ops", "wm", "save_as_mainfile"),
+})
+
+
+def _attribute_chain(node):
+    """Return a dotted attribute chain such as ('bpy', 'ops', 'wm', 'quit_blender')."""
+    parts = []
+
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+
+    if not isinstance(node, ast.Name):
+        return ()
+
+    parts.append(node.id)
+
+    return tuple(reversed(parts))
+
 
 def _find_blender():
     """Find Blender without depending on a particular installed version."""
@@ -539,6 +560,14 @@ def _validate_script(source):
                 )
 
         elif isinstance(node, ast.Call):
+            chain = _attribute_chain(node.func)
+
+            if chain in _FORBIDDEN_BPY_OPERATIONS:
+                raise ValueError(
+                    "Generated Blender script uses a JARVIS-owned "
+                    f"Blender operation: {'.'.join(chain)}"
+                )
+
             if isinstance(node.func, ast.Name):
                 if node.func.id in _FORBIDDEN_CALLS:
                     raise ValueError(
