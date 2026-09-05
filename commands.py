@@ -4907,9 +4907,23 @@ def _handle_command(command):
         return _query(intent, _restore_image)
 
     if intent == "model_in_blender":
-        return _query(
+        if not images.has_image():
+            return _query(
+                intent,
+                lambda: (
+                    "Please drop a reference image onto me first, sir. "
+                    "Then tell me to model it in Blender."
+                ),
+            )
+
+        return _action(
             intent,
-            lambda: _model_in_blender(verbatim_text or text),
+            "Modelling it in Blender, sir.",
+            lambda: blender.create_from_reference(
+                verbatim_text or text
+            ),
+            timeout=None,
+            success_response="Created the Blender model, sir.",
         )
 
     if intent == "click_thing" and text:
