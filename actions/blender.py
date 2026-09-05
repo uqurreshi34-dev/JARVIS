@@ -192,7 +192,7 @@ def analyse_current_reference(request=None):
 def _generate_scene_script(brief):
     """Ask the configured LLM for valid, safe bpy code."""
     prompt = _SCRIPT_PROMPT
-
+    print("[JARVIS] generating Blender scene script...", flush=True)
     for attempt in range(2):
         response = chat(
             [
@@ -206,8 +206,10 @@ def _generate_scene_script(brief):
                 },
             ],
             temperature=0,
-            max_tokens=12000,
+            max_tokens=6000,
+            reasoning_effort="low",
         )
+        print("[JARVIS] Blender scene script received.", flush=True)
 
         script = (response or "").strip()
 
