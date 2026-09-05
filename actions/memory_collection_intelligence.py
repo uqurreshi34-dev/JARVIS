@@ -18,7 +18,6 @@ from actions import memory, memory_collections, memory_history, safety
 _SCHEMA_EXAMPLE_LIMIT = 8
 _LOCAL_SCHEMA_SCORE = 0.62
 _LOCAL_KEY_FALLBACK_SCORE = 0.40
-_LOCAL_ITEM_COMPATIBILITY_SCORE = 0.78
 _DECISION_TTL = 60.0
 _DECISION_LIMIT = 24
 
@@ -261,9 +260,17 @@ def classification_details_for_text(text):
     if cardinality == memory_collections.CARDINALITY_COLLECTION:
         items = _extract_items(cleaned, key)
 
+        known_items = {
+            _key(value)
+            for value in memory_collections.items(key)
+        }
+
         if (
             not _collection_key_is_mentioned(cleaned, key)
-            and not _items_fit_collection(key, items)
+            and not any(
+                _key(item) in known_items
+                for item in items
+            )
         ):
             return None
 
@@ -445,11 +452,33 @@ def _schema_documents():
 
                 template = cleaned
 
-                # Replace the values learned from the example with a neutral
-                # placeholder so matching focuses on the memory meaning,
-                # not the particular item mentioned in that example.
+                # Learned item text can contain descriptive words that are
+                # not actually part of the stored collection item.
+                # Example:
+                #   learned item = "react project"
+                #   stored item  = "react"
+                #
+                # Replace the canonical stored value in the example so the
+                # remaining words become reusable learned context.
+                replacements = []
+
+                for learned_item in items:
+                    mapped = _canonicalise_collection_items(
+                        key,
+                        [learned_item],
+                    )
+
+                    canonical = (
+                        mapped[0]
+                        if mapped
+                        else learned_item
+                    )
+
+                    if canonical:
+                        replacements.append(canonical)
+
                 for item in sorted(
-                    set(items),
+                    set(replacements),
                     key=len,
                     reverse=True,
                 ):
@@ -719,50 +748,6 @@ def _collection_match(text):
     return None, None, 0.0
 
 
-def _items_fit_collection(key, items):
-    """Return True when the new items semantically fit existing collection items."""
-    cleaned_items = [
-        _clean_example(item)
-        for item in (items or ())
-        if _clean_example(item)
-    ]
-
-    if not cleaned_items:
-        return False
-
-    existing = memory_collections.items(key)
-
-    if not existing:
-        return False
-
-    documents = [
-        (value, "item", value)
-        for value in existing
-    ]
-
-    try:
-        from actions import semantic_memory
-
-        for item in cleaned_items:
-            ranked = semantic_memory._semantic_rank(
-                item,
-                documents,
-            )
-
-            if not ranked:
-                return False
-
-            _index, score = ranked[0]
-
-            if score < _LOCAL_ITEM_COMPATIBILITY_SCORE:
-                return False
-
-    except Exception:
-        return False
-
-    return True
-
-
 def _collection_key_is_mentioned(text, key):
     """Return True when the user's wording explicitly names the collection."""
     query_words = set(memory._retrieval_words(text))
@@ -800,10 +785,18 @@ def locally_known(text):
     if not items:
         return False
 
+    known_items = {
+        _key(value)
+        for value in memory_collections.items(key)
+    }
+
     if _collection_key_is_mentioned(text, key):
         return True
 
-    return _items_fit_collection(key, items)
+    return any(
+        _key(item) in known_items
+        for item in items
+    )
 
 
 def operation_for_text(text, key=None):
@@ -887,6 +880,72 @@ def _split_items(text, example_items=()):
     return unique
 
 
+def _template_span_candidates(key, example, example_items):
+    """Return learned prefix/suffix pairs using raw and canonical item names."""
+    folded_example = example.casefold()
+    variants = []
+
+    canonical_items = []
+
+    for learned_item in example_items:
+        mapped = _canonicalise_collection_items(
+            key,
+            [learned_item],
+        )
+
+        canonical_items.append(
+            mapped[0]
+            if mapped
+            else learned_item
+        )
+
+    variants.append(canonical_items)
+
+    if canonical_items != example_items:
+        variants.append(example_items)
+
+    candidates = []
+
+    for variant in variants:
+        spans = []
+
+        for item in sorted(
+            set(variant),
+            key=len,
+            reverse=True,
+        ):
+            if not item:
+                continue
+
+            start = folded_example.find(item.casefold())
+
+            if start < 0:
+                continue
+
+            spans.append(
+                (
+                    start,
+                    start + len(item),
+                )
+            )
+
+        if not spans:
+            continue
+
+        first = min(start for start, _end in spans)
+        last = max(end for _start, end in spans)
+
+        candidate = (
+            example[:first],
+            example[last:],
+        )
+
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    return candidates
+
+
 def _extract_template_items(text, key):
     """Extract collection items using every learned language template."""
     current = _clean_example(text)
@@ -897,8 +956,6 @@ def _extract_template_items(text, key):
     data = schema(key) or {}
     details = data.get("example_details") or []
 
-    # Try the newest learned templates first. Each successful model example
-    # becomes another locally reusable way of expressing the same memory.
     for detail in reversed(details):
         if not isinstance(detail, dict):
             continue
@@ -913,40 +970,6 @@ def _extract_template_items(text, key):
         if not example or not example_items:
             continue
 
-        folded_example = example.casefold()
-        first = None
-        last = None
-
-        # Treat the learned item values as placeholders and keep the rest of
-        # the user's wording as the template.
-        for item in sorted(
-            set(example_items),
-            key=len,
-            reverse=True,
-        ):
-            folded_item = item.casefold()
-            start = folded_example.find(folded_item)
-
-            if start < 0:
-                continue
-
-            end = start + len(item)
-
-            if first is None or start < first:
-                first = start
-
-            if last is None or end > last:
-                last = end
-
-        if first is None or last is None:
-            continue
-
-        prefix = example[:first]
-        suffix = example[last:]
-
-        # Speech recognition may omit apostrophes in contractions, e.g.
-        # "I'm" -> "im". Treat apostrophes as optional for matching only;
-        # keep the original text for extracting the actual item.
         def _flexible_literal(value):
             escaped = re.escape(value)
 
@@ -963,36 +986,67 @@ def _extract_template_items(text, key):
                 r"(?:i(?:'|’)?m|i\s+am)",
             )
 
-        pattern = re.compile(
-            rf"^{_flexible_literal(prefix)}(.*?){_flexible_literal(suffix)}$",
-            re.I,
-        )
-
-        match = pattern.match(current)
-
-        if not match:
-            # Allow common additive discourse wording without tying the
-            # collection system to any particular domain.
-            relaxed = re.sub(
-                r"\b(?:also|too|as well)\b",
-                "",
-                current,
-                flags=re.I,
+        for prefix, suffix in _template_span_candidates(
+            key,
+            example,
+            example_items,
+        ):
+            pattern = re.compile(
+                rf"^{_flexible_literal(prefix)}"
+                rf"(.*?)"
+                rf"{_flexible_literal(suffix)}$",
+                re.I,
             )
-            relaxed = _clean_example(relaxed)
-            match = pattern.match(relaxed)
 
-        if not match:
+            match = pattern.match(current)
+
+            if not match:
+                relaxed = re.sub(
+                    r"\b(?:also|too|as well)\b",
+                    "",
+                    current,
+                    flags=re.I,
+                )
+                relaxed = _clean_example(relaxed)
+                match = pattern.match(relaxed)
+
+            if not match:
+                continue
+
+            core = match.group(1).strip(" .")
+
+            items = _split_items(
+                core,
+                example_items,
+            )
+
+            items = _canonicalise_collection_items(
+                key,
+                items,
+            )
+
+            if items:
+                return items
+
+    # A known collection item is strong local evidence even when the user's
+    # wording is shorter than every learned example.
+    existing = memory_collections.items(key)
+    found = []
+
+    for value in existing:
+        cleaned_value = _clean_example(value)
+
+        if not cleaned_value:
             continue
 
-        core = match.group(1).strip(" .")
+        if re.search(
+            rf"(?<!\w){re.escape(cleaned_value)}(?!\w)",
+            current,
+            re.I,
+        ):
+            found.append(value)
 
-        items = _split_items(core, example_items)
-
-        if items:
-            return items
-
-    return []
+    return found
 
 
 def _canonicalise_collection_items(key, items):
