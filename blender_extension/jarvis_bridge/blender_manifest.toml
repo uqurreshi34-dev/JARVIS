@@ -1,0 +1,19 @@
+schema_version = "1.0.0"
+
+id = "jarvis_bridge"
+version = "1.0.0"
+name = "JARVIS Blender Bridge"
+tagline = "Connect Blender to JARVIS"
+maintainer = "JARVIS"
+type = "add-on"
+
+blender_version_min = "5.2.0"
+
+license = [
+    "SPDX:GPL-3.0-or-later",
+]
+
+tags = [
+    "System",
+    "Development",
+]

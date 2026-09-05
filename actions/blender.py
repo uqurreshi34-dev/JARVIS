@@ -121,45 +121,77 @@ def available():
 
 
 _BRIDGE_HOST = "127.0.0.1"
-_BRIDGE_SCRIPT = Path(__file__).with_name("blender_bridge.py")
-_BRIDGE_STATE = Path(files.root()) / ".blender-bridge.json"
+_BRIDGE_DIR = Path(files.root()) / ".blender-bridges"
+_BRIDGE_STARTUP_TIMEOUT = 30.0
 
 
-def _bridge_state():
-    """Read the current JARVIS↔Blender connection details."""
+def _bridge_states():
+    """Return available Blender bridge registrations, newest first."""
     try:
-        return json.loads(
-            _BRIDGE_STATE.read_text(encoding="utf-8")
+        states = list(_BRIDGE_DIR.glob("*.json"))
+    except OSError:
+        return ()
+
+    return tuple(
+        sorted(
+            states,
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    )
+
+
+def _read_bridge_state(path):
+    """Read one Blender bridge registration."""
+    try:
+        state = json.loads(
+            path.read_text(encoding="utf-8")
         )
     except (OSError, ValueError, TypeError):
         return None
 
+    if not isinstance(state, dict):
+        return None
+
+    if not state.get("token") or not state.get("port"):
+        return None
+
+    return state
+
 
 def _bridge_request(endpoint):
-    """Call the authenticated local Blender bridge."""
-    state = _bridge_state()
+    """Call the first healthy authenticated Blender bridge."""
+    for path in _bridge_states():
+        state = _read_bridge_state(path)
 
-    if not state:
-        return None
+        if not state:
+            continue
 
-    request = urllib.request.Request(
-        f"http://{_BRIDGE_HOST}:{int(state['port'])}{endpoint}",
-        headers={
-            "X-JARVIS-Token": state["token"],
-        },
-    )
+        try:
+            port = int(state["port"])
+        except (TypeError, ValueError):
+            continue
 
-    try:
-        with urllib.request.urlopen(
-            request,
-            timeout=2,
-        ) as response:
-            return json.loads(
-                response.read().decode("utf-8")
-            )
+        request = urllib.request.Request(
+            f"http://{_BRIDGE_HOST}:{port}{endpoint}",
+            headers={
+                "X-JARVIS-Token": str(state["token"]),
+            },
+        )
 
-    except Exception:
-        return None
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=2,
+            ) as response:
+                return json.loads(
+                    response.read().decode("utf-8")
+                )
+
+        except Exception:
+            continue
+
+    return None
 
 
 def running():
@@ -213,43 +245,39 @@ def modeling_context():
 
 
 def _launch_blender_gui(output_path):
-    """Open a .blend and attach the JARVIS bridge."""
-    try:
-        _BRIDGE_STATE.unlink()
-    except FileNotFoundError:
-        pass
+    """Open a .blend and wait for the persistent bridge."""
+    executable = _find_blender()
 
-    token = secrets.token_urlsafe(32)
-
-    environment = os.environ.copy()
-    environment["JARVIS_BLENDER_TOKEN"] = token
-    environment["JARVIS_BLENDER_PORT"] = "0"
-    environment["JARVIS_BLENDER_STATE"] = str(_BRIDGE_STATE)
+    if not executable:
+        raise RuntimeError(
+            "Blender could not be found."
+        )
 
     process = subprocess.Popen(
         [
-            _find_blender(),
+            executable,
             str(output_path),
-            "--python",
-            str(_BRIDGE_SCRIPT),
         ],
-        env=environment,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
 
-    # Wait only for the bridge to become ready. This is startup readiness,
-    # not an arbitrary limit on Blender modelling work.
-    while True:
+    deadline = time.monotonic() + _BRIDGE_STARTUP_TIMEOUT
+
+    while time.monotonic() < deadline:
         if running():
             return True
 
         if process.poll() is not None:
             raise RuntimeError(
-                "Blender closed before JARVIS could connect to it."
+                "Blender closed before the JARVIS bridge became available."
             )
 
         time.sleep(0.2)
+
+    raise RuntimeError(
+        "Blender opened, but the JARVIS Blender Bridge is not enabled."
+    )
 
 
 def _safe_stem(value):
