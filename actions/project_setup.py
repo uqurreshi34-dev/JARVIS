@@ -424,3 +424,81 @@ def plan(names, project_dir, answers=None):
         ),
         "steps": tuple(steps),
     }
+
+
+def execute(plan_data):
+    """Execute an approved project setup plan safely."""
+    if not isinstance(plan_data, dict):
+        raise ValueError("A setup plan is required.")
+
+    if plan_data.get("status") not in (None, "ready"):
+        raise ValueError(
+            "Only a ready setup plan can be executed."
+        )
+
+    project_dir = Path(
+        plan_data["project_dir"]
+    ).resolve()
+
+    project_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    results = []
+
+    for step in plan_data.get("steps") or plan_data.get("plan", {}).get("steps") or ():
+        if not isinstance(step, dict):
+            raise ValueError("Setup plan contains an invalid step.")
+
+        argv = step.get("argv")
+
+        if not isinstance(argv, (list, tuple)) or not argv:
+            raise ValueError(
+                f"Setup step {step.get('name', '<unknown>')!r} has no command."
+            )
+
+        cwd = Path(
+            step.get("cwd") or project_dir
+        ).resolve()
+
+        cwd.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        completed = subprocess.run(
+            [str(value) for value in argv],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        result = {
+            "name": step.get("name"),
+            "recipe": step.get("recipe"),
+            "cwd": str(cwd),
+            "argv": tuple(str(value) for value in argv),
+            "returncode": completed.returncode,
+            "stdout": completed.stdout.strip(),
+            "stderr": completed.stderr.strip(),
+            "succeeded": completed.returncode == 0,
+        }
+
+        results.append(result)
+
+        if completed.returncode != 0:
+            return {
+                "status": "failed",
+                "project_dir": str(project_dir),
+                "steps": tuple(results),
+                "failed_step": result,
+            }
+
+    return {
+        "status": "completed",
+        "project_dir": str(project_dir),
+        "steps": tuple(results),
+        "failed_step": None,
+    }
