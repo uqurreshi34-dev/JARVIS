@@ -376,6 +376,87 @@ def _bridge_execute(script):
     )
 
 
+def _generate_modification_script(request, scene_text, reference_analysis=None):
+    """Ask the configured LLM for valid, safe bpy code for a scene change."""
+    prompt_parts = [
+        "USER REQUEST:\n"
+        + request,
+        "CURRENT BLENDER SCENE:\n"
+        + scene_text,
+    ]
+
+    if reference_analysis:
+        prompt_parts.append(
+            "REFERENCE IMAGE ANALYSIS:\n"
+            + reference_analysis
+        )
+
+    user_content = "\n\n".join(prompt_parts)
+    prompt = _MODIFY_PROMPT
+
+    for attempt in range(2):
+        response = chat(
+            [
+                {
+                    "role": "system",
+                    "content": prompt,
+                },
+                {
+                    "role": "user",
+                    "content": user_content,
+                },
+            ],
+            temperature=0,
+            max_tokens=4000,
+            reasoning_effort="low",
+        )
+
+        script = _clean_generated_script(response)
+
+        if not script:
+            if attempt == 1:
+                raise ValueError(
+                    "Blender modification did not return a usable Python script."
+                )
+
+            prompt = (
+                _MODIFY_PROMPT
+                + "\n\nYour previous response was empty. "
+                "Return the complete Blender Python script."
+            )
+            continue
+
+        try:
+            _validate_script(script)
+
+        except SyntaxError as error:
+            if attempt == 1:
+                raise ValueError(
+                    "Generated Blender modification has invalid Python syntax: "
+                    f"{error}"
+                ) from error
+
+            prompt = (
+                _MODIFY_PROMPT
+                + "\n\nYour previous Blender modification failed to parse "
+                f"as Python: {error}. Rewrite the ENTIRE modification script "
+                "correctly. Return only valid Python source. "
+                "Do not use markdown fences."
+            )
+            continue
+
+        except ValueError:
+            # Security-policy violations are never repaired by asking the
+            # model to try again.
+            raise
+
+        return script
+
+    raise ValueError(
+        "Could not generate a valid Blender modification script."
+    )
+
+
 def modify_current_scene(request):
     """Interpret and apply a natural-language modification to Blender."""
     context = modeling_context()
@@ -399,36 +480,11 @@ def modify_current_scene(request):
             max_tokens=2500,
         )
 
-    prompt_parts = [
-        "USER REQUEST:\n"
-        + request,
-        "CURRENT BLENDER SCENE:\n"
-        + scene_text,
-    ]
-
-    if reference_analysis:
-        prompt_parts.append(
-            "REFERENCE IMAGE ANALYSIS:\n"
-            + reference_analysis
-        )
-
-    script = chat(
-        [
-            {
-                "role": "system",
-                "content": _MODIFY_PROMPT,
-            },
-            {
-                "role": "user",
-                "content": "\n\n".join(prompt_parts),
-            },
-        ],
-        temperature=0,
-        max_tokens=4000,
-        reasoning_effort="low",
+    script = _generate_modification_script(
+        request,
+        scene_text,
+        reference_analysis,
     )
-
-    _validate_script(script)
 
     result = _bridge_execute(script)
 
@@ -515,6 +571,27 @@ def analyse_current_reference(request=None):
     )
 
 
+def _clean_generated_script(source):
+    """Remove an optional outer Markdown code fence without changing code."""
+    script = (source or "").strip()
+
+    if not (
+        script.startswith("```")
+        and script.endswith("```")
+    ):
+        return script
+
+    lines = script.splitlines()
+
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+
+    return "\n".join(lines).strip()
+
+
 def _generate_scene_script(brief):
     """Ask the configured LLM for valid, safe bpy code."""
     prompt = _SCRIPT_PROMPT
@@ -537,7 +614,7 @@ def _generate_scene_script(brief):
         )
         print("[JARVIS] Blender scene script received.", flush=True)
 
-        script = (response or "").strip()
+        script = _clean_generated_script(response)
 
         # Claude may still wrap code in a markdown fence despite being told
         # not to. Remove only the outer fence; never alter the code itself.

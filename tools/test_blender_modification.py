@@ -31,6 +31,7 @@ def main():
     }
 
     generated_script = """
+```python
 import bpy
 
 obj = bpy.data.objects.get("Dome")
