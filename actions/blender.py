@@ -33,6 +33,14 @@ scene description.
 Identify objects semantically from the live scene description rather than
 assuming names, ordering, or previously selected objects.
 
+Visibility can be changed naturally: objects may be hidden, shown, or isolated.
+
+When the user asks to restore what was hidden or undo a recent isolation, use the
+visibility_restore state supplied with the current scene. Restore those objects
+to exactly the visibility they had before the last visibility change.
+
+Do not assume that every object was visible before isolation.
+
 Generate a complete Python script using bpy that performs ONLY the requested
 modification on the existing scene.
 
@@ -342,6 +350,7 @@ def modeling_context():
         "scene": scene.get("scene"),
         "active_object": scene.get("active_object"),
         "selected_objects": scene.get("selected_objects") or (),
+        "visibility_restore": scene.get("visibility_restore") or {},
         "objects": tuple(
             {
                 "name": obj.get("name"),

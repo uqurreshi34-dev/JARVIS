@@ -62,6 +62,21 @@ current Blender model. This is a read-only query.
 
 Use modify_blender when the user wants to change the current Blender model
 using natural language. Put the complete requested change in "text".
+This includes changing colours, materials, position, rotation, scale,
+dimensions, geometry, visibility, hiding or showing objects, isolating
+parts of the scene, and restoring a previous Blender visibility state.
+
+When words such as "restore", "show", "bring back", or "undo isolation"
+refer to a Blender model, scene, or its objects, use modify_blender.
+Do not use restore_all unless the user is talking about Windows, desktop
+windows, or other application windows.
+
+Examples:
+- "restore the bridge"
+- "show the hidden parts of the model"
+- "undo the isolation"
+- "bring back everything I hid"
+- "show the entire model again"
 Do not invent object names or application names.
 
 Use these for sound and media control:

@@ -438,6 +438,8 @@ _FAST_LOOKUP = {
 # match still counts.
 _FUZZY_THRESHOLD = 0.78
 
+_MIN_REPLACEMENT_TOKEN_SIMILARITY = 0.40
+
 # These delete something, and near misses are dangerous: "read my clipboard"
 # and "clear my clipboard" score 0.86 against each other. They must be said
 # clearly enough to match exactly.
@@ -503,14 +505,22 @@ def _word_structural_similarity(left, right):
         if tag == "replace":
             pair_count = min(left_count, right_count)
 
-            score += sum(
+            similarities = [
                 _token_similarity(left_token, right_token)
                 for left_token, right_token in zip(
                     left_tokens[left_start:left_start + pair_count],
                     right_tokens[right_start:right_start + pair_count],
                 )
-            )
+            ]
 
+            if (
+                similarities
+                and min(similarities)
+                < _MIN_REPLACEMENT_TOKEN_SIMILARITY
+            ):
+                return 0.0
+
+            score += sum(similarities)
             weight += max(left_count, right_count)
             continue
 

@@ -48,6 +48,23 @@ _TOKEN = secrets.token_urlsafe(32)
 _requests = queue.Queue()
 _server = None
 _server_thread = None
+_visibility_restore_state = None
+
+
+def _visibility_snapshot():
+    """Capture viewport visibility for every scene object."""
+    return {
+        obj.name: not obj.hide_get()
+        for obj in bpy.context.scene.objects
+    }
+
+
+def _remember_visibility_change(before, after):
+    """Remember the state immediately before a visibility change."""
+    global _visibility_restore_state
+
+    if before != after:
+        _visibility_restore_state = before
 
 
 def _json_bytes(payload):
@@ -112,6 +129,7 @@ def _scene_snapshot():
             obj.name
             for obj in bpy.context.selected_objects
         ],
+        "visibility_restore": _visibility_restore_state or {},
         "objects": objects,
     }
 
@@ -319,6 +337,8 @@ class _Handler(BaseHTTPRequestHandler):
             _validate_script(script)
 
             def execute():
+                before_visibility = _visibility_snapshot()
+
                 namespace = {
                     "bpy": bpy,
                 }
@@ -327,6 +347,13 @@ class _Handler(BaseHTTPRequestHandler):
                     compile(script, "<jarvis-blender>", "exec"),
                     namespace,
                     namespace,
+                )
+
+                after_visibility = _visibility_snapshot()
+
+                _remember_visibility_change(
+                    before_visibility,
+                    after_visibility,
                 )
 
                 bpy.ops.wm.save_as_mainfile(
