@@ -1,6 +1,7 @@
 """Create Blender scenes from JARVIS reference-image modelling briefs."""
 
 import ast
+import hashlib
 import json
 import os
 import re
@@ -119,6 +120,63 @@ _FORBIDDEN_BPY_OPERATIONS = frozenset({
     ("bpy", "ops", "wm", "quit_blender"),
     ("bpy", "ops", "wm", "save_as_mainfile"),
 })
+
+_REFERENCE_CACHE_VERSION = "1"
+_REFERENCE_CACHE_DIR = ".reference-analysis-cache"
+
+
+def _reference_cache_path(image_bytes):
+    """Return the on-disk cache path for this image and reference prompt."""
+    root = files.root()
+
+    if not root:
+        return None
+
+    digest = hashlib.sha256(
+        _REFERENCE_CACHE_VERSION.encode("utf-8")
+        + _REFERENCE_PROMPT.encode("utf-8")
+        + image_bytes
+    ).hexdigest()
+
+    cache_dir = Path(root) / _REFERENCE_CACHE_DIR
+
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+
+    return cache_dir / f"{digest}.txt"
+
+
+def _load_cached_reference_analysis(image_bytes):
+    """Return cached visual analysis for this exact image, if available."""
+    path = _reference_cache_path(image_bytes)
+
+    if not path:
+        return None
+
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+    return text or None
+
+
+def _save_cached_reference_analysis(image_bytes, analysis):
+    """Persist a successful reference analysis for reuse."""
+    path = _reference_cache_path(image_bytes)
+
+    if not path or not analysis:
+        return
+
+    try:
+        path.write_text(
+            analysis,
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
 
 
 def _attribute_chain(node):
@@ -492,16 +550,7 @@ def modify_current_scene(request):
     reference_analysis = None
 
     if image_bytes:
-        reference_analysis = vision(
-            _MODIFY_PROMPT
-            + "\n\nUSER REQUEST:\n"
-            + request
-            + "\n\nCURRENT SCENE:\n"
-            + scene_text,
-            image_bytes,
-            mime=images.current_mime() or "image/png",
-            max_tokens=2500,
-        )
+        reference_analysis = analyse_current_reference()
 
     script = _generate_modification_script(
         request,
@@ -580,26 +629,46 @@ def _validate_script(source):
 
 
 def analyse_current_reference(request=None):
-    """Analyse the current JARVIS image as a modelling reference."""
+    """Analyse the current JARVIS image, reusing cached analysis when possible."""
     image_bytes = images.current_original_bytes()
 
     if not image_bytes:
         return None
 
-    mime = images.current_mime() or "image/png"
+    analysis = _load_cached_reference_analysis(image_bytes)
+
+    if analysis:
+        print("[JARVIS] using cached reference analysis.", flush=True)
+
+    else:
+        print("[JARVIS] analysing reference image...", flush=True)
+
+        mime = images.current_mime() or "image/png"
+
+        analysis = vision(
+            _REFERENCE_PROMPT,
+            image_bytes,
+            mime=mime,
+            max_tokens=3000,
+        )
+
+        if not analysis:
+            return None
+
+        _save_cached_reference_analysis(
+            image_bytes,
+            analysis,
+        )
+
     request_text = (request or "").strip()
 
-    prompt = _REFERENCE_PROMPT
-
     if request_text:
-        prompt += f"\n\nUser request: {request_text}"
+        return (
+            analysis
+            + f"\n\nUser request: {request_text}"
+        )
 
-    return vision(
-        prompt,
-        image_bytes,
-        mime=mime,
-        max_tokens=3000,
-    )
+    return analysis
 
 
 def _clean_generated_script(source):
@@ -723,14 +792,28 @@ def create_from_reference(request=None):
             "Blender could not be found. Set BLENDER_EXECUTABLE if needed."
         )
 
+    analysis_started = time.monotonic()
+
     brief = analyse_current_reference(request)
+
+    print(
+        f"[JARVIS] reference analysis took "
+        f"{time.monotonic() - analysis_started:.1f}s",
+        flush=True,
+    )
 
     if not brief:
         raise RuntimeError(
             "The reference image could not be analysed."
         )
 
+    script_started = time.monotonic()
     scene_script = _generate_scene_script(brief)
+    print(
+        f"[JARVIS] scene script generation took "
+        f"{time.monotonic() - script_started:.1f}s",
+        flush=True,
+    )
 
     models_dir = Path(files.root()) / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
@@ -747,7 +830,7 @@ def create_from_reference(request=None):
             _write_runner(scene_script, output_path),
             encoding="utf-8",
         )
-
+        blender_started = time.monotonic()
         completed = subprocess.run(
             [
                 executable,
@@ -758,6 +841,11 @@ def create_from_reference(request=None):
             capture_output=True,
             text=True,
             check=False,
+        )
+        print(
+            f"[JARVIS] Blender generation took "
+            f"{time.monotonic() - blender_started:.1f}s",
+            flush=True,
         )
 
     if completed.returncode != 0:
