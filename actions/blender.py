@@ -1536,10 +1536,15 @@ def _create_from_reference_set(request):
         views,
     )
 
+    reference_image = _multiview_contact_sheet(
+        views
+    )
+
     started = time.monotonic()
 
     scene_script = _generate_scene_script(
-        brief
+        brief,
+        reference_image=reference_image,
     )
 
     print(
@@ -2401,7 +2406,10 @@ def _clean_generated_script(source):
     return "\n".join(lines).strip()
 
 
-def _generate_scene_script(brief):
+def _generate_scene_script(
+    brief,
+    reference_image=None,
+):
     """Ask the configured LLM for valid, safe bpy code."""
     prompt = _SCRIPT_PROMPT
 
@@ -2412,21 +2420,43 @@ def _generate_scene_script(brief):
 
     started = time.monotonic()
 
-    response = chat(
-        [
-            {
-                "role": "system",
-                "content": prompt,
-            },
-            {
-                "role": "user",
-                "content": brief,
-            },
-        ],
-        temperature=0,
-        max_tokens=12000,
-        reasoning_effort="low",
-    )
+    generation_messages = [
+        {
+            "role": "system",
+            "content": prompt,
+        },
+        {
+            "role": "user",
+            "content": brief,
+        },
+    ]
+
+    if reference_image is not None:
+        generation_messages[1]["content"] = (
+            brief
+            + "\n\n"
+            "REFERENCE-GROUNDING RULE:\n"
+            "The supplied reference views are the primary visual authority.\n"
+            "Construct the model from what is actually visible in those views.\n"
+            "Do not rely on remembered or canonical appearance of the subject.\n"
+            "Cross-check the supplied views and make one consistent 3D model.\n"
+        )
+
+        response = vision_chat(
+            generation_messages,
+            reference_image,
+            mime="image/png",
+            max_tokens=12000,
+            reasoning_effort="low",
+        )
+
+    else:
+        response = chat(
+            generation_messages,
+            temperature=0,
+            max_tokens=12000,
+            reasoning_effort="low",
+        )
 
     generation_time = time.monotonic() - started
 
