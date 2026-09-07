@@ -939,13 +939,42 @@ def _multiview_subject(request):
 
 
 def _reference_set_path(subject):
-    """Return the standard JARVIS reference-set folder."""
-    return (
+    """Return the matching JARVIS reference-set folder."""
+    root = (
         Path.home()
         / "JARVIS"
         / "reference-sets"
-        / _safe_stem(subject)
     )
+
+    requested = re.sub(
+        r"[^a-z0-9]+",
+        "",
+        (subject or "").casefold(),
+    )
+
+    exact = root / _safe_stem(subject)
+
+    if exact.is_dir():
+        return exact
+
+    try:
+        for candidate in root.iterdir():
+            if not candidate.is_dir():
+                continue
+
+            candidate_name = re.sub(
+                r"[^a-z0-9]+",
+                "",
+                candidate.name.casefold(),
+            )
+
+            if candidate_name == requested:
+                return candidate
+
+    except OSError:
+        pass
+
+    return exact
 
 
 def has_reference_set(request):
