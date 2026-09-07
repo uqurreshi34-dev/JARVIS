@@ -611,7 +611,7 @@ class Provider:
         )
 
         kwargs = {
-            "model": self.model,
+            "model": self.vision_model,
             "messages": anthropic_messages,
             "max_tokens": max_tokens,
         }
@@ -619,7 +619,7 @@ class Provider:
         if system_parts:
             kwargs["system"] = "\n\n".join(system_parts)
 
-        effort = reasoning_effort or self.answer_effort
+        effort = reasoning_effort or self.vision_effort
 
         if effort:
             kwargs["output_config"] = {
@@ -1134,14 +1134,14 @@ def vision_chat(
                     )
 
                 kwargs = {
-                    "model": provider.model,
+                    "model": provider.vision_model,
                     "messages": multimodal_messages,
                     "max_tokens": max_tokens,
                 }
 
                 effort = (
                     reasoning_effort
-                    or provider.default_effort
+                    or provider.vision_effort
                 )
 
                 if (
