@@ -5,6 +5,7 @@ import base64
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -101,41 +102,45 @@ Do not write Blender Python.
 Do not invent hidden geometry as fact.
 """
 
+_MULTIVIEW_SUPPORTED_VIEWS = (
+    "front",
+    "back",
+    "left",
+    "right",
+)
+
+_MULTIVIEW_MIN_VIEWS = 3
+
 _MULTIVIEW_PROMPT = """
-You are analysing three reference photographs of the SAME physical subject
-for 3D reconstruction.
+You are analysing multiple reference photographs of the SAME physical subject
+for accurate 3D reconstruction.
 
-The images are arranged in this exact order:
-
-LEFT IMAGE  = FRONT VIEW
-MIDDLE IMAGE = BACK VIEW
-RIGHT IMAGE = LEFT SIDE VIEW
+The contact sheet is labelled with the actual view names.
 
 Produce ONE unified modelling specification for the subject.
 
-Cross-reference all three views before drawing conclusions.
+Cross-reference ALL supplied views before making conclusions.
 
-Cover:
+Use the available views to establish:
+- overall 3D massing
+- width, height and depth proportions
+- front, rear and side geometry
+- features that project, recess, overlap, or continue around corners
+- symmetry supported by the evidence
+- repeated structures and counts
+- materials and major colour relationships
+- recognisable silhouette
+- geometry confirmed by multiple views
+- genuine remaining uncertainty
 
-- SUBJECT: what the object is
-- MASSING: overall 3D volume and major masses
-- PROPORTIONS: width, height, depth relationships
-- FRONT: distinctive front geometry
-- BACK: distinctive rear geometry
-- LEFT SIDE: visible side geometry and depth
-- DEPTH: features that project, recess, overlap, or continue around corners
-- SYMMETRY: symmetry supported by the views
-- REPETITION: repeated structures and counts
-- MATERIALS: major visible material groups
-- SILHOUETTE: the recognisable 3D outline
-- CONSISTENCY: geometry confirmed by multiple views
-- UNCERTAINTY: details that cannot be established from these views
+Use the front and rear views to establish longitudinal structure when those
+views are available.
 
-Use the front and back views to establish the object's longitudinal structure.
-Use the left-side view to establish depth and side-profile geometry.
+Use left and right views to establish lateral depth when those views are
+available.
 
-Do not assume that an unseen right side is identical unless symmetry is
-strongly supported by the available views.
+Do not assume an unseen side is identical unless symmetry is strongly
+supported by the supplied views.
 
 Do not invent hidden geometry as fact.
 
@@ -895,13 +900,13 @@ def _is_multiview_request(request):
         for phrase in (
             "three views",
             "3 views",
-            "three photos",
-            "3 photos",
-            "three images",
-            "3 images",
+            "four views",
+            "4 views",
             "multiple views",
             "multi view",
             "multi-view",
+            "multiple angles",
+            "several views",
         )
     )
 
@@ -928,8 +933,10 @@ def _multiview_subject(request):
 
     text = re.sub(
         r"\s+(?:from|using)\s+(?:these\s+)?"
-        r"(?:three|3|multiple|multi[- ]?)\s*"
-        r"(?:views?|photos?|images?|reference\s+views?)\b.*$",
+        r"(?:(?:\d+|one|two|three|four|five|six)\s+)?"
+        r"(?:multiple\s+|several\s+|various\s+|multi[- ]?)?"
+        r"(?:views?|angles?|photos?|images?|reference\s+views?)"
+        r"\b.*$",
         "",
         text,
         flags=re.IGNORECASE,
@@ -978,24 +985,33 @@ def _reference_set_path(subject):
 
 
 def has_reference_set(request):
-    """True when the requested multi-view reference set exists."""
+    """True when a usable multi-view reference set exists."""
     if not _is_multiview_request(request):
         return False
 
-    folder = _reference_set_path(
-        _multiview_subject(request)
-    )
+    subject = _multiview_subject(request)
+    folder = _reference_set_path(subject)
 
     if not folder.is_dir():
         return False
 
-    return all(
-        _find_reference_view(folder, view)
-        for view in (
-            "front",
-            "back",
-            "left",
-        )
+    available_views = {
+        view
+        for view in _MULTIVIEW_SUPPORTED_VIEWS
+        if _find_reference_view(folder, view)
+    }
+
+    if len(available_views) < _MULTIVIEW_MIN_VIEWS:
+        return False
+
+    if "front" not in available_views:
+        return False
+
+    if "back" not in available_views:
+        return False
+
+    return bool(
+        {"left", "right"} & available_views
     )
 
 
@@ -1019,7 +1035,7 @@ def _find_reference_view(folder, view):
 
 
 def _load_multiview_references(subject):
-    """Load front, back and left reference images."""
+    """Load all available supported reference views."""
     folder = _reference_set_path(subject)
 
     if not folder.is_dir():
@@ -1029,20 +1045,14 @@ def _load_multiview_references(subject):
 
     views = {}
 
-    for view in (
-        "front",
-        "back",
-        "left",
-    ):
+    for view in _MULTIVIEW_SUPPORTED_VIEWS:
         path = _find_reference_view(
             folder,
             view,
         )
 
         if path is None:
-            raise RuntimeError(
-                f"Missing {view} reference in {folder}"
-            )
+            continue
 
         if not images.supports_path(path):
             raise RuntimeError(
@@ -1051,27 +1061,48 @@ def _load_multiview_references(subject):
 
         views[view] = path.read_bytes()
 
+    if len(views) < _MULTIVIEW_MIN_VIEWS:
+        raise RuntimeError(
+            "A multi-view reference set needs at least "
+            f"{_MULTIVIEW_MIN_VIEWS} valid views."
+        )
+
+    if "front" not in views or "back" not in views:
+        raise RuntimeError(
+            "A multi-view reference set must contain front and back views."
+        )
+
+    if not {"left", "right"} & views.keys():
+        raise RuntimeError(
+            "A multi-view reference set must contain at least "
+            "one side view."
+        )
+
     return views
 
 
 def _multiview_contact_sheet(views):
-    """Create a labelled front/back/left comparison image."""
+    """Create a labelled contact sheet for all available views."""
+    from PIL import ImageDraw
+
     width = 768
     height = 768
     gap = 16
+    columns = 2
+    rows = (len(views) + columns - 1) // columns
 
     canvas = Image.new(
         "RGB",
         (
-            width * 3 + gap * 2,
-            height,
+            width * columns + gap * (columns - 1),
+            height * rows + gap * (rows - 1),
         ),
         "white",
     )
 
-    for index, view in enumerate(
-        ("front", "back", "left")
-    ):
+    draw = ImageDraw.Draw(canvas)
+
+    for index, view in enumerate(views):
         with Image.open(
             io.BytesIO(views[view])
         ) as image:
@@ -1080,19 +1111,27 @@ def _multiview_contact_sheet(views):
                 image,
                 (
                     width,
-                    height,
+                    height - 40,
                 ),
                 method=Image.Resampling.LANCZOS,
             )
 
+        x_slot = index % columns
+        y_slot = index // columns
+
+        cell_x = x_slot * (width + gap)
+        cell_y = y_slot * (height + gap)
+
         x = (
-            index * (width + gap)
+            cell_x
             + (width - image.width) // 2
         )
 
         y = (
-            height - image.height
-        ) // 2
+            cell_y
+            + 40
+            + (height - 40 - image.height) // 2
+        )
 
         canvas.paste(
             image,
@@ -1100,6 +1139,15 @@ def _multiview_contact_sheet(views):
                 x,
                 y,
             ),
+        )
+
+        draw.text(
+            (
+                cell_x + 12,
+                cell_y + 12,
+            ),
+            view.upper(),
+            fill="black",
         )
 
     output = io.BytesIO()
@@ -1113,9 +1161,14 @@ def _multiview_contact_sheet(views):
 
 
 def _analyse_multiview_references(subject, views):
-    """Produce one unified modelling brief from three views."""
+    """Produce one unified modelling brief from all supplied views."""
     comparison = _multiview_contact_sheet(
         views
+    )
+
+    view_names = ", ".join(
+        view.upper()
+        for view in views
     )
 
     started = time.monotonic()
@@ -1123,7 +1176,9 @@ def _analyse_multiview_references(subject, views):
     analysis = vision(
         _MULTIVIEW_PROMPT
         + "\n\nSUBJECT:\n"
-        + subject,
+        + subject
+        + "\n\nSUPPLIED VIEWS:\n"
+        + view_names,
         comparison,
         mime="image/png",
         max_tokens=4000,
@@ -1142,6 +1197,334 @@ def _analyse_multiview_references(subject, views):
         )
 
     return analysis.strip()
+
+
+def _multiview_camera_script(view):
+    """Position Blender's existing camera for a named reference view."""
+    angles = {
+        "front": 0.0,
+        "back": math.pi,
+        "left": -math.pi / 2.0,
+        "right": math.pi / 2.0,
+    }
+
+    if view not in angles:
+        raise ValueError(
+            f"Unsupported multi-view render: {view}"
+        )
+
+    return f"""
+import bpy
+import math
+from mathutils import Matrix, Vector
+
+scene = bpy.context.scene
+camera = scene.camera
+
+if camera is None:
+    raise RuntimeError("Blender scene has no active camera.")
+
+if "_jarvis_multiview_camera_state" not in scene:
+    scene["_jarvis_multiview_camera_state"] = {{
+        "location": tuple(camera.location),
+        "rotation": tuple(camera.rotation_euler),
+    }}
+
+objects = [
+    obj
+    for obj in scene.objects
+    if obj.type == "MESH" and obj.visible_get()
+]
+
+if not objects:
+    raise RuntimeError("Blender scene contains no visible mesh objects.")
+
+corners = []
+
+for obj in objects:
+    corners.extend(
+        obj.matrix_world @ Vector(corner)
+        for corner in obj.bound_box
+    )
+
+minimum = Vector((
+    min(point.x for point in corners),
+    min(point.y for point in corners),
+    min(point.z for point in corners),
+))
+
+maximum = Vector((
+    max(point.x for point in corners),
+    max(point.y for point in corners),
+    max(point.z for point in corners),
+))
+
+center = (minimum + maximum) * 0.5
+
+base = camera.location - center
+distance = max(base.length, 1.0)
+
+horizontal = Vector((
+    base.x,
+    base.y,
+    0.0,
+))
+
+if horizontal.length < 1e-6:
+    horizontal = Vector((0.0, -1.0, 0.0))
+else:
+    horizontal.normalize()
+
+rotation = Matrix.Rotation(
+    {angles[view]},
+    4,
+    "Z",
+)
+
+direction = rotation @ horizontal
+
+location = center + direction * distance
+location.z = center.z + base.z
+
+camera.location = location
+camera.rotation_euler = (
+    center - location
+).to_track_quat(
+    "-Z",
+    "Y",
+).to_euler()
+""".strip()
+
+
+def _multiview_restore_camera_script():
+    """Restore the camera to its original generated position."""
+    return """
+import bpy
+
+scene = bpy.context.scene
+camera = scene.camera
+state = scene.get("_jarvis_multiview_camera_state")
+
+if camera is not None and state:
+    camera.location = state["location"]
+    camera.rotation_euler = state["rotation"]
+
+if "_jarvis_multiview_camera_state" in scene:
+    del scene["_jarvis_multiview_camera_state"]
+""".strip()
+
+
+def _render_multiviews(views):
+    """Render the live model from every available reference viewpoint."""
+    renders = {}
+
+    try:
+        for view in views:
+            _bridge_execute(
+                _multiview_camera_script(view)
+            )
+
+            preview = _bridge_render_preview()
+
+            renders[view] = preview["bytes"]
+
+    finally:
+        try:
+            _bridge_execute(
+                _multiview_restore_camera_script()
+            )
+        except Exception as error:
+            print(
+                f"[JARVIS] could not restore multi-view camera: {error}",
+                flush=True,
+            )
+
+    return renders
+
+
+def _multiview_qa_plate(views, renders):
+    """Create labelled reference/render pairs for visual QA."""
+    width = 512
+    height = 512
+    gap = 16
+    columns = 2
+    rows = len(views)
+
+    canvas = Image.new(
+        "RGB",
+        (
+            width * columns + gap,
+            (height + 32) * rows + gap * (rows - 1),
+        ),
+        "white",
+    )
+
+    from PIL import ImageDraw
+
+    draw = ImageDraw.Draw(canvas)
+
+    for row, view in enumerate(views):
+        y = row * (height + 32 + gap)
+
+        draw.text(
+            (8, y + 8),
+            view.upper(),
+            fill="black",
+        )
+
+        for column, data in enumerate(
+            (
+                views[view],
+                renders[view],
+            )
+        ):
+            with Image.open(
+                io.BytesIO(data)
+            ) as image:
+                image = image.convert("RGB")
+                image = ImageOps.contain(
+                    image,
+                    (
+                        width,
+                        height,
+                    ),
+                    method=Image.Resampling.LANCZOS,
+                )
+
+            x = column * width
+
+            cell_x = (
+                x
+                + (width - image.width) // 2
+            )
+
+            cell_y = (
+                y
+                + 32
+                + (height - image.height) // 2
+            )
+
+            canvas.paste(
+                image,
+                (
+                    cell_x,
+                    cell_y,
+                ),
+            )
+
+    output = io.BytesIO()
+
+    canvas.save(
+        output,
+        format="PNG",
+    )
+
+    return output.getvalue()
+
+
+def _review_multiview(views, renders, brief):
+    """Run the same structured visual QA against all view pairs."""
+    comparison = _multiview_qa_plate(
+        views,
+        renders,
+    )
+
+    prompt = (
+        _REVIEW_PROMPT
+        + "\n\n"
+        + "THIS IS A MULTI-VIEW COMPARISON PLATE.\n"
+        + "Each row contains a labelled reference view and the corresponding "
+        + "current Blender render.\n"
+        + "Inspect every supplied view before ranking the 3 to 5 highest-impact "
+        + "global corrections.\n"
+        + "When an issue belongs to only one view, name that view explicitly "
+        + "in LOCATION.\n"
+        + "\nORIGINAL MODELLING BRIEF:\n"
+        + brief
+    )
+
+    review = vision(
+        prompt,
+        comparison,
+        mime="image/png",
+        max_tokens=1200,
+        reasoning_effort="low",
+    )
+
+    review = (review or "").strip()
+
+    issues = _parse_visual_review(
+        review
+    )
+
+    print(
+        "[JARVIS] multi-view visual QA report:\n"
+        + review,
+        flush=True,
+    )
+
+    return review, issues, comparison
+
+
+def _refine_multiview_scene(brief, views):
+    """Inspect and refine the same Blender model from multiple views."""
+    for pass_number in range(
+        1,
+        _REFINEMENT_PASSES + 1,
+    ):
+        print(
+            f"[JARVIS] multi-view visual refinement pass "
+            f"{pass_number}/{_REFINEMENT_PASSES}",
+            flush=True,
+        )
+
+        renders = _render_multiviews(
+            views
+        )
+
+        review, issues, comparison = _review_multiview(
+            views,
+            renders,
+            brief,
+        )
+
+        if review == "NO_CRITICAL_MISMATCHES":
+            print(
+                "[JARVIS] multi-view visual QA found no critical mismatches.",
+                flush=True,
+            )
+            break
+
+        context = modeling_context()
+
+        scene_text = json.dumps(
+            context,
+            indent=2,
+        )
+
+        script = _generate_refinement_script(
+            brief,
+            scene_text,
+            review,
+            comparison,
+        )
+
+        _bridge_execute(script)
+
+        print(
+            f"[JARVIS] multi-view refinement pass "
+            f"{pass_number} applied.",
+            flush=True,
+        )
+
+    _render_multiviews(
+        views
+    )
+
+    print(
+        "[JARVIS] final multi-view refinement render completed.",
+        flush=True,
+    )
 
 
 def _create_from_reference_set(request):
@@ -1245,6 +1628,17 @@ def _create_from_reference_set(request):
     _launch_blender_gui(
         output_path
     )
+
+    try:
+        _refine_multiview_scene(
+            brief,
+            views,
+        )
+    except Exception as error:
+        print(
+            f"[JARVIS] multi-view visual refinement skipped: {error}",
+            flush=True,
+        )
 
     print(
         f"[JARVIS] multi-view Blender model saved to "

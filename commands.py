@@ -1746,7 +1746,7 @@ def _model_in_blender(request):
     if blender.has_reference_set(request):
         return (
             "I found the multi-view reference set, sir. "
-            "I'll use the front, back and left views together."
+            "I'll use the available views together."
         )
 
     analysis = blender.analyse_current_reference(request)
