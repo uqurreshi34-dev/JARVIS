@@ -522,7 +522,10 @@ class _Handler(BaseHTTPRequestHandler):
                     "blend_path": bpy.data.filepath,
                 }
 
-            result = _submit(execute)
+            result = _submit(
+                execute,
+                timeout=60.0,
+            )
 
             self._send(200, result)
 

@@ -632,7 +632,7 @@ def _bridge_execute(script, restore_visibility=False):
         try:
             with urllib.request.urlopen(
                 request,
-                timeout=10,
+                timeout=70,
             ) as response:
                 payload = json.loads(
                     response.read().decode("utf-8")
