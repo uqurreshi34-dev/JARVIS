@@ -1734,10 +1734,19 @@ def _inspect_blender():
 
 def _model_in_blender(request):
     """Analyse the current reference image for future Blender modelling."""
-    if not images.has_image():
+    if (
+        not images.has_image()
+        and not blender.has_reference_set(request)
+    ):
         return (
             "Please drop a reference image onto me first, sir. "
-            "Then tell me to model it in Blender."
+            "Or provide a complete multi-view reference set."
+        )
+
+    if blender.has_reference_set(request):
+        return (
+            "I found the multi-view reference set, sir. "
+            "I'll use the front, back and left views together."
         )
 
     analysis = blender.analyse_current_reference(request)
@@ -5022,7 +5031,12 @@ def _handle_command(command):
         return _query(intent, _inspect_blender)
 
     if intent == "model_in_blender":
-        if not images.has_image():
+        if (
+            not images.has_image()
+            and not blender.has_reference_set(
+                verbatim_text or text
+            )
+        ):
             return _query(
                 intent,
                 lambda: (

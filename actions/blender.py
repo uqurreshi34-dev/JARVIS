@@ -101,6 +101,49 @@ Do not write Blender Python.
 Do not invent hidden geometry as fact.
 """
 
+_MULTIVIEW_PROMPT = """
+You are analysing three reference photographs of the SAME physical subject
+for 3D reconstruction.
+
+The images are arranged in this exact order:
+
+LEFT IMAGE  = FRONT VIEW
+MIDDLE IMAGE = BACK VIEW
+RIGHT IMAGE = LEFT SIDE VIEW
+
+Produce ONE unified modelling specification for the subject.
+
+Cross-reference all three views before drawing conclusions.
+
+Cover:
+
+- SUBJECT: what the object is
+- MASSING: overall 3D volume and major masses
+- PROPORTIONS: width, height, depth relationships
+- FRONT: distinctive front geometry
+- BACK: distinctive rear geometry
+- LEFT SIDE: visible side geometry and depth
+- DEPTH: features that project, recess, overlap, or continue around corners
+- SYMMETRY: symmetry supported by the views
+- REPETITION: repeated structures and counts
+- MATERIALS: major visible material groups
+- SILHOUETTE: the recognisable 3D outline
+- CONSISTENCY: geometry confirmed by multiple views
+- UNCERTAINTY: details that cannot be established from these views
+
+Use the front and back views to establish the object's longitudinal structure.
+Use the left-side view to establish depth and side-profile geometry.
+
+Do not assume that an unseen right side is identical unless symmetry is
+strongly supported by the available views.
+
+Do not invent hidden geometry as fact.
+
+Be concrete about proportions, counts, spacing, and spatial relationships.
+
+Do not write Blender Python.
+"""
+
 
 _SCRIPT_PROMPT = """
 You are an expert procedural Blender artist creating a high-quality,
@@ -841,6 +884,346 @@ def _comparison_image(reference_bytes, preview_bytes):
     )
 
     return output.getvalue()
+
+
+def _is_multiview_request(request):
+    """True when the user explicitly requests multiple reference views."""
+    text = (request or "").casefold()
+
+    return any(
+        phrase in text
+        for phrase in (
+            "three views",
+            "3 views",
+            "three photos",
+            "3 photos",
+            "three images",
+            "3 images",
+            "multiple views",
+            "multi view",
+            "multi-view",
+        )
+    )
+
+
+def _multiview_subject(request):
+    """Extract the subject name from a multi-view modelling request."""
+    text = " ".join(
+        (request or "").strip().split()
+    )
+
+    text = re.sub(
+        r"^\s*(?:model|make|build|create)\s+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    text = re.sub(
+        r"\s+(?:in|using)\s+blender\b.*$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    text = re.sub(
+        r"\s+(?:from|using)\s+(?:these\s+)?"
+        r"(?:three|3|multiple|multi[- ]?)\s*"
+        r"(?:views?|photos?|images?|reference\s+views?)\b.*$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    return text.strip(" .,") or "multiview"
+
+
+def _reference_set_path(subject):
+    """Return the standard JARVIS reference-set folder."""
+    return (
+        Path.home()
+        / "JARVIS"
+        / "reference-sets"
+        / _safe_stem(subject)
+    )
+
+
+def has_reference_set(request):
+    """True when the requested multi-view reference set exists."""
+    if not _is_multiview_request(request):
+        return False
+
+    folder = _reference_set_path(
+        _multiview_subject(request)
+    )
+
+    if not folder.is_dir():
+        return False
+
+    return all(
+        _find_reference_view(folder, view)
+        for view in (
+            "front",
+            "back",
+            "left",
+        )
+    )
+
+
+def _find_reference_view(folder, view):
+    """Find a local image for one named reference view."""
+    for suffix in (
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".bmp",
+        ".tif",
+        ".tiff",
+    ):
+        path = folder / f"{view}{suffix}"
+
+        if path.is_file():
+            return path
+
+    return None
+
+
+def _load_multiview_references(subject):
+    """Load front, back and left reference images."""
+    folder = _reference_set_path(subject)
+
+    if not folder.is_dir():
+        raise RuntimeError(
+            f"Reference set not found: {folder}"
+        )
+
+    views = {}
+
+    for view in (
+        "front",
+        "back",
+        "left",
+    ):
+        path = _find_reference_view(
+            folder,
+            view,
+        )
+
+        if path is None:
+            raise RuntimeError(
+                f"Missing {view} reference in {folder}"
+            )
+
+        if not images.supports_path(path):
+            raise RuntimeError(
+                f"Invalid {view} reference image: {path}"
+            )
+
+        views[view] = path.read_bytes()
+
+    return views
+
+
+def _multiview_contact_sheet(views):
+    """Create a labelled front/back/left comparison image."""
+    width = 768
+    height = 768
+    gap = 16
+
+    canvas = Image.new(
+        "RGB",
+        (
+            width * 3 + gap * 2,
+            height,
+        ),
+        "white",
+    )
+
+    for index, view in enumerate(
+        ("front", "back", "left")
+    ):
+        with Image.open(
+            io.BytesIO(views[view])
+        ) as image:
+            image = image.convert("RGB")
+            image = ImageOps.contain(
+                image,
+                (
+                    width,
+                    height,
+                ),
+                method=Image.Resampling.LANCZOS,
+            )
+
+        x = (
+            index * (width + gap)
+            + (width - image.width) // 2
+        )
+
+        y = (
+            height - image.height
+        ) // 2
+
+        canvas.paste(
+            image,
+            (
+                x,
+                y,
+            ),
+        )
+
+    output = io.BytesIO()
+
+    canvas.save(
+        output,
+        format="PNG",
+    )
+
+    return output.getvalue()
+
+
+def _analyse_multiview_references(subject, views):
+    """Produce one unified modelling brief from three views."""
+    comparison = _multiview_contact_sheet(
+        views
+    )
+
+    started = time.monotonic()
+
+    analysis = vision(
+        _MULTIVIEW_PROMPT
+        + "\n\nSUBJECT:\n"
+        + subject,
+        comparison,
+        mime="image/png",
+        max_tokens=4000,
+        reasoning_effort="low",
+    )
+
+    print(
+        f"[JARVIS] multi-view reference analysis took "
+        f"{time.monotonic() - started:.1f}s",
+        flush=True,
+    )
+
+    if not analysis:
+        raise RuntimeError(
+            "The multi-view references could not be analysed."
+        )
+
+    return analysis.strip()
+
+
+def _create_from_reference_set(request):
+    """Create one Blender model from front/back/left references."""
+    subject = _multiview_subject(request)
+
+    print(
+        f"[JARVIS] loading multi-view reference set for "
+        f"{subject}...",
+        flush=True,
+    )
+
+    views = _load_multiview_references(
+        subject
+    )
+
+    brief = _analyse_multiview_references(
+        subject,
+        views,
+    )
+
+    started = time.monotonic()
+
+    scene_script = _generate_scene_script(
+        brief
+    )
+
+    print(
+        f"[JARVIS] scene script generation took "
+        f"{time.monotonic() - started:.1f}s",
+        flush=True,
+    )
+
+    executable = _find_blender()
+
+    if not executable:
+        raise RuntimeError(
+            "Blender could not be found. "
+            "Set BLENDER_EXECUTABLE if needed."
+        )
+
+    models_dir = Path(files.root()) / "models"
+    models_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    output_path = (
+        models_dir
+        / f"{_safe_stem(subject)}.blend"
+    )
+
+    with tempfile.TemporaryDirectory(
+        prefix="jarvis-blender-"
+    ) as temporary:
+
+        runner_path = Path(temporary) / "scene.py"
+
+        runner_path.write_text(
+            _write_runner(
+                scene_script,
+                output_path,
+            ),
+            encoding="utf-8",
+        )
+
+        blender_started = time.monotonic()
+
+        completed = subprocess.run(
+            [
+                executable,
+                "--background",
+                "--python",
+                str(runner_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        print(
+            f"[JARVIS] Blender generation took "
+            f"{time.monotonic() - blender_started:.1f}s",
+            flush=True,
+        )
+
+    if completed.returncode != 0:
+        detail = (
+            completed.stderr.strip()
+            or completed.stdout.strip()
+            or "Blender returned a non-zero exit code."
+        )
+
+        raise RuntimeError(detail)
+
+    if not output_path.is_file():
+        raise RuntimeError(
+            "Blender finished, but the .blend file was not created."
+        )
+
+    _launch_blender_gui(
+        output_path
+    )
+
+    print(
+        f"[JARVIS] multi-view Blender model saved to "
+        f"{output_path}",
+        flush=True,
+    )
+
+    return True
 
 
 def _parse_visual_review(review):
@@ -1822,8 +2205,121 @@ def _write_runner(scene_script, output_path):
     )
 
 
+def _create_from_reference_set(request):
+    """Create one Blender model from front/back/left/right references."""
+    subject = _multiview_subject(request)
+
+    print(
+        f"[JARVIS] loading multi-view reference set for {subject}...",
+        flush=True,
+    )
+
+    views = _load_multiview_references(
+        subject
+    )
+
+    brief = _analyse_multiview_references(
+        subject,
+        views,
+    )
+
+    script_started = time.monotonic()
+
+    scene_script = _generate_scene_script(
+        brief
+    )
+
+    print(
+        f"[JARVIS] scene script generation took "
+        f"{time.monotonic() - script_started:.1f}s",
+        flush=True,
+    )
+
+    executable = _find_blender()
+
+    if not executable:
+        raise RuntimeError(
+            "Blender could not be found. "
+            "Set BLENDER_EXECUTABLE if needed."
+        )
+
+    models_dir = Path(files.root()) / "models"
+    models_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    output_path = (
+        models_dir
+        / f"{_safe_stem(subject)}.blend"
+    )
+
+    with tempfile.TemporaryDirectory(
+        prefix="jarvis-blender-"
+    ) as temporary:
+
+        runner_path = Path(temporary) / "scene.py"
+
+        runner_path.write_text(
+            _write_runner(
+                scene_script,
+                output_path,
+            ),
+            encoding="utf-8",
+        )
+
+        blender_started = time.monotonic()
+
+        completed = subprocess.run(
+            [
+                executable,
+                "--background",
+                "--python",
+                str(runner_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        print(
+            f"[JARVIS] Blender generation took "
+            f"{time.monotonic() - blender_started:.1f}s",
+            flush=True,
+        )
+
+    if completed.returncode != 0:
+        detail = (
+            completed.stderr.strip()
+            or completed.stdout.strip()
+            or "Blender returned a non-zero exit code."
+        )
+
+        raise RuntimeError(detail)
+
+    if not output_path.is_file():
+        raise RuntimeError(
+            "Blender finished, but the .blend file was not created."
+        )
+
+    _launch_blender_gui(
+        output_path
+    )
+
+    print(
+        f"[JARVIS] multi-view Blender model saved to "
+        f"{output_path}",
+        flush=True,
+    )
+
+    return True
+
+
 def create_from_reference(request=None):
     """Create and open a Blender model from the current reference image."""
+    if _is_multiview_request(request):
+        return _create_from_reference_set(request)
+
     if not images.has_image():
         return False
 
