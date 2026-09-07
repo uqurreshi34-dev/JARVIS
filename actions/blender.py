@@ -165,37 +165,61 @@ The supplied image is a comparison plate:
 - LEFT = the original reference image
 - RIGHT = the current Blender preview render
 
-Compare them directly.
+Compare the two images directly.
 
-Your job is NOT to praise the model.
-Your job is to identify the most important visible mismatches that should
-be corrected in the Blender scene.
+Your job is to diagnose the most important visible differences between the
+current Blender result and the reference so another expert Blender artist
+can correct them.
 
-Focus on:
-- silhouette
-- proportions
-- placement and scale of major forms
-- missing or incorrect distinctive features
-- repeated structures such as windows, columns, wheels, panels, etc.
-- visible depth and shape
-- materials and major colour relationships
-- camera framing and viewpoint
+Do NOT praise the model.
+Do NOT describe things that are already correct.
+Do NOT give generic modelling advice.
+Do NOT invent geometry that cannot be supported by the reference.
 
-Prioritise changes that would make the Blender render look substantially
-more like the reference.
+Prioritise the largest visual mismatches first.
 
-Do not request hidden geometry that cannot be inferred from the reference.
+Evaluate, in this order:
+1. silhouette and overall proportions
+2. major forms and their placement
+3. distinctive geometry and missing features
+4. repeated structures and their spacing/count
+5. visible depth and shape
+6. major materials and colour relationships
+7. camera framing/viewpoint
 
-Return at most 6 actionable issues.
+Treat a camera mismatch as a camera problem. Do not tell the modeller to
+change correct geometry just to compensate for an incorrect camera.
 
-For each issue use this format:
+Return the 3 to 5 highest-impact actionable issues.
+Return fewer when there are genuinely fewer important problems.
 
-ISSUE:
-LOCATION:
-CHANGE:
+For every issue use EXACTLY this format:
 
-If the model is already sufficiently close and there are no important
-remaining visible mismatches, return exactly:
+PRIORITY: 1
+TYPE: geometry | proportion | repetition | material | camera
+LOCATION: specific part of the model
+PROBLEM: one concrete visible mismatch
+ACTION: one concrete change that should be made
+
+Then continue with PRIORITY 2, PRIORITY 3, etc.
+
+The issues must be ordered from the change most likely to improve visual
+similarity to the change least likely to improve it.
+
+Prefer measurable or spatial descriptions when possible, such as:
+- too wide / too narrow
+- too tall / too short
+- too far left / right
+- too deep / shallow
+- too large / small
+- missing
+- too few / too many
+- too closely / widely spaced
+
+Do not ask for hidden or unseen sides of the object.
+
+If the current model is already visually close and there are no important
+remaining mismatches, return exactly:
 
 NO_CRITICAL_MISMATCHES
 """
@@ -825,7 +849,7 @@ def _review_preview(reference_bytes, preview_bytes, brief):
         prompt,
         comparison,
         mime="image/png",
-        max_tokens=1800,
+        max_tokens=1200,
     )
 
     print(
@@ -834,7 +858,15 @@ def _review_preview(reference_bytes, preview_bytes, brief):
         flush=True,
     )
 
-    return (review or "").strip()
+    review = (review or "").strip()
+
+    print(
+        "[JARVIS] visual QA report:\n"
+        + (review or "(empty)"),
+        flush=True,
+    )
+
+    return review
 
 
 def _generate_refinement_script(
