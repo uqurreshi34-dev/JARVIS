@@ -1,7 +1,9 @@
 """Create Blender scenes from JARVIS reference-image modelling briefs."""
 
 import ast
+import base64
 import hashlib
+import io
 import json
 import os
 import re
@@ -12,6 +14,8 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+from PIL import Image, ImageOps
 
 from providers import chat, vision
 
@@ -154,6 +158,81 @@ Requirements:
 MODELLING BRIEF:
 """
 
+_REVIEW_PROMPT = """
+You are the visual quality-control artist for a Blender reconstruction.
+
+The supplied image is a comparison plate:
+- LEFT = the original reference image
+- RIGHT = the current Blender preview render
+
+Compare them directly.
+
+Your job is NOT to praise the model.
+Your job is to identify the most important visible mismatches that should
+be corrected in the Blender scene.
+
+Focus on:
+- silhouette
+- proportions
+- placement and scale of major forms
+- missing or incorrect distinctive features
+- repeated structures such as windows, columns, wheels, panels, etc.
+- visible depth and shape
+- materials and major colour relationships
+- camera framing and viewpoint
+
+Prioritise changes that would make the Blender render look substantially
+more like the reference.
+
+Do not request hidden geometry that cannot be inferred from the reference.
+
+Return at most 6 actionable issues.
+
+For each issue use this format:
+
+ISSUE:
+LOCATION:
+CHANGE:
+
+If the model is already sufficiently close and there are no important
+remaining visible mismatches, return exactly:
+
+NO_CRITICAL_MISMATCHES
+"""
+
+_REFINEMENT_PROMPT = """
+You are an expert Blender artist performing a targeted visual refinement
+of an EXISTING scene.
+
+A first model has already been generated and rendered.
+
+Use the supplied visual QA report to improve the existing scene.
+
+Rules:
+- Do NOT rebuild the scene.
+- Do NOT delete correct unrelated geometry.
+- Preserve everything that is already correct.
+- Fix the highest-impact visual mismatches first.
+- Match the reference proportions and major spatial relationships.
+- Add missing distinctive geometry when the QA report identifies it.
+- Correct incorrectly scaled or positioned geometry.
+- Improve repeated structures using procedural repetition, linked duplicates,
+  arrays, curves, or loops where appropriate.
+- Correct camera framing when the QA report identifies a camera mismatch.
+- Correct major materials when the QA report identifies a visible mismatch.
+- Use actual editable Blender geometry.
+- Use only bpy, math, and mathutils.
+- Do not use external assets.
+- Do not download anything.
+- Do not read or write files.
+- Do not save the .blend; the JARVIS Blender bridge saves it.
+- Return only valid Python source.
+
+The goal is a visibly better match to the reference, not a new design.
+
+ORIGINAL MODELLING BRIEF:
+"""
+
 _ALLOWED_IMPORTS = frozenset({
     "bpy",
     "math",
@@ -177,6 +256,10 @@ _FORBIDDEN_BPY_OPERATIONS = frozenset({
 
 _REFERENCE_CACHE_VERSION = "1"
 _REFERENCE_CACHE_DIR = ".reference-analysis-cache"
+_PREVIEW_WIDTH = 768
+_PREVIEW_HEIGHT = 768
+_RENDER_TIMEOUT = 60.0
+_REFINEMENT_PASSES = 2
 
 _RESTORE_WORDS = (
     "restore",
@@ -535,6 +618,367 @@ def _bridge_execute(script, restore_visibility=False):
 
     raise RuntimeError(
         "I'm sorry, sir. Blender isn't running."
+    )
+
+
+def _bridge_render_preview():
+    """Render a fast visual preview from the live Blender scene."""
+    started = time.monotonic()
+
+    for path in _bridge_states():
+        state = _read_bridge_state(path)
+
+        if not state:
+            continue
+
+        try:
+            port = int(state["port"])
+        except (TypeError, ValueError):
+            continue
+
+        request = urllib.request.Request(
+            f"http://{_BRIDGE_HOST}:{port}/render",
+            data=json.dumps(
+                {
+                    "width": _PREVIEW_WIDTH,
+                    "height": _PREVIEW_HEIGHT,
+                }
+            ).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-JARVIS-Token": str(state["token"]),
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=_RENDER_TIMEOUT + 10,
+            ) as response:
+                payload = json.loads(
+                    response.read().decode("utf-8")
+                )
+
+            if not payload.get("ok"):
+                raise RuntimeError(
+                    payload.get(
+                        "error",
+                        "Blender could not render the preview.",
+                    )
+                )
+
+            encoded = payload.get("image")
+
+            if not encoded:
+                raise RuntimeError(
+                    "Blender returned no preview image."
+                )
+
+            try:
+                image_bytes = base64.b64decode(
+                    encoded,
+                    validate=True,
+                )
+            except (ValueError, TypeError):
+                raise RuntimeError(
+                    "Blender returned an invalid preview image."
+                )
+
+            mime = payload.get("mime") or "image/png"
+
+            print(
+                f"[JARVIS] preview render took "
+                f"{time.monotonic() - started:.1f}s",
+                flush=True,
+            )
+
+            return {
+                "bytes": image_bytes,
+                "mime": mime,
+            }
+
+        except urllib.error.HTTPError as error:
+            body = error.read().decode(
+                "utf-8",
+                errors="replace",
+            )
+
+            try:
+                payload = json.loads(body)
+                raise RuntimeError(
+                    payload.get(
+                        "error",
+                        str(error),
+                    )
+                ) from error
+            except json.JSONDecodeError:
+                raise RuntimeError(
+                    str(error)
+                ) from error
+
+        except OSError:
+            continue
+
+    raise RuntimeError(
+        "Blender could not produce a preview render."
+    )
+
+
+def _comparison_image(reference_bytes, preview_bytes):
+    """Create a side-by-side PNG for visual comparison."""
+    target_width = _PREVIEW_WIDTH
+    target_height = _PREVIEW_HEIGHT
+    gap = 16
+
+    with Image.open(io.BytesIO(reference_bytes)) as reference:
+        reference_image = reference.convert("RGB")
+        reference_image = ImageOps.contain(
+            reference_image,
+            (target_width, target_height),
+            method=Image.Resampling.LANCZOS,
+        )
+
+    with Image.open(io.BytesIO(preview_bytes)) as preview:
+        preview_image = preview.convert("RGB")
+        preview_image = ImageOps.contain(
+            preview_image,
+            (target_width, target_height),
+            method=Image.Resampling.LANCZOS,
+        )
+
+    canvas = Image.new(
+        "RGB",
+        (
+            target_width * 2 + gap,
+            target_height,
+        ),
+        "white",
+    )
+
+    reference_x = (
+        target_width - reference_image.width
+    ) // 2
+
+    reference_y = (
+        target_height - reference_image.height
+    ) // 2
+
+    preview_x = (
+        target_width
+        + gap
+        + (target_width - preview_image.width) // 2
+    )
+
+    preview_y = (
+        target_height - preview_image.height
+    ) // 2
+
+    canvas.paste(
+        reference_image,
+        (
+            reference_x,
+            reference_y,
+        ),
+    )
+
+    canvas.paste(
+        preview_image,
+        (
+            preview_x,
+            preview_y,
+        ),
+    )
+
+    output = io.BytesIO()
+
+    canvas.save(
+        output,
+        format="PNG",
+    )
+
+    return output.getvalue()
+
+
+def _review_preview(reference_bytes, preview_bytes, brief):
+    """Ask vision to compare the reference against the current render."""
+    comparison = _comparison_image(
+        reference_bytes,
+        preview_bytes,
+    )
+
+    prompt = (
+        _REVIEW_PROMPT
+        + "\n\nORIGINAL MODELLING BRIEF:\n"
+        + brief
+    )
+
+    started = time.monotonic()
+
+    review = vision(
+        prompt,
+        comparison,
+        mime="image/png",
+        max_tokens=1800,
+    )
+
+    print(
+        f"[JARVIS] visual QA took "
+        f"{time.monotonic() - started:.1f}s",
+        flush=True,
+    )
+
+    return (review or "").strip()
+
+
+def _generate_refinement_script(
+    brief,
+    scene_text,
+    review,
+):
+    """Generate targeted bpy changes from a visual QA report."""
+    user_content = (
+        "ORIGINAL MODELLING BRIEF:\n"
+        + brief
+        + "\n\nCURRENT BLENDER SCENE:\n"
+        + scene_text
+        + "\n\nVISUAL QA REPORT:\n"
+        + review
+    )
+
+    prompt = _REFINEMENT_PROMPT
+
+    for attempt in range(2):
+        response = chat(
+            [
+                {
+                    "role": "system",
+                    "content": prompt,
+                },
+                {
+                    "role": "user",
+                    "content": user_content,
+                },
+            ],
+            temperature=0,
+            max_tokens=12000,
+            reasoning_effort="medium",
+        )
+
+        script = _clean_generated_script(response)
+
+        if not script:
+            if attempt == 1:
+                raise ValueError(
+                    "Blender visual refinement did not return "
+                    "a usable Python script."
+                )
+
+            prompt = (
+                _REFINEMENT_PROMPT
+                + "\n\nYour previous response was empty. "
+                "Return the complete refinement script."
+            )
+            continue
+
+        try:
+            _validate_script(script)
+
+        except SyntaxError as error:
+            if attempt == 1:
+                raise ValueError(
+                    "Generated Blender refinement has invalid "
+                    f"Python syntax: {error}"
+                ) from error
+
+            prompt = (
+                _REFINEMENT_PROMPT
+                + "\n\nYour previous refinement failed to parse "
+                f"as Python: {error}. Rewrite the ENTIRE script "
+                "correctly. Return only valid Python source."
+            )
+            continue
+
+        except ValueError:
+            raise
+
+        return script
+
+    raise ValueError(
+        "Could not generate a valid Blender refinement script."
+    )
+
+
+def _refine_current_scene(brief):
+    """Iteratively inspect and improve the live Blender model."""
+    reference_bytes = images.current_original_bytes()
+
+    if not reference_bytes:
+        print(
+            "[JARVIS] no reference image available for visual refinement",
+            flush=True,
+        )
+        return
+
+    for pass_number in range(
+        1,
+        _REFINEMENT_PASSES + 1,
+    ):
+        print(
+            f"[JARVIS] visual refinement pass "
+            f"{pass_number}/{_REFINEMENT_PASSES}",
+            flush=True,
+        )
+
+        preview = _bridge_render_preview()
+
+        review = _review_preview(
+            reference_bytes,
+            preview["bytes"],
+            brief,
+        )
+
+        if not review:
+            print(
+                "[JARVIS] visual QA returned no report; "
+                "stopping refinement.",
+                flush=True,
+            )
+            return
+
+        if review.strip() == "NO_CRITICAL_MISMATCHES":
+            print(
+                "[JARVIS] visual QA found no critical mismatches.",
+                flush=True,
+            )
+            return
+
+        context = modeling_context()
+
+        scene_text = json.dumps(
+            context,
+            indent=2,
+        )
+
+        script = _generate_refinement_script(
+            brief,
+            scene_text,
+            review,
+        )
+
+        _bridge_execute(script)
+
+        print(
+            f"[JARVIS] refinement pass "
+            f"{pass_number} applied.",
+            flush=True,
+        )
+
+    _bridge_render_preview()
+
+    print(
+        "[JARVIS] final visual refinement render completed.",
+        flush=True,
     )
 
 
@@ -995,6 +1439,16 @@ def create_from_reference(request=None):
 
     _launch_blender_gui(output_path)
 
-    print(f"[JARVIS] Blender model saved to {output_path}")
+    try:
+        _refine_current_scene(brief)
+    except Exception as error:
+        print(
+            f"[JARVIS] visual refinement skipped: {error}",
+            flush=True,
+        )
+
+    print(
+        f"[JARVIS] Blender model saved to {output_path}"
+    )
 
     return True

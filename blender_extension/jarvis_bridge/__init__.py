@@ -4,16 +4,18 @@
 
 import ast
 import atexit
+import base64
+import bpy
 import hmac
 import json
 import os
 import queue
 import secrets
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-import bpy
 
 _ALLOWED_IMPORTS = frozenset({
     "bpy",
@@ -69,6 +71,77 @@ def _remember_visibility_change(before, after):
 
 def _json_bytes(payload):
     return json.dumps(payload).encode("utf-8")
+
+
+def _render_preview(width, height):
+    """Render a temporary low-resolution preview without changing scene setup."""
+    scene = bpy.context.scene
+
+    if scene.camera is None:
+        raise RuntimeError(
+            "The Blender scene has no active camera for preview rendering."
+        )
+
+    render = scene.render
+
+    original = {
+        "engine": render.engine,
+        "resolution_x": render.resolution_x,
+        "resolution_y": render.resolution_y,
+        "resolution_percentage": render.resolution_percentage,
+        "filepath": render.filepath,
+        "file_format": render.image_settings.file_format,
+    }
+
+    temporary_path = None
+
+    try:
+        render.engine = "BLENDER_EEVEE_NEXT"
+        render.resolution_x = width
+        render.resolution_y = height
+        render.resolution_percentage = 100
+        render.image_settings.file_format = "PNG"
+
+        temporary = tempfile.NamedTemporaryFile(
+            suffix=".png",
+            delete=False,
+        )
+        temporary_path = Path(temporary.name)
+        temporary.close()
+
+        render.filepath = str(temporary_path)
+
+        bpy.ops.render.render(
+            write_still=True,
+        )
+
+        image_bytes = temporary_path.read_bytes()
+
+        return {
+            "ok": True,
+            "mime": "image/png",
+            "image": base64.b64encode(
+                image_bytes
+            ).decode("ascii"),
+        }
+
+    finally:
+        render.engine = original["engine"]
+        render.resolution_x = original["resolution_x"]
+        render.resolution_y = original["resolution_y"]
+        render.resolution_percentage = (
+            original["resolution_percentage"]
+        )
+        render.filepath = original["filepath"]
+        render.image_settings.file_format = (
+            original["file_format"]
+        )
+
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
 
 
 def _scene_snapshot():
@@ -189,7 +262,7 @@ def _run_pending():
     return 0.1
 
 
-def _submit(function):
+def _submit(function, timeout=_REQUEST_TIMEOUT):
     """Marshal a Blender operation onto the application thread."""
     done = threading.Event()
 
@@ -202,7 +275,7 @@ def _submit(function):
 
     _requests.put(job)
 
-    if not done.wait(_REQUEST_TIMEOUT):
+    if not done.wait(timeout):
         raise TimeoutError(
             "Blender did not respond to the bridge request."
         )
@@ -307,6 +380,72 @@ class _Handler(BaseHTTPRequestHandler):
                     "error": "Forbidden.",
                 },
             )
+            return
+
+        if self.path == "/render":
+            try:
+                length = int(
+                    self.headers.get(
+                        "Content-Length",
+                        "0",
+                    )
+                )
+
+                if length <= 0 or length > _MAX_BODY:
+                    raise ValueError(
+                        "Invalid request size."
+                    )
+
+                payload = json.loads(
+                    self.rfile.read(length).decode(
+                        "utf-8"
+                    )
+                )
+
+                width = int(
+                    payload.get(
+                        "width",
+                        768,
+                    )
+                )
+
+                height = int(
+                    payload.get(
+                        "height",
+                        768,
+                    )
+                )
+
+                if not (
+                    256 <= width <= 2048
+                    and 256 <= height <= 2048
+                ):
+                    raise ValueError(
+                        "Preview dimensions are out of range."
+                    )
+
+                result = _submit(
+                    lambda: _render_preview(
+                        width,
+                        height,
+                    ),
+                    timeout=60.0,
+                )
+
+                self._send(
+                    200,
+                    result,
+                )
+
+            except Exception as error:
+                self._send(
+                    400,
+                    {
+                        "ok": False,
+                        "error": str(error),
+                    },
+                )
+
             return
 
         if self.path != "/execute":
