@@ -61,28 +61,42 @@ CURRENT BLENDER SCENE:
 
 
 _REFERENCE_PROMPT = """
-Analyse the supplied reference image as a 3D modelling reference.
+Return a compact but information-dense modelling specification.
 
-Describe only what would matter to a Blender artist or procedural modeller:
-- the main object's identity and overall form
-- major components and their approximate proportions
-- symmetry and repeated structures
-- visible surfaces and likely materials
-- important silhouette features
-- useful modelling priorities
-- important uncertainty caused by the viewing angle or missing sides
+Cover:
+
+- SUBJECT: what the object/building is and its architectural style
+- MASSING: overall footprint, height, wings, central mass, roof mass
+- PROPORTIONS: approximate ratios between the major elements
+- FACADE: windows, doors, columns, porticos, arches, balconies,
+  pediments, stairs, trim, cornices, etc.
+- REPETITION: repeated structures and approximate counts/rhythm
+- SYMMETRY: bilateral or radial symmetry visible in the reference
+- DEPTH: features that clearly project, recess, or overlap
+- ROOF: roof shape, levels, dormers, chimneys, parapets, etc.
+- MATERIALS: major visible material groups
+- CAMERA: approximate viewpoint, elevation, orientation, and framing
+- PRIORITIES: the 8–12 features that matter most for visual recognition
+- UNCERTAINTY: only details genuinely hidden or ambiguous in the image
+
+Be concrete about proportions, counts, spacing, and relationships when they
+can reasonably be inferred.
 
 Do not write Blender Python.
 Do not invent hidden geometry as fact.
-Keep the result concise and practical.
 """
 
 
 _SCRIPT_PROMPT = """
-You are an expert procedural Blender artist.
+You are an expert procedural Blender artist creating a high-quality,
+reference-faithful 3D reconstruction.
 
-Write a complete Blender 5.2 Python script using bpy that creates a
-recognisable first-pass 3D model from the modelling brief below.
+Write a complete Blender 5.2 Python script using bpy that creates the
+strongest accurate model you can from the modelling brief below.
+
+The goal is not a rough blockout. Reproduce the reference's distinctive
+architecture, proportions, repeated elements, depth, silhouette, and visible
+details as faithfully as practical.
 
 Requirements:
 - Build the described object as actual editable Blender geometry.
@@ -104,6 +118,27 @@ Requirements:
 - Use only bpy, math, mathutils, and random if imports are needed.
 - Every line must be valid Python 3 syntax.
 - Do not invent modules or conditional-import expressions.
+- Match the reference's proportions and major spatial relationships before
+  adding small decorative details.
+- Model distinctive architectural features as real 3D geometry whenever they
+  are visible in the reference.
+- Do not replace important features with arbitrary cubes or flat placeholders.
+- Use symmetry aggressively where the reference supports it.
+- Use procedural repetition, linked duplicates, arrays, curves, or loops for
+  repeated windows, columns, railings, arches, roof elements, and similar
+  structures.
+- Give important façade elements believable depth rather than leaving them
+  as flat surfaces.
+- Treat the roofline, entrances, windows, columns, stairs, balconies,
+  pediments, cornices, and other defining features as high-priority geometry
+  when present.
+- Spend geometry on features that materially affect recognition from the
+  reference camera.
+- Preserve consistent scale between all architectural elements.
+- Do not stop after creating only the primary masses; continue through the
+  major secondary architectural features visible in the reference.
+- Make the final scene look intentionally modelled, not like a primitive
+  blockout.
 
 MODELLING BRIEF:
 """
@@ -718,8 +753,8 @@ def _generate_scene_script(brief):
                 },
             ],
             temperature=0,
-            max_tokens=8000,
-            reasoning_effort="low",
+            max_tokens=12000,
+            reasoning_effort="medium",
         )
         print("[JARVIS] Blender scene script received.", flush=True)
 
