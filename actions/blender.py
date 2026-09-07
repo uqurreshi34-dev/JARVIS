@@ -17,7 +17,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from providers import chat, vision
+from providers import chat, vision, vision_chat
 
 from actions import files, images
 
@@ -1014,8 +1014,9 @@ def _generate_refinement_script(
     brief,
     scene_text,
     review,
+    comparison_image,
 ):
-    """Generate targeted bpy changes from a visual QA report."""
+    """Generate and, when necessary, repair targeted bpy changes."""
     issues = _parse_visual_review(review)
 
     checklist = "\n".join(
@@ -1041,83 +1042,111 @@ def _generate_refinement_script(
 
     prompt = _REFINEMENT_PROMPT
 
-    for attempt in range(2):
-        response = chat(
+    response = vision_chat(
+        [
+            {
+                "role": "system",
+                "content": prompt,
+            },
+            {
+                "role": "user",
+                "content": user_content,
+            },
+        ],
+        comparison_image,
+        mime="image/png",
+        max_tokens=12000,
+        reasoning_effort="medium",
+    )
+
+    script = _clean_generated_script(response)
+
+    if not script:
+        raise ValueError(
+            "Blender visual refinement did not return "
+            "a usable Python script."
+        )
+
+    try:
+        _validate_script(script)
+
+    except SyntaxError as error:
+        print(
+            "[JARVIS] initial Blender refinement failed syntax "
+            "validation; repairing the existing refinement script.",
+            flush=True,
+        )
+
+        repair_prompt = (
+            "You are repairing an EXISTING Blender Python refinement script.\n\n"
+            "The script was generated to improve an existing Blender 5.2 "
+            "scene, but it contains invalid Python syntax.\n\n"
+            f"Python syntax error: {error}\n\n"
+            "Repair the EXISTING script rather than redesigning the scene.\n"
+            "Preserve all intended modelling changes.\n"
+            "Do not remove correct changes merely to make the script shorter.\n"
+            "Return the COMPLETE corrected Python source.\n"
+            "Return ONLY Python source.\n"
+            "Do not use Markdown fences.\n"
+            "Use only bpy, math, and mathutils.\n"
+            "Do not import any other module.\n"
+            "Make sure every parenthesis, bracket, quote, function, loop, "
+            "conditional, and block is completely closed.\n\n"
+            "ORIGINAL MODELLING BRIEF:\n"
+            + brief
+            + "\n\n"
+            "MANDATORY FIX CHECKLIST:\n"
+            + checklist
+            + "\n\n"
+            "BROKEN REFINEMENT SCRIPT:\n"
+            + script
+        )
+
+        repaired = vision_chat(
             [
                 {
                     "role": "system",
-                    "content": prompt,
+                    "content": repair_prompt,
                 },
                 {
                     "role": "user",
-                    "content": user_content,
+                    "content": (
+                        "Repair this exact script and return only the "
+                        "complete corrected Python source."
+                    ),
                 },
             ],
-            temperature=0,
+            comparison_image,
+            mime="image/png",
             max_tokens=12000,
-            reasoning_effort="medium",
+            reasoning_effort="low",
         )
 
-        script = _clean_generated_script(response)
+        script = _clean_generated_script(repaired)
 
         if not script:
-            if attempt == 1:
-                raise ValueError(
-                    "Blender visual refinement did not return "
-                    "a usable Python script."
-                )
-
-            prompt = (
-                _REFINEMENT_PROMPT
-                + "\n\nYour previous response was empty. "
-                "Return the complete refinement script."
+            raise ValueError(
+                "Blender refinement repair did not return "
+                "a usable Python script."
             )
-            continue
 
         try:
             _validate_script(script)
 
-        except SyntaxError as error:
-            if attempt == 1:
-                raise ValueError(
-                    "Generated Blender refinement has invalid "
-                    f"Python syntax: {error}"
-                ) from error
+        except SyntaxError as repair_error:
+            raise ValueError(
+                "Generated Blender refinement remained syntactically "
+                f"invalid after repair: {repair_error}"
+            ) from repair_error
 
-            prompt = (
-                _REFINEMENT_PROMPT
-                + "\n\nYour previous refinement failed to parse "
-                f"as Python: {error}. Rewrite the ENTIRE script "
-                "correctly. Return only valid Python source."
-            )
-            continue
-
-        except ValueError as error:
-            message = str(error)
-
-            if (
-                "imports disallowed module:" in message
-                and attempt == 0
-            ):
-                prompt = (
-                    _REFINEMENT_PROMPT
-                    + "\n\n"
-                    "Your previous refinement script imported a module "
-                    f"that is not allowed: {message}\n\n"
-                    "Rewrite the ENTIRE script without importing that "
-                    "module or any other module. Do not use regular "
-                    "expressions. Use only bpy, math, and mathutils. "
-                    "Return only valid Python source."
-                )
-                continue
-
+        except ValueError:
             raise
 
-        return script
+    except ValueError:
+        # Security-policy violations are never repaired automatically.
+        raise
 
-    raise ValueError(
-        "Could not generate a valid Blender refinement script."
-    )
+    return script
 
 
 def _refine_current_scene(brief):
@@ -1171,10 +1200,16 @@ def _refine_current_scene(brief):
             indent=2,
         )
 
+        comparison = _comparison_image(
+            reference_bytes,
+            preview["bytes"],
+        )
+
         script = _generate_refinement_script(
             brief,
             scene_text,
             review,
+            comparison,
         )
 
         _bridge_execute(script)
