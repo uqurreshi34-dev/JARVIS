@@ -96,7 +96,7 @@ def _render_preview(width, height):
     temporary_path = None
 
     try:
-        render.engine = "BLENDER_EEVEE_NEXT"
+        render.engine = "BLENDER_EEVEE"
         render.resolution_x = width
         render.resolution_y = height
         render.resolution_percentage = 100

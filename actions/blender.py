@@ -221,7 +221,7 @@ Rules:
 - Correct camera framing when the QA report identifies a camera mismatch.
 - Correct major materials when the QA report identifies a visible mismatch.
 - Use actual editable Blender geometry.
-- Use only bpy, math, and mathutils.
+- Use only bpy, math, mathutils, and re.
 - Do not use external assets.
 - Do not download anything.
 - Do not read or write files.
@@ -238,6 +238,7 @@ _ALLOWED_IMPORTS = frozenset({
     "math",
     "mathutils",
     "random",
+    "re",
 })
 
 
@@ -1277,11 +1278,6 @@ def _generate_scene_script(brief):
             reasoning_effort=reasoning_effort,
         )
 
-        print(
-            "[JARVIS] Blender scene script received.",
-            flush=True,
-        )
-
         script = _clean_generated_script(response)
 
         if not script:
@@ -1327,6 +1323,11 @@ def _generate_scene_script(brief):
             # model to try again; reject them immediately.
             raise
 
+        print(
+            f"[JARVIS] Blender scene script accepted "
+            f"(attempt {attempt + 1}/2).",
+            flush=True,
+        )
         return script
 
     raise ValueError(
