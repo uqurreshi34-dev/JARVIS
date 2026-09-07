@@ -649,7 +649,11 @@ def _launch_blender_gui(output_path):
     )
 
 
-def _bridge_execute(script, restore_visibility=False):
+def _bridge_execute(
+    script,
+    restore_visibility=False,
+    save=True,
+):
     """Execute validated modelling code in the live Blender instance."""
     for path in _bridge_states():
         state = _read_bridge_state(path)
@@ -668,6 +672,7 @@ def _bridge_execute(script, restore_visibility=False):
                 {
                     "script": script,
                     "restore_visibility": restore_visibility,
+                    "save": save,
                 }
             ).encode("utf-8"),
             headers={
@@ -1321,7 +1326,8 @@ def _render_multiviews(views):
     try:
         for view in views:
             _bridge_execute(
-                _multiview_camera_script(view)
+                _multiview_camera_script(view),
+                save=False,
             )
 
             preview = _bridge_render_preview()
@@ -1331,7 +1337,8 @@ def _render_multiviews(views):
     finally:
         try:
             _bridge_execute(
-                _multiview_restore_camera_script()
+                _multiview_restore_camera_script(),
+                save=False,
             )
         except Exception as error:
             print(

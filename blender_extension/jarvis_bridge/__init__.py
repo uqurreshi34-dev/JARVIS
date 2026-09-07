@@ -475,6 +475,16 @@ class _Handler(BaseHTTPRequestHandler):
                 payload.get("restore_visibility")
             )
 
+            save_after = payload.get(
+                "save",
+                True,
+            )
+
+            if not isinstance(save_after, bool):
+                raise ValueError(
+                    "Invalid save flag."
+                )
+
             if not isinstance(script, str) or not script.strip():
                 raise ValueError("Missing Blender script.")
 
@@ -513,9 +523,10 @@ class _Handler(BaseHTTPRequestHandler):
                         after_visibility,
                     )
 
-                bpy.ops.wm.save_as_mainfile(
-                    filepath=bpy.data.filepath
-                )
+                if save_after:
+                    bpy.ops.wm.save_as_mainfile(
+                        filepath=bpy.data.filepath
+                    )
 
                 return {
                     "ok": True,
