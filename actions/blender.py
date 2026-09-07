@@ -65,7 +65,7 @@ Rules:
 - Identify objects semantically from the supplied scene description.
 - Preserve existing geometry unless the request requires changing it.
 - Make the smallest sensible modification that fulfills the request.
-- Use only bpy, math, and mathutils.
+- Use only bpy, bmesh, math, mathutils, and random.
 - Do not import or use os, pathlib, subprocess, socket, requests, urllib,
   open, exec, eval, compile, or __import__.
 - Do not save the .blend; the JARVIS Blender bridge saves it.
@@ -130,7 +130,7 @@ Requirements:
 - Do not save the .blend file; JARVIS will do that after the script runs.
 - The script must be self-contained and executable with Blender 5.2.
 - Return only the Python source code.
-- Use only bpy, math, mathutils, and random if imports are needed.
+- Use only bpy, bmesh, math, mathutils, and random if imports are needed.
 - Every line must be valid Python 3 syntax.
 - Do not invent modules or conditional-import expressions.
 - Match the reference's proportions and major spatial relationships before
@@ -245,7 +245,7 @@ Rules:
 - Correct camera framing when the QA report identifies a camera mismatch.
 - Correct major materials when the QA report identifies a visible mismatch.
 - Use actual editable Blender geometry.
-- Use only bpy, math, and mathutils.
+- Use only bpy, bmesh, math, and mathutils.
 - Do NOT import re.
 - Do NOT use regular expressions.
 - Treat EVERY PRIORITY in the VISUAL QA REPORT as a required correction.
@@ -260,6 +260,7 @@ Rules:
   information, make the most defensible supported correction rather than
   silently ignoring the priority.
 - Do NOT import any other module.
+- The approved Blender imports are exactly: bpy, bmesh, math, mathutils, random.
 - Prefer ordinary string operations, loops, lists, dictionaries, and
   direct Blender API calls instead of helper modules.
 - Start with the Blender API work; do not add unnecessary imports.
@@ -276,6 +277,7 @@ ORIGINAL MODELLING BRIEF:
 
 _ALLOWED_IMPORTS = frozenset({
     "bpy",
+    "bmesh",
     "math",
     "mathutils",
     "random",
@@ -1142,9 +1144,91 @@ def _generate_refinement_script(
         except ValueError:
             raise
 
-    except ValueError:
-        # Security-policy violations are never repaired automatically.
-        raise
+    except ValueError as error:
+        message = str(error)
+
+        if (
+            "Generated Blender script imports disallowed module:"
+            not in message
+        ):
+            # Security-policy violations other than imports are never
+            # repaired automatically.
+            raise
+
+        print(
+            "[JARVIS] Blender refinement used an unapproved import; "
+            "repairing the existing refinement script.",
+            flush=True,
+        )
+
+        repair_prompt = (
+            "You are repairing an EXISTING Blender Python refinement script.\n\n"
+            "The refinement script is otherwise intended to correct an "
+            "existing scene, but it imports a module outside JARVIS's "
+            "approved Blender import set.\n\n"
+            f"Validation error: {message}\n\n"
+            "Repair the EXISTING script. Do not redesign the scene.\n"
+            "Preserve every intended visual correction in the script.\n"
+            "Remove or replace only the unapproved import and the code "
+            "that depends on it.\n"
+            "Use only these approved imports: bpy, bmesh, math, "
+            "mathutils, random.\n"
+            "Do not import any other module.\n"
+            "Do not use regular expressions or external libraries.\n"
+            "Return ONLY the complete corrected Python source.\n"
+            "Do not use Markdown fences.\n\n"
+            "ORIGINAL MODELLING BRIEF:\n"
+            + brief
+            + "\n\n"
+            "MANDATORY FIX CHECKLIST:\n"
+            + checklist
+            + "\n\n"
+            "BROKEN REFINEMENT SCRIPT:\n"
+            + script
+        )
+
+        repaired = vision_chat(
+            [
+                {
+                    "role": "system",
+                    "content": repair_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Repair this exact script and return only the "
+                        "complete corrected Python source."
+                    ),
+                },
+            ],
+            comparison_image,
+            mime="image/png",
+            max_tokens=12000,
+            reasoning_effort="low",
+        )
+
+        script = _clean_generated_script(repaired)
+
+        if not script:
+            raise ValueError(
+                "Blender refinement import repair did not return "
+                "a usable Python script."
+            )
+
+        try:
+            _validate_script(script)
+
+        except SyntaxError as repair_error:
+            raise ValueError(
+                "Generated Blender refinement remained syntactically "
+                f"invalid after import repair: {repair_error}"
+            ) from repair_error
+
+        except ValueError as repair_error:
+            raise ValueError(
+                "Generated Blender refinement still violates the "
+                f"import/security policy after repair: {repair_error}"
+            ) from repair_error
 
     return script
 
@@ -1297,10 +1381,36 @@ def _generate_modification_script(request, scene_text, reference_analysis=None):
             )
             continue
 
-        except ValueError:
-            # Security-policy violations are never repaired by asking the
-            # model to try again.
-            raise
+        except ValueError as error:
+            message = str(error)
+
+            if (
+                "Generated Blender script imports disallowed module:"
+                not in message
+            ):
+                # Security-policy violations other than imports are never
+                # repaired automatically.
+                raise
+
+            if attempt == 1:
+                raise ValueError(
+                    "Generated Blender modification still uses a "
+                    f"disallowed import after repair: {message}"
+                )
+
+            prompt = (
+                _MODIFY_PROMPT
+                + "\n\nYour previous modification used an unapproved "
+                f"import: {message}\n\n"
+                "Repair the EXISTING modification script rather than "
+                "redesigning it.\n"
+                "Use only these approved imports: bpy, bmesh, math, "
+                "mathutils, random.\n"
+                "Do not import any other module.\n"
+                "Return the COMPLETE corrected Python source.\n"
+                "Return only Python source with no Markdown fences."
+            )
+            continue
 
         return script
 
@@ -1615,9 +1725,85 @@ def _generate_scene_script(brief):
         except ValueError:
             raise
 
-    except ValueError:
-        # Security-policy violations are never repaired automatically.
-        raise
+    except ValueError as error:
+        message = str(error)
+
+        if (
+            "Generated Blender script imports disallowed module:"
+            not in message
+        ):
+            # Security-policy violations other than imports are never
+            # repaired automatically.
+            raise
+
+        print(
+            "[JARVIS] Blender scene script used an unapproved import; "
+            "repairing the existing script.",
+            flush=True,
+        )
+
+        repair_prompt = (
+            "You are repairing an EXISTING Blender Python script.\n\n"
+            "The script is otherwise valid, but it imports a module that "
+            "is not in JARVIS's approved Blender import set.\n\n"
+            f"Validation error: {message}\n\n"
+            "Repair the EXISTING script. Do not redesign the scene.\n"
+            "Preserve the intended geometry and modelling work.\n"
+            "Remove or replace the unapproved import and any code that "
+            "depends on it.\n"
+            "Use only these approved imports: bpy, bmesh, math, "
+            "mathutils, random.\n"
+            "Do not import any other module.\n"
+            "Do not use regular expressions or external libraries.\n"
+            "Return ONLY the complete corrected Python source.\n"
+            "Do not use Markdown fences.\n\n"
+            "ORIGINAL MODELLING BRIEF:\n"
+            + brief
+            + "\n\n"
+            "SCRIPT TO REPAIR:\n"
+            + script
+        )
+
+        repaired = chat(
+            [
+                {
+                    "role": "system",
+                    "content": repair_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Repair this exact script and return only the "
+                        "complete corrected Python source."
+                    ),
+                },
+            ],
+            temperature=0,
+            max_tokens=12000,
+            reasoning_effort="low",
+        )
+
+        script = _clean_generated_script(repaired)
+
+        if not script:
+            raise ValueError(
+                "Blender import repair did not return a usable Python script."
+            )
+
+        try:
+            _validate_script(script)
+
+        except SyntaxError as repair_error:
+            raise ValueError(
+                "Generated Blender script remained syntactically invalid "
+                f"after import repair: {repair_error}"
+            ) from repair_error
+
+        except ValueError as repair_error:
+            raise ValueError(
+                "Generated Blender script still violates the import/security "
+                f"policy after repair: {repair_error}"
+            ) from repair_error
 
     print(
         "[JARVIS] Blender scene script accepted.",

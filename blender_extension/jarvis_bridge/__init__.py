@@ -19,8 +19,10 @@ from pathlib import Path
 
 _ALLOWED_IMPORTS = frozenset({
     "bpy",
+    "bmesh",
     "math",
     "mathutils",
+    "random",
 })
 
 _FORBIDDEN_NAMES = frozenset({
