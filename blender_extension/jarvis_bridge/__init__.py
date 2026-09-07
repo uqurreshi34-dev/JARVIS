@@ -330,6 +330,9 @@ class _Handler(BaseHTTPRequestHandler):
             )
 
             script = payload.get("script")
+            restore_visibility = bool(
+                payload.get("restore_visibility")
+            )
 
             if not isinstance(script, str) or not script.strip():
                 raise ValueError("Missing Blender script.")
@@ -337,6 +340,8 @@ class _Handler(BaseHTTPRequestHandler):
             _validate_script(script)
 
             def execute():
+                global _visibility_restore_state
+
                 before_visibility = _visibility_snapshot()
 
                 namespace = {
@@ -351,10 +356,21 @@ class _Handler(BaseHTTPRequestHandler):
 
                 after_visibility = _visibility_snapshot()
 
-                _remember_visibility_change(
-                    before_visibility,
-                    after_visibility,
-                )
+                if restore_visibility:
+                    expected = _visibility_restore_state or {}
+
+                    if after_visibility != expected:
+                        raise RuntimeError(
+                            "Blender visibility restore could not be verified."
+                        )
+
+                    _visibility_restore_state = None
+
+                else:
+                    _remember_visibility_change(
+                        before_visibility,
+                        after_visibility,
+                    )
 
                 bpy.ops.wm.save_as_mainfile(
                     filepath=bpy.data.filepath

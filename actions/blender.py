@@ -35,6 +35,17 @@ assuming names, ordering, or previously selected objects.
 
 Visibility can be changed naturally: objects may be hidden, shown, or isolated.
 
+Visibility rules:
+- When hiding or showing an object, ALWAYS use obj.hide_set(True) or
+  obj.hide_set(False).
+- When isolating objects, use obj.hide_set(...) for the visibility changes.
+- Do NOT use obj.hide_viewport.
+- Do NOT hide or unhide collections.
+- Do NOT use local view.
+- Do NOT use viewport-specific visibility mechanisms or operators.
+- These rules are required so JARVIS can reliably record and restore the
+  exact visibility state from before the last visibility operation.
+
 When the user asks to restore what was hidden or undo a recent isolation, use the
 visibility_restore state supplied with the current scene. Restore those objects
 to exactly the visibility they had before the last visibility change.
@@ -179,7 +190,12 @@ _RESTORE_WORDS = (
 
 def _is_restore_request(request):
     """True when the user is asking to restore previous visibility."""
-    text = " ".join((request or "").casefold().split())
+    text = re.sub(
+        r"[^\w\s]",
+        " ",
+        (request or "").casefold(),
+    )
+    text = " ".join(text.split())
 
     return any(
         text == word
@@ -459,7 +475,7 @@ def _launch_blender_gui(output_path):
     )
 
 
-def _bridge_execute(script):
+def _bridge_execute(script, restore_visibility=False):
     """Execute validated modelling code in the live Blender instance."""
     for path in _bridge_states():
         state = _read_bridge_state(path)
@@ -477,6 +493,7 @@ def _bridge_execute(script):
             data=json.dumps(
                 {
                     "script": script,
+                    "restore_visibility": restore_visibility,
                 }
             ).encode("utf-8"),
             headers={
@@ -627,7 +644,10 @@ def modify_current_scene(request):
             "        obj.hide_set(not visible)\n"
         )
 
-        result = _bridge_execute(script)
+        result = _bridge_execute(
+            script,
+            restore_visibility=True,
+        )
 
         if not result.get("ok"):
             raise RuntimeError(
