@@ -441,7 +441,7 @@ def available():
 
 
 _BRIDGE_HOST = "127.0.0.1"
-_BRIDGE_DIR = Path(files.root()) / ".blender-bridges"
+_BRIDGE_DIR = Path.home() / "JARVIS" / ".blender-bridges"
 _BRIDGE_STARTUP_TIMEOUT = 30.0
 
 
