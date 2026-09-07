@@ -222,7 +222,12 @@ Rules:
 - Correct major materials when the QA report identifies a visible mismatch.
 - Use actual editable Blender geometry.
 - Use only bpy, math, and mathutils.
-- Do not import or use re.
+- Do NOT import re.
+- Do NOT use regular expressions.
+- Do NOT import any other module.
+- Prefer ordinary string operations, loops, lists, dictionaries, and
+  direct Blender API calls instead of helper modules.
+- Start with the Blender API work; do not add unnecessary imports.
 - Do not use external assets.
 - Do not download anything.
 - Do not read or write files.
@@ -900,7 +905,25 @@ def _generate_refinement_script(
             )
             continue
 
-        except ValueError:
+        except ValueError as error:
+            message = str(error)
+
+            if (
+                "imports disallowed module:" in message
+                and attempt == 0
+            ):
+                prompt = (
+                    _REFINEMENT_PROMPT
+                    + "\n\n"
+                    "Your previous refinement script imported a module "
+                    f"that is not allowed: {message}\n\n"
+                    "Rewrite the ENTIRE script without importing that "
+                    "module or any other module. Do not use regular "
+                    "expressions. Use only bpy, math, and mathutils. "
+                    "Return only valid Python source."
+                )
+                continue
+
             raise
 
         return script
