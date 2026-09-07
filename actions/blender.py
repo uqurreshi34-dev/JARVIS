@@ -167,6 +167,26 @@ _FORBIDDEN_BPY_OPERATIONS = frozenset({
 _REFERENCE_CACHE_VERSION = "1"
 _REFERENCE_CACHE_DIR = ".reference-analysis-cache"
 
+_RESTORE_WORDS = (
+    "restore",
+    "restore the",
+    "bring back",
+    "bring the",
+    "undo isolation",
+    "undo the isolation",
+)
+
+
+def _is_restore_request(request):
+    """True when the user is asking to restore previous visibility."""
+    text = " ".join((request or "").casefold().split())
+
+    return any(
+        text == word
+        or text.startswith(word + " ")
+        for word in _RESTORE_WORDS
+    )
+
 
 def _reference_cache_path(image_bytes):
     """Return the on-disk cache path for this image and reference prompt."""
@@ -589,6 +609,35 @@ def modify_current_scene(request):
         context,
         indent=2,
     )
+
+    restore_state = context.get("visibility_restore") or {}
+
+    if _is_restore_request(request):
+        if not restore_state:
+            raise RuntimeError(
+                "There is no saved Blender visibility state to restore."
+            )
+
+        script = (
+            "import bpy\n"
+            f"restore_state = {restore_state!r}\n"
+            "for name, visible in restore_state.items():\n"
+            "    obj = bpy.context.scene.objects.get(name)\n"
+            "    if obj is not None:\n"
+            "        obj.hide_set(not visible)\n"
+        )
+
+        result = _bridge_execute(script)
+
+        if not result.get("ok"):
+            raise RuntimeError(
+                result.get(
+                    "error",
+                    "Blender rejected the visibility restore.",
+                )
+            )
+
+        return True
 
     image_bytes = images.current_original_bytes()
     reference_analysis = None
