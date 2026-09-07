@@ -221,7 +221,8 @@ Rules:
 - Correct camera framing when the QA report identifies a camera mismatch.
 - Correct major materials when the QA report identifies a visible mismatch.
 - Use actual editable Blender geometry.
-- Use only bpy, math, mathutils, and re.
+- Use only bpy, math, and mathutils.
+- Do not import or use re.
 - Do not use external assets.
 - Do not download anything.
 - Do not read or write files.
@@ -238,7 +239,6 @@ _ALLOWED_IMPORTS = frozenset({
     "math",
     "mathutils",
     "random",
-    "re",
 })
 
 
