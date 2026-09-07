@@ -1469,80 +1469,127 @@ def _generate_scene_script(brief):
         flush=True,
     )
 
-    for attempt in range(2):
-        reasoning_effort = "medium" if attempt == 0 else "low"
+    started = time.monotonic()
 
-        response = chat(
+    response = chat(
+        [
+            {
+                "role": "system",
+                "content": prompt,
+            },
+            {
+                "role": "user",
+                "content": brief,
+            },
+        ],
+        temperature=0,
+        max_tokens=12000,
+        reasoning_effort="low",
+    )
+
+    generation_time = time.monotonic() - started
+
+    print(
+        f"[JARVIS] Blender scene script received "
+        f"({generation_time:.1f}s).",
+        flush=True,
+    )
+
+    script = _clean_generated_script(response)
+
+    if not script:
+        raise ValueError(
+            "Blender model did not return a usable Python script."
+        )
+
+    try:
+        _validate_script(script)
+
+    except SyntaxError as error:
+        print(
+            "[JARVIS] initial Blender script failed syntax validation; "
+            "repairing the existing script.",
+            flush=True,
+        )
+
+        repair_prompt = (
+            "You are repairing an EXISTING Blender Python script.\n\n"
+            "The script below was generated for a Blender 5.2 scene, "
+            "but it contains invalid Python syntax.\n\n"
+            f"Python syntax error: {error}\n\n"
+            "Repair the existing script rather than redesigning the scene.\n"
+            "Preserve all existing modelling work and intended geometry.\n"
+            "Do not simplify or remove correct geometry unless required "
+            "to repair the syntax.\n"
+            "Return the COMPLETE corrected Python source.\n"
+            "Do not return explanations.\n"
+            "Do not use Markdown fences.\n"
+            "Use only bpy, math, mathutils, and random if imports are needed.\n"
+            "Do not import any other module.\n"
+            "Make sure every parenthesis, bracket, quote, function, loop, "
+            "conditional, and block is completely closed before returning.\n\n"
+            "ORIGINAL MODELLING BRIEF:\n"
+            + brief
+            + "\n\nBROKEN BLENDER SCRIPT:\n"
+            + script
+        )
+
+        repair_started = time.monotonic()
+
+        repaired = chat(
             [
                 {
                     "role": "system",
-                    "content": prompt,
+                    "content": repair_prompt,
                 },
                 {
                     "role": "user",
-                    "content": brief,
+                    "content": (
+                        "Repair the script above and return only the "
+                        "complete corrected Python source."
+                    ),
                 },
             ],
             temperature=0,
             max_tokens=12000,
-            reasoning_effort=reasoning_effort,
+            reasoning_effort="low",
         )
 
-        script = _clean_generated_script(response)
+        print(
+            f"[JARVIS] Blender script repair received "
+            f"({time.monotonic() - repair_started:.1f}s).",
+            flush=True,
+        )
+
+        script = _clean_generated_script(repaired)
 
         if not script:
-            if attempt == 1:
-                raise ValueError(
-                    "Blender model did not return a usable Python script."
-                )
-
-            prompt = (
-                _SCRIPT_PROMPT
-                + "\n\nYour previous response was empty. "
-                "Return the complete Blender Python script."
+            raise ValueError(
+                "Blender script repair did not return a usable Python script."
             )
-            continue
 
         try:
             _validate_script(script)
 
-        except SyntaxError as error:
-            if attempt == 1:
-                raise ValueError(
-                    "Generated Blender script has invalid Python syntax: "
-                    f"{error}"
-                ) from error
-
-            prompt = (
-                _SCRIPT_PROMPT
-                + "\n\nYour previous Blender script failed to parse as "
-                f"Python: {error}.\n\n"
-                "For this retry, prioritise a COMPLETE, VALID script over "
-                "extra detail. Keep the script compact. Remove unnecessary "
-                "comments, helper functions, and decorative detail that is "
-                "not important to the reference. Make absolutely sure every "
-                "parenthesis, bracket, quote, function, loop, and conditional "
-                "is closed before returning the script.\n\n"
-                "Return ONLY the complete Python source. "
-                "Do not use markdown fences."
-            )
-            continue
+        except SyntaxError as repair_error:
+            raise ValueError(
+                "Generated Blender script remained syntactically invalid "
+                f"after repair: {repair_error}"
+            ) from repair_error
 
         except ValueError:
-            # Security-policy violations are not repaired by asking the
-            # model to try again; reject them immediately.
             raise
 
-        print(
-            f"[JARVIS] Blender scene script accepted "
-            f"(attempt {attempt + 1}/2).",
-            flush=True,
-        )
-        return script
+    except ValueError:
+        # Security-policy violations are never repaired automatically.
+        raise
 
-    raise ValueError(
-        "Could not generate a valid Blender script."
+    print(
+        "[JARVIS] Blender scene script accepted.",
+        flush=True,
     )
+
+    return script
 
 
 def _write_runner(scene_script, output_path):
