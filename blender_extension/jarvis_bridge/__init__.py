@@ -8,12 +8,14 @@ import base64
 import bpy
 import hmac
 import json
+import math
 import os
 import queue
 import secrets
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from mathutils import Matrix, Vector
 from pathlib import Path
 
 
@@ -75,7 +77,92 @@ def _json_bytes(payload):
     return json.dumps(payload).encode("utf-8")
 
 
-def _render_preview(width, height):
+def _position_camera_for_view(camera, scene, view):
+    """Temporarily position the camera for a named multi-view render."""
+    angles = {
+        "front": 0.0,
+        "back": math.pi,
+        "left": -math.pi / 2.0,
+        "right": math.pi / 2.0,
+    }
+
+    if view not in angles:
+        raise ValueError(
+            f"Unsupported multi-view render: {view}"
+        )
+
+    objects = [
+        obj
+        for obj in scene.objects
+        if obj.type == "MESH" and not obj.hide_get()
+    ]
+
+    if not objects:
+        raise RuntimeError(
+            "Blender scene contains no visible mesh objects."
+        )
+
+    corners = []
+
+    for obj in objects:
+        corners.extend(
+            obj.matrix_world @ Vector(corner)
+            for corner in obj.bound_box
+        )
+
+    minimum = Vector((
+        min(point.x for point in corners),
+        min(point.y for point in corners),
+        min(point.z for point in corners),
+    ))
+
+    maximum = Vector((
+        max(point.x for point in corners),
+        max(point.y for point in corners),
+        max(point.z for point in corners),
+    ))
+
+    center = (minimum + maximum) * 0.5
+
+    base = camera.location - center
+    distance = max(base.length, 1.0)
+
+    horizontal = Vector((
+        base.x,
+        base.y,
+        0.0,
+    ))
+
+    if horizontal.length < 1e-6:
+        horizontal = Vector((
+            0.0,
+            -1.0,
+            0.0,
+        ))
+    else:
+        horizontal.normalize()
+
+    rotation = Matrix.Rotation(
+        angles[view],
+        4,
+        "Z",
+    )
+
+    direction = rotation @ horizontal
+
+    location = center + direction * distance
+    location.z = center.z + base.z
+
+    camera.location = location
+    camera.rotation_euler = (
+        center - location
+    ).to_track_quat(
+        "-Z",
+        "Y",
+    ).to_euler()
+
+
+def _render_preview(width, height, view=None):
     """Render a temporary low-resolution preview without changing scene setup."""
     scene = bpy.context.scene
 
@@ -83,6 +170,16 @@ def _render_preview(width, height):
         raise RuntimeError(
             "The Blender scene has no active camera for preview rendering."
         )
+
+    camera = scene.camera
+
+    original_camera = None
+
+    if view is not None:
+        original_camera = {
+            "location": camera.location.copy(),
+            "rotation": camera.rotation_euler.copy(),
+        }
 
     render = scene.render
 
@@ -98,6 +195,13 @@ def _render_preview(width, height):
     temporary_path = None
 
     try:
+        if view is not None:
+            _position_camera_for_view(
+                camera,
+                scene,
+                view,
+            )
+
         render.engine = "BLENDER_EEVEE"
         render.resolution_x = width
         render.resolution_y = height
@@ -138,6 +242,10 @@ def _render_preview(width, height):
         render.image_settings.file_format = (
             original["file_format"]
         )
+
+        if original_camera is not None:
+            camera.location = original_camera["location"]
+            camera.rotation_euler = original_camera["rotation"]
 
         if temporary_path is not None:
             try:
@@ -418,6 +526,24 @@ class _Handler(BaseHTTPRequestHandler):
                     )
                 )
 
+                view = payload.get("view")
+
+                if view is not None:
+                    if not isinstance(view, str):
+                        raise ValueError(
+                            "Invalid multi-view camera."
+                        )
+
+                    if view not in {
+                        "front",
+                        "back",
+                        "left",
+                        "right",
+                    }:
+                        raise ValueError(
+                            f"Unsupported multi-view camera: {view}"
+                        )
+
                 if not (
                     256 <= width <= 2048
                     and 256 <= height <= 2048
@@ -430,6 +556,7 @@ class _Handler(BaseHTTPRequestHandler):
                     lambda: _render_preview(
                         width,
                         height,
+                        view=view,
                     ),
                     timeout=60.0,
                 )

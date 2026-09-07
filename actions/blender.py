@@ -717,7 +717,7 @@ def _bridge_execute(
     )
 
 
-def _bridge_render_preview():
+def _bridge_render_preview(view=None):
     """Render a fast visual preview from the live Blender scene."""
     started = time.monotonic()
 
@@ -738,6 +738,7 @@ def _bridge_render_preview():
                 {
                     "width": _PREVIEW_WIDTH,
                     "height": _PREVIEW_HEIGHT,
+                    "view": view,
                 }
             ).encode("utf-8"),
             headers={
@@ -1320,31 +1321,13 @@ if "_jarvis_multiview_camera_state" in scene:
 
 
 def _render_multiviews(views):
-    """Render the live model from every available reference viewpoint."""
+    """Render the live model from every supplied reference viewpoint."""
     renders = {}
 
-    try:
-        for view in views:
-            _bridge_execute(
-                _multiview_camera_script(view),
-                save=False,
-            )
-
-            preview = _bridge_render_preview()
-
-            renders[view] = preview["bytes"]
-
-    finally:
-        try:
-            _bridge_execute(
-                _multiview_restore_camera_script(),
-                save=False,
-            )
-        except Exception as error:
-            print(
-                f"[JARVIS] could not restore multi-view camera: {error}",
-                flush=True,
-            )
+    for view in views:
+        renders[view] = _bridge_render_preview(
+            view=view,
+        )["bytes"]
 
     return renders
 
