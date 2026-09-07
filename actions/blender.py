@@ -1252,8 +1252,15 @@ def _clean_generated_script(source):
 def _generate_scene_script(brief):
     """Ask the configured LLM for valid, safe bpy code."""
     prompt = _SCRIPT_PROMPT
-    print("[JARVIS] generating Blender scene script...", flush=True)
+
+    print(
+        "[JARVIS] generating Blender scene script...",
+        flush=True,
+    )
+
     for attempt in range(2):
+        reasoning_effort = "medium" if attempt == 0 else "low"
+
         response = chat(
             [
                 {
@@ -1267,24 +1274,15 @@ def _generate_scene_script(brief):
             ],
             temperature=0,
             max_tokens=12000,
-            reasoning_effort="medium",
+            reasoning_effort=reasoning_effort,
         )
-        print("[JARVIS] Blender scene script received.", flush=True)
+
+        print(
+            "[JARVIS] Blender scene script received.",
+            flush=True,
+        )
 
         script = _clean_generated_script(response)
-
-        # Claude may still wrap code in a markdown fence despite being told
-        # not to. Remove only the outer fence; never alter the code itself.
-        if script.startswith("```") and script.endswith("```"):
-            lines = script.splitlines()
-
-            if lines and lines[0].strip().startswith("```"):
-                lines = lines[1:]
-
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-
-            script = "\n".join(lines).strip()
 
         if not script:
             if attempt == 1:
@@ -1312,8 +1310,14 @@ def _generate_scene_script(brief):
             prompt = (
                 _SCRIPT_PROMPT
                 + "\n\nYour previous Blender script failed to parse as "
-                f"Python: {error}. Rewrite the ENTIRE script correctly. "
-                "Return only valid Python source. "
+                f"Python: {error}.\n\n"
+                "For this retry, prioritise a COMPLETE, VALID script over "
+                "extra detail. Keep the script compact. Remove unnecessary "
+                "comments, helper functions, and decorative detail that is "
+                "not important to the reference. Make absolutely sure every "
+                "parenthesis, bracket, quote, function, loop, and conditional "
+                "is closed before returning the script.\n\n"
+                "Return ONLY the complete Python source. "
                 "Do not use markdown fences."
             )
             continue
@@ -1325,7 +1329,9 @@ def _generate_scene_script(brief):
 
         return script
 
-    raise ValueError("Could not generate a valid Blender script.")
+    raise ValueError(
+        "Could not generate a valid Blender script."
+    )
 
 
 def _write_runner(scene_script, output_path):
