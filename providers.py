@@ -489,6 +489,7 @@ class Provider:
         image_bytes,
         mime,
         max_tokens,
+        reasoning_effort=None,
     ):
         """Send an image through the native Anthropic Messages API."""
         encoded = base64.b64encode(image_bytes).decode("ascii")
@@ -517,9 +518,11 @@ class Provider:
             ],
         }
 
-        if self.vision_effort:
+        effort = reasoning_effort or self.vision_effort
+
+        if effort:
             kwargs["output_config"] = {
-                "effort": self.vision_effort,
+                "effort": effort,
             }
 
         response = self._client.messages.create(**kwargs)
@@ -530,6 +533,18 @@ class Provider:
 
                 if text:
                     return text
+
+        stop_reason = getattr(
+            response,
+            "stop_reason",
+            None,
+        )
+
+        if stop_reason == "max_tokens":
+            print(
+                f"[JARVIS] {self.name} exhausted the vision token "
+                "budget before producing visible text."
+            )
 
         return ""
 
@@ -718,7 +733,14 @@ def _strip_reasoning(text):
     return cleaned or text
 
 
-def _describe_image(provider, prompt, image_bytes, mime, max_tokens):
+def _describe_image(
+    provider,
+    prompt,
+    image_bytes,
+    mime,
+    max_tokens,
+    reasoning_effort=None,
+):
     """One vision request to a single provider.
 
     The budget matters more than it looks for a reasoning model. Hidden
@@ -734,6 +756,7 @@ def _describe_image(provider, prompt, image_bytes, mime, max_tokens):
             image_bytes,
             mime,
             max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     encoded = base64.b64encode(image_bytes).decode("ascii")
@@ -843,7 +866,13 @@ def _describe_image(provider, prompt, image_bytes, mime, max_tokens):
     return _strip_reasoning(content)
 
 
-def vision(prompt, image_bytes, mime="image/png", max_tokens=3000):
+def vision(
+    prompt,
+    image_bytes,
+    mime="image/png",
+    max_tokens=3000,
+    reasoning_effort=None,
+):
     """Ask about an image, rotating providers exactly as chat does."""
     if not image_bytes:
         return None
@@ -863,7 +892,12 @@ def vision(prompt, image_bytes, mime="image/png", max_tokens=3000):
     for index, provider in enumerate(order):
         try:
             answer = _describe_image(
-                provider, prompt, image_bytes, mime, max_tokens
+                provider,
+                prompt,
+                image_bytes,
+                mime,
+                max_tokens,
+                reasoning_effort=reasoning_effort,
             )
 
             if not (answer or "").strip():

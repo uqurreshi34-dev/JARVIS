@@ -248,6 +248,17 @@ Rules:
 - Use only bpy, math, and mathutils.
 - Do NOT import re.
 - Do NOT use regular expressions.
+- Treat EVERY PRIORITY in the VISUAL QA REPORT as a required correction.
+- Address priorities in numerical order.
+- Do not silently skip a priority because another correction is easier.
+- Every listed priority must result in a concrete change to the existing
+  Blender scene whenever the supplied scene and reference support that change.
+- Preserve correct work from earlier priorities while applying later ones.
+- Before returning the script, verify that you have addressed every listed
+  priority.
+- If a requested correction cannot safely be made from the available scene
+  information, make the most defensible supported correction rather than
+  silently ignoring the priority.
 - Do NOT import any other module.
 - Prefer ordinary string operations, loops, lists, dictionaries, and
   direct Blender API calls instead of helper modules.
@@ -830,6 +841,89 @@ def _comparison_image(reference_bytes, preview_bytes):
     return output.getvalue()
 
 
+def _parse_visual_review(review):
+    """Validate and parse the structured visual QA report."""
+    text = (review or "").strip()
+
+    if text == "NO_CRITICAL_MISMATCHES":
+        return ()
+
+    pattern = re.compile(
+        r"PRIORITY:\s*(\d+)\s*"
+        r"\nTYPE:\s*(geometry|proportion|repetition|material|camera|depth)\s*"
+        r"\nLOCATION:\s*(.+?)\s*"
+        r"\nPROBLEM:\s*(.+?)\s*"
+        r"\nACTION:\s*(.+?)"
+        r"(?=\nPRIORITY:|\Z)",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    matches = list(pattern.finditer(text))
+
+    if not matches:
+        raise ValueError(
+            "Visual QA report did not contain any valid priority blocks."
+        )
+
+    issues = []
+
+    for match in matches:
+        priority = int(match.group(1))
+        issue_type = match.group(2).casefold()
+        location = match.group(3).strip()
+        problem = match.group(4).strip()
+        action = match.group(5).strip()
+
+        if not location or not problem or not action:
+            raise ValueError(
+                f"Visual QA priority {priority} contains an empty field."
+            )
+
+        issues.append(
+            {
+                "priority": priority,
+                "type": issue_type,
+                "location": location,
+                "problem": problem,
+                "action": action,
+            }
+        )
+
+    priorities = [
+        issue["priority"]
+        for issue in issues
+    ]
+
+    expected = list(
+        range(
+            1,
+            len(priorities) + 1,
+        )
+    )
+
+    if priorities != expected:
+        raise ValueError(
+            "Visual QA priorities must be consecutive starting at 1."
+        )
+
+    if len(issues) > 5:
+        raise ValueError(
+            "Visual QA returned more than five priorities."
+        )
+
+    covered_length = sum(
+        match.end() - match.start()
+        for match in matches
+    )
+
+    if covered_length < len(text) * 0.9:
+        raise ValueError(
+            "Visual QA report contains unexpected unstructured text."
+        )
+
+    return tuple(issues)
+
+
 def _review_preview(reference_bytes, preview_bytes, brief):
     """Ask vision to compare the reference against the current render."""
     comparison = _comparison_image(
@@ -837,36 +931,83 @@ def _review_preview(reference_bytes, preview_bytes, brief):
         preview_bytes,
     )
 
-    prompt = (
+    base_prompt = (
         _REVIEW_PROMPT
         + "\n\nORIGINAL MODELLING BRIEF:\n"
         + brief
     )
 
-    started = time.monotonic()
+    prompt = base_prompt
+    last_error = None
 
-    review = vision(
-        prompt,
-        comparison,
-        mime="image/png",
-        max_tokens=1200,
-    )
+    for attempt in range(2):
+        started = time.monotonic()
 
-    print(
-        f"[JARVIS] visual QA took "
-        f"{time.monotonic() - started:.1f}s",
-        flush=True,
-    )
+        review = vision(
+            prompt,
+            comparison,
+            mime="image/png",
+            max_tokens=1200,
+            reasoning_effort="low",
+        )
 
-    review = (review or "").strip()
+        print(
+            f"[JARVIS] visual QA took "
+            f"{time.monotonic() - started:.1f}s",
+            flush=True,
+        )
 
-    print(
-        "[JARVIS] visual QA report:\n"
-        + (review or "(empty)"),
-        flush=True,
-    )
+        review = (review or "").strip()
 
-    return review
+        try:
+            issues = _parse_visual_review(review)
+
+        except ValueError as error:
+            last_error = error
+
+            if attempt == 1:
+                raise RuntimeError(
+                    "Visual QA returned an invalid report twice: "
+                    f"{error}"
+                ) from error
+
+            print(
+                "[JARVIS] visual QA report was invalid; "
+                "requesting a corrected report.",
+                flush=True,
+            )
+
+            prompt = (
+                base_prompt
+                + "\n\n"
+                "Your previous visual QA report was invalid because: "
+                f"{error}\n\n"
+                "Return the COMPLETE report again.\n"
+                "Use ONLY the required PRIORITY / TYPE / LOCATION / "
+                "PROBLEM / ACTION format.\n"
+                "Do not leave any field blank.\n"
+                "Do not add commentary before or after the report."
+            )
+            continue
+
+        print(
+            "[JARVIS] visual QA report:\n"
+            + (
+                review
+                if review
+                else "NO_CRITICAL_MISMATCHES"
+            ),
+            flush=True,
+        )
+
+        return (
+            review,
+            issues,
+        )
+
+    raise RuntimeError(
+        "Visual QA could not produce a valid report."
+    ) from last_error
 
 
 def _generate_refinement_script(
@@ -875,6 +1016,18 @@ def _generate_refinement_script(
     review,
 ):
     """Generate targeted bpy changes from a visual QA report."""
+    issues = _parse_visual_review(review)
+
+    checklist = "\n".join(
+        (
+            f"PRIORITY {issue['priority']}: "
+            f"{issue['type']} — "
+            f"{issue['location']} — "
+            f"{issue['action']}"
+        )
+        for issue in issues
+    )
+
     user_content = (
         "ORIGINAL MODELLING BRIEF:\n"
         + brief
@@ -882,6 +1035,8 @@ def _generate_refinement_script(
         + scene_text
         + "\n\nVISUAL QA REPORT:\n"
         + review
+        + "\n\nMANDATORY FIX CHECKLIST:\n"
+        + checklist
     )
 
     prompt = _REFINEMENT_PROMPT
@@ -988,7 +1143,7 @@ def _refine_current_scene(brief):
 
         preview = _bridge_render_preview()
 
-        review = _review_preview(
+        review, issues = _review_preview(
             reference_bytes,
             preview["bytes"],
             brief,
@@ -1002,7 +1157,7 @@ def _refine_current_scene(brief):
             )
             return
 
-        if review.strip() == "NO_CRITICAL_MISMATCHES":
+        if review == "NO_CRITICAL_MISMATCHES":
             print(
                 "[JARVIS] visual QA found no critical mismatches.",
                 flush=True,
