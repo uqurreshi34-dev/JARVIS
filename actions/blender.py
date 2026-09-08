@@ -2820,34 +2820,86 @@ try:
 
     camera.data.lens = 55
 
-    light_data = bpy.data.lights.new(
-    "JARVIS Key",
-    type="AREA",
+    def add_soft_light(
+        name,
+        location,
+        energy,
+        light_size,
+    ):
+        data = bpy.data.lights.new(
+            name,
+            type="AREA",
+        )
+
+        data.energy = energy
+        data.shape = "DISK"
+        data.size = light_size
+
+        light = bpy.data.objects.new(
+            name,
+            data,
+        )
+
+        scene.collection.objects.link(light)
+
+        light.location = location
+
+        light.rotation_euler = (
+            center - light.location
+        ).to_track_quat(
+            "-Z",
+            "Y",
+        ).to_euler()
+
+        return light
+
+    # Broad front light.
+    add_soft_light(
+        "JARVIS Front",
+        (
+            center.x,
+            center.y - size * 2.0,
+            center.z + size * 0.5,
+        ),
+        500,
+        size * 2.0,
     )
 
-    light_data.energy = 700
-    light_data.shape = "DISK"
-    light_data.size = size * 1.5
-
-    key_light = bpy.data.objects.new(
-        "JARVIS Key",
-        light_data,
+    # Left-side fill.
+    add_soft_light(
+        "JARVIS Left",
+        (
+            center.x - size * 1.6,
+            center.y - size * 0.8,
+            center.z + size * 0.3,
+        ),
+        300,
+        size * 1.5,
     )
 
-    scene.collection.objects.link(key_light)
-
-    key_light.location = (
-        center.x - size * 1.2,
-        center.y - size * 1.5,
-        center.z + size * 1.0,
+    # Right-side fill.
+    add_soft_light(
+        "JARVIS Right",
+        (
+            center.x + size * 1.6,
+            center.y - size * 0.8,
+            center.z + size * 0.3,
+        ),
+        300,
+        size * 1.5,
     )
 
-    key_light.rotation_euler = (
-        center - key_light.location
-    ).to_track_quat(
-        "-Z",
-        "Y",
-    ).to_euler()
+    # Soft rear/rim light.
+    add_soft_light(
+        "JARVIS Rear",
+        (
+            center.x,
+            center.y + size * 1.8,
+            center.z + size,
+        ),
+        250,
+        size * 1.5,
+    )
 
     print(
         "[JARVIS] saving Blender file...",
