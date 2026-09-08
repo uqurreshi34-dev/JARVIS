@@ -2774,7 +2774,24 @@ try:
     scene.render.resolution_percentage = 100
     scene.render.film_transparent = False
     scene.render.filepath = RENDER_PATH
-    scene.world.color = (0.055, 0.055, 0.055)
+    world = scene.world
+
+    if world is None:
+        world = bpy.data.worlds.new("JARVIS World")
+        scene.world = world
+
+    world.use_nodes = True
+
+    background = world.node_tree.nodes.get("Background")
+
+    if background is not None:
+        background.inputs["Color"].default_value = (
+            0.12,
+            0.12,
+            0.12,
+            1.0,
+        )
+        background.inputs["Strength"].default_value = 0.35
 
     camera_data = bpy.data.cameras.new(
         "JARVIS Camera"
@@ -2802,6 +2819,35 @@ try:
     ).to_euler()
 
     camera.data.lens = 55
+
+    light_data = bpy.data.lights.new(
+    "JARVIS Key",
+    type="AREA",
+    )
+
+    light_data.energy = 700
+    light_data.shape = "DISK"
+    light_data.size = size * 1.5
+
+    key_light = bpy.data.objects.new(
+        "JARVIS Key",
+        light_data,
+    )
+
+    scene.collection.objects.link(key_light)
+
+    key_light.location = (
+        center.x - size * 1.2,
+        center.y - size * 1.5,
+        center.z + size * 1.0,
+    )
+
+    key_light.rotation_euler = (
+        center - key_light.location
+    ).to_track_quat(
+        "-Z",
+        "Y",
+    ).to_euler()
 
     print(
         "[JARVIS] saving Blender file...",
