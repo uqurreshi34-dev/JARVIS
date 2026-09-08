@@ -18,6 +18,67 @@ TERMINAL_STATUSES = {"success", "failed", "cancelled"}
 DEFAULT_POLL_INTERVAL = 2.0
 DEFAULT_TIMEOUT = 300.0
 
+_SUPPORTED_VIEWS = ("front", "left", "back", "right")
+
+_VIEW_EXTENSIONS = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+)
+
+
+def _find_view_file(root: Path, view: str) -> Path | None:
+    """Find one named reference view, case-insensitively."""
+    root = Path(root)
+
+    if not root.is_dir():
+        return None
+
+    for path in root.iterdir():
+        if not path.is_file():
+            continue
+
+        if path.suffix.casefold() not in _VIEW_EXTENSIONS:
+            continue
+
+        if path.stem.casefold() == view.casefold():
+            return path
+
+    return None
+
+
+def find_reference_views(reference_root: Path) -> dict[str, Path]:
+    """
+    Discover the supported views present in a reference set.
+
+    Front is required. At least two views are required.
+    Unsupported extra images are ignored.
+    """
+    reference_root = Path(reference_root)
+
+    views = {}
+
+    for view in _SUPPORTED_VIEWS:
+        path = _find_view_file(reference_root, view)
+
+        if path is not None:
+            views[view] = path
+
+    if "front" not in views:
+        raise TripoError(
+            f"Reference set is missing the required front view: "
+            f"{reference_root}"
+        )
+
+    if len(views) < 2:
+        raise TripoError(
+            f"Reference set needs at least two supported views: "
+            f"{reference_root}"
+        )
+
+    return views
+
 
 class TripoError(RuntimeError):
     """Raised when a Tripo API operation fails."""
@@ -103,23 +164,37 @@ def upload_image(path: Path) -> str:
 def create_multiview_task(
     *,
     front: str,
-    back: str,
-    left: str,
+    left: str | None = None,
+    back: str | None = None,
     right: str | None = None,
     texture: bool = True,
     pbr: bool = True,
     texture_quality: str | None = None,
     geometry_quality: str | None = None,
 ) -> str:
-    """Create an H-Series multiview-to-model task."""
+    """Create an H-Series multiview-to-model task from 2–4 views."""
+    tokens = {
+        "front": front,
+        "left": left,
+        "back": back,
+        "right": right,
+    }
+
     inputs = [
-        {"front": front},
-        {"back": back},
-        {"left": left},
+        {view: token}
+        for view in _SUPPORTED_VIEWS
+        if (token := tokens.get(view))
     ]
 
-    if right:
-        inputs.append({"right": right})
+    if "front" not in tokens or not front:
+        raise TripoError(
+            "Tripo multiview generation requires a front view."
+        )
+
+    if len(inputs) < 2:
+        raise TripoError(
+            "Tripo multiview generation requires at least two views."
+        )
 
     payload: dict[str, Any] = {
         "inputs": inputs,
@@ -282,44 +357,41 @@ def generate_multiview_model(
 def upload_multiview_views(
     *,
     front: Path,
-    back: Path,
-    left: Path,
+    left: Path | None = None,
+    back: Path | None = None,
+    right: Path | None = None,
 ) -> dict[str, str]:
     """
-    Upload the three reference views required for the first JARVIS
-    H3.1 multiview experiment.
+    Upload whichever supported reference views are supplied.
 
-    This does NOT create a generation task.
-    It only returns Tripo file_tokens.
+    Front is required. At least one additional view must be supplied.
     """
-    return {
-        "front": upload_image(front),
-        "back": upload_image(back),
-        "left": upload_image(left),
+    paths = {
+        "front": front,
+        "left": left,
+        "back": back,
+        "right": right,
     }
 
+    if front is None:
+        raise TripoError("A front reference image is required.")
 
-def create_ironman_multiview_task() -> str:
-    """
-    Create the first JARVIS H3.1 Iron Man reconstruction task.
+    tokens = {}
 
-    Uses the three uploaded reference views:
-    front, back, left.
+    for view in _SUPPORTED_VIEWS:
+        path = paths.get(view)
 
-    Expected cost:
-        40 credits for detailed texture
-        +20 credits for detailed geometry
-        = 60 credits
-    """
-    return create_multiview_task(
-        front="file_a3503c1b-f440-4a27-ac66-e578e12c17e6",
-        back="file_4ac11b56-ce19-4ae6-bb4e-46339af9e7b0",
-        left="file_881522dd-06cc-4a88-a913-636a31703138",
-        texture=True,
-        pbr=True,
-        texture_quality="detailed",
-        geometry_quality="detailed",
-    )
+        if path is None:
+            continue
+
+        tokens[view] = upload_image(path)
+
+    if len(tokens) < 2:
+        raise TripoError(
+            "At least two reference views are required."
+        )
+
+    return tokens
 
 
 def generate_reference_set(
@@ -329,38 +401,26 @@ def generate_reference_set(
     output_path: Path,
 ) -> Path:
     """
-    Generate a Tripo H3.1 model from the available front/back/left
-    reference images and download the resulting GLB.
-
-    This is the JARVIS orchestration layer for the first Tripo test.
+    Generate an H3.1 model from whatever supported views are present
+    in the subject's reference set.
     """
     reference_root = Path(reference_root)
 
-    front = reference_root / "front.png"
-    back = reference_root / "back.png"
-    left = reference_root / "left.png"
-
-    missing = [
-        str(path)
-        for path in (front, back, left)
-        if not path.is_file()
-    ]
-
-    if missing:
-        raise TripoError(
-            "Missing required reference images: "
-            + ", ".join(missing)
-        )
+    views = find_reference_views(
+        reference_root
+    )
 
     print(
-        f"[JARVIS] uploading Tripo references for {subject}...",
+        "[JARVIS] Tripo reference views: "
+        + ", ".join(view.upper() for view in views),
         flush=True,
     )
 
     tokens = upload_multiview_views(
-        front=front,
-        back=back,
-        left=left,
+        front=views["front"],
+        left=views.get("left"),
+        back=views.get("back"),
+        right=views.get("right"),
     )
 
     print(
@@ -368,30 +428,29 @@ def generate_reference_set(
         flush=True,
     )
 
-    print(
-        "[JARVIS] starting H3.1 multiview reconstruction...",
-        flush=True,
-    )
-
     task_id = create_multiview_task(
         front=tokens["front"],
-        back=tokens["back"],
-        left=tokens["left"],
+        left=tokens.get("left"),
+        back=tokens.get("back"),
+        right=tokens.get("right"),
         texture=True,
         pbr=True,
         texture_quality="detailed",
-        geometry_quality="detailed",
     )
 
     print(
-        f"[JARVIS] Tripo task started: {task_id}",
+        f"[JARVIS] Tripo H3.1 task: {task_id}",
         flush=True,
     )
 
-    task = wait_for_task(task_id)
+    task = wait_for_task(
+        task_id
+    )
 
-    output = task.get("output") or {}
-    model_url = output.get("model_url")
+    model_url = (
+        (task.get("output") or {})
+        .get("model_url")
+    )
 
     if not model_url:
         raise TripoError(

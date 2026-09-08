@@ -5074,12 +5074,6 @@ def _handle_command(command):
                 lambda: "What shall I model with Tripo, sir?",
             )
 
-        subject_slug = re.sub(
-            r"[^a-z0-9]+",
-            "-",
-            subject.casefold(),
-        ).strip("-")
-
         subject_key = re.sub(
             r"[^a-z0-9]",
             "",
@@ -5134,80 +5128,27 @@ def _handle_command(command):
             exist_ok=True,
         )
 
+        subject_slug = re.sub(
+            r"[^a-z0-9]+",
+            "-",
+            subject.casefold(),
+        ).strip("-")
+
         output_path = os.path.join(
             output_dir,
             f"{subject_slug}.glb",
         )
 
         def generate():
-            views = {
-                "front": os.path.join(
-                    reference_folder,
-                    "front.png",
-                ),
-                "back": os.path.join(
-                    reference_folder,
-                    "back.png",
-                ),
-                "left": os.path.join(
-                    reference_folder,
-                    "left.png",
-                ),
-            }
-
-            missing = [
-                path
-                for path in views.values()
-                if not os.path.isfile(path)
-            ]
-
-            if missing:
-                raise RuntimeError(
-                    "Missing Tripo reference images: "
-                    + ", ".join(missing)
-                )
-
-            tokens = tripo.upload_multiview_views(
-                front=views["front"],
-                back=views["back"],
-                left=views["left"],
-            )
-
-            task_id = tripo.create_multiview_task(
-                front=tokens["front"],
-                back=tokens["back"],
-                left=tokens["left"],
-                texture=True,
-                pbr=True,
-                texture_quality="detailed",
-                geometry_quality="detailed",
+            glb_path = tripo.generate_reference_set(
+                subject=subject,
+                reference_root=reference_folder,
+                output_path=output_path,
             )
 
             print(
-                f"[JARVIS] Tripo H3.1 task: {task_id}",
-                flush=True,
-            )
-
-            task = tripo.wait_for_task(
-                task_id,
-            )
-
-            model_url = (
-                (task.get("output") or {}).get("model_url")
-            )
-
-            if not model_url:
-                raise RuntimeError(
-                    "Tripo completed without returning a model URL."
-                )
-
-            glb_path = tripo.download_model(
-                model_url,
-                output_path,
-            )
-
-            print(
-                f"[JARVIS] handing Tripo model to Blender: {glb_path}",
+                f"[JARVIS] handing Tripo model to Blender: "
+                f"{glb_path}",
                 flush=True,
             )
 
@@ -5216,7 +5157,7 @@ def _handle_command(command):
                 subject=subject,
             ):
                 raise RuntimeError(
-                    "The Tripo model was downloaded, "
+                    "The Tripo model was generated, "
                     "but Blender could not open it."
                 )
 
@@ -5228,7 +5169,8 @@ def _handle_command(command):
             generate,
             timeout=None,
             success_response=(
-                f"Tripo has reconstructed {subject}, sir."
+                f"Tripo has reconstructed {subject} "
+                "and opened it in Blender, sir."
             ),
         )
 
