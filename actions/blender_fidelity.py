@@ -544,6 +544,9 @@ def _with_effort(name, original):
     floor = _EFFORT_TOKENS.get(_EFFORT)
 
     def wrapped(*args, **kwargs):
+        original_effort = kwargs.get("reasoning_effort")
+        original_tokens = kwargs.get("max_tokens")
+
         if kwargs.get("reasoning_effort") == "low":
             kwargs["reasoning_effort"] = _EFFORT
 
@@ -555,16 +558,81 @@ def _with_effort(name, original):
         result = original(*args, **kwargs)
 
         if not result:
+            payload = ""
+
+            if len(args) > 1 and isinstance(args[1], (bytes, bytearray)):
+                payload = f", image={len(args[1])} bytes"
+            elif len(args) > 1 and args[1] is None:
+                payload = ", image=None"
+
             print(
                 f"[JARVIS] {name} returned nothing "
                 f"(max_tokens={kwargs.get('max_tokens')}, "
-                f"effort={kwargs.get('reasoning_effort')})",
+                f"effort={kwargs.get('reasoning_effort')}{payload})",
                 flush=True,
             )
+
+            # An upgraded call that comes back empty is worth one retry at
+            # the original settings before the whole action fails.
+            if kwargs.get("reasoning_effort") != original_effort:
+                print(
+                    f"[JARVIS] retrying {name} at the original settings",
+                    flush=True,
+                )
+
+                retry = dict(kwargs)
+                retry["reasoning_effort"] = original_effort
+                retry["max_tokens"] = original_tokens
+
+                result = original(*args, **retry)
+
+                if result:
+                    print(
+                        f"[JARVIS] {name} retry succeeded",
+                        flush=True,
+                    )
 
         return result
 
     wrapped._jarvis_effort_patched = True
+
+    return wrapped
+
+
+def _loud_validate(original):
+    """Print why a generated script was rejected, then re-raise."""
+    def wrapped(source):
+        try:
+            return original(source)
+        except SyntaxError as error:
+            lines = (source or "").splitlines()
+            line = ""
+
+            if error.lineno and 0 < error.lineno <= len(lines):
+                line = lines[error.lineno - 1].strip()
+
+            print(
+                f"[JARVIS] generated script syntax error at line "
+                f"{error.lineno}: {error.msg}",
+                flush=True,
+            )
+
+            if line:
+                print(f"[JARVIS]   {line}", flush=True)
+
+            print(
+                f"[JARVIS]   script was {len(lines)} lines, "
+                f"{len(source or '')} chars",
+                flush=True,
+            )
+
+            raise
+        except ValueError as error:
+            print(
+                f"[JARVIS] generated script rejected: {error}",
+                flush=True,
+            )
+            raise
 
     return wrapped
 
@@ -967,6 +1035,8 @@ def install():
         blender,
         blender._generate_scene_script,
     )
+
+    blender._validate_script = _loud_validate(blender._validate_script)
 
     blender._refine_current_scene = _scored_refine_current_scene(blender)
     blender._refine_multiview_scene = _scored_refine_multiview_scene(blender)
