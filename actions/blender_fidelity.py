@@ -31,7 +31,7 @@ _EFFORT = os.environ.get("JARVIS_BLENDER_EFFORT", "medium")
 _MASK_SIZE = 256
 _MIN_EXTENT = 0.01
 _MAX_EXTENT = 0.985
-_MAX_PASSES = 3
+_MAX_PASSES = 2
 
 
 # ---------------------------------------------------------------------------
