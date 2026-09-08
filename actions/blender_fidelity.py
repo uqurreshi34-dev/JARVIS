@@ -1143,7 +1143,67 @@ CAMERA HANDLING: JARVIS positions, frames and levels the camera automatically
 before every render, identically for every view. Do NOT report camera issues.
 Do NOT emit TYPE: camera. Spend every priority on geometry, proportion,
 repetition and materials instead.
+
+OUTPUT FORMAT: return ONLY the PRIORITY blocks. No preamble, no heading, no
+explanation of what you are skipping, no closing summary, no blank commentary
+between blocks. The response must begin with "PRIORITY: 1".
 """
+
+
+_QA_BLOCK = re.compile(
+    r"PRIORITY:\s*\d+\s*\n"
+    r"TYPE:\s*(geometry|proportion|repetition|material|camera|depth)\s*\n"
+    r"LOCATION:\s*(.+?)\s*\n"
+    r"PROBLEM:\s*(.+?)\s*\n"
+    r"ACTION:\s*(.+?)"
+    r"(?=\nPRIORITY:|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _salvaged_parse(original):
+    """Keep a good QA report that arrived wrapped in commentary.
+
+    The strict parser discards the whole report when more than a tenth of it
+    is unstructured text, which throws away four usable priorities because
+    of one introductory sentence.
+    """
+    def wrapped(review):
+        try:
+            return original(review)
+        except ValueError as error:
+            text = (review or "").strip()
+            rebuilt = []
+
+            for match in _QA_BLOCK.finditer(text):
+                fields = [group.strip() for group in match.groups()]
+
+                if not all(fields):
+                    continue
+
+                rebuilt.append(
+                    f"PRIORITY: {len(rebuilt) + 1}\n"
+                    f"TYPE: {fields[0].casefold()}\n"
+                    f"LOCATION: {fields[1]}\n"
+                    f"PROBLEM: {fields[2]}\n"
+                    f"ACTION: {fields[3]}"
+                )
+
+                if len(rebuilt) == 5:
+                    break
+
+            if not rebuilt:
+                raise
+
+            print(
+                f"[JARVIS] salvaged {len(rebuilt)} QA priorities from an "
+                f"unstructured report ({error})",
+                flush=True,
+            )
+
+            return original("\n".join(rebuilt))
+
+    return wrapped
 
 
 def install():
@@ -1177,6 +1237,10 @@ def install():
     )
 
     blender._validate_script = _loud_validate(blender._validate_script)
+
+    blender._parse_visual_review = _salvaged_parse(
+        blender._parse_visual_review,
+    )
 
     blender._refine_current_scene = _scored_refine_current_scene(blender)
     blender._refine_multiview_scene = _scored_refine_multiview_scene(blender)
