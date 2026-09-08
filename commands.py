@@ -55,6 +55,7 @@ from actions import (
     screen_control,
     tasks,
     project_setup,
+    tripo,
 )
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
@@ -1050,6 +1051,25 @@ def _spoken_number(text):
 
 
 _CONNECTORS = ("in", "for", "after", "to", "and", "me")
+
+_TRIPO_MODEL_REQUEST = re.compile(
+    r"^(?:model|make|build|create)\s+(.+?)"
+    r"(?:\s+in\s+blender)?"
+    r"\s+(?:using|with)\s+tripo$",
+    re.IGNORECASE,
+)
+
+
+def _tripo_model_request(text):
+    """Return the requested subject for an explicit Tripo modelling command."""
+    match = _TRIPO_MODEL_REQUEST.match(text)
+
+    if not match:
+        return None
+
+    subject = match.group(1).strip()
+
+    return subject or None
 
 
 def _strip_connectors(text):
@@ -3439,6 +3459,21 @@ def _fast_path(command):
     if not text:
         return None
 
+    tripo_match = re.match(
+        r"^(?:model|make|build|create)\s+(.+?)"
+        r"\s+(?:using|with|in)\s+"
+        r"(?:tripo\w*|tri\s*pole|triple|cripo|criple)$",
+        text,
+    )
+
+    if tripo_match:
+        subject = tripo_match.group(1).strip()
+
+        return _blank_result(
+            "model_with_tripo",
+            text=_original_case(command, subject),
+        )
+
     intent = _FAST_LOOKUP.get(text)
 
     if intent:
@@ -5029,6 +5064,173 @@ def _handle_command(command):
 
     if intent == "inspect_blender":
         return _query(intent, _inspect_blender)
+
+    if intent == "model_with_tripo":
+        subject = (verbatim_text or text or "").strip()
+
+        if not subject:
+            return _query(
+                intent,
+                lambda: "What shall I model with Tripo, sir?",
+            )
+
+        subject_slug = re.sub(
+            r"[^a-z0-9]+",
+            "-",
+            subject.casefold(),
+        ).strip("-")
+
+        subject_key = re.sub(
+            r"[^a-z0-9]",
+            "",
+            subject.casefold(),
+        )
+
+        reference_root = os.path.join(
+            os.path.expanduser("~"),
+            "JARVIS",
+            "reference-sets",
+        )
+
+        reference_folder = None
+
+        if os.path.isdir(reference_root):
+            for candidate in os.listdir(reference_root):
+                candidate_path = os.path.join(
+                    reference_root,
+                    candidate,
+                )
+
+                if not os.path.isdir(candidate_path):
+                    continue
+
+                candidate_key = re.sub(
+                    r"[^a-z0-9]",
+                    "",
+                    candidate.casefold(),
+                )
+
+                if candidate_key == subject_key:
+                    reference_folder = candidate_path
+                    break
+
+        if not reference_folder:
+            return _query(
+                intent,
+                lambda: (
+                    f"I couldn't find the reference set for "
+                    f"{subject}, sir."
+                ),
+            )
+
+        output_dir = os.path.join(
+            files.root(),
+            "models",
+            "tripo",
+        )
+
+        os.makedirs(
+            output_dir,
+            exist_ok=True,
+        )
+
+        output_path = os.path.join(
+            output_dir,
+            f"{subject_slug}.glb",
+        )
+
+        def generate():
+            views = {
+                "front": os.path.join(
+                    reference_folder,
+                    "front.png",
+                ),
+                "back": os.path.join(
+                    reference_folder,
+                    "back.png",
+                ),
+                "left": os.path.join(
+                    reference_folder,
+                    "left.png",
+                ),
+            }
+
+            missing = [
+                path
+                for path in views.values()
+                if not os.path.isfile(path)
+            ]
+
+            if missing:
+                raise RuntimeError(
+                    "Missing Tripo reference images: "
+                    + ", ".join(missing)
+                )
+
+            tokens = tripo.upload_multiview_views(
+                front=views["front"],
+                back=views["back"],
+                left=views["left"],
+            )
+
+            task_id = tripo.create_multiview_task(
+                front=tokens["front"],
+                back=tokens["back"],
+                left=tokens["left"],
+                texture=True,
+                pbr=True,
+                texture_quality="detailed",
+                geometry_quality="detailed",
+            )
+
+            print(
+                f"[JARVIS] Tripo H3.1 task: {task_id}",
+                flush=True,
+            )
+
+            task = tripo.wait_for_task(
+                task_id,
+            )
+
+            model_url = (
+                (task.get("output") or {}).get("model_url")
+            )
+
+            if not model_url:
+                raise RuntimeError(
+                    "Tripo completed without returning a model URL."
+                )
+
+            glb_path = tripo.download_model(
+                model_url,
+                output_path,
+            )
+
+            print(
+                f"[JARVIS] handing Tripo model to Blender: {glb_path}",
+                flush=True,
+            )
+
+            if not blender.open_external_glb(
+                glb_path,
+                subject=subject,
+            ):
+                raise RuntimeError(
+                    "The Tripo model was downloaded, "
+                    "but Blender could not open it."
+                )
+
+            return True
+
+        return _action(
+            intent,
+            f"Sending {subject} to Tripo, sir.",
+            generate,
+            timeout=None,
+            success_response=(
+                f"Tripo has reconstructed {subject}, sir."
+            ),
+        )
 
     if intent == "model_in_blender":
         if (

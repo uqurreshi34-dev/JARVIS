@@ -2648,6 +2648,280 @@ def _write_runner(scene_script, output_path):
     )
 
 
+def open_external_glb(
+    glb_path,
+    subject="model",
+):
+    """
+    Import an externally generated GLB into a fresh Blender file,
+    create a simple studio camera/light setup, open Blender, and
+    show the result in rendered view.
+    """
+    glb_path = Path(glb_path)
+
+    if not glb_path.is_file():
+        raise RuntimeError(
+            f"Generated GLB was not found: {glb_path}"
+        )
+
+    executable = _find_blender()
+
+    if not executable:
+        raise RuntimeError(
+            "Blender could not be found. "
+            "Set BLENDER_EXECUTABLE if needed."
+        )
+
+    models_dir = Path(files.root()) / "models"
+    models_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    stem = _safe_stem(subject)
+    blend_path = models_dir / f"{stem}-tripo.blend"
+    render_path = models_dir / f"{stem}-tripo.png"
+
+    runner = f"""
+import bpy
+import math
+from mathutils import Vector
+
+bpy.ops.wm.read_factory_settings(use_empty=True)
+
+bpy.ops.import_scene.gltf(
+    filepath={str(glb_path)!r}
+)
+
+meshes = [
+    obj
+    for obj in bpy.context.scene.objects
+    if obj.type == "MESH"
+]
+
+if not meshes:
+    raise RuntimeError("Tripo GLB imported but contains no mesh objects.")
+
+corners = []
+
+for obj in meshes:
+    corners.extend(
+        obj.matrix_world @ Vector(corner)
+        for corner in obj.bound_box
+    )
+
+minimum = Vector((
+    min(point.x for point in corners),
+    min(point.y for point in corners),
+    min(point.z for point in corners),
+))
+
+maximum = Vector((
+    max(point.x for point in corners),
+    max(point.y for point in corners),
+    max(point.z for point in corners),
+))
+
+center = (minimum + maximum) * 0.5
+size = max(
+    maximum.x - minimum.x,
+    maximum.y - minimum.y,
+    maximum.z - minimum.z,
+    1.0,
+)
+
+scene = bpy.context.scene
+
+scene.render.engine = "BLENDER_EEVEE_NEXT"
+scene.render.resolution_x = 900
+scene.render.resolution_y = 900
+scene.render.resolution_percentage = 100
+scene.render.film_transparent = False
+scene.render.filepath = {str(render_path)!r}
+
+scene.world.color = (0.055, 0.055, 0.055)
+
+camera_data = bpy.data.cameras.new("JARVIS Camera")
+camera = bpy.data.objects.new(
+    "JARVIS Camera",
+    camera_data,
+)
+
+scene.collection.objects.link(camera)
+scene.camera = camera
+
+camera.location = (
+    center.x,
+    center.y - size * 2.4,
+    center.z + size * 0.12,
+)
+
+camera.rotation_euler = (
+    center - camera.location
+).to_track_quat(
+    "-Z",
+    "Y",
+).to_euler()
+
+camera.data.lens = 55
+
+def add_area(name, location, energy, size_value):
+    data = bpy.data.lights.new(
+        name,
+        type="AREA",
+    )
+    data.energy = energy
+    data.shape = "DISK"
+    data.size = size_value
+
+    light = bpy.data.objects.new(
+        name,
+        data,
+    )
+
+    scene.collection.objects.link(light)
+
+    light.location = location
+    light.rotation_euler = (
+        center - light.location
+    ).to_track_quat(
+        "-Z",
+        "Y",
+    ).to_euler()
+
+    return light
+
+add_area(
+    "JARVIS Key",
+    (
+        center.x - size,
+        center.y - size,
+        center.z + size,
+    ),
+    1400,
+    size,
+)
+
+add_area(
+    "JARVIS Fill",
+    (
+        center.x + size,
+        center.y - size * 0.5,
+        center.z + size * 0.4,
+    ),
+    800,
+    size * 0.8,
+)
+
+add_area(
+    "JARVIS Rim",
+    (
+        center.x,
+        center.y + size,
+        center.z + size * 0.8,
+    ),
+    1100,
+    size * 0.7,
+)
+
+bpy.ops.wm.save_as_mainfile(
+    filepath={str(blend_path)!r}
+)
+
+bpy.ops.render.render(
+    write_still=True,
+)
+""".strip()
+
+    with tempfile.TemporaryDirectory(
+        prefix="jarvis-tripo-"
+    ) as temporary:
+
+        runner_path = Path(temporary) / "import_tripo.py"
+
+        runner_path.write_text(
+            runner,
+            encoding="utf-8",
+        )
+
+        started = time.monotonic()
+
+        completed = subprocess.run(
+            [
+                executable,
+                "--background",
+                "--python",
+                str(runner_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        print(
+            f"[JARVIS] Tripo Blender import took "
+            f"{time.monotonic() - started:.1f}s",
+            flush=True,
+        )
+
+    if completed.returncode != 0:
+        detail = (
+            completed.stderr.strip()
+            or completed.stdout.strip()
+            or "Blender failed to import the Tripo model."
+        )
+
+        raise RuntimeError(detail)
+
+    if not blend_path.is_file():
+        raise RuntimeError(
+            f"Blender did not create the expected file: {blend_path}"
+        )
+
+    if not render_path.is_file():
+        raise RuntimeError(
+            f"Blender did not create the expected render: {render_path}"
+        )
+
+    print(
+        f"[JARVIS] opening Tripo model: {blend_path}",
+        flush=True,
+    )
+
+    _launch_blender_gui(blend_path)
+
+    try:
+        _bridge_execute(
+            """
+import bpy
+
+for area in bpy.context.screen.areas:
+    if area.type == "VIEW_3D":
+        area.spaces.active.region_3d.view_perspective = "CAMERA"
+        area.spaces.active.shading.type = "RENDERED"
+
+try:
+    bpy.ops.render.render()
+    bpy.ops.render.view_show("INVOKE_DEFAULT")
+except Exception as error:
+    print("[JARVIS] render view could not be opened:", error)
+""".strip(),
+            save=False,
+        )
+    except Exception as error:
+        print(
+            f"[JARVIS] rendered display setup skipped: {error}",
+            flush=True,
+        )
+
+    print(
+        f"[JARVIS] Tripo model ready in Blender: {blend_path}",
+        flush=True,
+    )
+
+    return True
+
+
 def create_from_reference(request=None):
     """Create and open a Blender model from the current reference image."""
     if _is_multiview_request(request):
