@@ -2803,66 +2803,6 @@ try:
 
     camera.data.lens = 55
 
-    def add_area(name, location, energy, size_value):
-        data = bpy.data.lights.new(
-            name,
-            type="AREA",
-        )
-
-        data.energy = energy
-        data.shape = "DISK"
-        data.size = size_value
-
-        light = bpy.data.objects.new(
-            name,
-            data,
-        )
-
-        scene.collection.objects.link(light)
-
-        light.location = location
-        light.rotation_euler = (
-            center - light.location
-        ).to_track_quat(
-            "-Z",
-            "Y",
-        ).to_euler()
-
-        return light
-
-    add_area(
-        "JARVIS Key",
-        (
-            center.x - size,
-            center.y - size,
-            center.z + size,
-        ),
-        1400,
-        size,
-    )
-
-    add_area(
-        "JARVIS Fill",
-        (
-            center.x + size,
-            center.y - size * 0.5,
-            center.z + size * 0.4,
-        ),
-        800,
-        size * 0.8,
-    )
-
-    add_area(
-        "JARVIS Rim",
-        (
-            center.x,
-            center.y + size,
-            center.z + size * 0.8,
-        ),
-        1100,
-        size * 0.7,
-    )
-
     print(
         "[JARVIS] saving Blender file...",
         flush=True,
@@ -2896,25 +2836,6 @@ try:
         if area.type == "VIEW_3D":
             area.spaces.active.region_3d.view_perspective = "CAMERA"
             area.spaces.active.shading.type = "RENDERED"
-
-    def show_render():
-        try:
-            bpy.ops.render.view_show(
-                "INVOKE_DEFAULT"
-            )
-        except Exception as error:
-            print(
-                "[JARVIS] render window could not be opened:",
-                error,
-                flush=True,
-            )
-
-        return None
-
-    bpy.app.timers.register(
-        show_render,
-        first_interval=0.75,
-    )
 
     write_status("READY")
 
