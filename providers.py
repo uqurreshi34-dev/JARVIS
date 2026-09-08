@@ -392,7 +392,8 @@ class Provider:
         if output_config:
             kwargs["output_config"] = output_config
 
-        response = self._client.messages.create(**kwargs)
+        with self._client.messages.stream(**kwargs) as stream:
+            response = stream.get_final_message()
 
         for block in response.content:
             if getattr(block, "type", None) == "text":
@@ -525,7 +526,8 @@ class Provider:
                 "effort": effort,
             }
 
-        response = self._client.messages.create(**kwargs)
+        with self._client.messages.stream(**kwargs) as stream:
+            response = stream.get_final_message()
 
         for block in response.content:
             if getattr(block, "type", None) == "text":
@@ -626,9 +628,8 @@ class Provider:
                 "effort": effort,
             }
 
-        response = self._client.messages.create(
-            **kwargs
-        )
+        with self._client.messages.stream(**kwargs) as stream:
+            response = stream.get_final_message()
 
         for block in response.content:
             if getattr(block, "type", None) == "text":

@@ -16,6 +16,7 @@ Install after blender.py is importable, next to routing_guard.install():
     blender_fidelity.install()
 """
 
+import hashlib
 import io
 import json
 import os
@@ -170,8 +171,97 @@ FOR EVERY CLASS
 # Silhouette measurement
 # ---------------------------------------------------------------------------
 
+def _flood_mask(image, tolerance):
+    """Mark background by flooding inward from the frame border."""
+    from PIL import ImageDraw
+
+    work = image.copy()
+    width, height = work.size
+    sentinel = (255, 0, 255)
+
+    seeds = (
+        (0, 0),
+        (width - 1, 0),
+        (0, height - 1),
+        (width - 1, height - 1),
+        (width // 2, 0),
+        (width // 2, height - 1),
+        (0, height // 2),
+        (width - 1, height // 2),
+    )
+
+    for seed in seeds:
+        if work.getpixel(seed) != sentinel:
+            ImageDraw.floodfill(
+                work,
+                seed,
+                sentinel,
+                thresh=tolerance,
+            )
+
+    flat = Image.new("RGB", work.size, sentinel)
+
+    return ImageChops.difference(
+        work,
+        flat,
+    ).convert("L").point(
+        lambda value: 255 if value > 8 else 0
+    )
+
+
+def _flat_mask(image, tolerance):
+    """Mark background by distance from the averaged corner colour."""
+    width, height = image.size
+    pixels = image.load()
+
+    corners = [
+        pixels[0, 0],
+        pixels[width - 1, 0],
+        pixels[0, height - 1],
+        pixels[width - 1, height - 1],
+    ]
+
+    background = tuple(
+        sum(corner[channel] for corner in corners) // 4
+        for channel in range(3)
+    )
+
+    flat = Image.new("RGB", image.size, background)
+
+    return ImageChops.difference(
+        image,
+        flat,
+    ).convert("L").point(
+        lambda value: 255 if value > tolerance else 0
+    )
+
+
+def _extent(mask):
+    """Fraction of the frame the mask's bounding box covers."""
+    bbox = mask.getbbox()
+
+    if not bbox:
+        return 0.0
+
+    return (
+        (bbox[2] - bbox[0])
+        * (bbox[3] - bbox[1])
+        / float(mask.width * mask.height)
+    )
+
+
+_SILHOUETTE_CACHE = {}
+
+
 def _silhouette(image_bytes):
     """Estimate a normalised binary silhouette from a photo or render."""
+    # The same reference views are measured on every pass; flood filling
+    # them once is worth the few kilobytes.
+    key = hashlib.sha256(image_bytes).hexdigest()
+
+    if key in _SILHOUETTE_CACHE:
+        return _SILHOUETTE_CACHE[key]
+
     with Image.open(io.BytesIO(image_bytes)) as source:
         if "A" in source.getbands():
             alpha = source.convert("RGBA").getchannel("A")
@@ -184,29 +274,22 @@ def _silhouette(image_bytes):
                 method=Image.Resampling.LANCZOS,
             )
 
-            width, height = image.size
-            pixels = image.load()
+            # Try several tolerances and keep the one that isolates the
+            # subject most tightly. Taking the first merely-acceptable
+            # result risks scoring a background as if it were the subject.
+            best = None
 
-            corners = [
-                pixels[0, 0],
-                pixels[width - 1, 0],
-                pixels[0, height - 1],
-                pixels[width - 1, height - 1],
-            ]
+            for tolerance in (16, 32, 48, 72, 96):
+                candidate = _flood_mask(image, tolerance)
+                extent = _extent(candidate)
 
-            background = tuple(
-                sum(corner[channel] for corner in corners) // 4
-                for channel in range(3)
-            )
+                if extent <= _MIN_EXTENT:
+                    continue
 
-            flat = Image.new("RGB", image.size, background)
+                if best is None or extent < best[0]:
+                    best = (extent, candidate)
 
-            mask = ImageChops.difference(
-                image,
-                flat,
-            ).convert("L").point(
-                lambda value: 255 if value > 20 else 0
-            )
+            mask = best[1] if best else _flat_mask(image, 20)
 
     bbox = mask.getbbox()
 
@@ -230,11 +313,15 @@ def _silhouette(image_bytes):
 
     source_area = float(mask.width * mask.height)
 
-    return normalised, {
+    result = (normalised, {
         "aspect": aspect,
         "coverage": coverage,
         "extent": (cropped.width * cropped.height) / source_area,
-    }
+    })
+
+    _SILHOUETTE_CACHE[key] = result
+
+    return result
 
 
 def _metrics(reference_bytes, render_bytes):
@@ -450,17 +537,67 @@ if visible:
 """
 
 
+def _wait_for_bridge(blender, timeout=90.0):
+    """Blender takes time to boot and register its bridge port."""
+    deadline = time.monotonic() + timeout
+    waited = False
+
+    while time.monotonic() < deadline:
+        try:
+            if blender.running():
+                if waited:
+                    print(
+                        "[JARVIS] Blender bridge is up.",
+                        flush=True,
+                    )
+                return True
+        except Exception:
+            pass
+
+        if not waited:
+            print(
+                "[JARVIS] waiting for the Blender bridge to start...",
+                flush=True,
+            )
+            waited = True
+
+        time.sleep(2.0)
+
+    return False
+
+
 def _ensure_renderable(blender):
     """Fail loudly on an empty scene; supply a camera when one is missing."""
-    try:
-        blender._bridge_execute(_ENSURE_RENDERABLE)
-        return True
-    except Exception as error:
+    if not _wait_for_bridge(blender):
         print(
-            f"[JARVIS] scene is not renderable: {error}",
+            "[JARVIS] the Blender bridge never came up; "
+            "skipping visual refinement.",
             flush=True,
         )
         return False
+
+    last_error = None
+
+    for attempt in range(3):
+        try:
+            blender._bridge_execute(_ENSURE_RENDERABLE)
+            return True
+        except Exception as error:
+            last_error = error
+
+            # A scene with no meshes will not fix itself; only retry
+            # transport failures.
+            if "no mesh objects" in str(error):
+                break
+
+            time.sleep(3.0)
+
+    print(
+        f"[JARVIS] scene is not renderable: {last_error}",
+        flush=True,
+    )
+
+    return False
 
 
 def _score(metrics):
@@ -523,9 +660,12 @@ def _metrics_block(metrics):
 # Provider wrappers
 # ---------------------------------------------------------------------------
 
+# The Anthropic SDK rejects non-streaming requests whose max_tokens implies
+# a run longer than ten minutes. Staying under that ceiling buys room for
+# thinking tokens without needing streaming support in providers.py.
 _EFFORT_TOKENS = {
-    "medium": 24000,
-    "high": 32000,
+    "medium": 16000,
+    "high": 20000,
 }
 
 # Only calls that already ask for a large budget are at risk of being
