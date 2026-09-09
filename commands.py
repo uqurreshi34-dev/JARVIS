@@ -4515,12 +4515,43 @@ def _planner_context(command):
     return "\n".join(context)
 
 
+def _compound_dispatch(command):
+    """Dispatch a compound step while preserving an already-attached browser."""
+    result = handle_command(command)
+
+    if not result:
+        return None
+
+    website = result.get("website")
+
+    if not website:
+        return result
+
+    if (
+        result.get("intent") in {"open_website", "browse_to"}
+        and browser.attached()
+    ):
+        return _action(
+            "browse_to",
+            f"Opening {_website_label(website)}, sir.",
+            lambda: browser.navigate(website),
+        )
+
+    return result
+
+
 def _compound_request(command):
     """Return a compound action when the planner finds a valid multi-step plan."""
-    plan = planner.plan(
+    plan = planner.local_plan(
         command,
-        context=_planner_context(command),
+        _fast_path,
     )
+
+    if plan is None:
+        plan = planner.plan(
+            command,
+            context=_planner_context(command),
+        )
 
     if not plan:
         return None
@@ -4531,7 +4562,7 @@ def _compound_request(command):
     def execute_plan():
         return planner.execute(
             steps,
-            handle_command,
+            _compound_dispatch,
         )
 
     if plan.get("requires_confirmation"):
