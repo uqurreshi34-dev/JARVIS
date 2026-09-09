@@ -14,6 +14,12 @@ import providers
 
 _MAX_STEPS = 6
 _MIN_STEPS = 2
+_COMPOUND_SEPARATORS = (
+    re.compile(r"\s+then\s+", re.IGNORECASE),
+    re.compile(r"\s+after that\s+", re.IGNORECASE),
+    re.compile(r"\s+followed by\s+", re.IGNORECASE),
+    re.compile(r"\s+and\s+", re.IGNORECASE),
+)
 
 # These are capabilities, not utterance matchers. The model chooses which
 # existing JARVIS command shape fulfils the user's request.
@@ -69,6 +75,15 @@ Rules:
   that is destructive, externally consequential, or otherwise clearly needs
   user approval. Normal local modelling, inspection, opening, and reading do
   not need confirmation merely because they are multi-step.
+
+Browser continuity is important:
+- "open <browser> and open <website>" is one compound task. Open the browser
+  application once, then navigate that existing browser to the website.
+- When a browser has already been opened earlier in the same plan, use the
+  existing-browser navigation capability for later website destinations rather
+  than launching a second browser window or tab through the default browser.
+- Do not treat a later website destination as a separate fresh-browser launch
+  merely because the user said "open".
 
 For modelling requests, distinguish these existing capabilities by intent:
 - use Tripo when the user asks for external 3D reconstruction, multiple
@@ -146,6 +161,66 @@ def should_plan(command):
             " followed by ",
         )
     )
+
+
+def _split_compound(command):
+    """Split a simple spoken sequence into candidate one-command clauses."""
+    text = " ".join((command or "").strip().split())
+
+    if not text:
+        return ()
+
+    for separator in _COMPOUND_SEPARATORS:
+        parts = separator.split(text)
+
+        if len(parts) > 1:
+            cleaned = tuple(
+                part.strip(" ,.")
+                for part in parts
+                if part.strip(" ,.")
+            )
+
+            if len(cleaned) >= _MIN_STEPS:
+                return cleaned
+
+    return ()
+
+
+def local_plan(command, resolve):
+    """Return a compound plan without an LLM when every clause is already local.
+
+    `resolve` is the existing command fast-path supplied by commands.py. The
+    planner never imports the command module, so there is no circular import.
+    Any query, unresolved clause, or compound-looking clause is rejected and
+    falls back to the normal LLM planner.
+    """
+    parts = _split_compound(command)
+
+    if len(parts) < _MIN_STEPS:
+        return None
+
+    steps = []
+
+    for part in parts[:_MAX_STEPS]:
+        result = resolve(part)
+
+        if not result or result.get("kind") != "action":
+            return None
+
+        steps.append({
+            "command": part,
+            "purpose": "execute the requested action",
+        })
+
+    if len(steps) > _MAX_STEPS:
+        return None
+
+    return {
+        "is_compound": True,
+        "summary": "I'll handle those actions in order, sir.",
+        "requires_confirmation": False,
+        "steps": tuple(steps),
+    }
 
 
 def _normalise_plan(data):
