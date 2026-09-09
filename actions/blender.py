@@ -491,6 +491,15 @@ if not loaded_scenes:
 
 restored_scene = loaded_scenes[0]
 
+if isinstance(restored_scene, str):
+    restored_scene = bpy.data.scenes.get(restored_scene)
+
+if restored_scene is None:
+    raise RuntimeError(
+        "Blender loaded the original snapshot but could not resolve "
+        "the restored Scene datablock."
+    )
+
 for window in bpy.context.window_manager.windows:
     window.scene = restored_scene
 
