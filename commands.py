@@ -5140,7 +5140,7 @@ def _handle_command(command):
         )
 
         def generate():
-            glb_path = tripo.generate_reference_set(
+            glb_path = tripo.generate_segmented_reference_set(
                 subject=subject,
                 reference_root=reference_folder,
                 output_path=output_path,

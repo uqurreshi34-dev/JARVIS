@@ -534,6 +534,7 @@ def generate_reference_set(
         texture=True,
         pbr=True,
         texture_quality="detailed",
+        geometry_quality="detailed",
     )
 
     print(
@@ -565,3 +566,125 @@ def generate_reference_set(
         str(model_url),
         output_path,
     )
+
+
+def generate_segmented_reference_set(
+    *,
+    subject: str,
+    reference_root: Path,
+    output_path: Path,
+) -> Path:
+    """
+    Generate a detailed H3.1 model from the subject reference set,
+    then semantically segment that generated model.
+
+    Final output is the segmented GLB intended for Blender.
+    """
+    reference_root = Path(reference_root)
+
+    views = find_reference_views(
+        reference_root
+    )
+
+    print(
+        "[JARVIS] Tripo reference views: "
+        + ", ".join(view.upper() for view in views),
+        flush=True,
+    )
+
+    tokens = upload_multiview_views(
+        front=views["front"],
+        left=views.get("left"),
+        back=views.get("back"),
+        right=views.get("right"),
+    )
+
+    print(
+        "[JARVIS] Tripo references uploaded.",
+        flush=True,
+    )
+
+    generation_task_id = create_multiview_task(
+        front=tokens["front"],
+        left=tokens.get("left"),
+        back=tokens.get("back"),
+        right=tokens.get("right"),
+        texture=True,
+        pbr=True,
+        texture_quality="detailed",
+        geometry_quality="detailed",
+    )
+
+    print(
+        f"[JARVIS] Tripo H3.1 task: {generation_task_id}",
+        flush=True,
+    )
+
+    generation_task = wait_for_task(
+        generation_task_id
+    )
+
+    generation_output = generation_task.get("output") or {}
+    generation_url = generation_output.get("model_url")
+
+    if not generation_url:
+        raise TripoError(
+            "Tripo H3.1 completed without a model URL."
+        )
+
+    # Keep the detailed generation locally as a useful backup.
+    detailed_path = Path(output_path).with_name(
+        f"{Path(output_path).stem}-detailed.glb"
+    )
+
+    download_model(
+        str(generation_url),
+        detailed_path,
+    )
+
+    print(
+        "[JARVIS] detailed H3.1 model downloaded.",
+        flush=True,
+    )
+
+    segmentation_task_id = create_mesh_segmentation_task(
+        generation_task_id,
+        granularity="balanced",
+        split_by_connectivity=True,
+    )
+
+    print(
+        f"[JARVIS] Tripo segmentation task: "
+        f"{segmentation_task_id}",
+        flush=True,
+    )
+
+    segmentation_task = wait_for_task(
+        segmentation_task_id
+    )
+
+    segmentation_output = (
+        segmentation_task.get("output") or {}
+    )
+
+    segmented_url = segmentation_output.get(
+        "model_url"
+    )
+
+    if not segmented_url:
+        raise TripoError(
+            "Tripo segmentation completed without a model URL."
+        )
+
+    segmented_path = download_model(
+        str(segmented_url),
+        output_path,
+    )
+
+    print(
+        f"[JARVIS] segmented model downloaded: "
+        f"{segmented_path}",
+        flush=True,
+    )
+
+    return segmented_path
