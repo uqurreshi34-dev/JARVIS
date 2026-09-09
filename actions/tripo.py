@@ -12,6 +12,7 @@ import requests
 
 BASE_URL = "https://openapi.tripo3d.ai/v3"
 MODEL_H31 = "v3.1-20260211"
+MODEL_SEGMENTATION_V2 = "v2.0-20260430"
 
 TERMINAL_STATUSES = {"success", "failed", "cancelled"}
 
@@ -248,6 +249,103 @@ def get_task(task_id: str) -> dict[str, Any]:
         )
 
     return data
+
+
+def create_mesh_segmentation_task(
+    source_task_id: str,
+    *,
+    granularity: str = "balanced",
+    split_by_connectivity: bool = True,
+) -> str:
+    """
+    Create a semantic mesh-segmentation task from an existing Tripo
+    3D-generation task.
+
+    Uses Tripo's v2 semantic segmentation model.
+    """
+    if not source_task_id.strip():
+        raise TripoError(
+            "A source Tripo task ID is required for segmentation."
+        )
+
+    if granularity not in {"simple", "balanced", "detailed"}:
+        raise TripoError(
+            f"Invalid segmentation granularity: {granularity}"
+        )
+
+    payload: dict[str, Any] = {
+        "model": MODEL_SEGMENTATION_V2,
+        "input": source_task_id,
+        "segmentation_granularity": granularity,
+        "split_by_connectivity": split_by_connectivity,
+    }
+
+    response = requests.post(
+        f"{BASE_URL}/mesh/segment",
+        headers=_headers(),
+        json=payload,
+        timeout=60,
+    )
+
+    result = _check_response(response)
+
+    try:
+        return str(result["data"]["task_id"])
+    except (KeyError, TypeError) as exc:
+        raise TripoError(
+            "Tripo segmentation response did not contain task_id: "
+            f"{result}"
+        ) from exc
+
+
+def generate_segmented_model(
+    *,
+    source_task_id: str,
+    output_path: Path,
+    granularity: str = "balanced",
+    split_by_connectivity: bool = True,
+) -> Path:
+    """
+    Segment an existing Tripo model semantically and download the
+    resulting GLB.
+    """
+    segmentation_task_id = create_mesh_segmentation_task(
+        source_task_id,
+        granularity=granularity,
+        split_by_connectivity=split_by_connectivity,
+    )
+
+    print(
+        f"[JARVIS] Tripo segmentation task: "
+        f"{segmentation_task_id}",
+        flush=True,
+    )
+
+    task = wait_for_task(
+        segmentation_task_id
+    )
+
+    model_url = (
+        (task.get("output") or {})
+        .get("model_url")
+    )
+
+    if not model_url:
+        raise TripoError(
+            "Tripo segmentation completed without a model URL: "
+            f"{task}"
+        )
+
+    print(
+        "[JARVIS] Tripo semantic segmentation complete; "
+        "downloading segmented GLB...",
+        flush=True,
+    )
+
+    return download_model(
+        str(model_url),
+        output_path,
+    )
 
 
 def wait_for_task(
