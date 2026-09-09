@@ -457,42 +457,69 @@ else:
 
 
 def _restore_original_scene():
-    """Restore the complete Blender scene from JARVIS's original snapshot."""
+    """Restore the working Blender file from its immutable JARVIS baseline."""
     script = r'''
 import bpy
+import os
 
+current_path = bpy.data.filepath
 scene = bpy.context.scene
-snapshot_path = scene.get("_jarvis_original_snapshot")
-working_path = bpy.data.filepath
 
-if not snapshot_path:
-    raise RuntimeError(
-        "There is no original Blender snapshot for this scene."
-    )
-
-if not working_path:
+if not current_path:
     raise RuntimeError(
         "The current Blender scene has no saved file path."
     )
 
-if snapshot_path == working_path:
+normalised_current = os.path.normcase(
+    os.path.abspath(current_path)
+)
+
+# Prefer the explicitly recorded baseline path.
+snapshot_path = scene.get("_jarvis_original_snapshot")
+
+# Fall back to the deterministic sibling filename for older files.
+if not snapshot_path:
+    root, extension = os.path.splitext(current_path)
+
+    if extension.casefold() != ".blend":
+        raise RuntimeError(
+            "The current Blender file is not a .blend file."
+        )
+
+    snapshot_path = (
+        root
+        + "-jarvis-original.blend"
+    )
+
+normalised_snapshot = os.path.normcase(
+    os.path.abspath(snapshot_path)
+)
+
+# Never allow a baseline file to restore itself.
+if normalised_snapshot == normalised_current:
     raise RuntimeError(
-        "The original snapshot path matches the current Blender file."
+        "This is the JARVIS original snapshot itself. "
+        "Open the corresponding working .blend file before using "
+        "'restore original'."
+    )
+
+if not os.path.isfile(snapshot_path):
+    raise RuntimeError(
+        "JARVIS could not find the original scene snapshot: "
+        + snapshot_path
     )
 
 print(
-    "[JARVIS] opening original Blender snapshot:",
+    "[JARVIS] restoring original Blender snapshot:",
     snapshot_path,
     flush=True,
 )
 
-# Replace the entire current Blender file with the untouched snapshot.
-# load_ui=False keeps the existing Blender window/workspace rather than
-# replacing the user's interface layout.
 result = bpy.ops.wm.open_mainfile(
     filepath=snapshot_path,
     load_ui=False,
     use_scripts=False,
+    display_file_selector=False,
 )
 
 print(
@@ -506,17 +533,19 @@ if "FINISHED" not in result:
         f"Blender could not open the original snapshot: {result}"
     )
 
-# The snapshot is now the active Blender file. Save the restored state
-# back over the working project file, while leaving the original snapshot
-# untouched for future resets.
+# open_mainfile() makes the snapshot the active file. Save that untouched
+# scene back over the working file, while keeping the baseline untouched.
+restored_scene = bpy.context.scene
+restored_scene["_jarvis_original_snapshot"] = snapshot_path
+
 bpy.ops.wm.save_as_mainfile(
-    filepath=working_path,
+    filepath=current_path,
     check_existing=False,
 )
 
 print(
-    "[JARVIS] restored Blender file saved:",
-    working_path,
+    "[JARVIS] original Blender state restored and saved:",
+    current_path,
     flush=True,
 )
 '''.strip()
@@ -3152,14 +3181,28 @@ except Exception as error:
 
     started = time.monotonic()
 
+    popen_kwargs = {
+        "stdout": None,
+        "stderr": None,
+    }
+
+    if os.name == "nt":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+
+        popen_kwargs["startupinfo"] = startupinfo
+        popen_kwargs["creationflags"] = (
+            subprocess.CREATE_NO_WINDOW
+        )
+
     process = subprocess.Popen(
         [
             executable,
             "--python-expr",
             f"exec({runner!r})",
         ],
-        stdout=None,
-        stderr=None,
+        **popen_kwargs,
     )
 
     print(
