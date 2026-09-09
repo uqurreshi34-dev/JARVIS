@@ -4544,7 +4544,7 @@ def _compound_request(command):
     """Return a compound action when the planner finds a valid multi-step plan."""
     plan = planner.local_plan(
         command,
-        _fast_path,
+        handle_command,
     )
 
     if plan is None:
