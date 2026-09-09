@@ -1052,25 +1052,6 @@ def _spoken_number(text):
 
 _CONNECTORS = ("in", "for", "after", "to", "and", "me")
 
-_TRIPO_MODEL_REQUEST = re.compile(
-    r"^(?:model|make|build|create)\s+(.+?)"
-    r"(?:\s+in\s+blender)?"
-    r"\s+(?:using|with)\s+tripo$",
-    re.IGNORECASE,
-)
-
-
-def _tripo_model_request(text):
-    """Return the requested subject for an explicit Tripo modelling command."""
-    match = _TRIPO_MODEL_REQUEST.match(text)
-
-    if not match:
-        return None
-
-    subject = match.group(1).strip()
-
-    return subject or None
-
 
 def _strip_connectors(text):
     """Remove joining words left behind when the duration is cut out."""
@@ -3470,21 +3451,6 @@ def _fast_path(command):
     ):
         return _blank_result(
             "restore_original",
-        )
-
-    tripo_match = re.match(
-        r"^(?:model|make|build|create)\s+(.+?)"
-        r"\s+(?:using|with|in)\s+"
-        r"(?:tripo\w*|tri\s*pole|triple|cripo|criple)$",
-        text,
-    )
-
-    if tripo_match:
-        subject = tripo_match.group(1).strip()
-
-        return _blank_result(
-            "model_with_tripo",
-            text=_original_case(command, subject),
         )
 
     intent = _FAST_LOOKUP.get(text)

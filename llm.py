@@ -56,6 +56,27 @@ comes from JARVIS's image working set. Put the user's modelling request
 in "text". Do not invent a project name, application, website, amount,
 or unit.
 
+Use model_with_tripo when the user wants JARVIS to reconstruct a 3D model
+through the Tripo 3D reconstruction service.
+
+A model_with_tripo command normally has the form:
+"model <subject> in Tripo",
+"model <subject> using Tripo",
+"make <subject> with Tripo",
+or equivalent natural wording.
+
+Speech recognition can seriously distort the provider name. When the command
+clearly describes external 3D reconstruction and the final provider-like word
+is a plausible speech-recognition distortion of a known modelling service,
+correct the provider name from context rather than treating the distorted
+word literally.
+
+Do not require the provider name to be spelled correctly.
+
+For model_with_tripo:
+- put only the subject being reconstructed in "text"
+- leave "application", "website", "project", "amount", and "unit" null
+
 Use inspect_blender when the user asks what is currently open in Blender,
 what objects are in the Blender scene, or whether JARVIS can inspect the
 current Blender model. This is a read-only query.
@@ -447,6 +468,7 @@ _SCHEMA = {
                 "list_projects",
                 "setup_project",
                 "model_in_blender",
+                "model_with_tripo",
                 "inspect_blender",
                 "modify_blender",
                 "volume_up",
