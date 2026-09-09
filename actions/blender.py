@@ -361,6 +361,167 @@ _RESTORE_WORDS = (
     "undo the isolation",
 )
 
+_ORIGINAL_SNAPSHOT_PROPERTY = "_jarvis_original_snapshot"
+_ORIGINAL_SNAPSHOT_SUFFIX = "-jarvis-original.blend"
+
+
+def _is_restore_original_request(request):
+    """True when the user explicitly requests the original scene."""
+    text = re.sub(
+        r"[^\w\s]",
+        " ",
+        (request or "").casefold(),
+    )
+    text = " ".join(text.split())
+
+    return text in (
+        "restore original",
+        "restore the original",
+        "restore original model",
+        "restore the original model",
+        "restore it to original",
+        "restore everything",
+        "restore everything to original",
+    )
+
+
+def _ensure_original_snapshot():
+    """
+    Capture the current Blender scene once, immediately before the first
+    JARVIS modification.
+
+    The snapshot is a .blend copy so it contains the complete scene state,
+    not merely transforms or visibility.
+    """
+    script = r'''
+import bpy
+
+scene = bpy.context.scene
+snapshot_path = scene.get("_jarvis_original_snapshot")
+
+if snapshot_path:
+    print(
+        "[JARVIS] original scene snapshot already exists:",
+        snapshot_path,
+        flush=True,
+    )
+else:
+    filepath = bpy.data.filepath
+
+    if not filepath:
+        raise RuntimeError(
+            "The current Blender scene has not been saved yet. "
+            "Save the Blender file once before using modifications "
+            "that need 'restore original'."
+        )
+
+    if filepath.casefold().endswith(".blend"):
+        snapshot_path = (
+            filepath[:-6]
+            + "-jarvis-original.blend"
+        )
+    else:
+        snapshot_path = (
+            filepath
+            + "-jarvis-original.blend"
+        )
+
+    scene["_jarvis_original_snapshot"] = snapshot_path
+
+    bpy.ops.wm.save_as_mainfile(
+        filepath=snapshot_path,
+        copy=True,
+    )
+
+    print(
+        "[JARVIS] original scene snapshot saved:",
+        snapshot_path,
+        flush=True,
+    )
+'''.strip()
+
+    result = _bridge_execute(
+        script,
+        save=True,
+    )
+
+    if not result.get("ok"):
+        raise RuntimeError(
+            result.get(
+                "error",
+                "Could not create the original Blender scene snapshot.",
+            )
+        )
+
+    return True
+
+
+def _restore_original_scene():
+    """Restore the complete scene from JARVIS's original .blend snapshot."""
+    script = r'''
+import bpy
+
+scene = bpy.context.scene
+snapshot_path = scene.get("_jarvis_original_snapshot")
+
+if not snapshot_path:
+    raise RuntimeError(
+        "There is no original Blender snapshot for this scene."
+    )
+
+old_scene = scene
+loaded_scenes = []
+
+with bpy.data.libraries.load(
+    snapshot_path,
+    link=False,
+) as (data_from, data_to):
+    if not data_from.scenes:
+        raise RuntimeError(
+            "The original Blender snapshot contains no scene."
+        )
+
+    data_to.scenes = [data_from.scenes[0]]
+    loaded_scenes = list(data_to.scenes)
+
+if not loaded_scenes:
+    raise RuntimeError(
+        "Blender could not load the original scene snapshot."
+    )
+
+restored_scene = loaded_scenes[0]
+
+for window in bpy.context.window_manager.windows:
+    window.scene = restored_scene
+
+for candidate in tuple(bpy.data.scenes):
+    if candidate != restored_scene:
+        try:
+            bpy.data.scenes.remove(candidate)
+        except RuntimeError:
+            pass
+
+print(
+    "[JARVIS] original Blender scene restored.",
+    flush=True,
+)
+'''.strip()
+
+    result = _bridge_execute(
+        script,
+        save=True,
+    )
+
+    if not result.get("ok"):
+        raise RuntimeError(
+            result.get(
+                "error",
+                "Could not restore the original Blender scene.",
+            )
+        )
+
+    return True
+
 
 def _is_restore_request(request):
     """True when the user is asking to restore previous visibility."""
@@ -2220,8 +2381,16 @@ def _generate_modification_script(request, scene_text, reference_analysis=None):
     )
 
 
+def restore_original_scene():
+    """Restore the complete original scene baseline."""
+    return _restore_original_scene()
+
+
 def modify_current_scene(request):
     """Interpret and apply a natural-language modification to Blender."""
+    if _is_restore_original_request(request):
+        return _restore_original_scene()
+
     context = modeling_context()
     scene_text = json.dumps(
         context,
@@ -2260,6 +2429,7 @@ def modify_current_scene(request):
 
         return True
 
+    _ensure_original_snapshot()
     image_bytes = images.current_original_bytes()
     reference_analysis = None
 

@@ -3459,6 +3459,19 @@ def _fast_path(command):
     if not text:
         return None
 
+    if text in (
+        "restore original",
+        "restore the original",
+        "restore original model",
+        "restore the original model",
+        "restore it to original",
+        "restore everything",
+        "restore everything to original",
+    ):
+        return _blank_result(
+            "restore_original",
+        )
+
     tripo_match = re.match(
         r"^(?:model|make|build|create)\s+(.+?)"
         r"\s+(?:using|with|in)\s+"
@@ -5197,6 +5210,15 @@ def _handle_command(command):
             ),
             timeout=None,
             success_response="Created the Blender model, sir.",
+        )
+
+    if intent == "restore_original":
+        return _action(
+            intent,
+            "Restoring the original model, sir.",
+            blender.restore_original_scene,
+            timeout=None,
+            success_response="Original model restored, sir.",
         )
 
     if intent == "modify_blender":
