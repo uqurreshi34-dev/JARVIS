@@ -48,6 +48,7 @@ from actions import (
     markets,
     memory,
     news,
+    planner,
     proofread,
     notes,
     patterns,
@@ -4486,6 +4487,86 @@ def _resolve_pending(text):
     return None
 
 
+def _planner_context(command):
+    """Give the compound planner only cheap, relevant local context."""
+    context = []
+
+    try:
+        context.append(
+            f"Blender running: {blender.running()}"
+        )
+    except Exception:
+        context.append("Blender running: unknown")
+
+    context.append(
+        f"Reference image available: {images.has_image()}"
+    )
+
+    try:
+        context.append(
+            "Matching multi-view reference set available: "
+            f"{blender.has_reference_set(command)}"
+        )
+    except Exception:
+        context.append(
+            "Matching multi-view reference set available: unknown"
+        )
+
+    return "\n".join(context)
+
+
+def _compound_request(command):
+    """Return a compound action when the planner finds a valid multi-step plan."""
+    plan = planner.plan(
+        command,
+        context=_planner_context(command),
+    )
+
+    if not plan:
+        return None
+
+    steps = plan["steps"]
+    summary = plan["summary"]
+
+    def execute_plan():
+        return planner.execute(
+            steps,
+            handle_command,
+        )
+
+    if plan.get("requires_confirmation"):
+        step_text = "; ".join(
+            step["purpose"]
+            for step in steps
+            if step.get("purpose")
+        )
+
+        question = summary
+
+        if step_text:
+            question += f" The plan is: {step_text}."
+
+        question += " Shall I proceed, sir?"
+
+        return _confirm(
+            "compound_task",
+            question,
+            execute_plan,
+            yes_text="Proceeding, sir.",
+            no_text="Very good, sir. Nothing has been changed.",
+            timeout=None,
+            success_response="Done, sir.",
+        )
+
+    return _action(
+        "compound_task",
+        summary,
+        execute_plan,
+        timeout=None,
+        success_response="Done, sir.",
+    )
+
+
 # Commands arrive from two places now: the voice loop at the desk, and
 # the phone server on its own thread. Everything below relies on module
 # state -- _awaiting, _pending, the pronoun subject -- so two commands
@@ -4513,6 +4594,12 @@ def _handle_command(command):
 
     if answered is not None:
         return answered
+
+    compound = _compound_request(command)
+
+    if compound is not None:
+        print("[planner] compound task")
+        return compound
 
     agent_task = _agent_task(command)
 
