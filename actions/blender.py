@@ -460,7 +460,6 @@ def _restore_original_scene():
     """Restore the working Blender file from its immutable JARVIS baseline."""
     script = r'''
 import bpy
-import os
 
 current_path = bpy.data.filepath
 scene = bpy.context.scene
@@ -470,8 +469,10 @@ if not current_path:
         "The current Blender scene has no saved file path."
     )
 
-normalised_current = os.path.normcase(
-    os.path.abspath(current_path)
+normalised_current = (
+    bpy.path.abspath(current_path)
+    .replace("\\", "/")
+    .casefold()
 )
 
 # Prefer the explicitly recorded baseline path.
@@ -491,8 +492,10 @@ if not snapshot_path:
         + "-jarvis-original.blend"
     )
 
-normalised_snapshot = os.path.normcase(
-    os.path.abspath(snapshot_path)
+normalised_snapshot = (
+    bpy.path.abspath(snapshot_path)
+    .replace("\\", "/")
+    .casefold()
 )
 
 # Never allow a baseline file to restore itself.
@@ -501,12 +504,6 @@ if normalised_snapshot == normalised_current:
         "This is the JARVIS original snapshot itself. "
         "Open the corresponding working .blend file before using "
         "'restore original'."
-    )
-
-if not os.path.isfile(snapshot_path):
-    raise RuntimeError(
-        "JARVIS could not find the original scene snapshot: "
-        + snapshot_path
     )
 
 print(
