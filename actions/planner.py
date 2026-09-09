@@ -165,7 +165,8 @@ def should_plan(command):
 
 def _split_compound(command):
     """Split a simple spoken sequence into candidate one-command clauses."""
-    text = " ".join((command or "").strip().split())
+    text = re.sub(r"[,;]", " ", (command or "")).strip()
+    text = " ".join(text.split())
 
     if not text:
         return ()
@@ -189,10 +190,11 @@ def _split_compound(command):
 def local_plan(command, resolve):
     """Return a compound plan without an LLM when every clause is already local.
 
-    `resolve` is the existing command fast-path supplied by commands.py. The
-    planner never imports the command module, so there is no circular import.
-    Any query, unresolved clause, or compound-looking clause is rejected and
-    falls back to the normal LLM planner.
+    `resolve` must be the normal command dispatcher, because the local lane
+    needs the full `kind` field to distinguish an executable action from a
+    query. Website-opening clauses deliberately stay on the LLM path so a
+    compound browser request can use existing-browser navigation instead of
+    launching a second browser.
     """
     parts = _split_compound(command)
 
@@ -205,6 +207,9 @@ def local_plan(command, resolve):
         result = resolve(part)
 
         if not result or result.get("kind") != "action":
+            return None
+
+        if result.get("intent") in {"open_website", "browse_to"}:
             return None
 
         steps.append({
