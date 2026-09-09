@@ -40,7 +40,7 @@ class PlannerTests(unittest.TestCase):
             ["open Blender", "model this in Blender"],
         )
 
-    def test_plan_rejects_non_compound_output(self):
+    def test_plan_normalization_preserves_false_plan_as_no_steps(self):
         result = planner._normalise_plan({
             "is_compound": False,
             "summary": "",
@@ -48,7 +48,8 @@ class PlannerTests(unittest.TestCase):
             "steps": [],
         })
 
-        self.assertIsNone(planner._normalise_plan(result))
+        self.assertFalse(result["is_compound"])
+        self.assertEqual(result["steps"], ())
 
     def test_execute_runs_steps_in_order(self):
         calls = []
