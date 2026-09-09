@@ -457,68 +457,73 @@ else:
 
 
 def _restore_original_scene():
-    """Restore the complete scene from JARVIS's original .blend snapshot."""
+    """Restore the complete Blender scene from JARVIS's original snapshot."""
     script = r'''
 import bpy
 
 scene = bpy.context.scene
 snapshot_path = scene.get("_jarvis_original_snapshot")
+working_path = bpy.data.filepath
 
 if not snapshot_path:
     raise RuntimeError(
         "There is no original Blender snapshot for this scene."
     )
 
-old_scene = scene
-loaded_scenes = []
-
-with bpy.data.libraries.load(
-    snapshot_path,
-    link=False,
-) as (data_from, data_to):
-    if not data_from.scenes:
-        raise RuntimeError(
-            "The original Blender snapshot contains no scene."
-        )
-
-    data_to.scenes = [data_from.scenes[0]]
-    loaded_scenes = list(data_to.scenes)
-
-if not loaded_scenes:
+if not working_path:
     raise RuntimeError(
-        "Blender could not load the original scene snapshot."
+        "The current Blender scene has no saved file path."
     )
 
-restored_scene = loaded_scenes[0]
-
-if isinstance(restored_scene, str):
-    restored_scene = bpy.data.scenes.get(restored_scene)
-
-if restored_scene is None:
+if snapshot_path == working_path:
     raise RuntimeError(
-        "Blender loaded the original snapshot but could not resolve "
-        "the restored Scene datablock."
+        "The original snapshot path matches the current Blender file."
     )
-
-for window in bpy.context.window_manager.windows:
-    window.scene = restored_scene
-
-for candidate in tuple(bpy.data.scenes):
-    if candidate != restored_scene:
-        try:
-            bpy.data.scenes.remove(candidate)
-        except RuntimeError:
-            pass
 
 print(
-    "[JARVIS] original Blender scene restored.",
+    "[JARVIS] opening original Blender snapshot:",
+    snapshot_path,
+    flush=True,
+)
+
+# Replace the entire current Blender file with the untouched snapshot.
+# load_ui=False keeps the existing Blender window/workspace rather than
+# replacing the user's interface layout.
+result = bpy.ops.wm.open_mainfile(
+    filepath=snapshot_path,
+    load_ui=False,
+    use_scripts=False,
+)
+
+print(
+    "[JARVIS] original snapshot open result:",
+    result,
+    flush=True,
+)
+
+if "FINISHED" not in result:
+    raise RuntimeError(
+        f"Blender could not open the original snapshot: {result}"
+    )
+
+# The snapshot is now the active Blender file. Save the restored state
+# back over the working project file, while leaving the original snapshot
+# untouched for future resets.
+bpy.ops.wm.save_as_mainfile(
+    filepath=working_path,
+    check_existing=False,
+)
+
+print(
+    "[JARVIS] restored Blender file saved:",
+    working_path,
     flush=True,
 )
 '''.strip()
 
     result = _bridge_execute(
         script,
-        save=True,
+        save=False,
     )
 
     if not result.get("ok"):
