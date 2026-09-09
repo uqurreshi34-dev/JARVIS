@@ -35,7 +35,7 @@ from datetime import datetime
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
-from actions import camera, contacts, diary, memory, documents, images
+from actions import camera, contacts, diary, memory, documents, images, blender_fidelity
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
 import phrases
@@ -52,6 +52,7 @@ import commands
 from actions import routing_guard
 
 routing_guard.install(commands)
+blender_fidelity.install()
 
 
 # Set True to print how long each stage takes. Also enable the TIMING flags

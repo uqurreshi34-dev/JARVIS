@@ -4,21 +4,27 @@
 
 import ast
 import atexit
+import base64
+import bpy
 import hmac
 import json
+import math
 import os
 import queue
 import secrets
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from mathutils import Matrix, Vector
 from pathlib import Path
 
-import bpy
 
 _ALLOWED_IMPORTS = frozenset({
     "bpy",
+    "bmesh",
     "math",
     "mathutils",
+    "random",
 })
 
 _FORBIDDEN_NAMES = frozenset({
@@ -48,10 +54,204 @@ _TOKEN = secrets.token_urlsafe(32)
 _requests = queue.Queue()
 _server = None
 _server_thread = None
+_visibility_restore_state = None
+
+
+def _visibility_snapshot():
+    """Capture viewport visibility for every scene object."""
+    return {
+        obj.name: not obj.hide_get()
+        for obj in bpy.context.scene.objects
+    }
+
+
+def _remember_visibility_change(before, after):
+    """Remember the state immediately before a visibility change."""
+    global _visibility_restore_state
+
+    if before != after:
+        _visibility_restore_state = before
 
 
 def _json_bytes(payload):
     return json.dumps(payload).encode("utf-8")
+
+
+def _position_camera_for_view(camera, scene, view):
+    """Temporarily position the camera for a named multi-view render."""
+    angles = {
+        "front": 0.0,
+        "back": math.pi,
+        "left": -math.pi / 2.0,
+        "right": math.pi / 2.0,
+    }
+
+    if view not in angles:
+        raise ValueError(
+            f"Unsupported multi-view render: {view}"
+        )
+
+    objects = [
+        obj
+        for obj in scene.objects
+        if obj.type == "MESH" and not obj.hide_get()
+    ]
+
+    if not objects:
+        raise RuntimeError(
+            "Blender scene contains no visible mesh objects."
+        )
+
+    corners = []
+
+    for obj in objects:
+        corners.extend(
+            obj.matrix_world @ Vector(corner)
+            for corner in obj.bound_box
+        )
+
+    minimum = Vector((
+        min(point.x for point in corners),
+        min(point.y for point in corners),
+        min(point.z for point in corners),
+    ))
+
+    maximum = Vector((
+        max(point.x for point in corners),
+        max(point.y for point in corners),
+        max(point.z for point in corners),
+    ))
+
+    center = (minimum + maximum) * 0.5
+
+    base = camera.location - center
+    distance = max(base.length, 1.0)
+
+    horizontal = Vector((
+        base.x,
+        base.y,
+        0.0,
+    ))
+
+    if horizontal.length < 1e-6:
+        horizontal = Vector((
+            0.0,
+            -1.0,
+            0.0,
+        ))
+    else:
+        horizontal.normalize()
+
+    rotation = Matrix.Rotation(
+        angles[view],
+        4,
+        "Z",
+    )
+
+    direction = rotation @ horizontal
+
+    location = center + direction * distance
+    location.z = center.z + base.z
+
+    camera.location = location
+    camera.rotation_euler = (
+        center - location
+    ).to_track_quat(
+        "-Z",
+        "Y",
+    ).to_euler()
+
+
+def _render_preview(width, height, view=None):
+    """Render a temporary low-resolution preview without changing scene setup."""
+    scene = bpy.context.scene
+
+    if scene.camera is None:
+        raise RuntimeError(
+            "The Blender scene has no active camera for preview rendering."
+        )
+
+    camera = scene.camera
+
+    original_camera = None
+
+    if view is not None:
+        original_camera = {
+            "location": camera.location.copy(),
+            "rotation": camera.rotation_euler.copy(),
+        }
+
+    render = scene.render
+
+    original = {
+        "engine": render.engine,
+        "resolution_x": render.resolution_x,
+        "resolution_y": render.resolution_y,
+        "resolution_percentage": render.resolution_percentage,
+        "filepath": render.filepath,
+        "file_format": render.image_settings.file_format,
+    }
+
+    temporary_path = None
+
+    try:
+        if view is not None:
+            _position_camera_for_view(
+                camera,
+                scene,
+                view,
+            )
+
+        render.engine = "BLENDER_EEVEE"
+        render.resolution_x = width
+        render.resolution_y = height
+        render.resolution_percentage = 100
+        render.image_settings.file_format = "PNG"
+
+        temporary = tempfile.NamedTemporaryFile(
+            suffix=".png",
+            delete=False,
+        )
+        temporary_path = Path(temporary.name)
+        temporary.close()
+
+        render.filepath = str(temporary_path)
+
+        bpy.ops.render.render(
+            write_still=True,
+        )
+
+        image_bytes = temporary_path.read_bytes()
+
+        return {
+            "ok": True,
+            "mime": "image/png",
+            "image": base64.b64encode(
+                image_bytes
+            ).decode("ascii"),
+        }
+
+    finally:
+        render.engine = original["engine"]
+        render.resolution_x = original["resolution_x"]
+        render.resolution_y = original["resolution_y"]
+        render.resolution_percentage = (
+            original["resolution_percentage"]
+        )
+        render.filepath = original["filepath"]
+        render.image_settings.file_format = (
+            original["file_format"]
+        )
+
+        if original_camera is not None:
+            camera.location = original_camera["location"]
+            camera.rotation_euler = original_camera["rotation"]
+
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
 
 
 def _scene_snapshot():
@@ -112,6 +312,7 @@ def _scene_snapshot():
             obj.name
             for obj in bpy.context.selected_objects
         ],
+        "visibility_restore": _visibility_restore_state or {},
         "objects": objects,
     }
 
@@ -171,7 +372,7 @@ def _run_pending():
     return 0.1
 
 
-def _submit(function):
+def _submit(function, timeout=_REQUEST_TIMEOUT):
     """Marshal a Blender operation onto the application thread."""
     done = threading.Event()
 
@@ -184,7 +385,7 @@ def _submit(function):
 
     _requests.put(job)
 
-    if not done.wait(_REQUEST_TIMEOUT):
+    if not done.wait(timeout):
         raise TimeoutError(
             "Blender did not respond to the bridge request."
         )
@@ -291,6 +492,91 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
 
+        if self.path == "/render":
+            try:
+                length = int(
+                    self.headers.get(
+                        "Content-Length",
+                        "0",
+                    )
+                )
+
+                if length <= 0 or length > _MAX_BODY:
+                    raise ValueError(
+                        "Invalid request size."
+                    )
+
+                payload = json.loads(
+                    self.rfile.read(length).decode(
+                        "utf-8"
+                    )
+                )
+
+                width = int(
+                    payload.get(
+                        "width",
+                        768,
+                    )
+                )
+
+                height = int(
+                    payload.get(
+                        "height",
+                        768,
+                    )
+                )
+
+                view = payload.get("view")
+
+                if view is not None:
+                    if not isinstance(view, str):
+                        raise ValueError(
+                            "Invalid multi-view camera."
+                        )
+
+                    if view not in {
+                        "front",
+                        "back",
+                        "left",
+                        "right",
+                    }:
+                        raise ValueError(
+                            f"Unsupported multi-view camera: {view}"
+                        )
+
+                if not (
+                    256 <= width <= 2048
+                    and 256 <= height <= 2048
+                ):
+                    raise ValueError(
+                        "Preview dimensions are out of range."
+                    )
+
+                result = _submit(
+                    lambda: _render_preview(
+                        width,
+                        height,
+                        view=view,
+                    ),
+                    timeout=60.0,
+                )
+
+                self._send(
+                    200,
+                    result,
+                )
+
+            except Exception as error:
+                self._send(
+                    400,
+                    {
+                        "ok": False,
+                        "error": str(error),
+                    },
+                )
+
+            return
+
         if self.path != "/execute":
             self._send(
                 404,
@@ -312,6 +598,19 @@ class _Handler(BaseHTTPRequestHandler):
             )
 
             script = payload.get("script")
+            restore_visibility = bool(
+                payload.get("restore_visibility")
+            )
+
+            save_after = payload.get(
+                "save",
+                True,
+            )
+
+            if not isinstance(save_after, bool):
+                raise ValueError(
+                    "Invalid save flag."
+                )
 
             if not isinstance(script, str) or not script.strip():
                 raise ValueError("Missing Blender script.")
@@ -319,6 +618,10 @@ class _Handler(BaseHTTPRequestHandler):
             _validate_script(script)
 
             def execute():
+                global _visibility_restore_state
+
+                before_visibility = _visibility_snapshot()
+
                 namespace = {
                     "bpy": bpy,
                 }
@@ -329,16 +632,38 @@ class _Handler(BaseHTTPRequestHandler):
                     namespace,
                 )
 
-                bpy.ops.wm.save_as_mainfile(
-                    filepath=bpy.data.filepath
-                )
+                after_visibility = _visibility_snapshot()
+
+                if restore_visibility:
+                    expected = _visibility_restore_state or {}
+
+                    if after_visibility != expected:
+                        raise RuntimeError(
+                            "Blender visibility restore could not be verified."
+                        )
+
+                    _visibility_restore_state = None
+
+                else:
+                    _remember_visibility_change(
+                        before_visibility,
+                        after_visibility,
+                    )
+
+                if save_after:
+                    bpy.ops.wm.save_as_mainfile(
+                        filepath=bpy.data.filepath
+                    )
 
                 return {
                     "ok": True,
                     "blend_path": bpy.data.filepath,
                 }
 
-            result = _submit(execute)
+            result = _submit(
+                execute,
+                timeout=60.0,
+            )
 
             self._send(200, result)
 

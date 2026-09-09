@@ -55,6 +55,7 @@ from actions import (
     screen_control,
     tasks,
     project_setup,
+    tripo,
 )
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
@@ -438,6 +439,8 @@ _FAST_LOOKUP = {
 # match still counts.
 _FUZZY_THRESHOLD = 0.78
 
+_MIN_REPLACEMENT_TOKEN_SIMILARITY = 0.40
+
 # These delete something, and near misses are dangerous: "read my clipboard"
 # and "clear my clipboard" score 0.86 against each other. They must be said
 # clearly enough to match exactly.
@@ -503,14 +506,22 @@ def _word_structural_similarity(left, right):
         if tag == "replace":
             pair_count = min(left_count, right_count)
 
-            score += sum(
+            similarities = [
                 _token_similarity(left_token, right_token)
                 for left_token, right_token in zip(
                     left_tokens[left_start:left_start + pair_count],
                     right_tokens[right_start:right_start + pair_count],
                 )
-            )
+            ]
 
+            if (
+                similarities
+                and min(similarities)
+                < _MIN_REPLACEMENT_TOKEN_SIMILARITY
+            ):
+                return 0.0
+
+            score += sum(similarities)
             weight += max(left_count, right_count)
             continue
 
@@ -1724,10 +1735,19 @@ def _inspect_blender():
 
 def _model_in_blender(request):
     """Analyse the current reference image for future Blender modelling."""
-    if not images.has_image():
+    if (
+        not images.has_image()
+        and not blender.has_reference_set(request)
+    ):
         return (
             "Please drop a reference image onto me first, sir. "
-            "Then tell me to model it in Blender."
+            "Or provide a complete multi-view reference set."
+        )
+
+    if blender.has_reference_set(request):
+        return (
+            "I found the multi-view reference set, sir. "
+            "I'll use the available views together."
         )
 
     analysis = blender.analyse_current_reference(request)
@@ -3420,6 +3440,19 @@ def _fast_path(command):
     if not text:
         return None
 
+    if text in (
+        "restore original",
+        "restore the original",
+        "restore original model",
+        "restore the original model",
+        "restore it to original",
+        "restore everything",
+        "restore everything to original",
+    ):
+        return _blank_result(
+            "restore_original",
+        )
+
     intent = _FAST_LOOKUP.get(text)
 
     if intent:
@@ -5011,8 +5044,122 @@ def _handle_command(command):
     if intent == "inspect_blender":
         return _query(intent, _inspect_blender)
 
+    if intent == "model_with_tripo":
+        subject = (verbatim_text or text or "").strip()
+
+        if not subject:
+            return _query(
+                intent,
+                lambda: "What shall I model with Tripo, sir?",
+            )
+
+        subject_key = re.sub(
+            r"[^a-z0-9]",
+            "",
+            subject.casefold(),
+        )
+
+        reference_root = os.path.join(
+            os.path.expanduser("~"),
+            "JARVIS",
+            "reference-sets",
+        )
+
+        reference_folder = None
+
+        if os.path.isdir(reference_root):
+            for candidate in os.listdir(reference_root):
+                candidate_path = os.path.join(
+                    reference_root,
+                    candidate,
+                )
+
+                if not os.path.isdir(candidate_path):
+                    continue
+
+                candidate_key = re.sub(
+                    r"[^a-z0-9]",
+                    "",
+                    candidate.casefold(),
+                )
+
+                if candidate_key == subject_key:
+                    reference_folder = candidate_path
+                    break
+
+        if not reference_folder:
+            return _query(
+                intent,
+                lambda: (
+                    f"I couldn't find the reference set for "
+                    f"{subject}, sir."
+                ),
+            )
+
+        output_dir = os.path.join(
+            files.root(),
+            "models",
+            "tripo",
+        )
+
+        os.makedirs(
+            output_dir,
+            exist_ok=True,
+        )
+
+        subject_slug = re.sub(
+            r"[^a-z0-9]+",
+            "-",
+            subject.casefold(),
+        ).strip("-")
+
+        output_path = os.path.join(
+            output_dir,
+            f"{subject_slug}.glb",
+        )
+
+        def generate():
+            glb_path = tripo.generate_segmented_reference_set(
+                subject=subject,
+                reference_root=reference_folder,
+                output_path=output_path,
+            )
+
+            print(
+                f"[JARVIS] handing Tripo model to Blender: "
+                f"{glb_path}",
+                flush=True,
+            )
+
+            if not blender.open_external_glb(
+                glb_path,
+                subject=subject,
+            ):
+                raise RuntimeError(
+                    "The Tripo model was generated, "
+                    "but Blender could not open it."
+                )
+
+            return True
+
+        return _action(
+            intent,
+            f"Sending {subject} to Tripo, sir.",
+            generate,
+            timeout=None,
+            success_response=(
+                f"Tripo has reconstructed {subject} "
+                "and opened it in Blender, sir."
+            ),
+        )
+
     if intent == "model_in_blender":
-        if not images.has_image():
+        if (
+            not images.has_image()
+            and not blender.has_reference_set(
+                verbatim_text or text
+            )
+        ):
             return _query(
                 intent,
                 lambda: (
@@ -5029,6 +5176,15 @@ def _handle_command(command):
             ),
             timeout=None,
             success_response="Created the Blender model, sir.",
+        )
+
+    if intent == "restore_original":
+        return _action(
+            intent,
+            "Restoring the original model, sir.",
+            blender.restore_original_scene,
+            timeout=None,
+            success_response="Original model restored, sir.",
         )
 
     if intent == "modify_blender":

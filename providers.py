@@ -392,7 +392,8 @@ class Provider:
         if output_config:
             kwargs["output_config"] = output_config
 
-        response = self._client.messages.create(**kwargs)
+        with self._client.messages.stream(**kwargs) as stream:
+            response = stream.get_final_message()
 
         for block in response.content:
             if getattr(block, "type", None) == "text":
@@ -489,6 +490,7 @@ class Provider:
         image_bytes,
         mime,
         max_tokens,
+        reasoning_effort=None,
     ):
         """Send an image through the native Anthropic Messages API."""
         encoded = base64.b64encode(image_bytes).decode("ascii")
@@ -517,12 +519,117 @@ class Provider:
             ],
         }
 
-        if self.vision_effort:
+        effort = reasoning_effort or self.vision_effort
+
+        if effort:
             kwargs["output_config"] = {
-                "effort": self.vision_effort,
+                "effort": effort,
             }
 
-        response = self._client.messages.create(**kwargs)
+        with self._client.messages.stream(**kwargs) as stream:
+            response = stream.get_final_message()
+
+        for block in response.content:
+            if getattr(block, "type", None) == "text":
+                text = (block.text or "").strip()
+
+                if text:
+                    return text
+
+        stop_reason = getattr(
+            response,
+            "stop_reason",
+            None,
+        )
+
+        if stop_reason == "max_tokens":
+            print(
+                f"[JARVIS] {self.name} exhausted the vision token "
+                "budget before producing visible text."
+            )
+
+        return ""
+
+    def _vision_chat_anthropic(
+        self,
+        messages,
+        image_bytes,
+        mime,
+        max_tokens,
+        reasoning_effort=None,
+    ):
+        """Run a native Anthropic multimodal chat request."""
+        system_parts = []
+        anthropic_messages = []
+
+        for message in messages:
+            role = message.get("role", "user")
+            content = message.get("content", "")
+
+            if role == "system":
+                if isinstance(content, str) and content.strip():
+                    system_parts.append(content.strip())
+                continue
+
+            anthropic_messages.append(
+                {
+                    "role": role,
+                    "content": content,
+                }
+            )
+
+        encoded = base64.b64encode(
+            image_bytes
+        ).decode("ascii")
+
+        if not anthropic_messages:
+            anthropic_messages.append(
+                {
+                    "role": "user",
+                    "content": [],
+                }
+            )
+
+        last_content = anthropic_messages[-1]["content"]
+
+        if isinstance(last_content, str):
+            last_content = [
+                {
+                    "type": "text",
+                    "text": last_content,
+                }
+            ]
+            anthropic_messages[-1]["content"] = last_content
+
+        last_content.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": mime,
+                    "data": encoded,
+                },
+            }
+        )
+
+        kwargs = {
+            "model": self.vision_model,
+            "messages": anthropic_messages,
+            "max_tokens": max_tokens,
+        }
+
+        if system_parts:
+            kwargs["system"] = "\n\n".join(system_parts)
+
+        effort = reasoning_effort or self.vision_effort
+
+        if effort:
+            kwargs["output_config"] = {
+                "effort": effort,
+            }
+
+        with self._client.messages.stream(**kwargs) as stream:
+            response = stream.get_final_message()
 
         for block in response.content:
             if getattr(block, "type", None) == "text":
@@ -718,7 +825,14 @@ def _strip_reasoning(text):
     return cleaned or text
 
 
-def _describe_image(provider, prompt, image_bytes, mime, max_tokens):
+def _describe_image(
+    provider,
+    prompt,
+    image_bytes,
+    mime,
+    max_tokens,
+    reasoning_effort=None,
+):
     """One vision request to a single provider.
 
     The budget matters more than it looks for a reasoning model. Hidden
@@ -734,6 +848,7 @@ def _describe_image(provider, prompt, image_bytes, mime, max_tokens):
             image_bytes,
             mime,
             max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     encoded = base64.b64encode(image_bytes).decode("ascii")
@@ -843,7 +958,13 @@ def _describe_image(provider, prompt, image_bytes, mime, max_tokens):
     return _strip_reasoning(content)
 
 
-def vision(prompt, image_bytes, mime="image/png", max_tokens=3000):
+def vision(
+    prompt,
+    image_bytes,
+    mime="image/png",
+    max_tokens=3000,
+    reasoning_effort=None,
+):
     """Ask about an image, rotating providers exactly as chat does."""
     if not image_bytes:
         return None
@@ -863,7 +984,12 @@ def vision(prompt, image_bytes, mime="image/png", max_tokens=3000):
     for index, provider in enumerate(order):
         try:
             answer = _describe_image(
-                provider, prompt, image_bytes, mime, max_tokens
+                provider,
+                prompt,
+                image_bytes,
+                mime,
+                max_tokens,
+                reasoning_effort=reasoning_effort,
             )
 
             if not (answer or "").strip():
@@ -910,6 +1036,190 @@ def vision(prompt, image_bytes, mime="image/png", max_tokens=3000):
     print(f"[JARVIS] no provider could see the image: {last_error}")
 
     return None
+
+
+def vision_chat(
+    messages,
+    image_bytes,
+    mime="image/png",
+    max_tokens=12000,
+    reasoning_effort=None,
+):
+    """Run a multimodal chat request with provider failover."""
+    if not image_bytes:
+        return ""
+
+    capable = [
+        provider
+        for provider in _pool
+        if provider.vision_model
+    ]
+
+    if not capable:
+        print(
+            "[JARVIS] no provider is configured for multimodal chat"
+        )
+        return ""
+
+    order = (
+        [provider for provider in capable if not provider.resting]
+        + [provider for provider in capable if provider.resting]
+    )
+
+    last_error = None
+
+    for index, provider in enumerate(order):
+        try:
+            if provider.kind == "anthropic":
+                answer = provider._vision_chat_anthropic(
+                    messages,
+                    image_bytes,
+                    mime,
+                    max_tokens,
+                    reasoning_effort=reasoning_effort,
+                )
+
+            else:
+                encoded = base64.b64encode(
+                    image_bytes
+                ).decode("ascii")
+
+                multimodal_messages = []
+
+                for message in messages:
+                    content = message.get(
+                        "content",
+                        "",
+                    )
+
+                    if (
+                        message.get("role") == "user"
+                        and isinstance(content, str)
+                    ):
+                        content = [
+                            {
+                                "type": "text",
+                                "text": content,
+                            },
+                        ]
+
+                    multimodal_messages.append(
+                        {
+                            **message,
+                            "content": content,
+                        }
+                    )
+
+                user_message = (
+                    multimodal_messages[-1]
+                    if multimodal_messages
+                    else {
+                        "role": "user",
+                        "content": [],
+                    }
+                )
+
+                content = user_message["content"]
+
+                if isinstance(content, list):
+                    content.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": (
+                                    f"data:{mime};base64,"
+                                    f"{encoded}"
+                                )
+                            },
+                        }
+                    )
+
+                kwargs = {
+                    "model": provider.vision_model,
+                    "messages": multimodal_messages,
+                    "max_tokens": max_tokens,
+                }
+
+                effort = (
+                    reasoning_effort
+                    or provider.vision_effort
+                )
+
+                if (
+                    effort
+                    and provider.reasoning
+                ):
+                    kwargs["reasoning_effort"] = effort
+
+                response = provider._client.chat.completions.create(
+                    **kwargs
+                )
+
+                message = response.choices[0].message
+                answer = (message.content or "").strip()
+
+                if not answer:
+                    for field in (
+                        "reasoning",
+                        "reasoning_content",
+                    ):
+                        spare = getattr(
+                            message,
+                            field,
+                            None,
+                        )
+
+                        if spare and str(spare).strip():
+                            answer = str(spare).strip()
+                            break
+
+            if (answer or "").strip():
+                provider.wake()
+                return _strip_reasoning(answer)
+
+            print(
+                f"[JARVIS] {provider.name} returned nothing "
+                "for multimodal refinement"
+            )
+
+        except Exception as error:
+            last_error = error
+
+            if not should_failover(error):
+                print(
+                    f"[JARVIS] {provider.name} could not process "
+                    f"multimodal refinement: {error}"
+                )
+                return ""
+
+            provider.rest()
+
+            if is_rate_limit(error):
+                reason = "rate limited"
+
+            elif is_permission_error(error):
+                reason = (
+                    f"access denied ({provider.model})"
+                )
+
+            else:
+                reason = (
+                    f"model unavailable ({provider.model})"
+                )
+
+            if len(order) - index - 1:
+                print(
+                    f"[JARVIS] {provider.name} {reason} for "
+                    "multimodal refinement; trying "
+                    f"{order[index + 1].name}"
+                )
+
+    print(
+        "[JARVIS] no provider could process multimodal refinement: "
+        f"{last_error}"
+    )
+
+    return ""
 
 
 def active_provider():

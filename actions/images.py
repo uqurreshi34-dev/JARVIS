@@ -26,7 +26,6 @@ import re
 import threading
 from pathlib import Path
 import time
-import mimetypes
 import requests
 from PIL import Image
 
@@ -59,6 +58,31 @@ MIN_SCALE = 0.25
 MAX_SCALE = 3.0
 
 _lock = threading.Lock()
+
+_MIME_BY_FORMAT = {
+    "JPEG": "image/jpeg",
+    "PNG": "image/png",
+    "WEBP": "image/webp",
+    "GIF": "image/gif",
+    "BMP": "image/bmp",
+    "TIFF": "image/tiff",
+}
+
+
+def _actual_mime(image_bytes, fallback=None):
+    """Return the MIME type that matches the actual image bytes."""
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            mime = _MIME_BY_FORMAT.get(image.format)
+
+        if mime:
+            return mime
+
+    except (OSError, ValueError):
+        pass
+
+    return fallback
+
 
 # Everything about the photo currently on screen. Kept as the pristine
 # fetched bytes plus a rotation/scale to apply, rather than repeatedly
@@ -164,9 +188,9 @@ def load_file(path):
     except (OSError, ValueError):
         return False
 
-    mime = (
-        mimetypes.guess_type(str(resolved))[0]
-        or "application/octet-stream"
+    mime = _actual_mime(
+        original,
+        fallback="application/octet-stream",
     )
 
     with _lock:
@@ -250,11 +274,9 @@ def search(query):
         image_response.raise_for_status()
 
         original = image_response.content
-        mime = (
-            image_response.headers.get("Content-Type", "")
-            .split(";", 1)[0]
-            .strip()
-            .lower()
+        mime = _actual_mime(
+            original,
+            fallback=None,
         )
 
     except requests.RequestException as error:
@@ -374,11 +396,9 @@ def select_choice(choice):
         image_response.raise_for_status()
 
         original = image_response.content
-        mime = (
-            image_response.headers.get("Content-Type", "")
-            .split(";", 1)[0]
-            .strip()
-            .lower()
+        mime = _actual_mime(
+            original,
+            fallback=None,
         )
 
     except requests.RequestException as error:
