@@ -134,7 +134,7 @@ def should_plan(command):
     text = re.sub(r"[^\w\s]", " ", (command or "").casefold())
     text = " ".join(text.split())
 
-    if len(text.split()) < 8:
+    if len(text.split()) < 4:
         return False
 
     return any(
