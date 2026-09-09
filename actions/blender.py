@@ -480,15 +480,13 @@ snapshot_path = scene.get("_jarvis_original_snapshot")
 
 # Fall back to the deterministic sibling filename for older files.
 if not snapshot_path:
-    root, extension = os.path.splitext(current_path)
-
-    if extension.casefold() != ".blend":
+    if not current_path.casefold().endswith(".blend"):
         raise RuntimeError(
             "The current Blender file is not a .blend file."
         )
 
     snapshot_path = (
-        root
+        current_path[:-6]
         + "-jarvis-original.blend"
     )
 
@@ -823,13 +821,20 @@ def _launch_blender_gui(output_path):
             "Blender could not be found."
         )
 
+    launch_kwargs = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+
+    if os.name == "nt":
+        launch_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
     process = subprocess.Popen(
         [
             executable,
             str(output_path),
         ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        **launch_kwargs,
     )
 
     deadline = time.monotonic() + _BRIDGE_STARTUP_TIMEOUT
