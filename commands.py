@@ -40,6 +40,7 @@ from actions import (
     documents,
     files,
     folder_organizer,
+    folder_undo,
     git_tasks,
     image_choices,
     images,
@@ -444,6 +445,7 @@ _FAST_PHRASES = (
      "list_reminders"),
     (("cancel my reminders", "cancel my timers", "cancel everything"),
      "cancel_reminders"),
+    (("undo",), "undo_folder_organisation"),
 )
 
 _FAST_LOOKUP = {
@@ -3820,7 +3822,7 @@ _WRITE_INTENTS = frozenset({
     "show_brain", "hide_brain",
     "proofread_fix", "proofread_report", "proofread_copy", "ignore_word",
     "remember", "forget", "learn_subject", "set_market_alert", "market_report",
-    "add_event", "remove_event", "clear_calendar",
+    "add_event", "remove_event", "clear_calendar", "undo_folder_organisation",
 })
 
 
@@ -4822,6 +4824,21 @@ def _handle_command(command, *, fast_only=False, probe=False):
     text = _trim_filler(_normalise(raw_text)) or None
     verbatim_text = raw_text or None
     unit = result.get("unit")
+
+    if intent == "undo_folder_organisation":
+        if not folder_undo.can_undo():
+            return _query(
+                "undo_status",
+                lambda: "There is nothing I can undo, sir.",
+            )
+
+        return _action(
+            "undo_folder_organisation",
+            "Undoing the last folder organisation, sir.",
+            folder_undo.undo,
+            detail="last folder organisation",
+            success_response=folder_undo.success_response,
+        )
 
     if intent == "setup_project":
         return _setup_request(result)
