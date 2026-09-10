@@ -45,5 +45,5 @@ Name: "{group}\JARVIS Chrome"; Filename: "{app}\jarvis-chrome.bat"; WorkingDir: 
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
 
 [Run]
-Filename: "{app}\{UpdaterExeName}"; WorkingDir: "{app}"; Flags: nowait skipifsilent
+Filename: "{app}\{UpdaterExeName}"; WorkingDir: "{app}"; Flags: nowait
 Filename: "{app}\{AppExeName}"; WorkingDir: "{app}"; Description: "Launch JARVIS"; Flags: nowait postinstall
