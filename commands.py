@@ -4558,6 +4558,7 @@ def _compound_request(command):
 
     steps = plan["steps"]
     summary = plan["summary"]
+    local = bool(plan.get("local"))
 
     def execute_plan():
         return planner.execute(
@@ -4589,9 +4590,15 @@ def _compound_request(command):
             success_response="Done, sir.",
         )
 
+    response = summary
+
+    if local and steps:
+        first_result = steps[0].get("result") or {}
+        response = first_result.get("response") or summary
+
     return _action(
         "compound_task",
-        summary,
+        response,
         execute_plan,
         timeout=None,
         success_response="Done, sir.",

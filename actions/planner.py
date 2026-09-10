@@ -215,6 +215,7 @@ def local_plan(command, resolve):
         steps.append({
             "command": part,
             "purpose": "execute the requested action",
+            "result": result,
         })
 
     if len(steps) > _MAX_STEPS:
@@ -224,6 +225,7 @@ def local_plan(command, resolve):
         "is_compound": True,
         "summary": "I'll handle those actions in order, sir.",
         "requires_confirmation": False,
+        "local": True,
         "steps": tuple(steps),
     }
 
@@ -349,7 +351,10 @@ def execute(steps, dispatch):
             flush=True,
         )
 
-        result = dispatch(command)
+        result = step.get("result")
+
+        if result is None:
+            result = dispatch(command)
 
         if not result:
             print(
