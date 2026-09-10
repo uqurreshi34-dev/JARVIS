@@ -29,7 +29,7 @@ RestartApplications=no
 
 [Files]
 Source: "{#RepoRoot}\dist\JARVIS\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#RepoRoot}\dist\JARVIS-Updater\{#UpdaterExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#RepoRoot}\dist\{#UpdaterExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\installer\jarvis-chrome.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\installer\.env.example"; DestDir: "{app}"; Flags: ignoreversion onlyifdoesntexist
 
