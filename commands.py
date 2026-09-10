@@ -4544,7 +4544,11 @@ def _compound_request(command):
     """Return a compound action when the planner finds a valid multi-step plan."""
     plan = planner.local_plan(
         command,
-        handle_command,
+        lambda text: handle_command(
+            text,
+            fast_only=True,
+            probe=True,
+        ),
     )
 
     if plan is None:
@@ -4615,12 +4619,16 @@ def _compound_request(command):
 _command_lock = threading.RLock()
 
 
-def handle_command(command):
+def handle_command(command, *, fast_only=False, probe=False):
     with _command_lock:
-        return _handle_command(command)
+        return _handle_command(
+            command,
+            fast_only=fast_only,
+            probe=probe,
+        )
 
 
-def _handle_command(command):
+def _handle_command(command, *, fast_only=False, probe=False):
     command = _resolve_pronouns(command)
 
     answered = _resolve_awaiting(command)
@@ -4633,26 +4641,30 @@ def _handle_command(command):
     if answered is not None:
         return answered
 
-    compound = _compound_request(command)
+    if not fast_only:
+        compound = _compound_request(command)
 
-    if compound is not None:
-        print("[planner] compound task")
-        return compound
+        if compound is not None:
+            print("[planner] compound task")
+            return compound
 
-    agent_task = _agent_task(command)
+        agent_task = _agent_task(command)
 
-    if agent_task:
-        print("[agent] Agent Mode")
+        if agent_task:
+            print("[agent] Agent Mode")
 
-        return _query(
-            "agent_mode",
-            lambda: _run_agent_investigation(agent_task),
-            detail=agent_task,
-        )
+            return _query(
+                "agent_mode",
+                lambda: _run_agent_investigation(agent_task),
+                detail=agent_task,
+            )
 
     result = _fast_path(command)
 
     took_free_path = result is not None
+
+    if fast_only and result is None:
+        return None
 
     if result is not None:
         print(f"[fast] {result['intent']} (no API call)")
@@ -4694,27 +4706,31 @@ def _handle_command(command):
     # its intent at all, which would make any intent that regularly
     # falls through to the model invisible to anything reading history
     # (pattern detection, "what have you done today").
-    journal.command(
-        command,
-        intent,
-        took_free_path,
-        detail=(
-            (result.get("text") or "").strip()
-            if intent == "market_report"
-            else None
-        ),
-    )
+    if not probe:
+        journal.command(
+            command,
+            intent,
+            took_free_path,
+            detail=(
+                ...
+            ),
+        )
 
     application = result.get("application")
 
-    _set_subject(result)
+    if not probe:
+        _set_subject(result)
+        # Whatever this command was about becomes what "it" means next.
+        _remember(
+            result.get("application")
+            or result.get("project")
+            or (
+                result.get("text")
+                if intent in _SUBJECT_INTENTS
+                else None
+            )
+        )
 
-    # Whatever this command was about becomes what "it" means next.
-    _remember(
-        result.get("application")
-        or result.get("project")
-        or (result.get("text") if intent in _SUBJECT_INTENTS else None)
-    )
     website = result.get("website")
     project = result.get("project")
     amount = _to_number(result.get("amount"))
