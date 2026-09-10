@@ -14,6 +14,7 @@ from actions import browser, files
 
 _MAX_QUERIES = 5
 _MAX_INITIAL_SOURCES = 10
+_MAX_SOURCES_PER_QUERY = 2
 _MAX_FOLLOWUP_QUERIES = 2
 _MAX_SOURCE_CHARS = 7000
 _SEARCH_TIMEOUT = 20
@@ -286,12 +287,14 @@ def _bing_search(query):
 
 
 def _search_queries(queries):
-    """Gather unique structured results from all planned searches."""
+    """Gather a balanced pool of unique results across all planned searches."""
     results = []
     seen_urls = set()
 
     for query in queries:
         print(f"[JARVIS] research search: {query}", flush=True)
+
+        query_count = 0
 
         for result in _bing_search(query):
             url = result["url"]
@@ -301,9 +304,13 @@ def _search_queries(queries):
 
             seen_urls.add(url)
             results.append(result)
+            query_count += 1
 
             if len(results) >= _MAX_INITIAL_SOURCES:
                 return results
+
+            if query_count >= _MAX_SOURCES_PER_QUERY:
+                break
 
     return results
 
