@@ -8,7 +8,7 @@ from pathlib import Path
 
 import providers
 
-from actions import files, journal
+from actions import files, folder_undo, journal
 
 
 _MAX_FILES = 150
@@ -21,6 +21,7 @@ _MAX_PLAN_TOKENS = 1400
 _PROTECTED_NAMES = frozenset({
     ".env",
     ".gitignore",
+    ".jarvis-folder-undo.json",
     "calendar.txt",
     "contacts.txt",
     "jarvis-log.txt",
@@ -154,13 +155,16 @@ def _inventory(base):
 
     records = []
 
+    protected = {
+        name.casefold()
+        for name in _PROTECTED_NAMES
+    }
+
     for entry in entries:
         if not entry.is_file():
             continue
 
-        if entry.name.casefold() in {
-            name.casefold() for name in _PROTECTED_NAMES
-        }:
+        if entry.name.casefold() in protected:
             continue
 
         try:
@@ -349,9 +353,14 @@ def _execute(base, groups):
     moved = 0
     skipped = 0
     created = set()
+    moves = []
     conflicts = []
 
     base = os.path.abspath(base)
+    protected = {
+        name.casefold()
+        for name in _PROTECTED_NAMES
+    }
 
     for group in groups:
         folder = files.safe_folder(group["folder"])
@@ -366,6 +375,8 @@ def _execute(base, groups):
             skipped += len(group["files"])
             continue
 
+        was_directory = os.path.isdir(destination_dir)
+
         try:
             os.makedirs(destination_dir, exist_ok=True)
         except OSError as error:
@@ -373,8 +384,8 @@ def _execute(base, groups):
             skipped += len(group["files"])
             continue
 
-        if not group["existing"]:
-            created.add(folder)
+        if not was_directory:
+            created.add(destination_dir)
 
         for name in group["files"]:
             source = os.path.abspath(os.path.join(base, name))
@@ -392,10 +403,7 @@ def _execute(base, groups):
                 skipped += 1
                 continue
 
-            if name.casefold() in {
-                protected.casefold()
-                for protected in _PROTECTED_NAMES
-            }:
+            if name.casefold() in protected:
                 skipped += 1
                 continue
 
@@ -409,9 +417,15 @@ def _execute(base, groups):
             try:
                 shutil.move(source, destination)
                 moved += 1
+                moves.append({
+                    "source": source,
+                    "destination": destination,
+                })
             except OSError as error:
                 print(f"[JARVIS] could not move {source}: {error}")
                 skipped += 1
+
+    folder_undo.record(base, moves, created)
 
     journal.action(
         "organise_folder",
@@ -422,7 +436,7 @@ def _execute(base, groups):
     return {
         "moved": moved,
         "skipped": skipped,
-        "created": tuple(sorted(created)),
+        "created": tuple(sorted(os.path.basename(path) for path in created)),
         "conflicts": tuple(conflicts),
     }
 
