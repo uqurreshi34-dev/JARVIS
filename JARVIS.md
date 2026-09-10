@@ -36,16 +36,20 @@ This prevents speech intended for the phone from being heard or acted on by
 the desktop listener. When the phone interaction finishes, the desktop
 microphone is restored.
 
-**105 intents. 491 spoken phrases resolve locally with no API call.**
+**111 language-model intents. 494 spoken phrases resolve locally with no API call.**
 
 ---
 
 ## The rule that shapes everything: the free path
 
-Every command is matched against a table of known phrases first. If nothing
-matches, JARVIS checks whether the utterance is a strong personal-memory
-question using its local semantic memory layer. Only when neither local path
-can handle it does it need a language-model request.
+Every command is matched against the local fast path first. If a command
+is a compound made entirely from locally understood actions, JARVIS resolves
+and executes the steps locally with no language-model request. Semantic
+compound tasks that cannot be resolved locally move to the planner.
+
+Research/report requests have their own workflow because they require
+planning, web research, source reading, synthesis and document creation.
+Everything else follows the normal command routing.
 
 ```
 you speak → Whisper (local) → phrase table (free) → fuzzy match (free)
@@ -61,19 +65,15 @@ you speak → Whisper (local) → phrase table (free) → fuzzy match (free)
                   one LLM call   local fallback
 ```
 
-In practice almost everything is free: apps, files, notes, clipboard, news,
-charts, spelling, screen control, calendar, memory retrieval, volume, and
-timers. A general-knowledge answer still needs a live language-model request,
-and the camera needs a live vision request. A fetched image uses a free
-Unsplash request rather than the language model. Personal-memory questions
-are special: finding the memory is always local, and a strong match skips the
-classifier API call. When a provider is available, the final answer uses one
-language-model request; when both providers are unavailable, a local factual
-fallback can answer directly from the remembered fact.
+In practice almost everything simple is free: apps, files, notes, clipboard,
+news, charts, spelling, screen control, calendar, memory retrieval, volume,
+timers, and compound sequences made from those local actions. A general
+knowledge answer, semantic compound task, research task, or camera request
+needs the configured model machinery.
 
-**When adding a capability, add its phrases to the free path.** An intent
-that only the model can reach is slower and costs money on every use.
-
+**When adding a capability, put deterministic phrases on the free path when they can be resolved safely and unambiguously.** 
+An intent that only the model can reach is slower and costs money on every use.
+Do not force semantic tasks into the phrase table just to avoid a model request.
 ---
 
 ## Capabilities
@@ -217,6 +217,11 @@ Create (txt, md, docx, pdf, csv), read, append, copy, remove a line, list,
 count, copy contents to the clipboard. A spoken name matches any extension,
 so "business" finds `business.docx`. Word documents are read including
 their tables.
+
+Research reports can optionally be saved into a direct subfolder beneath the
+JARVIS root when the user explicitly names one. Missing destination folders
+are created automatically. Without an explicit destination, reports continue
+to save directly in the JARVIS folder.
 
 ### Documents — `actions/documents.py`
 
@@ -573,6 +578,113 @@ page's own text is outside content, so it goes through
 input — a page that tries to give orders gets flagged, not obeyed. Logged
 through its own `journal.browser()` rather than `journal.action()`, so a
 page visit is recorded but never becomes the answer to "what did you do".
+
+### Blender and Tripo — `actions/blender.py`, `actions/tripo.py`
+
+JARVIS can work with Blender as a live modelling environment and can
+reconstruct reference subjects through Tripo.
+
+Blender requests can use the current reference image or an existing Blender
+scene. JARVIS can model a reference, inspect the current scene, and modify
+the live model using natural language.
+
+Modification requests are semantic rather than tied to a fixed object list.
+JARVIS can change colours, materials, position, rotation, scale, dimensions,
+geometry and visibility, isolate parts, restore hidden parts, and otherwise
+edit the current scene without requiring hard-coded object names.
+
+Tripo is the external 3D reconstruction path. JARVIS can send a subject for
+multi-view reconstruction, obtain the reconstructed model, run semantic
+segmentation, download the segmented GLB and hand it to Blender.
+
+Tripo speech recognition does not have to spell the provider name perfectly.
+The command interpreter is instructed to recover an obvious speech-recognition
+distortion from the modelling context rather than maintaining a hard-coded
+dictionary of transcription mistakes.
+
+Typical requests include:
+
+`model this in Blender`
+
+`model Iron Man in Tripo`
+
+`inspect the Blender scene`
+
+`make the helmet blue`
+
+`isolate the chest`
+
+`restore original`
+
+The same Blender command path handles ordinary live-scene edits and
+post-Tripo segmented models.
+
+### Research and reports — `actions/research.py`
+
+JARVIS can research arbitrary subjects, compare them, synthesise the findings
+and create a source-backed report.
+
+Research is provider-agnostic and uses the normal JARVIS provider chain:
+Claude first, then Groq, then Gemini when failover is required. The research
+workflow is not hard-coded to particular companies, subjects or websites.
+
+A research request can be as natural as:
+
+`compare iPhone with Android and save it`
+
+`research NVIDIA, compare it with AMD, save it`
+
+`research Lamborghini, compare it with Ferrari, write the report and save it`
+
+The user does not have to say `write a report` explicitly when the request
+already contains a research/comparison request and a save/deliverable request.
+For example, `compare iPhone with Android and save it` is enough.
+
+JARVIS plans focused searches, gathers multiple sources, reads the available
+evidence, checks whether important gaps remain, and then synthesises the
+report. A failed source does not normally abort the research: unreadable,
+blocked or timed-out pages are discarded and the remaining sources are used.
+
+Reports include a Sources section containing the source titles and URLs
+actually used.
+
+By default a report is saved directly in the JARVIS folder. An explicit
+destination can target a direct JARVIS subfolder, for example:
+
+`save it in the Cars folder`
+
+`save it in the AI folder`
+
+If that folder does not exist, JARVIS creates it. If it already exists, the
+new report is saved alongside previous reports using the normal unique-file
+behaviour. A request for a folder named `JARVIS` is treated as the existing
+root rather than creating `JARVIS\JARVIS`.
+
+Folder destinations are optional: leaving the destination out preserves the
+existing JARVIS-folder behaviour.
+
+### Compound tasks — `actions/planner.py`
+
+JARVIS can execute multiple actions from one spoken request.
+
+When every step is already understood locally, the compound request stays
+entirely on the local path and does not call a language model.
+
+For example:
+
+`open Chrome and set the volume to 100`
+
+`open Chrome and open Blender`
+
+These are resolved locally and execute as a single compound action.
+
+More semantic tasks can still use the planner when the later step depends on
+the result of the earlier one, for example:
+
+`model Iron Man in Blender and make the legs blue`
+
+The planner keeps the steps ordered and passes the completed result forward to
+the next step rather than re-resolving the same local action unnecessarily.
 
 ### The brain view — `brain_panel.py`
 A rotating wireframe globe, standalone rather than attached to the HUD by
