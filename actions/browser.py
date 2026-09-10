@@ -588,6 +588,57 @@ def page_text():
         return title, url, body
 
 
+def search_results():
+    """Return the visible search-result links from the current page."""
+    if not _AVAILABLE:
+        return []
+
+    with _lock:
+        driver = _connect()
+
+        if not driver:
+            return []
+
+        try:
+            return driver.execute_script(
+                """
+                const results = [];
+                const seen = new Set();
+
+                for (const heading of document.querySelectorAll('h3')) {
+                    const link = heading.closest('a');
+
+                    if (!link || !link.href) {
+                        continue;
+                    }
+
+                    const url = link.href;
+
+                    if (seen.has(url)) {
+                        continue;
+                    }
+
+                    seen.add(url);
+
+                    results.push({
+                        title: (heading.innerText || '').trim(),
+                        url: url
+                    });
+
+                    if (results.length >= 20) {
+                        break;
+                    }
+                }
+
+                return results;
+                """
+            ) or []
+
+        except Exception as error:
+            print(f"[JARVIS] could not read search results: {error}")
+            return []
+
+
 def _spoken_opening(body):
     """The first bit of a page, cut at a sentence rather than mid-word."""
     words = body.split()

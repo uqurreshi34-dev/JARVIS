@@ -50,6 +50,7 @@ from actions import (
     news,
     planner,
     proofread,
+    research,
     notes,
     patterns,
     safety,
@@ -3788,7 +3789,7 @@ _WRITE_INTENTS = frozenset({
     "click_thing", "type_text", "open_application", "close_application",
     "open_website", "open_project", "close_project", "set_reminder",
     "cancel_reminders", "set_volume", "mute", "unmute", "toggle_mute",
-    "minimise_all", "restore_all", "stop_looking",
+    "minimise_all", "restore_all", "stop_looking", "research_report",
     # The read-only browser intents are deliberately absent: they log
     # themselves through journal.browser instead, so visiting a page
     # never becomes the answer to "what did you do?". Saving one is a
@@ -4665,6 +4666,18 @@ def _handle_command(command, *, fast_only=False, probe=False):
         return answered
 
     if not fast_only:
+
+        if research.is_report_request(command):
+            return _action(
+                "research_report",
+                "I'll research that, compare the findings, and prepare the report, sir.",
+                lambda: bool(research.run(command)),
+                timeout=None,
+                success_response=(
+                    "The report is written and saved in your JARVIS folder, sir."
+                ),
+            )
+
         compound = _compound_request(command)
 
         if compound is not None:
