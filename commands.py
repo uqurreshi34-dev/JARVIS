@@ -4685,7 +4685,7 @@ def _handle_command(command, *, fast_only=False, probe=False):
             return _action(
                 "research_report",
                 "I'll research that, compare the findings, and prepare the report, sir.",
-                research.run,
+                lambda: research.run(command),
                 timeout=None,
                 success_response=_research_success_response,
             )
