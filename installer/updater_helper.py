@@ -23,9 +23,11 @@ from packaging.version import InvalidVersion, Version
 from app_version import VERSION
 
 
+DEFAULT_UPDATE_REPOSITORY = "uqurreshi34-dev/JARVIS-Releases"
+
 REPOSITORY = os.environ.get(
     "JARVIS_UPDATE_REPOSITORY",
-    "uqurreshi34-dev/JARVIS",
+    DEFAULT_UPDATE_REPOSITORY,
 ).strip()
 
 RELEASE_API = (
