@@ -38,6 +38,12 @@ _REPORT_WORDS = (
     "save the",
 )
 
+_FOLDER_RE = re.compile(
+    r"\b(?:save|store|put)\b.*?\b(?:in|inside|into|under|to)\s+"
+    r"(?:the\s+)?([A-Za-z0-9][A-Za-z0-9 _-]{0,79}?)\s+folder\b",
+    re.IGNORECASE,
+)
+
 _QUERY_SCHEMA = {
     "type": "object",
     "properties": {
@@ -126,6 +132,21 @@ def _normalise(text):
     """Normalise speech text without changing its meaning."""
     text = re.sub(r"[^\w\s]", " ", str(text or "").casefold())
     return " ".join(text.split())
+
+
+def _requested_folder(text):
+    """Return an explicitly requested JARVIS subfolder, or None."""
+    match = _FOLDER_RE.search(str(text or ""))
+
+    if not match:
+        return None
+
+    folder = " ".join(match.group(1).split()).strip(" .")
+
+    if folder.casefold() == files.FOLDER_NAME.casefold():
+        return None
+
+    return files.safe_folder(folder)
 
 
 def is_report_request(text):
@@ -510,11 +531,13 @@ def run(request):
         f"{_safe_filename_part(' vs '.join(subjects[:2]))} "
         f"research report {stamp}.docx"
     )
+    destination = _requested_folder(request)
 
     path = files.write(
         filename,
         report,
         default_suffix=".docx",
+        folder=destination,
     )
 
     if not path:
@@ -530,4 +553,5 @@ def run(request):
         "path": path,
         "subjects": subjects,
         "sources": len(sources),
+        "folder": destination,
     }
