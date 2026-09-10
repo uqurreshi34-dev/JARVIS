@@ -589,7 +589,7 @@ def page_text():
 
 
 def search_results():
-    """Return the visible search-result links from the current page."""
+    """Return visible external search-result links from the current page."""
     if not _AVAILABLE:
         return []
 
@@ -605,24 +605,50 @@ def search_results():
                 const results = [];
                 const seen = new Set();
 
-                for (const heading of document.querySelectorAll('h3')) {
-                    const link = heading.closest('a');
+                for (const link of document.querySelectorAll('a[href]')) {
+                    const href = link.href || '';
+                    const text = (link.innerText || '').trim();
 
-                    if (!link || !link.href) {
+                    if (!href || !text) {
                         continue;
                     }
 
-                    const url = link.href;
-
-                    if (seen.has(url)) {
+                    if (href.startsWith('javascript:')) {
                         continue;
                     }
 
-                    seen.add(url);
+                    let url;
+
+                    try {
+                        url = new URL(href);
+                    } catch {
+                        continue;
+                    }
+
+                    const host = url.hostname.toLowerCase();
+
+                    if (
+                        host === 'google.com' ||
+                        host.endsWith('.google.com') ||
+                        host === 'google.co.uk' ||
+                        host.endsWith('.google.co.uk')
+                    ) {
+                        continue;
+                    }
+
+                    if (text.length < 4 || text.length > 300) {
+                        continue;
+                    }
+
+                    if (seen.has(href)) {
+                        continue;
+                    }
+
+                    seen.add(href);
 
                     results.push({
-                        title: (heading.innerText || '').trim(),
-                        url: url
+                        title: text,
+                        url: href,
                     });
 
                     if (results.length >= 20) {

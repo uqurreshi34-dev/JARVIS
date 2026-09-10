@@ -175,6 +175,12 @@ def _search_sources(queries):
 
         results = browser.search_results()
 
+        if not results:
+            import time
+
+            time.sleep(0.6)
+            results = browser.search_results()
+
         for result in results[:_MAX_RESULTS_PER_QUERY]:
             url = str(result.get("url") or "").strip()
 
