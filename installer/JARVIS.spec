@@ -58,8 +58,8 @@ for package in (
         print(f"[JARVIS build] optional collection skipped for {package}: {error}")
 
 
-# The main package graph brings in the application's Python modules. The
-# explicit data entries above preserve the files that Python opens directly.
+# The application is shipped as a one-folder bundle so large native/data
+# assets such as the Vosk model are installed once and reused between starts.
 a = Analysis(
     [str(ROOT / "main.py")],
     pathex=[str(ROOT)],
@@ -78,9 +78,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="JARVIS",
     debug=False,
     bootloader_ignore_signals=False,
@@ -89,4 +88,13 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="JARVIS",
 )
