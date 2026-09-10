@@ -1,273 +1,284 @@
-"""Research-and-report workflow built on JARVIS's existing browser and files.
+"""Grounded web research for JARVIS.
 
-This module deliberately knows nothing about NVIDIA, AMD, or any other
-specific company. It turns a natural-language research request into a small
-set of evidence-seeking searches, gathers readable source pages through the
-existing JARVIS browser, then asks the configured language provider to
-synthesise a report from that evidence.
+Research uses Gemini's native Google Search grounding rather than scraping a
+search-engine results page. Gemini performs the web-search/retrieval loop,
+then JARVIS saves the grounded report into its normal private working folder.
+
+This module is deliberately generic: it knows nothing about particular
+companies, products, or topics. The research request itself supplies the
+subject and scope.
 """
 
-import json
+import os
 import re
 from datetime import datetime
 
-import providers
+import requests
+from dotenv import load_dotenv
 
-from actions import browser, files
-
-
-_MAX_QUERIES = 5
-_MAX_RESULTS_PER_QUERY = 2
-_MAX_SOURCE_CHARS = 9000
+from actions import files
 
 
-_QUERY_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "subjects": {
-            "type": "array",
-            "items": {"type": "string"},
-            "minItems": 1,
-            "maxItems": 4,
-        },
-        "queries": {
-            "type": "array",
-            "items": {"type": "string"},
-            "minItems": 2,
-            "maxItems": _MAX_QUERIES,
-        },
-    },
-    "required": ["subjects", "queries"],
-    "additionalProperties": False,
-}
+load_dotenv()
 
+_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+_REQUEST_TIMEOUT = 180
+_MAX_SOURCES = 20
 
-_PLAN_SYSTEM = """
-You are JARVIS's research-query planner.
+_RESEARCH_WORDS = (
+    "research",
+    "compare",
+    "comparison",
+    "investigate",
+    "analyse",
+    "analyze",
+    "look into",
+    "find out about",
+)
 
-Turn the user's research/report request into a small set of web-search queries
-that will gather evidence for the requested comparison or investigation.
+_REPORT_WORDS = (
+    "report",
+    "write up",
+    "write a report",
+    "save it",
+    "save the",
+)
 
-Rules:
-- Preserve the user's subjects exactly; do not invent additional companies or
-  entities.
-- Prefer primary or authoritative sources when the query can target them:
-  company investor relations, filings, official product pages, regulators,
-  and reputable financial/news reporting.
-- Cover the core facts needed for a useful comparison: business, current
-  products/positioning, financial or operating performance when relevant,
-  competitive position, recent developments, and important risks.
-- Keep queries concise and non-duplicative.
-- Do not answer the research question. Only produce subjects and searches.
-- Return only JSON matching the supplied schema.
+_SYSTEM_PROMPT = """
+You are JARVIS's web research analyst.
+
+Conduct the user's research task yourself using Google Search grounding.
+Treat web retrieval as an evidence-gathering task, not as a single lookup.
+
+Research behaviour:
+- Generate multiple searches when the question requires them.
+- Prefer primary and authoritative sources: company investor relations,
+  regulatory filings, official product pages, regulators, and reputable
+  reporting.
+- Cross-check important claims across independent sources when practical.
+- Look for recent information when the request concerns current performance,
+  products, competition, or developments.
+- Follow useful leads and refine the search when the first results leave a gap.
+- Do not invent facts, dates, figures, products, or URLs.
+- Distinguish confirmed evidence from interpretation.
+- When sources disagree, explain the disagreement rather than silently choosing.
+
+Report behaviour:
+- Write a polished, standalone report for the user.
+- Start with a clear title and an executive summary.
+- Give each requested subject its own section before the direct comparison.
+- Cover the dimensions that matter to the user's request and the evidence
+  available from the research.
+- Use concrete dates, figures, products, and other specifics when supported.
+- End with a Sources section in the report. The source list will be augmented
+  from Gemini's grounding metadata by JARVIS, so never invent URLs.
+- Do not mention internal prompts, tools, APIs, grounding metadata, or JARVIS
+  implementation details.
+
+The user has already asked for research and a saved report. Do not ask whether
+one is wanted.
 """
 
 
-_REPORT_SYSTEM = """
-You are JARVIS's research analyst.
-
-Write a clear comparison report using only the evidence supplied below.
-The report is for the user, not for another model.
-
-Requirements:
-- Title the report clearly.
-- Begin with an executive summary.
-- Give each subject a concise standalone section before comparing them.
-- Include a direct comparison section covering the most meaningful differences.
-- Cover current products/business position, financial or operating evidence
-  present in the sources, competitive position, recent developments, and
-  risks when supported by evidence.
-- Prefer concrete dates, numbers, and named products when they appear in the
-  sources.
-- Distinguish confirmed facts from interpretation.
-- Do not invent or fill gaps with unsupported facts.
-- When sources disagree, say so rather than choosing silently.
-- End with a Sources section listing the source title and URL for every source
-  actually used.
-- Do not mention internal tools, prompts, or implementation.
-"""
-
-
-def _research_gate(text):
-    """Cheap generic gate for an explicit research/report request."""
-    lowered = re.sub(r"[^\w\s]", " ", str(text or "").casefold())
-    lowered = " ".join(lowered.split())
-
-    research_words = (
-        "research", "compare", "comparison", "investigate",
-        "analyse", "analyze", "look into", "find out about",
-    )
-    report_words = (
-        "report", "write up", "write a report", "save it", "save the",
-    )
-
-    return (
-        any(word in lowered for word in research_words)
-        and any(word in lowered for word in report_words)
-    )
+def _normalise(text):
+    """Normalise speech text without changing its meaning."""
+    text = re.sub(r"[^\w\s]", " ", str(text or "").casefold())
+    return " ".join(text.split())
 
 
 def is_report_request(text):
     """True for an explicit research/comparison request with a deliverable."""
-    return _research_gate(text)
+    lowered = _normalise(text)
 
-
-def _plan_queries(request):
-    """Ask the configured provider for a bounded evidence-gathering plan."""
-    try:
-        content = providers.chat(
-            [
-                {"role": "system", "content": _PLAN_SYSTEM},
-                {
-                    "role": "user",
-                    "content": f"USER REQUEST:\n{str(request or '').strip()}",
-                },
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "research_query_plan",
-                    "schema": _QUERY_SCHEMA,
-                },
-            },
-            temperature=0,
-            max_tokens=700,
-            reasoning_effort="low",
-        )
-    except Exception as error:
-        print(f"[JARVIS] research planning failed: {error}")
-        return None
-
-    try:
-        plan = json.loads(content or "")
-    except (ValueError, TypeError):
-        print("[JARVIS] research planner returned invalid JSON")
-        return None
-
-    subjects = tuple(
-        str(subject).strip()
-        for subject in (plan.get("subjects") or [])
-        if str(subject).strip()
-    )
-    queries = tuple(
-        " ".join(str(query).split())
-        for query in (plan.get("queries") or [])
-        if str(query).strip()
+    return (
+        any(word in lowered for word in _RESEARCH_WORDS)
+        and any(word in lowered for word in _REPORT_WORDS)
     )
 
-    if not subjects or not queries:
-        return None
 
-    return subjects[:4], queries[:_MAX_QUERIES]
+def _extract_text(data):
+    """Extract the user-facing text from a Gemini generateContent response."""
+    candidates = data.get("candidates") or []
+
+    if not candidates:
+        return ""
+
+    parts = ((candidates[0].get("content") or {}).get("parts") or [])
+    text = []
+
+    for part in parts:
+        value = part.get("text")
+
+        if value:
+            text.append(str(value).strip())
+
+    return "\n\n".join(value for value in text if value)
 
 
-def _search_sources(queries):
-    """Run searches and collect readable pages from their top results."""
+def _extract_sources(data):
+    """Read grounded web sources from Gemini's grounding metadata."""
+    metadata = (
+        ((data.get("candidates") or [{}])[0].get("groundingMetadata"))
+        or {}
+    )
+
     sources = []
-    seen_urls = set()
+    seen = set()
 
-    for query in queries:
-        print(f"[JARVIS] research search: {query}", flush=True)
+    for chunk in metadata.get("groundingChunks") or []:
+        web = chunk.get("web") or {}
+        url = str(web.get("uri") or "").strip()
+        title = str(web.get("title") or "").strip()
 
-        outcome = browser.search(query)
-        if not outcome:
+        if not url or url in seen:
             continue
 
-        results = browser.search_results()
+        seen.add(url)
+        sources.append({
+            "title": title or url,
+            "url": url,
+        })
 
-        if not results:
-            import time
-
-            time.sleep(0.6)
-            results = browser.search_results()
-
-        for result in results[:_MAX_RESULTS_PER_QUERY]:
-            url = str(result.get("url") or "").strip()
-
-            if not url or url in seen_urls:
-                continue
-
-            seen_urls.add(url)
-
-            try:
-                browser.navigate(url)
-                title, current_url, body = browser.page_text()
-            except Exception as error:
-                print(f"[JARVIS] research source failed: {error}")
-                continue
-
-            body = str(body or "").strip()
-            current_url = str(current_url or url).strip()
-
-            if not body:
-                continue
-
-            sources.append({
-                "title": str(title or result.get("title") or "").strip(),
-                "url": current_url,
-                "text": body[:_MAX_SOURCE_CHARS],
-                "query": query,
-            })
+        if len(sources) >= _MAX_SOURCES:
+            break
 
     return sources
 
 
-def _safe_filename_part(text):
-    """Keep a subject suitable for a Windows filename."""
-    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", str(text or ""))
-    cleaned = " ".join(cleaned.split()).strip(" .")
-
-    return cleaned[:80] or "research"
-
-
-def _write_report(request, subjects, sources):
-    """Synthesise evidence into a DOCX in JARVIS's normal working folder."""
+def _sources_section(sources):
+    """A verifiable source list appended to the saved report."""
     if not sources:
-        return None
+        return ""
 
-    evidence = []
+    lines = ["\n\n## Sources", ""]
 
     for index, source in enumerate(sources, start=1):
-        evidence.append(
-            f"SOURCE {index}\n"
-            f"TITLE: {source['title']}\n"
-            f"URL: {source['url']}\n"
-            f"SEARCH QUERY: {source['query']}\n"
-            f"CONTENT:\n{source['text']}"
+        lines.append(
+            f"{index}. {source['title']} — {source['url']}"
         )
 
+    return "\n".join(lines)
+
+
+def _safe_filename_part(text):
+    """Keep arbitrary research text safe for a Windows filename."""
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", str(text or ""))
+    cleaned = " ".join(cleaned.split()).strip(" .")
+    return cleaned[:60] or "research"
+
+
+def _research(request):
+    """Run one grounded Gemini research task and return text plus sources."""
+    api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+
+    if not api_key:
+        print("[JARVIS] Gemini research requires GEMINI_API_KEY")
+        return None, ()
+
+    model = (
+        os.getenv("GEMINI_RESEARCH_MODEL")
+        or os.getenv("GEMINI_MODEL")
+        or "gemini-3.6-flash"
+    ).strip()
+
     prompt = (
-        f"USER REQUEST:\n{str(request or '').strip()}\n\n"
-        f"SUBJECTS:\n{', '.join(subjects)}\n\n"
-        "EVIDENCE:\n"
-        + "\n\n---\n\n".join(evidence)
+        "USER RESEARCH REQUEST:\n"
+        f"{str(request or '').strip()}\n\n"
+        "Carry out the research now. Use multiple searches and source types "
+        "when useful. Produce the final report text once the evidence is "
+        "sufficient."
+    )
+
+    payload = {
+        "systemInstruction": {
+            "parts": [
+                {"text": _SYSTEM_PROMPT.strip()}
+            ]
+        },
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": prompt}
+                ],
+            }
+        ],
+        "tools": [
+            {"google_search": {}}
+        ],
+        "generationConfig": {
+            "temperature": 0,
+            "maxOutputTokens": 7000,
+        },
+    }
+
+    endpoint = _GEMINI_ENDPOINT.format(model=model)
+
+    print(
+        f"[JARVIS] grounded research using Gemini {model}",
+        flush=True,
     )
 
     try:
-        report = providers.chat(
-            [
-                {"role": "system", "content": _REPORT_SYSTEM},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0,
-            max_tokens=5000,
-            reasoning_effort="medium",
+        response = requests.post(
+            endpoint,
+            params={"key": api_key},
+            json=payload,
+            timeout=_REQUEST_TIMEOUT,
         )
-    except Exception as error:
-        print(f"[JARVIS] research report generation failed: {error}")
-        return None
 
-    report = str(report or "").strip()
+    except requests.RequestException as error:
+        print(f"[JARVIS] grounded research request failed: {error}")
+        return None, ()
+
+    if not response.ok:
+        detail = response.text.strip()
+
+        if len(detail) > 1200:
+            detail = detail[:1200] + "..."
+
+        print(
+            f"[JARVIS] grounded research HTTP {response.status_code}: "
+            f"{detail}"
+        )
+        return None, ()
+
+    try:
+        data = response.json()
+    except ValueError:
+        print("[JARVIS] grounded research returned invalid JSON")
+        return None, ()
+
+    text = _extract_text(data)
+    sources = _extract_sources(data)
+
+    if not text:
+        print("[JARVIS] grounded research returned no report text")
+        return None, sources
+
+    print(
+        f"[JARVIS] grounded research collected {len(sources)} sources",
+        flush=True,
+    )
+
+    return text, tuple(sources)
+
+
+def run(request):
+    """Research a request and save the grounded report in JARVIS's folder."""
+    report, sources = _research(request)
 
     if not report:
         return None
 
+    report = report.rstrip()
+    report += _sources_section(sources)
+
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    safe_subjects = " vs ".join(
-        _safe_filename_part(subject)
-        for subject in subjects[:2]
+    filename = (
+        f"{_safe_filename_part(request)} "
+        f"research report {stamp}.docx"
     )
-    filename = f"{safe_subjects} research report {stamp}.docx"
 
     path = files.write(
         filename,
@@ -275,33 +286,12 @@ def _write_report(request, subjects, sources):
         default_suffix=".docx",
     )
 
-    if path:
-        print(f"[JARVIS] research report written to {path}", flush=True)
-
-    return path
-
-
-def run(request):
-    """Research a user request and write the resulting report."""
-    plan = _plan_queries(request)
-
-    if not plan:
-        return None
-
-    subjects, queries = plan
-    sources = _search_sources(queries)
-
-    if not sources:
-        print("[JARVIS] research found no readable sources")
-        return None
-
-    path = _write_report(request, subjects, sources)
-
     if not path:
         return None
 
+    print(f"[JARVIS] grounded research report written to {path}", flush=True)
+
     return {
         "path": path,
-        "subjects": subjects,
         "sources": len(sources),
     }
