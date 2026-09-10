@@ -7,6 +7,19 @@ $UpdaterExe = Join-Path $RepoRoot "dist\JARVIS-Updater.exe"
 $ModelDir = Join-Path $RepoRoot "model"
 $VersionFile = Join-Path $RepoRoot "app_version.py"
 
+$IsccCandidates = @(
+    (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source,
+    (Join-Path ${env:ProgramFiles} "Inno Setup 7\ISCC.exe"),
+    (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 7\ISCC.exe"),
+    (Join-Path ${env:LOCALAPPDATA} "Programs\Inno Setup 7\ISCC.exe")
+) | Where-Object { $_ -and (Test-Path $_ -PathType Leaf) }
+
+$ISCC = $IsccCandidates | Select-Object -First 1
+
+if (-not $ISCC) {
+    throw "Inno Setup 7 compiler not found. Install Inno Setup 7 before building the installer."
+}
+
 if (-not (Test-Path $ModelDir -PathType Container)) {
     throw "Missing Vosk model directory: $ModelDir"
 }
@@ -64,18 +77,6 @@ if ($LASTEXITCODE -ne 0) {
 
 if (-not (Test-Path $UpdaterExe -PathType Leaf)) {
     throw "PyInstaller completed without producing $UpdaterExe."
-}
-
-$IsccCandidates = @(
-    (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source,
-    (Join-Path ${env:ProgramFiles} "Inno Setup 7\ISCC.exe"),
-    (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 7\ISCC.exe")
-) | Where-Object { $_ -and (Test-Path $_ -PathType Leaf) }
-
-$ISCC = $IsccCandidates | Select-Object -First 1
-
-if (-not $ISCC) {
-    throw "Inno Setup 7 compiler not found. Install it before building the installer."
 }
 
 Write-Host "[JARVIS build] Building Windows installer v$AppVersion..."
