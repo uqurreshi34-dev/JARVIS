@@ -625,30 +625,63 @@ def search_results():
                         continue;
                     }
 
+                    let destination = url.href;
                     const host = url.hostname.toLowerCase();
 
+                    // Google may wrap an external result in a Google
+                    // redirect URL. Unwrap the destination rather than
+                    // discarding the result.
                     if (
                         host === 'google.com' ||
                         host.endsWith('.google.com') ||
                         host === 'google.co.uk' ||
                         host.endsWith('.google.co.uk')
                     ) {
-                        continue;
+                        const redirected =
+                            url.searchParams.get('q') ||
+                            url.searchParams.get('url') ||
+                            url.searchParams.get('u');
+
+                        if (!redirected) {
+                            continue;
+                        }
+
+                        try {
+                            destination = new URL(
+                                redirected,
+                                url.href
+                            ).href;
+                        } catch {
+                            continue;
+                        }
+
+                        const destinationUrl = new URL(destination);
+                        const destinationHost =
+                            destinationUrl.hostname.toLowerCase();
+
+                        if (
+                            destinationHost === 'google.com' ||
+                            destinationHost.endsWith('.google.com') ||
+                            destinationHost === 'google.co.uk' ||
+                            destinationHost.endsWith('.google.co.uk')
+                        ) {
+                            continue;
+                        }
                     }
 
                     if (text.length < 4 || text.length > 300) {
                         continue;
                     }
 
-                    if (seen.has(href)) {
+                    if (seen.has(destination)) {
                         continue;
                     }
 
-                    seen.add(href);
+                    seen.add(destination);
 
                     results.push({
                         title: text,
-                        url: href,
+                        url: destination,
                     });
 
                     if (results.length >= 20) {
