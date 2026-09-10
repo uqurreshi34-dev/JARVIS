@@ -4597,8 +4597,31 @@ def _compound_request(command):
     response = summary
 
     if local and steps:
-        first_result = steps[0].get("result") or {}
-        response = first_result.get("response") or summary
+        responses = []
+
+        for step in steps:
+            result = step.get("result") or {}
+            spoken = (result.get("response") or "").strip()
+
+            if not spoken:
+                continue
+
+            spoken = spoken.removesuffix(", sir.")
+            spoken = spoken.removesuffix(" sir.")
+
+            if spoken:
+                responses.append(spoken)
+
+        if responses:
+            if len(responses) == 1:
+                response = f"{responses[0]}, sir."
+            elif len(responses) == 2:
+                response = f"{responses[0]} and {responses[1]}, sir."
+            else:
+                response = (
+                    f"{', '.join(responses[:-1])}, "
+                    f"and {responses[-1]}, sir."
+                )
 
     return _action(
         "compound_task",
