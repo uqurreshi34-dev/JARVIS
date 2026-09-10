@@ -39,6 +39,7 @@ from actions import (
     diary,
     documents,
     files,
+    folder_organizer,
     git_tasks,
     image_choices,
     images,
@@ -4680,6 +4681,30 @@ def _handle_command(command, *, fast_only=False, probe=False):
         return answered
 
     if not fast_only:
+
+        if folder_organizer.is_request(command):
+            prepared = folder_organizer.prepare(command)
+
+            status = prepared.get("status")
+
+            if status != "confirm":
+                return _query(
+                    "organise_folder",
+                    lambda: prepared.get(
+                        "message",
+                        "I couldn't prepare that organisation, sir.",
+                    ),
+                )
+
+            return _confirm(
+                "organise_folder",
+                prepared["question"],
+                prepared["action"],
+                yes_text="Organising it, sir.",
+                no_text="Very good, sir. Nothing has been changed.",
+                timeout=None,
+                success_response=prepared["success_response"],
+            )
 
         if research.is_report_request(command):
             return _action(
