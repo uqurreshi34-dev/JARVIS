@@ -16,7 +16,7 @@ if (-not (Test-Path $VersionFile -PathType Leaf)) {
 }
 
 $VersionText = Get-Content $VersionFile -Raw
-if ($VersionText -notmatch 'VERSION\s*=\s*[\"'\']([^\"'\']+)[\"'\']') {
+if ($VersionText -notmatch 'VERSION\s*=\s*["'']([^"'']+)["'']') {
     throw "Could not read VERSION from $VersionFile"
 }
 
