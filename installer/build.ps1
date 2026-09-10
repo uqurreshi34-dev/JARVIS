@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $InstallerDir = $PSScriptRoot
 $RepoRoot = Split-Path -Parent $InstallerDir
 $DistDir = Join-Path $RepoRoot "dist\JARVIS"
-$UpdaterDistDir = Join-Path $RepoRoot "dist\JARVIS-Updater"
+$UpdaterExe = Join-Path $RepoRoot "dist\JARVIS-Updater.exe"
 $ModelDir = Join-Path $RepoRoot "model"
 $VersionFile = Join-Path $RepoRoot "app_version.py"
 
@@ -62,8 +62,8 @@ if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller build failed for the updater."
 }
 
-if (-not (Test-Path (Join-Path $UpdaterDistDir "JARVIS-Updater.exe") -PathType Leaf)) {
-    throw "PyInstaller completed without producing JARVIS-Updater.exe."
+if (-not (Test-Path $UpdaterExe -PathType Leaf)) {
+    throw "PyInstaller completed without producing $UpdaterExe."
 }
 
 $IsccCandidates = @(
