@@ -197,6 +197,9 @@ class Assistant:
         if success:
             success_response = result.get("success_response")
 
+            if callable(success_response):
+                success_response = success_response(success)
+
             if success_response:
                 self._say(success_response)
             elif CONFIRM_SUCCESS:

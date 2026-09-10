@@ -130,6 +130,20 @@ def _record(intent, action, detail=None):
     return recorded
 
 
+def _research_success_response(result):
+    """Describe where the completed research report was saved."""
+    result = result or {}
+    folder = result.get("folder")
+
+    if folder:
+        return (
+            f"The report is written and saved in your "
+            f"{files.spoken_name(folder)} folder, sir."
+        )
+
+    return "The report is written and saved in your JARVIS folder, sir."
+
+
 def _action(
     intent,
     response,
@@ -4671,11 +4685,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
             return _action(
                 "research_report",
                 "I'll research that, compare the findings, and prepare the report, sir.",
-                lambda: bool(research.run(command)),
+                research.run,
                 timeout=None,
-                success_response=(
-                    "The report is written and saved in your JARVIS folder, sir."
-                ),
+                success_response=_research_success_response,
             )
 
         compound = _compound_request(command)
