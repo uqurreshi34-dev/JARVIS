@@ -206,6 +206,14 @@ def _search_sources(queries):
     return sources
 
 
+def _safe_filename_part(text):
+    """Keep a subject suitable for a Windows filename."""
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", str(text or ""))
+    cleaned = " ".join(cleaned.split()).strip(" .")
+
+    return cleaned[:80] or "research"
+
+
 def _write_report(request, subjects, sources):
     """Synthesise evidence into a DOCX in JARVIS's normal working folder."""
     if not sources:
@@ -249,7 +257,10 @@ def _write_report(request, subjects, sources):
         return None
 
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    safe_subjects = " vs ".join(subjects[:2])
+    safe_subjects = " vs ".join(
+        _safe_filename_part(subject)
+        for subject in subjects[:2]
+    )
     filename = f"{safe_subjects} research report {stamp}.docx"
 
     path = files.write(
