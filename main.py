@@ -35,7 +35,16 @@ from datetime import datetime
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
-from actions import camera, contacts, diary, memory, documents, images, blender_fidelity
+from actions import (
+    camera,
+    contacts,
+    diary,
+    memory,
+    documents,
+    images,
+    blender_fidelity,
+    folder_guard,
+)
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
 import phrases
@@ -197,6 +206,9 @@ class Assistant:
         if success:
             success_response = result.get("success_response")
 
+            if callable(success_response):
+                success_response = success_response(success)
+
             if success_response:
                 self._say(success_response)
             elif CONFIRM_SUCCESS:
@@ -248,6 +260,16 @@ class Assistant:
             # alerts, pattern runs, the morning diary -- so this one line
             # covers all of them. Still spoken to the room regardless,
             # since being at the desk is still the normal case.
+            self._speak_alert_locked(text)
+            self._state(previous)
+
+    def _on_folder_guard(self, text):
+        """Speak a folder-guard announcement without interrupting a turn."""
+        with self._alert_lock:
+            if self._interaction_open:
+                return
+
+            previous = self._current_state
             self._speak_alert_locked(text)
             self._state(previous)
 
@@ -404,6 +426,12 @@ class Assistant:
         except Exception as error:
             print(f"[JARVIS] could not read the diary: {error}")
 
+        folder_guard.folder_guard.set_listener(self._on_folder_guard)
+        folder_guard.folder_guard.set_follow_up_listener(self._open_follow_up)
+        folder_guard.folder_guard.set_busy_checker(
+            lambda: self._interaction_open)
+        folder_guard.folder_guard.start()
+
         # Warm the cache for stock replies while the greeting plays, so the
         # first "Done, sir." does not wait on a network round trip.
         threading.Thread(target=prewarm, daemon=True).start()
@@ -492,6 +520,7 @@ class Assistant:
         watcher.stop()
         pattern_monitor.stop()
         phone_server.stop()
+        folder_guard.folder_guard.stop()
         camera.release()
         market_monitor.stop()
         self._hud.shutdown.emit()

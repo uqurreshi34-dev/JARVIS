@@ -39,6 +39,9 @@ from actions import (
     diary,
     documents,
     files,
+    folder_guard,
+    folder_organizer,
+    folder_undo,
     git_tasks,
     image_choices,
     images,
@@ -48,7 +51,9 @@ from actions import (
     markets,
     memory,
     news,
+    planner,
     proofread,
+    research,
     notes,
     patterns,
     safety,
@@ -126,6 +131,20 @@ def _record(intent, action, detail=None):
         return outcome
 
     return recorded
+
+
+def _research_success_response(result):
+    """Describe where the completed research report was saved."""
+    result = result or {}
+    folder = result.get("folder")
+
+    if folder:
+        return (
+            f"The report is written and saved in your "
+            f"{files.spoken_name(folder)} folder, sir."
+        )
+
+    return "The report is written and saved in your JARVIS folder, sir."
 
 
 def _action(
@@ -427,6 +446,25 @@ _FAST_PHRASES = (
      "list_reminders"),
     (("cancel my reminders", "cancel my timers", "cancel everything"),
      "cancel_reminders"),
+    ((
+        "keep my jarvis folder organised",
+        "keep my jarvis folder organized",
+        "keep the jarvis folder organised",
+        "keep the jarvis folder organized",
+        "keep my jarvis folder tidy",
+        "automatically organise my jarvis folder",
+        "automatically organize my jarvis folder",
+    ), "enable_folder_guard"),
+
+    ((
+        "stop keeping my jarvis folder organised",
+        "stop keeping my jarvis folder organized",
+        "stop organising my jarvis folder automatically",
+        "stop organizing my jarvis folder automatically",
+        "disable automatic jarvis folder organisation",
+        "disable automatic jarvis folder organization",
+    ), "disable_folder_guard"),
+    (("undo",), "undo_folder_organisation"),
 )
 
 _FAST_LOOKUP = {
@@ -461,6 +499,9 @@ _NEVER_FUZZY = frozenset({
     # Same risk, same reason: "close the image" and "save the image" are
     # one word apart.
     "save_image",
+
+    "enable_folder_guard",
+    "disable_folder_guard",
 })
 
 
@@ -3787,7 +3828,7 @@ _WRITE_INTENTS = frozenset({
     "click_thing", "type_text", "open_application", "close_application",
     "open_website", "open_project", "close_project", "set_reminder",
     "cancel_reminders", "set_volume", "mute", "unmute", "toggle_mute",
-    "minimise_all", "restore_all", "stop_looking",
+    "minimise_all", "restore_all", "stop_looking", "research_report",
     # The read-only browser intents are deliberately absent: they log
     # themselves through journal.browser instead, so visiting a page
     # never becomes the answer to "what did you do?". Saving one is a
@@ -3803,7 +3844,8 @@ _WRITE_INTENTS = frozenset({
     "show_brain", "hide_brain",
     "proofread_fix", "proofread_report", "proofread_copy", "ignore_word",
     "remember", "forget", "learn_subject", "set_market_alert", "market_report",
-    "add_event", "remove_event", "clear_calendar",
+    "add_event", "remove_event", "clear_calendar", "undo_folder_organisation",
+    "enable_folder_guard", "disable_folder_guard",
 })
 
 
@@ -4486,6 +4528,151 @@ def _resolve_pending(text):
     return None
 
 
+def _planner_context(command):
+    """Give the compound planner only cheap, relevant local context."""
+    context = []
+
+    try:
+        context.append(
+            f"Blender running: {blender.running()}"
+        )
+    except Exception:
+        context.append("Blender running: unknown")
+
+    context.append(
+        f"Reference image available: {images.has_image()}"
+    )
+
+    try:
+        context.append(
+            "Matching multi-view reference set available: "
+            f"{blender.has_reference_set(command)}"
+        )
+    except Exception:
+        context.append(
+            "Matching multi-view reference set available: unknown"
+        )
+
+    return "\n".join(context)
+
+
+def _compound_dispatch(command):
+    """Dispatch a compound step while preserving an already-attached browser."""
+    result = handle_command(command)
+
+    if not result:
+        return None
+
+    website = result.get("website")
+
+    if not website:
+        return result
+
+    if (
+        result.get("intent") in {"open_website", "browse_to"}
+        and browser.attached()
+    ):
+        return _action(
+            "browse_to",
+            f"Opening {_website_label(website)}, sir.",
+            lambda: browser.navigate(website),
+        )
+
+    return result
+
+
+def _compound_request(command):
+    """Return a compound action when the planner finds a valid multi-step plan."""
+    plan = planner.local_plan(
+        command,
+        lambda text: handle_command(
+            text,
+            fast_only=True,
+            probe=True,
+        ),
+    )
+
+    if plan is None:
+        plan = planner.plan(
+            command,
+            context=_planner_context(command),
+        )
+
+    if not plan:
+        return None
+
+    steps = plan["steps"]
+    summary = plan["summary"]
+    local = bool(plan.get("local"))
+
+    def execute_plan():
+        return planner.execute(
+            steps,
+            _compound_dispatch,
+        )
+
+    if plan.get("requires_confirmation"):
+        step_text = "; ".join(
+            step["purpose"]
+            for step in steps
+            if step.get("purpose")
+        )
+
+        question = summary
+
+        if step_text:
+            question += f" The plan is: {step_text}."
+
+        question += " Shall I proceed, sir?"
+
+        return _confirm(
+            "compound_task",
+            question,
+            execute_plan,
+            yes_text="Proceeding, sir.",
+            no_text="Very good, sir. Nothing has been changed.",
+            timeout=None,
+            success_response="Done, sir.",
+        )
+
+    response = summary
+
+    if local and steps:
+        responses = []
+
+        for step in steps:
+            result = step.get("result") or {}
+            spoken = (result.get("response") or "").strip()
+
+            if not spoken:
+                continue
+
+            spoken = spoken.removesuffix(", sir.")
+            spoken = spoken.removesuffix(" sir.")
+
+            if spoken:
+                responses.append(spoken)
+
+        if responses:
+            if len(responses) == 1:
+                response = f"{responses[0]}, sir."
+            elif len(responses) == 2:
+                response = f"{responses[0]} and {responses[1]}, sir."
+            else:
+                response = (
+                    f"{', '.join(responses[:-1])}, "
+                    f"and {responses[-1]}, sir."
+                )
+
+    return _action(
+        "compound_task",
+        response,
+        execute_plan,
+        timeout=None,
+        success_response="Done, sir.",
+    )
+
+
 # Commands arrive from two places now: the voice loop at the desk, and
 # the phone server on its own thread. Everything below relies on module
 # state -- _awaiting, _pending, the pronoun subject -- so two commands
@@ -4496,12 +4683,16 @@ def _resolve_pending(text):
 _command_lock = threading.RLock()
 
 
-def handle_command(command):
+def handle_command(command, *, fast_only=False, probe=False):
     with _command_lock:
-        return _handle_command(command)
+        return _handle_command(
+            command,
+            fast_only=fast_only,
+            probe=probe,
+        )
 
 
-def _handle_command(command):
+def _handle_command(command, *, fast_only=False, probe=False):
     command = _resolve_pronouns(command)
 
     answered = _resolve_awaiting(command)
@@ -4514,20 +4705,64 @@ def _handle_command(command):
     if answered is not None:
         return answered
 
-    agent_task = _agent_task(command)
+    if not fast_only:
 
-    if agent_task:
-        print("[agent] Agent Mode")
+        if folder_organizer.is_request(command):
+            prepared = folder_organizer.prepare(command)
 
-        return _query(
-            "agent_mode",
-            lambda: _run_agent_investigation(agent_task),
-            detail=agent_task,
-        )
+            status = prepared.get("status")
+
+            if status != "confirm":
+                return _query(
+                    "organise_folder",
+                    lambda: prepared.get(
+                        "message",
+                        "I couldn't prepare that organisation, sir.",
+                    ),
+                )
+
+            return _confirm(
+                "organise_folder",
+                prepared["question"],
+                prepared["action"],
+                yes_text="Organising it, sir.",
+                no_text="Very good, sir. Nothing has been changed.",
+                timeout=None,
+                success_response=prepared["success_response"],
+            )
+
+        if research.is_report_request(command):
+            return _action(
+                "research_report",
+                "I'll research that, compare the findings, and prepare the report, sir.",
+                lambda: research.run(command),
+                timeout=None,
+                success_response=_research_success_response,
+            )
+
+        compound = _compound_request(command)
+
+        if compound is not None:
+            print("[planner] compound task")
+            return compound
+
+        agent_task = _agent_task(command)
+
+        if agent_task:
+            print("[agent] Agent Mode")
+
+            return _query(
+                "agent_mode",
+                lambda: _run_agent_investigation(agent_task),
+                detail=agent_task,
+            )
 
     result = _fast_path(command)
 
     took_free_path = result is not None
+
+    if fast_only and result is None:
+        return None
 
     if result is not None:
         print(f"[fast] {result['intent']} (no API call)")
@@ -4569,27 +4804,31 @@ def _handle_command(command):
     # its intent at all, which would make any intent that regularly
     # falls through to the model invisible to anything reading history
     # (pattern detection, "what have you done today").
-    journal.command(
-        command,
-        intent,
-        took_free_path,
-        detail=(
-            (result.get("text") or "").strip()
-            if intent == "market_report"
-            else None
-        ),
-    )
+    if not probe:
+        journal.command(
+            command,
+            intent,
+            took_free_path,
+            detail=(
+                ...
+            ),
+        )
 
     application = result.get("application")
 
-    _set_subject(result)
+    if not probe:
+        _set_subject(result)
+        # Whatever this command was about becomes what "it" means next.
+        _remember(
+            result.get("application")
+            or result.get("project")
+            or (
+                result.get("text")
+                if intent in _SUBJECT_INTENTS
+                else None
+            )
+        )
 
-    # Whatever this command was about becomes what "it" means next.
-    _remember(
-        result.get("application")
-        or result.get("project")
-        or (result.get("text") if intent in _SUBJECT_INTENTS else None)
-    )
     website = result.get("website")
     project = result.get("project")
     amount = _to_number(result.get("amount"))
@@ -4608,6 +4847,37 @@ def _handle_command(command):
     text = _trim_filler(_normalise(raw_text)) or None
     verbatim_text = raw_text or None
     unit = result.get("unit")
+
+    if intent == "enable_folder_guard":
+        return _action(
+            "enable_folder_guard",
+            "I'll keep your JARVIS folder organised, sir.",
+            folder_guard.folder_guard.enable,
+            detail="persistent JARVIS folder organisation",
+        )
+
+    if intent == "disable_folder_guard":
+        return _action(
+            "disable_folder_guard",
+            "I'll stop automatically organising your JARVIS folder, sir.",
+            folder_guard.folder_guard.disable,
+            detail="persistent JARVIS folder organisation",
+        )
+
+    if intent == "undo_folder_organisation":
+        if not folder_undo.can_undo():
+            return _query(
+                "undo_status",
+                lambda: "There is nothing I can undo, sir.",
+            )
+
+        return _action(
+            "undo_folder_organisation",
+            "Undoing the last folder organisation, sir.",
+            folder_undo.undo,
+            detail="last folder organisation",
+            success_response=folder_undo.success_response,
+        )
 
     if intent == "setup_project":
         return _setup_request(result)

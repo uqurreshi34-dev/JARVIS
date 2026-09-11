@@ -15,3 +15,8 @@ jarvis-phone-*.cer
 
 contacts.txt
 memory.json
+
+# Windows packaging output
+build/
+dist/
+installer/output/

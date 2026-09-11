@@ -588,6 +588,116 @@ def page_text():
         return title, url, body
 
 
+def search_results():
+    """Return visible external search-result links from the current page."""
+    if not _AVAILABLE:
+        return []
+
+    with _lock:
+        driver = _connect()
+
+        if not driver:
+            return []
+
+        try:
+            return driver.execute_script(
+                """
+                const results = [];
+                const seen = new Set();
+
+                for (const link of document.querySelectorAll('a[href]')) {
+                    const href = link.href || '';
+                    const text = (link.innerText || '').trim();
+
+                    if (!href || !text) {
+                        continue;
+                    }
+
+                    if (href.startsWith('javascript:')) {
+                        continue;
+                    }
+
+                    let url;
+
+                    try {
+                        url = new URL(href);
+                    } catch {
+                        continue;
+                    }
+
+                    let destination = url.href;
+                    const host = url.hostname.toLowerCase();
+
+                    // Google may wrap an external result in a Google
+                    // redirect URL. Unwrap the destination rather than
+                    // discarding the result.
+                    if (
+                        host === 'google.com' ||
+                        host.endsWith('.google.com') ||
+                        host === 'google.co.uk' ||
+                        host.endsWith('.google.co.uk')
+                    ) {
+                        const redirected =
+                            url.searchParams.get('q') ||
+                            url.searchParams.get('url') ||
+                            url.searchParams.get('u');
+
+                        if (!redirected) {
+                            continue;
+                        }
+
+                        try {
+                            destination = new URL(
+                                redirected,
+                                url.href
+                            ).href;
+                        } catch {
+                            continue;
+                        }
+
+                        const destinationUrl = new URL(destination);
+                        const destinationHost =
+                            destinationUrl.hostname.toLowerCase();
+
+                        if (
+                            destinationHost === 'google.com' ||
+                            destinationHost.endsWith('.google.com') ||
+                            destinationHost === 'google.co.uk' ||
+                            destinationHost.endsWith('.google.co.uk')
+                        ) {
+                            continue;
+                        }
+                    }
+
+                    if (text.length < 4 || text.length > 300) {
+                        continue;
+                    }
+
+                    if (seen.has(destination)) {
+                        continue;
+                    }
+
+                    seen.add(destination);
+
+                    results.push({
+                        title: text,
+                        url: destination,
+                    });
+
+                    if (results.length >= 20) {
+                        break;
+                    }
+                }
+
+                return results;
+                """
+            ) or []
+
+        except Exception as error:
+            print(f"[JARVIS] could not read search results: {error}")
+            return []
+
+
 def _spoken_opening(body):
     """The first bit of a page, cut at a sentence rather than mid-word."""
     words = body.split()

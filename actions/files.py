@@ -62,6 +62,41 @@ def root():
     return path
 
 
+def safe_folder(name):
+    """Return a safe direct child folder name, or None."""
+    cleaned = _ILLEGAL.sub("", str(name or "").strip())
+    cleaned = " ".join(cleaned.split()).strip(". ")
+
+    if not cleaned or cleaned in {".", ".."}:
+        return None
+
+    return cleaned[:80]
+
+
+def folder_path(name):
+    """Create and return a safe direct subfolder beneath the JARVIS root."""
+    base = root()
+    folder = safe_folder(name)
+
+    if not base or not folder:
+        return None
+
+    path = os.path.abspath(os.path.join(base, folder))
+    root_path = os.path.abspath(base)
+
+    if os.path.commonpath([path, root_path]) != root_path:
+        print(f"[JARVIS] refusing a folder outside {root_path}")
+        return None
+
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError as error:
+        print(f"[JARVIS] could not create {path}: {error}")
+        return None
+
+    return path
+
+
 def safe_name(name, default_suffix=".txt"):
     """Turn spoken words into a filename, or None if nothing usable remains."""
     cleaned = _ILLEGAL.sub("", (name or "").strip())
@@ -79,19 +114,20 @@ def safe_name(name, default_suffix=".txt"):
     return f"{stem}{suffix}"
 
 
-def resolve(name, default_suffix=".txt"):
-    """Full path inside the folder, or None if it would escape it."""
-    base = root()
+def resolve(name, default_suffix=".txt", folder=None):
+    """Full path inside JARVIS, optionally in a safe direct subfolder."""
+    base = folder_path(folder) if folder else root()
     filename = safe_name(name, default_suffix)
 
     if not base or not filename:
         return None
 
     path = os.path.abspath(os.path.join(base, filename))
+    root_path = os.path.abspath(root())
 
     # The decisive check: anything that resolves outside the root is refused.
-    if os.path.commonpath([path, os.path.abspath(base)]) != os.path.abspath(base):
-        print(f"[JARVIS] refusing a path outside {base}")
+    if os.path.commonpath([path, root_path]) != root_path:
+        print(f"[JARVIS] refusing a path outside {root_path}")
         return None
 
     return path
@@ -123,9 +159,9 @@ def unique_path(path):
     return None
 
 
-def write(name, content="", default_suffix=".txt", overwrite=False):
+def write(name, content="", default_suffix=".txt", overwrite=False, folder=None):
     """Create a file with optional content. Returns the path, or None."""
-    path = resolve(name, default_suffix)
+    path = resolve(name, default_suffix, folder=folder)
 
     if not path:
         return None

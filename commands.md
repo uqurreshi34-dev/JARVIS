@@ -124,6 +124,26 @@ the recipe's own questions to choose TypeScript or other supported options.
 
 Nothing is created until the setup has been approved.
 
+## Compound tasks
+
+JARVIS can handle several instructions in one utterance.
+
+When every step is a known local action, the whole compound request stays
+local and does not require a language-model call.
+
+| Say | Does |
+|---|---|
+| open chrome and set the volume to 100 | opens Chrome, then sets volume to 100 |
+| open chrome and open blender | opens both in order |
+| mute and set volume to 50 | performs both local actions |
+
+Semantic compounds can still use JARVIS's planner when a task needs reasoning
+between steps.
+
+| Say | Does |
+|---|---|
+| model Iron Man in Blender and make the legs blue | models first, then modifies the resulting scene |
+
 ## Notes
 
 Notes are a timestamped list, separate from files.
@@ -153,6 +173,34 @@ Everything lives in `C:\Users\<you>\JARVIS\`. Nothing outside it is touched.
 
 Saying **"file"** always works. Leaving it off works when the file already
 exists.
+
+## Persistent JARVIS-folder housekeeping
+
+| Say | Does |
+|---|---|
+| keep my JARVIS folder organised | enables automatic local housekeeping |
+| keep my JARVIS folder organized | same |
+| stop keeping my JARVIS folder organised | disables automatic housekeeping |
+| stop keeping my JARVIS folder organized | same |
+
+Once enabled, JARVIS checks the JARVIS folder at startup and then every six hours.
+
+If he finds clearly classifiable loose files, he organises them automatically using local rules. 
+Existing destination folders are reused; missing category folders are created when needed; 
+ambiguous files are left alone.
+
+There is no language-model call for the automatic housekeeping check.
+
+When automatic organisation changes files, JARVIS reports what he moved and returns to listening 
+mode, so `undo` can immediately reverse the latest organisation transaction.
+
+The setting survives restarts in `.jarvis-folder-guard.json`.
+
+The manual `organise my JARVIS folder` command remains available when you want the broader planner 
+to inspect the folder and propose an organisation first.
+
+Say `stop keeping my JARVIS folder organised` or `stop keeping my JARVIS folder organized` to turn 
+the automatic behaviour off.
 
 ## Documents
 
@@ -354,6 +402,78 @@ that gap.
 Clicking and typing on a web page are still screen control, above, same
 as any other application — browsing does not change how those work.
 
+## Blender and 3D modelling
+
+JARVIS can model, inspect and modify Blender scenes using natural language.
+
+| Say | Does |
+|---|---|
+| model this in Blender | turns the current reference into a Blender model |
+| inspect the Blender scene | reads the current scene and its objects |
+| make the helmet blue | modifies the current Blender model |
+| isolate the chest | isolates the requested part |
+| restore the model | restores Blender visibility state where appropriate |
+| restore original | returns to the preserved original Blender snapshot |
+
+### Tripo
+
+JARVIS can also reconstruct a subject through Tripo and hand the resulting
+segmented model to Blender.
+
+| Say | Does |
+|---|---|
+| model Iron Man in Tripo | reconstructs the subject and opens it in Blender |
+| model this using Tripo | same, using the current modelling request |
+
+The provider name does not need to be perfectly transcribed. JARVIS uses the
+meaning of the modelling request to correct obvious speech-recognition
+distortions rather than depending on a fixed list of misspellings.
+
+After Tripo reconstruction, the model can be modified through the same Blender
+natural-language commands above.
+
+## Research and reports
+
+JARVIS can research arbitrary subjects, compare them and create source-backed
+Word reports.
+
+You do not always need to say "write a report". A research/comparison request
+combined with a save request is enough.
+
+| Say | Does |
+|---|---|
+| compare iPhone with Android and save it | researches both, compares them and creates the report |
+| research NVIDIA, compare it with AMD and save it | same |
+| research Lamborghini, compare it with Ferrari, write the report and save it | same |
+
+Research uses the normal JARVIS provider chain: Claude first, then Groq, then
+Gemini if failover is needed.
+
+JARVIS plans searches dynamically, gathers multiple sources and synthesises
+the evidence into the final report. Individual pages can fail without
+aborting the whole research task; unusable sources are skipped and research
+continues with the others.
+
+Reports include a Sources section listing the sources actually used.
+
+### Research destinations
+
+By default reports are saved directly in the JARVIS folder.
+
+You can name a destination folder explicitly:
+
+| Say | Does |
+|---|---|
+| save it in the Cars folder | creates/uses `JARVIS\Cars\` |
+| save it in the AI folder | creates/uses `JARVIS\AI\` |
+| save it | uses the normal JARVIS folder |
+
+A missing folder is created automatically. Existing reports are not
+overwritten; a new unique filename is used beside previous reports.
+
+Destination folders are direct children of the JARVIS folder. JARVIS cannot
+use the feature to escape the JARVIS root.
+
 ## Memory
 
 Facts are kept in `memory.txt`, editable by hand.
@@ -486,9 +606,10 @@ thing everything else here depends on.
 
 ## Patterns
 
-Habits JARVIS notices from what you actually do, kept in `patterns.txt`,
-separate from `memory.txt`. Memory is what you told him; a pattern is
-something he worked out by watching. Free — built from the log he already
+Habits JARVIS notices from commands you ask him to carry out, kept in `patterns.txt`,
+separate from `memory.txt`. Memory is what you told him; a pattern is something he works out 
+from the commands he has logged you asking him to perform; he does not monitor applications 
+you open or actions you take manually. Free — built from the log he already
 keeps, no API call.
 
 | Say | Does |
