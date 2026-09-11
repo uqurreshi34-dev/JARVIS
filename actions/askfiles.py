@@ -140,7 +140,7 @@ def plan_folder_organisation(
         ],
         response_format=_RESPONSE_FORMAT,
         temperature=0,
-        max_tokens=1800,
+        max_tokens=4096,
         reasoning_effort="low",
     )
 
