@@ -29,6 +29,9 @@ _PROTECTED_NAMES = frozenset({
     "patterns.txt",
     "spelling-ignore.txt",
     "tasks.txt",
+    ".jarvis-folder-guard.json",
+    "jarvis-pending.txt",
+    "market-alerts.txt",
 })
 
 _REQUEST_RE = re.compile(
@@ -452,7 +455,8 @@ def _success_response(result):
     if moved == 0 and skipped == 0:
         return "Everything already looks organised, sir."
 
-    message = f"Moved {moved} " + ("file" if moved == 1 else "files") + ", sir."
+    message = f"Moved {moved} " + \
+        ("file" if moved == 1 else "files") + ", sir."
 
     if created:
         count = len(created)

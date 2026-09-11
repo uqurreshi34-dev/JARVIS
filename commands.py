@@ -39,6 +39,7 @@ from actions import (
     diary,
     documents,
     files,
+    folder_guard,
     folder_organizer,
     folder_undo,
     git_tasks,
@@ -445,6 +446,24 @@ _FAST_PHRASES = (
      "list_reminders"),
     (("cancel my reminders", "cancel my timers", "cancel everything"),
      "cancel_reminders"),
+    ((
+        "keep my jarvis folder organised",
+        "keep my jarvis folder organized",
+        "keep the jarvis folder organised",
+        "keep the jarvis folder organized",
+        "keep my jarvis folder tidy",
+        "automatically organise my jarvis folder",
+        "automatically organize my jarvis folder",
+    ), "enable_folder_guard"),
+
+    ((
+        "stop keeping my jarvis folder organised",
+        "stop keeping my jarvis folder organized",
+        "stop organising my jarvis folder automatically",
+        "stop organizing my jarvis folder automatically",
+        "disable automatic jarvis folder organisation",
+        "disable automatic jarvis folder organization",
+    ), "disable_folder_guard"),
     (("undo",), "undo_folder_organisation"),
 )
 
@@ -480,6 +499,9 @@ _NEVER_FUZZY = frozenset({
     # Same risk, same reason: "close the image" and "save the image" are
     # one word apart.
     "save_image",
+
+    "enable_folder_guard",
+    "disable_folder_guard",
 })
 
 
@@ -3823,6 +3845,7 @@ _WRITE_INTENTS = frozenset({
     "proofread_fix", "proofread_report", "proofread_copy", "ignore_word",
     "remember", "forget", "learn_subject", "set_market_alert", "market_report",
     "add_event", "remove_event", "clear_calendar", "undo_folder_organisation",
+    "enable_folder_guard", "disable_folder_guard",
 })
 
 
@@ -4824,6 +4847,22 @@ def _handle_command(command, *, fast_only=False, probe=False):
     text = _trim_filler(_normalise(raw_text)) or None
     verbatim_text = raw_text or None
     unit = result.get("unit")
+
+    if intent == "enable_folder_guard":
+        return _action(
+            "enable_folder_guard",
+            "I'll keep your JARVIS folder organised, sir.",
+            folder_guard.folder_guard.enable,
+            detail="persistent JARVIS folder organisation",
+        )
+
+    if intent == "disable_folder_guard":
+        return _action(
+            "disable_folder_guard",
+            "I'll stop automatically organising your JARVIS folder, sir.",
+            folder_guard.folder_guard.disable,
+            detail="persistent JARVIS folder organisation",
+        )
 
     if intent == "undo_folder_organisation":
         if not folder_undo.can_undo():
