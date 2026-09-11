@@ -141,13 +141,10 @@ def plan_folder_organisation(
         response_format=_RESPONSE_FORMAT,
         temperature=0,
         max_tokens=1800,
+        reasoning_effort="low",
     )
 
-    try:
-        plan = json.loads(result)
-    except (TypeError, json.JSONDecodeError) as error:
-        raise ValueError(
-            "AskFiles organisation plan was not valid JSON") from error
+    plan = _parse_plan_json(result)
 
     moves = []
     seen = set()
@@ -204,3 +201,55 @@ def plan_folder_organisation(
         "moves": moves,
         "create_folders": create_folders,
     }
+
+
+def _parse_plan_json(result: Any) -> dict[str, Any]:
+    """Parse the structured planner response defensively."""
+    if isinstance(result, dict):
+        return result
+
+    text = str(result or "").strip()
+
+    if not text:
+        raise ValueError(
+            "AskFiles planner returned no visible JSON content"
+        )
+
+    if text.startswith("```"):
+        lines = text.splitlines()
+
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+
+        text = "\n".join(lines).strip()
+
+        if text.casefold().startswith("json"):
+            text = text[4:].lstrip()
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+
+        if start < 0 or end <= start:
+            raise ValueError(
+                "AskFiles planner returned malformed JSON"
+            )
+
+        try:
+            parsed = json.loads(text[start:end + 1])
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                "AskFiles planner returned malformed JSON"
+            ) from error
+
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            "AskFiles planner returned a non-object JSON response"
+        )
+
+    return parsed
