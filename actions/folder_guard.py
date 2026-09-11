@@ -10,8 +10,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
-from pathlib import Path
 
 from actions import files, folder_organizer
 
@@ -21,7 +19,6 @@ _POLL_SECONDS = 6 * 60 * 60
 
 # Local, high-confidence categories only. Anything not covered here is left
 # alone rather than guessed at.
-_REPORT_MARKERS = ("report", "research")
 _CATEGORIES = (
     ("Spreadsheets", frozenset({".csv", ".tsv", ".xls", ".xlsx", ".ods"})),
     ("Images", frozenset({
@@ -34,10 +31,18 @@ _CATEGORIES = (
         ".pdf", ".doc", ".docx", ".rtf", ".odt", ".txt", ".md",
     })),
     ("Code", frozenset({
-        ".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".yaml", ".yml",
-        ".toml", ".ini", ".cfg", ".ps1", ".bat", ".cmd", ".sh",
+        ".py", ".js", ".jsx", ".ts", ".tsx", ".html", ".css", ".ps1",
+        ".bat", ".cmd", ".sh",
     })),
 )
+
+# JARVIS keeps these files in its root. The manual organiser already protects
+# most of them; these extra names/patterns are important for automatic mode.
+_PROTECTED_AUTO_NAMES = frozenset({
+    _STATE_NAME,
+    "jarvis-pending.txt",
+    "market-alerts.txt",
+})
 
 
 class FolderGuard:
@@ -138,7 +143,21 @@ class FolderGuard:
         name = item["name"].casefold()
         extension = item["extension"].casefold()
 
-        if any(marker in name for marker in _REPORT_MARKERS):
+        if name in {value.casefold() for value in _PROTECTED_AUTO_NAMES}:
+            return None
+
+        if name.startswith("jarvis-log-") and name.endswith(".txt"):
+            return None
+
+        # "report" is deliberately checked as a filename word rather than
+        # matching any filename containing "report" (for example, report.py
+        # is still a report, but reporting.py should remain Code).
+        report_words = {
+            token.strip("._- ")
+            for token in name.replace(".", " ").replace("_", " ").replace("-", " ").split()
+        }
+
+        if "report" in report_words:
             return "Reports"
 
         for category, extensions in _CATEGORIES:
@@ -151,6 +170,7 @@ class FolderGuard:
         """Build a conservative local move plan from the inspected inventory."""
         groups = {}
         existing = inventory["directories"]
+        existing_keys = {name.casefold() for name in existing}
 
         for item in inventory["files"]:
             category = self._category_for(item)
@@ -164,9 +184,7 @@ class FolderGuard:
         return [
             {
                 "folder": folder,
-                "existing": folder.casefold() in {
-                    name.casefold() for name in existing
-                },
+                "existing": folder.casefold() in existing_keys,
                 "files": names,
             }
             for folder, names in groups.items()
@@ -184,17 +202,13 @@ class FolderGuard:
             return "Your JARVIS folder is in good order, sir."
 
         destinations = []
-
         remaining = moved
 
         for group in groups:
             count = len(group["files"])
 
             if count:
-                destinations.append(
-                    f"{count} into {group['folder']}"
-                )
-
+                destinations.append(f"{count} into {group['folder']}")
                 remaining -= count
 
             if remaining <= 0:
@@ -246,8 +260,10 @@ class FolderGuard:
 
         if not inventory or not inventory["files"]:
             if startup:
-                text = "Your JARVIS folder is in good order, sir."
-                self._announce(text, open_follow_up=False)
+                self._announce(
+                    "Your JARVIS folder is in good order, sir.",
+                    open_follow_up=False,
+                )
 
             return {"status": "clean"}
 
@@ -255,8 +271,10 @@ class FolderGuard:
 
         if not groups:
             if startup:
-                text = "Your JARVIS folder is in good order, sir."
-                self._announce(text, open_follow_up=False)
+                self._announce(
+                    "Your JARVIS folder is in good order, sir.",
+                    open_follow_up=False,
+                )
 
             return {"status": "clean"}
 
