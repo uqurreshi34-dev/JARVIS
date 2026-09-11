@@ -89,6 +89,17 @@ def plan_folder_organisation(
     existing_child_folders: list[str],
 ) -> dict[str, Any]:
     """Ask the configured provider chain for a bounded folder plan."""
+    normalized_path = (current_path or "").replace("\\", "/").rstrip("/").casefold()
+
+    # Android's camera tree is already a purposeful media structure. Never
+    # ask the model to reorganise it into arbitrary category folders.
+    if normalized_path.endswith("/dcim") or normalized_path.endswith("/dcim/camera"):
+        return {
+            "summary": "This is a standard Android camera folder, so I will leave its structure intact.",
+            "moves": [],
+            "create_folders": [],
+        }
+
     manifest = []
     valid_names = set()
     directories = set()
