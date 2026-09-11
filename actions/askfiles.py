@@ -89,7 +89,8 @@ def plan_folder_organisation(
     existing_child_folders: list[str],
 ) -> dict[str, Any]:
     """Ask the configured provider chain for a bounded folder plan."""
-    normalized_path = (current_path or "").replace("\\", "/").rstrip("/").casefold()
+    normalized_path = (current_path or "").replace(
+        "\\", "/").rstrip("/").casefold()
 
     # Android's camera tree is already a purposeful media structure. Never
     # ask the model to reorganise it into arbitrary category folders.
@@ -145,7 +146,8 @@ def plan_folder_organisation(
     try:
         plan = json.loads(result)
     except (TypeError, json.JSONDecodeError) as error:
-        raise ValueError("AskFiles organisation plan was not valid JSON") from error
+        raise ValueError(
+            "AskFiles organisation plan was not valid JSON") from error
 
     moves = []
     seen = set()
