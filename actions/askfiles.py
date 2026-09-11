@@ -186,6 +186,7 @@ def plan_folder_organisation(
 
         index_to_name[next_index] = name
         index_to_extension[next_index] = extension
+        valid_names.add(name)
 
         manifest.append([
             next_index,
