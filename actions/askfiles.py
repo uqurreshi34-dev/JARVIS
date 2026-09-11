@@ -162,6 +162,7 @@ def plan_folder_organisation(
     manifest = []
     index_to_name: dict[int, str] = {}
     index_to_extension: dict[int, str] = {}
+    valid_names = set()
     directories = set()
 
     next_index = 1
@@ -194,15 +195,15 @@ def plan_folder_organisation(
 
         next_index += 1
 
-        prompt = json.dumps(
-            {
-                "folder": current_folder,
-                "existing_folders": existing_child_folders,
-                "files": manifest,
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
+    prompt = json.dumps(
+        {
+            "folder": current_folder,
+            "existing_folders": existing_child_folders,
+            "files": manifest,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
     result = chat(
         [
