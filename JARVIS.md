@@ -36,7 +36,7 @@ This prevents speech intended for the phone from being heard or acted on by
 the desktop listener. When the phone interaction finishes, the desktop
 microphone is restored.
 
-**111 language-model intents. 494 spoken phrases resolve locally with no API call.**
+**113 language-model intents. 507 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -222,6 +222,32 @@ Research reports can optionally be saved into a direct subfolder beneath the
 JARVIS root when the user explicitly names one. Missing destination folders
 are created automatically. Without an explicit destination, reports continue
 to save directly in the JARVIS folder.
+
+### Persistent JARVIS-folder housekeeping — `actions/folder_guard.py`
+
+JARVIS can be told to keep his own folder organised automatically:
+
+`keep my JARVIS folder organised`
+
+This is a free local command and does not use a language model.
+
+Once enabled, JARVIS checks the JARVIS root immediately at startup and then periodically every six hours. 
+When loose files are found, he uses conservative local rules based on file type and clear filename markers, 
+reuses an existing destination folder when one is already present, and creates a missing category folder only 
+when a file can be classified confidently.
+
+Ambiguous files are left untouched rather than guessed at.
+
+Automatic housekeeping uses the existing safe folder-organisation executor and the existing persistent undo 
+transaction, so one automatic run can be reversed with `undo`, including after a restart.
+
+The persistent preference is stored in `.jarvis-folder-guard.json` inside the JARVIS folder.
+
+Say `stop keeping my JARVIS folder organised` to disable automatic housekeeping. Disabling it does not 
+move or delete anything.
+
+The manual `organise my JARVIS folder` command remains available separately and can still use the full organisation
+planner when broader judgement is useful.
 
 ### Documents — `actions/documents.py`
 

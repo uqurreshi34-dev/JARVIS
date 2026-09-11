@@ -174,6 +174,34 @@ Everything lives in `C:\Users\<you>\JARVIS\`. Nothing outside it is touched.
 Saying **"file"** always works. Leaving it off works when the file already
 exists.
 
+## Persistent JARVIS-folder housekeeping
+
+| Say | Does |
+|---|---|
+| keep my JARVIS folder organised | enables automatic local housekeeping |
+| keep my JARVIS folder organized | same |
+| stop keeping my JARVIS folder organised | disables automatic housekeeping |
+| stop keeping my JARVIS folder organized | same |
+
+Once enabled, JARVIS checks the JARVIS folder at startup and then every six hours.
+
+If he finds clearly classifiable loose files, he organises them automatically using local rules. 
+Existing destination folders are reused; missing category folders are created when needed; 
+ambiguous files are left alone.
+
+There is no language-model call for the automatic housekeeping check.
+
+When automatic organisation changes files, JARVIS reports what he moved and returns to listening 
+mode, so `undo` can immediately reverse the latest organisation transaction.
+
+The setting survives restarts in `.jarvis-folder-guard.json`.
+
+The manual `organise my JARVIS folder` command remains available when you want the broader planner 
+to inspect the folder and propose an organisation first.
+
+Say `stop keeping my JARVIS folder organised` or `stop keeping my JARVIS folder organized` to turn 
+the automatic behaviour off.
+
 ## Documents
 
 Drag Word documents, PDFs, TXT, Markdown, CSV or JSON files directly onto the JARVIS HUD to load them into a temporary working set.
@@ -578,9 +606,10 @@ thing everything else here depends on.
 
 ## Patterns
 
-Habits JARVIS notices from what you actually do, kept in `patterns.txt`,
-separate from `memory.txt`. Memory is what you told him; a pattern is
-something he worked out by watching. Free — built from the log he already
+Habits JARVIS notices from commands you ask him to carry out, kept in `patterns.txt`,
+separate from `memory.txt`. Memory is what you told him; a pattern is something he works out 
+from the commands he has logged you asking him to perform; he does not monitor applications 
+you open or actions you take manually. Free — built from the log he already
 keeps, no API call.
 
 | Say | Does |
