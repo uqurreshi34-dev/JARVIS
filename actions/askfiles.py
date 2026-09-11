@@ -16,16 +16,51 @@ from providers import chat
 _SCHEMA = {
     "type": "object",
     "properties": {
-        "summary": {"type": "string"},
-        "moves": {
+        "summary": {
+            "type": "string",
+        },
+        "rules": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "file": {"type": "string"},
-                    "destination": {"type": "string"},
+                    "match": {
+                        "type": "string",
+                        "enum": ["extension", "prefix"],
+                    },
+                    "values": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "destination": {
+                        "type": "string",
+                    },
                 },
-                "required": ["file", "destination"],
+                "required": [
+                    "match",
+                    "values",
+                    "destination",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "exceptions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "indices": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                    },
+                    "destination": {
+                        "type": "string",
+                    },
+                },
+                "required": [
+                    "indices",
+                    "destination",
+                ],
                 "additionalProperties": False,
             },
         },
@@ -34,7 +69,12 @@ _SCHEMA = {
             "items": {"type": "string"},
         },
     },
-    "required": ["summary", "moves", "create_folders"],
+    "required": [
+        "summary",
+        "rules",
+        "exceptions",
+        "create_folders",
+    ],
     "additionalProperties": False,
 }
 
@@ -49,23 +89,41 @@ _RESPONSE_FORMAT = {
 
 _SYSTEM = """You are the planning layer for AskFiles, an Android file manager.
 
-The user asked AskFiles to organise the folder currently open in the app.
-Return ONLY a JSON organisation plan matching the supplied schema.
+The user asked AskFiles to organise the files directly inside the current
+folder. Return ONLY a JSON organisation plan matching the supplied schema.
+
+The file list is numbered from 1 upward. Those indices are the only file
+identifiers you may use.
 
 Rules:
-- Organise ONLY the files directly listed in the current folder.
-- Never invent files that are not in the manifest.
-- Never move or classify a directory itself; only files may be moved.
-- Destinations must be DIRECT CHILD FOLDER NAMES of the current folder, with no
-  slash, backslash, URI, absolute path, or parent traversal.
-- Reuse an existing child folder when it is an appropriate destination.
-- Put a missing destination folder in create_folders so AskFiles can create it.
-- Keep standard Android media directories such as DCIM/Camera or Pictures
-  intact when that current folder is itself clearly a camera/media folder;
-  prefer no moves there rather than restructuring a system media location.
-- Be conservative. Ambiguous files should be left in place.
-- Do not delete, overwrite, rename, or move files outside the current folder.
-- The summary should describe only the proposed moves.
+- Organise ONLY the listed files in the current folder.
+- Never invent a file.
+- Directories are not included in the file list and must never be moved.
+- Destinations must be DIRECT CHILD FOLDER NAMES of the current folder.
+- Never use a slash, backslash, URI, absolute path, or parent traversal.
+- Reuse an existing child folder when appropriate.
+- Missing destination folders belong in create_folders.
+- Standard Android camera/media folders must remain intact; this is already
+  enforced by the caller for recognised camera paths.
+- Be conservative. Ambiguous files should remain where they are.
+
+Compact planning:
+- Prefer extension rules for common file types.
+- Use prefix rules when filenames clearly identify a narrower group, such as
+  screenshots.
+- Prefix rules override extension rules.
+- Use exceptions only for files that need individual treatment.
+- Do not create a separate exception for every ordinary file when a rule can
+  cover them.
+- Use at most 300 exception indices total. If more would be needed, leave the
+  ambiguous files unmoved.
+- Avoid overlapping rules that would assign the same file to different
+  destinations.
+- Every extension should normally have at most one destination.
+- Every prefix should normally identify one destination.
+
+The planner's output is expanded locally by JARVIS into individual file moves.
+Do not return individual filename-based move objects.
 """
 
 
@@ -102,8 +160,11 @@ def plan_folder_organisation(
         }
 
     manifest = []
-    valid_names = set()
+    index_to_name: dict[int, str] = {}
+    index_to_extension: dict[int, str] = {}
     directories = set()
+
+    next_index = 1
 
     for item in items:
         name = str(item.get("name") or "").strip()
@@ -111,27 +172,37 @@ def plan_folder_organisation(
         if not name:
             continue
 
-        entry = {
-            "name": name,
-            "directory": bool(item.get("isDirectory")),
-            "size": int(item.get("size") or 0),
-        }
-        manifest.append(entry)
-
-        if entry["directory"]:
+        if bool(item.get("isDirectory")):
             directories.add(name)
-        else:
-            valid_names.add(name)
+            continue
 
-    prompt = json.dumps(
-        {
-            "current_folder": current_folder,
-            "current_path": current_path,
-            "existing_child_folders": existing_child_folders,
-            "items": manifest,
-        },
-        ensure_ascii=False,
-    )
+        dot = name.rfind(".")
+        extension = (
+            name[dot:].casefold()
+            if dot > 0
+            else ""
+        )
+
+        index_to_name[next_index] = name
+        index_to_extension[next_index] = extension
+
+        manifest.append([
+            next_index,
+            name,
+            extension,
+        ])
+
+        next_index += 1
+
+        prompt = json.dumps(
+            {
+                "folder": current_folder,
+                "existing_folders": existing_child_folders,
+                "files": manifest,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
     result = chat(
         [
@@ -140,7 +211,7 @@ def plan_folder_organisation(
         ],
         response_format=_RESPONSE_FORMAT,
         temperature=0,
-        max_tokens=4096,
+        max_tokens=3072,
         reasoning_effort="low",
     )
 
@@ -150,24 +221,137 @@ def plan_folder_organisation(
         raise ValueError(
             "AskFiles organisation plan was not valid JSON") from error
 
-    moves = []
-    seen = set()
+    assigned: dict[int, str] = {}
+    ambiguous: set[int] = set()
 
-    for move in plan.get("moves") or []:
-        if not isinstance(move, dict):
+    def normalise_extension(value: Any) -> str:
+        text = str(value or "").strip().casefold()
+
+        if not text:
+            return ""
+
+        if not text.startswith("."):
+            text = "." + text
+
+        if "/" in text or "\\" in text:
+            return ""
+
+        return text
+
+    extension_destinations: dict[str, str | None] = {}
+
+    for rule in plan.get("rules") or []:
+        if not isinstance(rule, dict):
             continue
 
-        source = _safe_name(move.get("file"))
-        destination = _safe_name(move.get("destination"))
+        if str(rule.get("match") or "").strip().casefold() != "extension":
+            continue
+
+        destination = _safe_name(rule.get("destination"))
+
+        if not destination:
+            continue
+
+        for raw_value in rule.get("values") or []:
+            extension = normalise_extension(raw_value)
+
+            if not extension:
+                continue
+
+            existing_destination = extension_destinations.get(extension)
+
+            if existing_destination is None and extension in extension_destinations:
+                continue
+
+            if existing_destination and existing_destination != destination:
+                extension_destinations[extension] = None
+            elif extension not in extension_destinations:
+                extension_destinations[extension] = destination
+
+    prefix_rules: list[tuple[str, str]] = []
+
+    for rule in plan.get("rules") or []:
+        if not isinstance(rule, dict):
+            continue
+
+        if str(rule.get("match") or "").strip().casefold() != "prefix":
+            continue
+
+        destination = _safe_name(rule.get("destination"))
+
+        if not destination:
+            continue
+
+        for raw_value in rule.get("values") or []:
+            prefix = str(raw_value or "").strip()
+
+            if not prefix or "/" in prefix or "\\" in prefix:
+                continue
+
+            prefix_rules.append((prefix.casefold(), destination))
+
+    for index, name in index_to_name.items():
+        matching_prefix_destinations = {
+            destination
+            for prefix, destination in prefix_rules
+            if name.casefold().startswith(prefix)
+        }
+
+        if len(matching_prefix_destinations) == 1:
+            assigned[index] = next(iter(matching_prefix_destinations))
+            continue
+
+        if len(matching_prefix_destinations) > 1:
+            ambiguous.add(index)
+            continue
+
+        extension = index_to_extension.get(index, "")
+        destination = extension_destinations.get(extension)
+
+        if destination:
+            assigned[index] = destination
+
+    exception_count = 0
+
+    for exception in plan.get("exceptions") or []:
+        if not isinstance(exception, dict):
+            continue
+
+        destination = _safe_name(exception.get("destination"))
+
+        if not destination:
+            continue
+
+        for raw_index in exception.get("indices") or []:
+            if exception_count >= 300:
+                break
+
+            if (
+                not isinstance(raw_index, int)
+                or isinstance(raw_index, bool)
+                or raw_index not in index_to_name
+            ):
+                continue
+
+            assigned[raw_index] = destination
+            ambiguous.discard(raw_index)
+            exception_count += 1
+
+    moves = []
+
+    for index, destination in assigned.items():
+        if index in ambiguous:
+            continue
+
+        source = index_to_name.get(index)
 
         if not source or not destination:
             continue
 
-        if source not in valid_names or source in seen:
-            continue
-
-        seen.add(source)
-        moves.append({"file": source, "destination": destination})
+        moves.append({
+            "file": source,
+            "destination": destination,
+        })
 
     existing = {
         _safe_name(name)

@@ -94,6 +94,8 @@ MAX_NOTICES = 40
 # Maximum size of a picture sent from the phone camera.
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
+MAX_ASKFILES_ORGANISE_ITEMS = 5000
+
 # Address prefixes that mean "on the home network".
 #
 # Worth knowing before relying on this: over Tailscale it tells you
@@ -939,8 +941,13 @@ class PhoneServer:
             if not isinstance(existing_child_folders, list):
                 existing_child_folders = []
 
-            if len(items) > 500:
-                return jsonify({"error": "That folder is too large to organise in one pass."}), 400
+            if len(items) > MAX_ASKFILES_ORGANISE_ITEMS:
+                return jsonify({
+                    "error": (
+                        "That folder is too large to organise in one pass "
+                        f"(maximum {MAX_ASKFILES_ORGANISE_ITEMS} items)."
+                    )
+                }), 400
 
             try:
                 plan = askfiles.plan_folder_organisation(
