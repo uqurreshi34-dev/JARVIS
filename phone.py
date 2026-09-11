@@ -32,7 +32,7 @@ from werkzeug.serving import make_server
 from pywebpush import webpush, WebPushException
 
 import transcriber
-from actions import location
+from actions import location, askfiles
 from voice import FILLERS, set_phone_active
 
 import speech
@@ -920,6 +920,43 @@ class PhoneServer:
             set_phone_active(active)
 
             return jsonify({"ok": True, "active": active})
+
+        @app.post("/askfiles/organise")
+        def askfiles_organise():
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            payload = request.get_json(silent=True) or {}
+
+            current_path = str(payload.get("current_path") or "").strip()
+            current_folder = str(payload.get("current_folder") or "").strip()
+            items = payload.get("items")
+            existing_child_folders = payload.get("existing_child_folders")
+
+            if not current_path or not isinstance(items, list):
+                return jsonify({"error": "Invalid AskFiles folder context."}), 400
+
+            if not isinstance(existing_child_folders, list):
+                existing_child_folders = []
+
+            if len(items) > 500:
+                return jsonify({"error": "That folder is too large to organise in one pass."}), 400
+
+            try:
+                plan = askfiles.plan_folder_organisation(
+                    current_path=current_path,
+                    current_folder=current_folder or "Current folder",
+                    items=items,
+                    existing_child_folders=existing_child_folders,
+                )
+            except Exception as error:
+                print(f"[JARVIS] AskFiles organisation failed: {error}")
+
+                return jsonify({
+                    "error": "I couldn't plan that folder, sir."
+                }), 500
+
+            return jsonify(plan)
 
         @app.post("/command")
         def command():
