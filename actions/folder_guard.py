@@ -201,21 +201,20 @@ class FolderGuard:
         if moved == 0:
             return "Your JARVIS folder is in good order, sir."
 
-        destinations = []
-        remaining = moved
+        planned = sum(len(group["files"]) for group in groups)
 
-        for group in groups:
-            count = len(group["files"])
-
-            if count:
-                destinations.append(f"{count} into {group['folder']}")
-                remaining -= count
-
-            if remaining <= 0:
-                break
-
-        detail = "; ".join(destinations)
-        message = f"Checking your JARVIS folder, sir. I moved {detail}."
+        if moved == planned:
+            destinations = "; ".join(
+                f"{len(group['files'])} into {group['folder']}"
+                for group in groups
+                if group["files"]
+            )
+            message = f"Checking your JARVIS folder, sir. I moved {destinations}."
+        else:
+            message = (
+                f"Checking your JARVIS folder, sir. I moved {moved} "
+                f"file{'s' if moved != 1 else ''}."
+            )
 
         if created:
             count = len(created)
