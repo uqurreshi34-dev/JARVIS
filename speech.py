@@ -169,8 +169,20 @@ class SpeechEngine:
             global _neural_failed_at
 
             try:
-                if time.monotonic() - _neural_failed_at < _NEURAL_COOLDOWN:
+                if _neural_busy.is_set():
+                    # A stuck synthesis is still holding the cache lock, so
+                    # even a cached phrase would block behind it.
                     self._speak_fallback(text)
+
+                elif (
+                    time.monotonic() - _neural_failed_at < _NEURAL_COOLDOWN
+                    and not self._is_cached(text)
+                ):
+                    # The cooldown exists to avoid paying the timeout again.
+                    # A cached phrase never touches the network, so there is
+                    # nothing to avoid and it keeps the real voice.
+                    self._speak_fallback(text)
+
                 else:
                     try:
                         self._speak_neural(text)
@@ -521,6 +533,24 @@ class SpeechEngine:
             data = data.mean(axis=1)
 
         return data, samplerate
+
+    def _is_cached(self, text):
+        """True when this phrase can be played without the network.
+
+        Deliberately does not take _cache_lock. A stuck synthesis may be
+        holding it, and this is only a hint used to decide whether an
+        attempt is worth making -- blocking here would defeat the point.
+        """
+        key = self._cache_key(text)
+        cached = self._memory.get(key)
+
+        if cached is not None and len(cached) == 3 and cached[2]:
+            return True
+
+        return (
+            os.path.exists(os.path.join(_CACHE_DIR, f"{key}.mp3"))
+            and os.path.exists(os.path.join(_CACHE_DIR, f"{key}.json"))
+        )
 
     def _audio_for_bounded(self, text, timeout):
         """Fetch audio, abandoning the attempt if the network stalls."""

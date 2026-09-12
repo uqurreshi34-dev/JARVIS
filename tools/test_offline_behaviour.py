@@ -304,6 +304,73 @@ def _check_no_stacked_syntheses(failures):
     speech._neural_busy.clear()
 
 
+def _check_cached_phrase_keeps_the_voice(failures):
+    """A cached phrase needs no network, so the cooldown must not apply."""
+    import time as clock
+
+    engine = speech.speech
+
+    # Mid-cooldown: a failure just happened.
+    speech._neural_failed_at = clock.monotonic()
+    speech._neural_busy.clear()
+
+    with (
+        patch.object(engine, "_is_cached", return_value=True),
+        patch.object(engine, "_speak_neural") as neural_mock,
+        patch.object(engine, "_speak_fallback"),
+    ):
+        engine.speak("a phrase that is already on disk")
+
+        if not neural_mock.called:
+            failures.append(
+                "a cached phrase used the fallback voice during the "
+                "cooldown, even though it needs no network"
+            )
+
+    speech._neural_failed_at = clock.monotonic()
+
+    with (
+        patch.object(engine, "_is_cached", return_value=False),
+        patch.object(engine, "_speak_neural") as neural_mock,
+        patch.object(engine, "_speak_fallback") as fallback_mock,
+    ):
+        engine.speak("a phrase that is not on disk")
+
+        if neural_mock.called:
+            failures.append(
+                "an uncached phrase retried the network inside the cooldown"
+            )
+
+        if not fallback_mock.called:
+            failures.append("an uncached phrase did not fall back")
+
+    # A stuck synthesis holds the cache lock, so even a cached phrase has
+    # to take the fallback rather than block behind it.
+    speech._neural_failed_at = 0.0
+    speech._neural_busy.set()
+
+    with (
+        patch.object(engine, "_is_cached", return_value=True),
+        patch.object(engine, "_speak_neural") as neural_mock,
+        patch.object(engine, "_speak_fallback") as fallback_mock,
+    ):
+        engine.speak("a cached phrase during a stuck synthesis")
+
+        if neural_mock.called:
+            failures.append(
+                "a cached phrase tried to use the cache while a stuck "
+                "synthesis was holding its lock"
+            )
+
+        if not fallback_mock.called:
+            failures.append(
+                "a cached phrase during a stuck synthesis did not fall back"
+            )
+
+    speech._neural_failed_at = 0.0
+    speech._neural_busy.clear()
+
+
 def main():
     failures = []
 
@@ -316,6 +383,7 @@ def main():
     _check_synthesis_timeouts(failures)
     _check_speech_survives_a_hang(failures)
     _check_no_stacked_syntheses(failures)
+    _check_cached_phrase_keeps_the_voice(failures)
 
     if failures:
         print("FAILED")
