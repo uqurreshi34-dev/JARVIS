@@ -4705,6 +4705,16 @@ def _handle_command(command, *, fast_only=False, probe=False):
     if answered is not None:
         return answered
 
+    result = _fast_path(command)
+
+    took_free_path = result is not None
+
+    if fast_only and result is None:
+        return None
+
+    if result is not None:
+        print(f"[fast] {result['intent']} (no API call)")
+
     if not fast_only:
 
         if folder_organizer.is_request(command):
@@ -4756,16 +4766,6 @@ def _handle_command(command, *, fast_only=False, probe=False):
                 lambda: _run_agent_investigation(agent_task),
                 detail=agent_task,
             )
-
-    result = _fast_path(command)
-
-    took_free_path = result is not None
-
-    if fast_only and result is None:
-        return None
-
-    if result is not None:
-        print(f"[fast] {result['intent']} (no API call)")
 
     else:
         candidates = _application_manager.candidates(command)
