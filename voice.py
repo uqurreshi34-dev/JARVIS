@@ -4,6 +4,7 @@ import re
 import time
 import threading
 from difflib import SequenceMatcher
+import os
 
 import numpy as np
 import sounddevice as sd
@@ -13,7 +14,10 @@ import transcriber
 from speech import is_speaking, speech_epoch
 
 
-MODEL_PATH = "model"
+MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "model",
+)
 SAMPLE_RATE = transcriber.SAMPLE_RATE
 
 # Audio is handed to the engine in blocks of this many samples. 4000 is a
