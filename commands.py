@@ -4581,6 +4581,13 @@ def _compound_dispatch(command):
     return result
 
 
+# Each step's reply is addressed to the user, so the "sir" has to come off
+# before the fragments are joined or it ends up mid-sentence. Matching the
+# form rather than two exact spellings, so a new phrase ending "sir!" or
+# "Sir." does not quietly slip a "sir" into the middle of a compound reply.
+_TRAILING_SIR = re.compile(r"[\s,]*\bsir\b[\s.!?]*$", re.IGNORECASE)
+
+
 def _compound_request(command):
     """Return a compound action when the planner finds a valid multi-step plan."""
     # Neither lane below can produce a plan for a single-clause command, and
@@ -4655,11 +4662,20 @@ def _compound_request(command):
             if not spoken:
                 continue
 
-            spoken = spoken.removesuffix(", sir.")
-            spoken = spoken.removesuffix(" sir.")
+            spoken = _TRAILING_SIR.sub("", spoken).strip()
 
-            if spoken:
-                responses.append(spoken)
+            if not spoken:
+                continue
+
+            # Each step's reply is a sentence in its own right, so every
+            # fragment but the first needs its opening word lowered or the
+            # joined reply reads "Calculator, coming up and Bringing up
+            # Notepad, sir." Only the first character is touched, leaving
+            # proper nouns such as "Notepad" and "OK" intact.
+            if responses and spoken[:1].isupper() and not spoken[:2].isupper():
+                spoken = spoken[0].lower() + spoken[1:]
+
+            responses.append(spoken)
 
         if responses:
             if len(responses) == 1:

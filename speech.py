@@ -22,6 +22,17 @@ VOICE = os.getenv("JARVIS_VOICE") or "en-GB-RyanNeural"
 # Both accept forms like "-8%" and "-6Hz"; set them empty for the default.
 VOICE_RATE = os.getenv("JARVIS_VOICE_RATE", "-7%")
 VOICE_PITCH = os.getenv("JARVIS_VOICE_PITCH", "-4Hz")
+# edge_tts defaults to 10s connect and 60s receive. Offline that stalls a
+# reply for over a minute inside speak()'s lock, so the pyttsx3 fallback is
+# never reached. These are generous for a short reply and fail fast when
+# there is no connection.
+_NEURAL_CONNECT_TIMEOUT = 5
+_NEURAL_RECEIVE_TIMEOUT = 20
+
+# Remember a failed synthesis briefly so a run of uncached replies does not
+# each pay the connect timeout while offline.
+_NEURAL_COOLDOWN = 30.0
+_neural_failed_at = 0.0
 
 # Playback chunk size; smaller means the HUD reacts more finely.
 _BLOCK = 1024
@@ -147,15 +158,21 @@ class SpeechEngine:
         with self._lock:
             _speaking.set()
 
+            global _neural_failed_at
+
             try:
-                try:
-                    self._speak_neural(text)
-                except Exception as error:
-                    print(
-                        f"[JARVIS] neural voice unavailable "
-                        f"({error}); using fallback."
-                    )
+                if time.monotonic() - _neural_failed_at < _NEURAL_COOLDOWN:
                     self._speak_fallback(text)
+                else:
+                    try:
+                        self._speak_neural(text)
+                    except Exception as error:
+                        _neural_failed_at = time.monotonic()
+                        print(
+                            f"[JARVIS] neural voice unavailable "
+                            f"({error}); using fallback."
+                        )
+                        self._speak_fallback(text)
 
             finally:
                 self._report(0.0)
@@ -420,6 +437,8 @@ class SpeechEngine:
         communicate = edge_tts.Communicate(
             text,
             self.voice,
+            connect_timeout=_NEURAL_CONNECT_TIMEOUT,
+            receive_timeout=_NEURAL_RECEIVE_TIMEOUT,
             **options,
         )
 
