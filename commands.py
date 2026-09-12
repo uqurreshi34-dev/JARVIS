@@ -4581,6 +4581,43 @@ def _compound_dispatch(command):
     return result
 
 
+def _compound_response(steps, fallback):
+    """Join each step's spoken reply into one sentence."""
+    responses = []
+
+    for step in steps:
+        result = step.get("result") or {}
+        spoken = (result.get("response") or "").strip()
+        spoken = _TRAILING_SIR.sub("", spoken).strip()
+
+        if not spoken:
+            continue
+
+        # Each step's reply is a sentence in its own right, so every
+        # fragment but the first needs its opening word lowered, or the
+        # joined reply reads "Calculator, coming up and Bringing up
+        # Notepad, sir." Only the first character is touched, leaving
+        # proper nouns and acronyms intact.
+        if responses and spoken[:1].isupper() and not spoken[:2].isupper():
+            spoken = spoken[0].lower() + spoken[1:]
+
+        responses.append(spoken)
+
+    if not responses:
+        return fallback
+
+    if len(responses) == 1:
+        return f"{responses[0]}, sir."
+
+    if len(responses) == 2:
+        return f"{responses[0]} and {responses[1]}, sir."
+
+    return (
+        f"{', '.join(responses[:-1])}, "
+        f"and {responses[-1]}, sir."
+    )
+
+
 # Each step's reply is addressed to the user, so the "sir" has to come off
 # before the fragments are joined or it ends up mid-sentence. Matching the
 # form rather than two exact spellings, so a new phrase ending "sir!" or
@@ -4653,40 +4690,7 @@ def _compound_request(command):
     response = summary
 
     if local and steps:
-        responses = []
-
-        for step in steps:
-            result = step.get("result") or {}
-            spoken = (result.get("response") or "").strip()
-
-            if not spoken:
-                continue
-
-            spoken = _TRAILING_SIR.sub("", spoken).strip()
-
-            if not spoken:
-                continue
-
-            # Each step's reply is a sentence in its own right, so every
-            # fragment but the first needs its opening word lowered or the
-            # joined reply reads "Calculator, coming up and Bringing up
-            # Notepad, sir." Only the first character is touched, leaving
-            # proper nouns such as "Notepad" and "OK" intact.
-            if responses and spoken[:1].isupper() and not spoken[:2].isupper():
-                spoken = spoken[0].lower() + spoken[1:]
-
-            responses.append(spoken)
-
-        if responses:
-            if len(responses) == 1:
-                response = f"{responses[0]}, sir."
-            elif len(responses) == 2:
-                response = f"{responses[0]} and {responses[1]}, sir."
-            else:
-                response = (
-                    f"{', '.join(responses[:-1])}, "
-                    f"and {responses[-1]}, sir."
-                )
+        response = _compound_response(steps, summary)
 
     return _action(
         "compound_task",
