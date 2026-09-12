@@ -261,6 +261,49 @@ def _check_synthesis_timeouts(failures):
         failures.append(f"receive_timeout is {receive}s, too long")
 
 
+def _check_no_stacked_syntheses(failures):
+    """A stuck synthesis must not be followed by a second one behind it."""
+    import time as clock
+
+    engine = speech.speech
+    speech._neural_failed_at = 0.0
+    speech._neural_busy.clear()
+
+    attempts = []
+
+    def never_returns(*_args, **_kwargs):
+        attempts.append(1)
+        clock.sleep(60)
+
+    with (
+        patch.object(engine, "_audio_for", side_effect=never_returns),
+        patch.object(engine, "_speak_fallback"),
+    ):
+        engine.speak("first uncached phrase")
+
+        # Past the cooldown, so a second attempt is allowed to try again.
+        speech._neural_failed_at = 0.0
+
+        started = clock.monotonic()
+        engine.speak("second uncached phrase")
+        elapsed = clock.monotonic() - started
+
+    if len(attempts) > 1:
+        failures.append(
+            f"{len(attempts)} syntheses were started; the second stacked "
+            "up behind a thread that was still holding the cache lock"
+        )
+
+    if elapsed > 2:
+        failures.append(
+            f"the second phrase waited {elapsed:.0f}s behind a stuck "
+            "synthesis instead of falling back immediately"
+        )
+
+    speech._neural_failed_at = 0.0
+    speech._neural_busy.clear()
+
+
 def main():
     failures = []
 
@@ -272,6 +315,7 @@ def main():
     _check_speech_falls_back(failures)
     _check_synthesis_timeouts(failures)
     _check_speech_survives_a_hang(failures)
+    _check_no_stacked_syntheses(failures)
 
     if failures:
         print("FAILED")

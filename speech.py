@@ -37,6 +37,10 @@ _neural_failed_at = 0.0
 # disconnected machine is an OS call they cannot interrupt. The attempt
 # needs a deadline that does not depend on the network stack cooperating.
 _NEURAL_SYNTHESIS_DEADLINE = 8.0
+# An abandoned synthesis keeps running and keeps holding the cache lock.
+# Starting a second one behind it just stacks up stuck threads, so a new
+# attempt goes straight to the fallback until the first one lets go.
+_neural_busy = threading.Event()
 
 # Playback chunk size; smaller means the HUD reacts more finely.
 _BLOCK = 1024
@@ -520,6 +524,11 @@ class SpeechEngine:
 
     def _audio_for_bounded(self, text, timeout):
         """Fetch audio, abandoning the attempt if the network stalls."""
+        if _neural_busy.is_set():
+            raise RuntimeError(
+                "a previous synthesis is still holding the cache"
+            )
+
         outcome = {}
         done = threading.Event()
 
@@ -529,8 +538,10 @@ class SpeechEngine:
             except BaseException as error:
                 outcome["error"] = error
             finally:
+                _neural_busy.clear()
                 done.set()
 
+        _neural_busy.set()
         threading.Thread(target=work, daemon=True).start()
 
         if not done.wait(timeout):
