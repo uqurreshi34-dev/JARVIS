@@ -4581,8 +4581,60 @@ def _compound_dispatch(command):
     return result
 
 
+def _compound_response(steps, fallback):
+    """Join each step's spoken reply into one sentence."""
+    responses = []
+
+    for step in steps:
+        result = step.get("result") or {}
+        spoken = (result.get("response") or "").strip()
+        spoken = _TRAILING_SIR.sub("", spoken).strip()
+
+        if not spoken:
+            continue
+
+        # Each step's reply is a sentence in its own right, so every
+        # fragment but the first needs its opening word lowered, or the
+        # joined reply reads "Calculator, coming up and Bringing up
+        # Notepad, sir." Only the first character is touched, leaving
+        # proper nouns and acronyms intact.
+        if responses and spoken[:1].isupper() and not spoken[:2].isupper():
+            spoken = spoken[0].lower() + spoken[1:]
+
+        responses.append(spoken)
+
+    if not responses:
+        return fallback
+
+    if len(responses) == 1:
+        return f"{responses[0]}, sir."
+
+    if len(responses) == 2:
+        return f"{responses[0]} and {responses[1]}, sir."
+
+    return (
+        f"{', '.join(responses[:-1])}, "
+        f"and {responses[-1]}, sir."
+    )
+
+
+# Each step's reply is addressed to the user, so the "sir" has to come off
+# before the fragments are joined or it ends up mid-sentence. Matching the
+# form rather than two exact spellings, so a new phrase ending "sir!" or
+# "Sir." does not quietly slip a "sir" into the middle of a compound reply.
+_TRAILING_SIR = re.compile(r"[\s,]*\bsir\b[\s.!?]*$", re.IGNORECASE)
+
+
 def _compound_request(command):
     """Return a compound action when the planner finds a valid multi-step plan."""
+    # Neither lane below can produce a plan for a single-clause command, and
+    # _planner_context() probes Blender over HTTP with a two second timeout
+    # per bridge state file. Python evaluates that argument before calling
+    # planner.plan(), which then discards it, so the cheap gate has to come
+    # first or every local command pays for a Blender health check.
+    if not planner.should_plan(command):
+        return None
+
     plan = planner.local_plan(
         command,
         lambda text: handle_command(
@@ -4638,31 +4690,7 @@ def _compound_request(command):
     response = summary
 
     if local and steps:
-        responses = []
-
-        for step in steps:
-            result = step.get("result") or {}
-            spoken = (result.get("response") or "").strip()
-
-            if not spoken:
-                continue
-
-            spoken = spoken.removesuffix(", sir.")
-            spoken = spoken.removesuffix(" sir.")
-
-            if spoken:
-                responses.append(spoken)
-
-        if responses:
-            if len(responses) == 1:
-                response = f"{responses[0]}, sir."
-            elif len(responses) == 2:
-                response = f"{responses[0]} and {responses[1]}, sir."
-            else:
-                response = (
-                    f"{', '.join(responses[:-1])}, "
-                    f"and {responses[-1]}, sir."
-                )
+        response = _compound_response(steps, summary)
 
     return _action(
         "compound_task",
@@ -4767,7 +4795,11 @@ def _handle_command(command, *, fast_only=False, probe=False):
                 detail=agent_task,
             )
 
-    else:
+    # The model is the fallback for speech the local path could not resolve.
+    # Bound to `result is None` rather than to `fast_only`, which had it
+    # firing on probe lookups that already had an answer and never firing
+    # on the voice path that actually needed it.
+    if result is None:
         candidates = _application_manager.candidates(command)
 
         try:

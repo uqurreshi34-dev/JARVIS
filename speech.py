@@ -22,6 +22,25 @@ VOICE = os.getenv("JARVIS_VOICE") or "en-GB-RyanNeural"
 # Both accept forms like "-8%" and "-6Hz"; set them empty for the default.
 VOICE_RATE = os.getenv("JARVIS_VOICE_RATE", "-7%")
 VOICE_PITCH = os.getenv("JARVIS_VOICE_PITCH", "-4Hz")
+# edge_tts defaults to 10s connect and 60s receive. Offline that stalls a
+# reply for over a minute inside speak()'s lock, so the pyttsx3 fallback is
+# never reached. These are generous for a short reply and fail fast when
+# there is no connection.
+_NEURAL_CONNECT_TIMEOUT = 5
+_NEURAL_RECEIVE_TIMEOUT = 20
+
+# Remember a failed synthesis briefly so a run of uncached replies does not
+# each pay the connect timeout while offline.
+_NEURAL_COOLDOWN = 30.0
+_neural_failed_at = 0.0
+# edge_tts has its own timeouts, but a blocking getaddrinfo on a
+# disconnected machine is an OS call they cannot interrupt. The attempt
+# needs a deadline that does not depend on the network stack cooperating.
+_NEURAL_SYNTHESIS_DEADLINE = 8.0
+# An abandoned synthesis keeps running and keeps holding the cache lock.
+# Starting a second one behind it just stacks up stuck threads, so a new
+# attempt goes straight to the fallback until the first one lets go.
+_neural_busy = threading.Event()
 
 # Playback chunk size; smaller means the HUD reacts more finely.
 _BLOCK = 1024
@@ -147,15 +166,33 @@ class SpeechEngine:
         with self._lock:
             _speaking.set()
 
+            global _neural_failed_at
+
             try:
-                try:
-                    self._speak_neural(text)
-                except Exception as error:
-                    print(
-                        f"[JARVIS] neural voice unavailable "
-                        f"({error}); using fallback."
-                    )
+                if _neural_busy.is_set():
+                    # A stuck synthesis is still holding the cache lock, so
+                    # even a cached phrase would block behind it.
                     self._speak_fallback(text)
+
+                elif (
+                    time.monotonic() - _neural_failed_at < _NEURAL_COOLDOWN
+                    and not self._is_cached(text)
+                ):
+                    # The cooldown exists to avoid paying the timeout again.
+                    # A cached phrase never touches the network, so there is
+                    # nothing to avoid and it keeps the real voice.
+                    self._speak_fallback(text)
+
+                else:
+                    try:
+                        self._speak_neural(text)
+                    except Exception as error:
+                        _neural_failed_at = time.monotonic()
+                        print(
+                            f"[JARVIS] neural voice unavailable "
+                            f"({error}); using fallback."
+                        )
+                        self._speak_fallback(text)
 
             finally:
                 self._report(0.0)
@@ -420,6 +457,8 @@ class SpeechEngine:
         communicate = edge_tts.Communicate(
             text,
             self.voice,
+            connect_timeout=_NEURAL_CONNECT_TIMEOUT,
+            receive_timeout=_NEURAL_RECEIVE_TIMEOUT,
             **options,
         )
 
@@ -495,8 +534,61 @@ class SpeechEngine:
 
         return data, samplerate
 
+    def _is_cached(self, text):
+        """True when this phrase can be played without the network.
+
+        Deliberately does not take _cache_lock. A stuck synthesis may be
+        holding it, and this is only a hint used to decide whether an
+        attempt is worth making -- blocking here would defeat the point.
+        """
+        key = self._cache_key(text)
+        cached = self._memory.get(key)
+
+        if cached is not None and len(cached) == 3 and cached[2]:
+            return True
+
+        return (
+            os.path.exists(os.path.join(_CACHE_DIR, f"{key}.mp3"))
+            and os.path.exists(os.path.join(_CACHE_DIR, f"{key}.json"))
+        )
+
+    def _audio_for_bounded(self, text, timeout):
+        """Fetch audio, abandoning the attempt if the network stalls."""
+        if _neural_busy.is_set():
+            raise RuntimeError(
+                "a previous synthesis is still holding the cache"
+            )
+
+        outcome = {}
+        done = threading.Event()
+
+        def work():
+            try:
+                outcome["audio"] = self._audio_for(text)
+            except BaseException as error:
+                outcome["error"] = error
+            finally:
+                _neural_busy.clear()
+                done.set()
+
+        _neural_busy.set()
+        threading.Thread(target=work, daemon=True).start()
+
+        if not done.wait(timeout):
+            raise TimeoutError(
+                f"synthesis did not finish within {timeout}s"
+            )
+
+        if "error" in outcome:
+            raise outcome["error"]
+
+        return outcome["audio"]
+
     def _speak_neural(self, text):
-        data, samplerate, boundaries = self._audio_for(text)
+        data, samplerate, boundaries = self._audio_for_bounded(
+            text,
+            _NEURAL_SYNTHESIS_DEADLINE,
+        )
 
         self._play_reactive(data, samplerate, boundaries)
 
