@@ -96,9 +96,7 @@ POOLS = {
     ),
     # These take a {name} field.
     "opening": (
-        "Opening {name}, sir.",
-        "Bringing up {name}, sir.",
-        "{name}, coming up, sir.",
+        "Launching {name}, sir.",
     ),
     "closing": (
         "Closing {name}, sir.",
