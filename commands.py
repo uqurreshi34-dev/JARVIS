@@ -4582,26 +4582,50 @@ def _compound_dispatch(command):
 
 
 def _compound_response(steps, fallback):
-    """Join each step's spoken reply into one sentence."""
+    """Join compound replies into one natural sentence."""
     responses = []
+    opening = []
+    closing = []
 
     for step in steps:
         result = step.get("result") or {}
+        intent = result.get("intent")
+        application = result.get("application")
+
+        if intent == "open_application" and application:
+            opening.append(application)
+            continue
+
+        if intent == "close_application" and application:
+            closing.append(application)
+            continue
+
         spoken = (result.get("response") or "").strip()
         spoken = _TRAILING_SIR.sub("", spoken).strip()
 
         if not spoken:
             continue
 
-        # Each step's reply is a sentence in its own right, so every
-        # fragment but the first needs its opening word lowered, or the
-        # joined reply reads "Calculator, coming up and Bringing up
-        # Notepad, sir." Only the first character is touched, leaving
-        # proper nouns and acronyms intact.
+        # Preserve Claude's lowercase joining fix.
         if responses and spoken[:1].isupper() and not spoken[:2].isupper():
             spoken = spoken[0].lower() + spoken[1:]
 
         responses.append(spoken)
+
+    def join_names(names):
+        if len(names) == 1:
+            return names[0]
+
+        if len(names) == 2:
+            return f"{names[0]} and {names[1]}"
+
+        return f"{', '.join(names[:-1])}, and {names[-1]}"
+
+    if opening:
+        responses.append(f"Launching {join_names(opening)}")
+
+    if closing:
+        responses.append(f"Closing {join_names(closing)}")
 
     if not responses:
         return fallback
