@@ -33,6 +33,10 @@ _NEURAL_RECEIVE_TIMEOUT = 20
 # each pay the connect timeout while offline.
 _NEURAL_COOLDOWN = 30.0
 _neural_failed_at = 0.0
+# edge_tts has its own timeouts, but a blocking getaddrinfo on a
+# disconnected machine is an OS call they cannot interrupt. The attempt
+# needs a deadline that does not depend on the network stack cooperating.
+_NEURAL_SYNTHESIS_DEADLINE = 8.0
 
 # Playback chunk size; smaller means the HUD reacts more finely.
 _BLOCK = 1024
@@ -514,8 +518,36 @@ class SpeechEngine:
 
         return data, samplerate
 
+    def _audio_for_bounded(self, text, timeout):
+        """Fetch audio, abandoning the attempt if the network stalls."""
+        outcome = {}
+        done = threading.Event()
+
+        def work():
+            try:
+                outcome["audio"] = self._audio_for(text)
+            except BaseException as error:
+                outcome["error"] = error
+            finally:
+                done.set()
+
+        threading.Thread(target=work, daemon=True).start()
+
+        if not done.wait(timeout):
+            raise TimeoutError(
+                f"synthesis did not finish within {timeout}s"
+            )
+
+        if "error" in outcome:
+            raise outcome["error"]
+
+        return outcome["audio"]
+
     def _speak_neural(self, text):
-        data, samplerate, boundaries = self._audio_for(text)
+        data, samplerate, boundaries = self._audio_for_bounded(
+            text,
+            _NEURAL_SYNTHESIS_DEADLINE,
+        )
 
         self._play_reactive(data, samplerate, boundaries)
 

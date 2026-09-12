@@ -150,6 +150,38 @@ def _check_join(failures):
         failures.append(f"joined reply was {actual!r}")
 
 
+def _check_speech_survives_a_hang(failures):
+    """A neural voice that hangs must be abandoned, not waited on."""
+    import time as clock
+
+    engine = speech.speech
+    speech._neural_failed_at = 0.0
+
+    def never_returns(*_args, **_kwargs):
+        clock.sleep(60)
+
+    with (
+        patch.object(engine, "_audio_for", side_effect=never_returns),
+        patch.object(engine, "_speak_fallback") as fallback_mock,
+    ):
+        started = clock.monotonic()
+        engine.speak("a phrase whose synthesis never completes")
+        elapsed = clock.monotonic() - started
+
+    if elapsed > speech._NEURAL_SYNTHESIS_DEADLINE + 3:
+        failures.append(
+            f"a hanging synthesis blocked speech for {elapsed:.0f}s"
+        )
+
+    if not fallback_mock.called:
+        failures.append("a hanging synthesis never reached the fallback")
+
+    if speech._speaking.is_set():
+        failures.append("the speaking flag was left set after a hang")
+
+    speech._neural_failed_at = 0.0
+
+
 def _check_speech_falls_back(failures):
     """A failed neural voice must fall back and release the speaking flag."""
     engine = speech.speech
@@ -239,6 +271,7 @@ def main():
     _check_join(failures)
     _check_speech_falls_back(failures)
     _check_synthesis_timeouts(failures)
+    _check_speech_survives_a_hang(failures)
 
     if failures:
         print("FAILED")
