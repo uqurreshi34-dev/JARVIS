@@ -4583,6 +4583,14 @@ def _compound_dispatch(command):
 
 def _compound_request(command):
     """Return a compound action when the planner finds a valid multi-step plan."""
+    # Neither lane below can produce a plan for a single-clause command, and
+    # _planner_context() probes Blender over HTTP with a two second timeout
+    # per bridge state file. Python evaluates that argument before calling
+    # planner.plan(), which then discards it, so the cheap gate has to come
+    # first or every local command pays for a Blender health check.
+    if not planner.should_plan(command):
+        return None
+
     plan = planner.local_plan(
         command,
         lambda text: handle_command(
@@ -4767,7 +4775,11 @@ def _handle_command(command, *, fast_only=False, probe=False):
                 detail=agent_task,
             )
 
-    else:
+    # The model is the fallback for speech the local path could not resolve.
+    # Bound to `result is None` rather than to `fast_only`, which had it
+    # firing on probe lookups that already had an answer and never firing
+    # on the voice path that actually needed it.
+    if result is None:
         candidates = _application_manager.candidates(command)
 
         try:
