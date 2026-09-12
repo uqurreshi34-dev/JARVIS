@@ -338,7 +338,7 @@ class ApplicationManager:
     def _title_matches(self, app, title):
         lowered = title.casefold()
 
-        return any(
+        return all(
             re.search(r"\b%s\b" % re.escape(token), lowered)
             for token in app.tokens
         )
@@ -363,7 +363,7 @@ class ApplicationManager:
 
         stem = os.path.splitext(process_name)[0]
 
-        if app.tokens & _significant_tokens(stem):
+        if app.tokens <= _significant_tokens(stem):
             return True
 
         target_executable = self._target_executable(app)
@@ -375,8 +375,11 @@ class ApplicationManager:
 
         signature = self._product_signature(executable)
 
-        if signature and any(token in signature for token in app.tokens):
-            return True
+        if signature:
+            signature_tokens = _significant_tokens(signature)
+
+            if app.tokens <= signature_tokens:
+                return True
 
         return False
 
