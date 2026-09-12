@@ -1,3 +1,3 @@
 """JARVIS application version used by packaging and update checks."""
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
