@@ -144,6 +144,22 @@ def _subject_matches(query_tokens, label):
     ):
         return 0.80 + min(0.08, 0.02 * len(label_tokens))
 
+    # Neither whole direction fits when a stored label is longer than the
+    # spoken name AND the utterance carries an attribute too: "bmw fuel
+    # economy" against "bmw 3 series" shares only the leading word. Match
+    # on a leading run of the label, which is how people shorten names.
+    leading = 0
+
+    for token in label_tokens:
+        if any(spoken.startswith(token) for spoken in query_tokens):
+            leading += 1
+            continue
+
+        break
+
+    if leading and len(label_tokens[0]) >= 3:
+        return 0.60 + 0.04 * leading
+
     return 0.0
 
 
