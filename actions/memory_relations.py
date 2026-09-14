@@ -136,11 +136,14 @@ def remove(from_entity=None, relation=None, to_entity=None):
                 kept.append(record)
                 continue
             matches = (
-                from_entity is None or _normalise(record.get("from")) == _normalise(from_entity)
+                from_entity is None or _normalise(
+                    record.get("from")) == _normalise(from_entity)
             ) and (
-                relation is None or _normalise(record.get("relation")) == _normalise(relation)
+                relation is None or _normalise(
+                    record.get("relation")) == _normalise(relation)
             ) and (
-                to_entity is None or _normalise(record.get("to")) == _normalise(to_entity)
+                to_entity is None or _normalise(
+                    record.get("to")) == _normalise(to_entity)
             )
             if matches:
                 removed = True
@@ -185,10 +188,12 @@ def related(entity, relation=None, direction="both"):
     result = []
     if direction in ("out", "both"):
         for record in outgoing(entity, relation=relation):
-            result.append({"entity": record.get("to"), "relation": record.get("relation"), "direction": "out", "record": record})
+            result.append({"entity": record.get("to"), "relation": record.get(
+                "relation"), "direction": "out", "record": record})
     if direction in ("in", "both"):
         for record in incoming(entity, relation=relation):
-            result.append({"entity": record.get("from"), "relation": record.get("relation"), "direction": "in", "record": record})
+            result.append({"entity": record.get("from"), "relation": record.get(
+                "relation"), "direction": "in", "record": record})
     return result
 
 
@@ -300,7 +305,8 @@ def _answer_relation_question(query):
     links = outgoing(memory_entity(key), relation=_RELATION)
     targets = []
     for record in links:
-        match = re.match(r"^collection:(.+?):(.*)$", _clean(record.get("to")), re.I)
+        match = re.match(r"^collection:(.+?):(.*)$",
+                         _clean(record.get("to")), re.I)
         if match:
             collection_key = _clean(match.group(1))
             item = _clean(match.group(2))
