@@ -58,13 +58,14 @@ from chart_panel import ChartPanel
 from image_choices_panel import ImageChoicesPanel
 from image_panel import ImagePanel
 import commands
-from actions import routing_guard
+from actions import routing_guard, memory_subjects
 
 from debug_output import install as install_debug_output
 
 install_debug_output()
 
 routing_guard.install(commands)
+memory_subjects.install_runtime(commands)
 blender_fidelity.install()
 
 # Set True to print how long each stage takes. Also enable the TIMING flags
