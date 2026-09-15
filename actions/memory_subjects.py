@@ -22,6 +22,7 @@ _lock = threading.RLock()
 _installed = False
 _original_answer = None
 _original_local_question = None
+_original_compound_request = None
 
 # Words that never identify a subject. Question words, pronouns, and the
 # handful of verbs and prepositions that carry a category question.
@@ -97,10 +98,16 @@ def _content_tokens(text):
     # Tokens under three characters carry no meaning and match everything:
     # "what's" yields "s", and the lexical scorer's prefix match then hits
     # series, saloon and systems alike.
+    #
+    # A short token that carries a digit is the exception. "a4", "x5" and
+    # the "3" in "3 series" are what tell one model from its sibling, and
+    # dropping them made "audi a4" and "audi a6" the same subject. The
+    # "s" from "what's" has no digit, so it is still dropped.
     return [
         token
         for token in _tokens(text)
-        if token not in _NOISE and len(token) >= 3
+        if token not in _NOISE
+        and (len(token) >= 3 or any(ch.isdigit() for ch in token))
     ]
 
 
@@ -730,6 +737,45 @@ def _stored_facts_for(label):
     return []
 
 
+def _resolve_with_facts(text, labels=None):
+    """The stored subject a piece of a comparison names, or None.
+
+    resolve() ranks collection items first, which is right for "what type
+    of thing is BMW" and wrong here. When "BMW" is a bare collection item
+    and the facts sit under "BMW 3 Series", resolve() picks the item, the
+    item has nothing to compare, and the whole question went to the model.
+    A comparison can only ever use subjects with facts, so only those are
+    considered.
+    """
+    query_tokens = _content_tokens(text)
+
+    if not query_tokens:
+        return None
+
+    if labels is None:
+        labels = list(_subject_facts())
+
+    candidates = []
+
+    for label in labels:
+        score = _subject_matches(query_tokens, label)
+
+        if score:
+            candidates.append((score, label))
+
+    if not candidates:
+        closest = _closest_label(
+            " ".join(query_tokens),
+            [(label, None) for label in labels],
+        )
+
+        return closest[1] if closest else None
+
+    candidates.sort(key=lambda item: (item[0], -len(item[1])), reverse=True)
+
+    return candidates[0][1]
+
+
 def _comparison_pair(text):
     """The two stored subjects an utterance asks to compare, or None."""
     tokens = _tokens(text)
@@ -737,22 +783,124 @@ def _comparison_pair(text):
     if not (_COMPARISON_CUES & set(tokens)):
         return None
 
+    labels = list(_subject_facts())
+
     for index, token in enumerate(tokens):
         if token not in _COMPARISON_JOINERS:
             continue
 
-        left = resolve(" ".join(tokens[:index]))
-        right = resolve(" ".join(tokens[index + 1:]))
+        left = _resolve_with_facts(" ".join(tokens[:index]), labels)
+        right = _resolve_with_facts(" ".join(tokens[index + 1:]), labels)
 
         if not left or not right:
             continue
 
-        if _identity(left[0]) == _identity(right[0]):
+        if _identity(left) == _identity(right):
             continue
 
-        return left[0], right[0]
+        return left, right
 
     return None
+
+
+# Most subjects a spoken comparison may name before it stops being
+# something to read aloud.
+_MAX_COMPARISON_SUBJECTS = 5
+
+
+def _comparison_segments(text):
+    """The utterance cut at commas and joining words, as text pieces.
+
+    Commas matter here and _tokens() discards them, so this keeps them as
+    their own marks. Pieces made only of question words and comparison
+    cues ("which is better", "compare") carry no subject and are dropped.
+    """
+    marks = re.findall(r"[a-z0-9]+|,", str(text or "").casefold())
+    segments = []
+    current = []
+
+    for mark in marks:
+        if mark == "," or mark in _COMPARISON_JOINERS:
+            if current:
+                segments.append(current)
+            current = []
+            continue
+
+        current.append(mark)
+
+    if current:
+        segments.append(current)
+
+    return [
+        " ".join(segment)
+        for segment in segments
+        if set(_content_tokens(" ".join(segment))) - _COMPARISON_CUES
+    ]
+
+
+def _comparison_subjects(text):
+    """Every stored subject a comparison names, or None.
+
+    Only claims comparisons of three or more. Two subjects stay with
+    _comparison_pair, which tries each joining word in turn and so copes
+    with a name that itself contains "and".
+
+    All or nothing: if any named piece does not resolve, or two pieces
+    resolve to the same subject, this declines. Quietly dropping one of
+    three cars would read like an answer while leaving out what was asked.
+    """
+    if not (_COMPARISON_CUES & set(_tokens(text))):
+        return None
+
+    segments = _comparison_segments(text)
+
+    if len(segments) < 3 or len(segments) > _MAX_COMPARISON_SUBJECTS:
+        return None
+
+    labels = list(_subject_facts())
+    subjects = []
+    seen = set()
+
+    for segment in segments:
+        label = _resolve_with_facts(segment, labels)
+
+        if not label:
+            return None
+
+        identity = _identity(label)
+
+        if identity in seen:
+            return None
+
+        seen.add(identity)
+        subjects.append(label)
+
+    return subjects
+
+
+def _names_several(text):
+    """True when an utterance names three or more things to compare."""
+    if not (_COMPARISON_CUES & set(_tokens(text))):
+        return False
+
+    return len(_comparison_segments(text)) >= 3
+
+
+def _compared_subjects(text):
+    """Every stored subject a comparison names, or None. No encoder."""
+    several = _comparison_subjects(text)
+
+    if several:
+        return several
+
+    # Three or more were named but not all are held. The pair finder would
+    # happily compare two of them and drop the rest, so decline instead.
+    if _names_several(text):
+        return None
+
+    pair = _comparison_pair(text)
+
+    return list(pair) if pair else None
 
 
 def _mutual_best(left, right):
@@ -795,36 +943,149 @@ def _mutual_best(left, right):
 
 
 def comparison_answer(text):
-    """Set two stored subjects side by side, or None.
+    """Set two to five stored subjects side by side, or None.
 
-    Both have to be held locally. If either is missing the question goes
-    to the model, which is the right outcome: half a comparison built
+    Every subject has to be held locally. If one is missing the question
+    goes to the model, which is the right outcome: half a comparison built
     from one side's facts and nothing for the other would read like an
     answer while being worthless.
+
+    Once every subject is held, this always answers. Facts are lined up by
+    meaning where the encoder can do it, and otherwise each subject's own
+    facts are read out in turn.
     """
-    pair = _comparison_pair(text)
+    subjects = _compared_subjects(text)
 
-    if not pair:
+    if not subjects:
         return None
 
-    first, second = pair
-    left = _stored_facts_for(first)
-    right = _stored_facts_for(second)
+    facts = [_stored_facts_for(subject) for subject in subjects]
 
-    if not left or not right:
+    if any(not stored for stored in facts):
         return None
 
-    matched = _mutual_best(left, right)
+    if len(subjects) == 2:
+        lines = [
+            f"{subjects[0]}: {one} {subjects[1]}: {two}"
+            for one, two in _mutual_best(facts[0], facts[1])
+        ]
+    else:
+        lines = _several_lines(subjects, facts)
 
-    if not matched:
-        return None
+    if not lines:
+        lines = _listed_lines(subjects, facts)
 
-    lines = [
-        f"{first}: {one} {second}: {two}"
-        for one, two in matched[:_MAX_COMPARISON_PAIRS]
+    names = ", ".join(subjects[:-1]) + f" and {subjects[-1]}"
+
+    return (
+        f"Comparing {names}, sir. "
+        + " ".join(lines[:_MAX_COMPARISON_PAIRS])
+    )
+
+
+def _listed_lines(subjects, facts):
+    """Each subject's own facts, when nothing could be lined up.
+
+    Only reached when the encoder is unavailable, or when three or more
+    subjects share no attribute at all. Still the stored facts, still no
+    model: the listener hears what is held and can compare it themselves.
+    """
+    per_subject = max(1, _MAX_COMPARISON_PAIRS - 1)
+
+    return [
+        f"{subject}: " + " ".join(stored[:per_subject])
+        for subject, stored in zip(subjects, facts)
     ]
 
-    return f"Comparing {first} and {second}, sir. " + " ".join(lines)
+
+def _several_lines(subjects, facts):
+    """Rows of matching facts across three or more subjects.
+
+    Mutual nearest neighbours only pair two lists, so the first subject's
+    facts lead: each one becomes a row, and every other subject contributes
+    its own closest fact to that row. A row is kept only when each of those
+    facts agrees in return that the lead fact is its closest, the same
+    agreement _mutual_best asks for. Rows that some subject cannot answer
+    are left out rather than padded, and an empty result falls back to
+    _listed_lines in comparison_answer.
+    """
+    lead = facts[0]
+    rows = None
+
+    for other in facts[1:]:
+        agreed = dict(_mutual_best(lead, other))
+
+        if rows is None:
+            rows = {fact: [agreed[fact]] for fact in lead if fact in agreed}
+        else:
+            rows = {
+                fact: matched + [agreed[fact]]
+                for fact, matched in rows.items()
+                if fact in agreed
+            }
+
+        if not rows:
+            return []
+
+    lines = []
+
+    for fact in lead:
+        if fact not in rows:
+            continue
+
+        parts = [f"{subjects[0]}: {fact}"] + [
+            f"{subject}: {matched}"
+            for subject, matched in zip(subjects[1:], rows[fact])
+        ]
+        lines.append(" ".join(parts))
+
+    return lines
+
+
+# Words that turn a comparison into a sequence of tasks. Any of these and
+# the compound planner keeps its say.
+_SEQUENCE_WORDS = frozenset({"then", "after", "afterwards", "followed"})
+
+# Conversational words that happen to open a command phrase somewhere in
+# the table, so they appear in _ACTION_WORDS, but do not make "show me the
+# difference between X and Y" a command.
+_CONVERSATIONAL = frozenset({"jarvis", "show", "know", "tell", "now"})
+
+
+def local_comparison(text):
+    """True when an utterance is a comparison answered from stored facts.
+
+    The compound planner is offered anything containing "and", and asks the
+    model whether it is a sequence of tasks. "compare X and Y" never is, so
+    that call was spent on every comparison before the local answer ran.
+
+    Conservative on purpose. Any sequencing word, or any leftover word that
+    opens a known command ("compare audi and open the bmw folder"), leaves
+    the planner in charge.
+    """
+    if _ACTION_WORDS is None:
+        return False
+
+    corrected = correct(text)
+
+    if _SEQUENCE_WORDS & set(_tokens(corrected)):
+        return False
+
+    subjects = _compared_subjects(corrected)
+
+    if not subjects:
+        return False
+
+    leftover = set(_content_tokens(corrected)) - _COMPARISON_CUES
+
+    for label in subjects:
+        leftover -= set(_tokens(label))
+
+    if (leftover - _CONVERSATIONAL) & _ACTION_WORDS:
+        return False
+
+    # Memoised, so the routing gate and the answer that follow reuse this.
+    return local_answer(text) is not None
 
 
 def attribute_answer(text):
@@ -906,6 +1167,8 @@ def local_answer(text):
         if _last_query == text:
             return _last_answer
 
+    asked = text
+
     try:
         # Repair the utterance once so every route below agrees on what
         # was actually said.
@@ -924,7 +1187,11 @@ def local_answer(text):
         answer = None
 
     with _lock:
-        _last_query = text
+        # The key is what was asked, not the corrected form. The next
+        # caller passes the same raw utterance, so storing the corrected
+        # text meant any misheard question missed the memo and ran the
+        # encoder twice.
+        _last_query = asked
         _last_answer = answer
 
     return answer
@@ -938,6 +1205,18 @@ def _wrapped_answer(question):
         return local
 
     return _original_answer(question)
+
+
+def _wrapped_compound_request(command):
+    """Keep a locally answerable comparison away from the planner."""
+    try:
+        if local_comparison(command):
+            print("[local] comparison, not a compound task (no planner call)")
+            return None
+    except Exception as error:
+        print(f"[JARVIS] comparison check failed: {error}")
+
+    return _original_compound_request(command)
 
 
 def _wrapped_local_question(command):
@@ -972,6 +1251,7 @@ def _wrapped_local_question(command):
 def install_runtime(commands):
     """Install local subject resolution once, after commands is loaded."""
     global _installed, _original_answer, _original_local_question
+    global _original_compound_request
 
     with _lock:
         if _installed:
@@ -1009,6 +1289,14 @@ def install_runtime(commands):
 
         _original_answer = commands.answer
         commands.answer = _wrapped_answer
+
+        # _handle_command looks this up by name at call time, so replacing
+        # the module attribute is enough.
+        original_compound = getattr(commands, "_compound_request", None)
+
+        if original_compound is not None:
+            _original_compound_request = original_compound
+            commands._compound_request = _wrapped_compound_request
 
         try:
             import llm

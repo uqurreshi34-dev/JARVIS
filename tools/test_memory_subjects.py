@@ -504,6 +504,215 @@ def _check_comparison(failures):
             )
 
 
+# Sibling models that differ only in a short designator, plus a third
+# car, for the comparisons below. Kept out of _FACTS so the other checks
+# see exactly what they always have.
+_CARS = {
+    "Audi A4": [
+        "Returns around 50 mpg combined.",
+        "Boot space is 460 litres.",
+    ],
+    "Audi A6": [
+        "Returns around 45 mpg combined.",
+        "Boot space is 520 litres.",
+    ],
+    "Ford Focus": [
+        "Returns around 60 mpg combined.",
+        "Boot space is 390 litres.",
+    ],
+}
+
+
+def _with_cars():
+    stack = _applied()
+    stack.enter_context(
+        patch.object(subject_store, "facts", return_value=_CARS)
+    )
+
+    return stack
+
+
+def _check_sibling_models(failures):
+    """"A4" and "A6" are different subjects, not two spellings of Audi."""
+    with _with_cars():
+        answer = memory_subjects.comparison_answer(
+            "compare audi a4 with audi a6"
+        ) or ""
+
+        if "Audi A4" not in answer or "Audi A6" not in answer:
+            failures.append(
+                f"sibling models were not compared locally: {answer!r}"
+            )
+
+        boot = memory_subjects.attribute_answer(
+            "what is the audi a6 boot space"
+        ) or ""
+
+        if "520" not in boot:
+            failures.append(
+                f"an A6 question was answered from another model: {boot!r}"
+            )
+
+
+def _check_several(failures):
+    """Three or more subjects compare only when every one is held."""
+    with _with_cars():
+        three = memory_subjects.comparison_answer(
+            "compare audi a4, ford focus and BMW 3 Series"
+        ) or ""
+
+        for label in ("Audi A4", "Ford Focus", "BMW 3 Series"):
+            if label not in three:
+                failures.append(
+                    f"a three-way comparison left out {label!r}: {three!r}"
+                )
+
+        # One of three is unknown. Comparing the other two would drop
+        # part of the question without saying so.
+        missing = memory_subjects.comparison_answer(
+            "compare audi a4, ford focus and tesla"
+        )
+
+        if missing is not None:
+            failures.append(
+                f"a comparison silently dropped an unknown subject: "
+                f"{missing!r}"
+            )
+
+        repeated = memory_subjects.comparison_answer(
+            "compare audi a4, audi a4 and ford focus"
+        )
+
+        if repeated is not None:
+            failures.append(
+                f"a subject was compared with itself: {repeated!r}"
+            )
+
+        # A comma before the subjects is phrasing, not a third subject.
+        phrased = memory_subjects.comparison_answer(
+            "which is better, the ford focus or the audi a6"
+        ) or ""
+
+        if "Ford Focus" not in phrased or "Audi A6" not in phrased:
+            failures.append(
+                f"a phrased two-way comparison was lost: {phrased!r}"
+            )
+
+
+def _check_all_held_never_reaches_model(failures):
+    """Once every subject is stored, nothing may send it to the model."""
+    # "Audi" and "Ford" are bare collection items with no facts, while the
+    # facts sit under the full model names. Resolving to the bare item used
+    # to leave nothing to compare.
+    shadowing = {"cars": ["Audi", "Ford"]}
+
+    with _with_cars() as stack:
+        stack.enter_context(patch.object(
+            memory_subjects.memory_collections,
+            "_ensure_data",
+            return_value={"collections": shadowing},
+        ))
+        stack.enter_context(patch.object(
+            memory_subjects.memory_collections,
+            "items",
+            side_effect=lambda key: shadowing.get(key, []),
+        ))
+
+        answer = memory_subjects.comparison_answer(
+            "compare audi with ford"
+        ) or ""
+
+        if "Audi A4" not in answer or "Ford Focus" not in answer:
+            failures.append(
+                "a collection item with no facts hid the stored subject: "
+                f"{answer!r}"
+            )
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("encoder unavailable")
+
+    for question in (
+        "compare audi a4 with ford focus",
+        "compare audi a4, audi a6 and ford focus",
+    ):
+        with _with_cars() as stack:
+            stack.enter_context(patch.object(
+                semantic_memory, "_encode", side_effect=unavailable,
+            ))
+            answer = memory_subjects.comparison_answer(question)
+
+        if not answer or "Ford Focus" not in answer:
+            failures.append(
+                f"without the encoder a fully stored comparison went to "
+                f"the model: {question!r} -> {answer!r}"
+            )
+
+
+def _check_planner_bypass(failures):
+    """A comparison skips the compound planner; a real sequence does not."""
+    saved_words = memory_subjects._ACTION_WORDS
+    saved_original = memory_subjects._original_compound_request
+    planned = []
+
+    memory_subjects._ACTION_WORDS = frozenset({"open", "folder", "show"})
+    memory_subjects._original_compound_request = (
+        lambda command: planned.append(command) or "planned"
+    )
+
+    local = (
+        "compare audi a4 and ford focus",
+        "compare audi a4, audi a6 and ford focus",
+        # "show" opens a command phrase, but not here.
+        "show me the difference between audi a4 and ford focus",
+    )
+    planner = (
+        "compare audi a4 and ford focus then open notepad",
+        "compare audi a4 and open the ford focus folder",
+        "compare audi a4 and ford focus and open notepad",
+        # Not every subject is held, so the planner still gets asked.
+        "compare audi a4 and tesla",
+    )
+
+    try:
+        with _with_cars():
+            for question in local:
+                memory_subjects._last_query = None
+                planned.clear()
+
+                if memory_subjects._wrapped_compound_request(question):
+                    failures.append(
+                        f"a local comparison was sent to the planner: "
+                        f"{question!r}"
+                    )
+
+            for question in planner:
+                memory_subjects._last_query = None
+                planned.clear()
+                memory_subjects._wrapped_compound_request(question)
+
+                if planned != [question]:
+                    failures.append(
+                        f"a compound command skipped the planner: "
+                        f"{question!r}"
+                    )
+
+            # Without the command table there is no way to tell a command
+            # from a comparison, so the planner keeps its say.
+            memory_subjects._ACTION_WORDS = None
+            planned.clear()
+            memory_subjects._wrapped_compound_request(local[0])
+
+            if planned != [local[0]]:
+                failures.append(
+                    "the planner was skipped with no command table loaded"
+                )
+    finally:
+        memory_subjects._ACTION_WORDS = saved_words
+        memory_subjects._original_compound_request = saved_original
+        memory_subjects._last_query = None
+        memory_subjects._last_answer = None
+
+
 def _check_declines(failures):
     """Anything it cannot answer well must fall through to the model."""
     cases = (
@@ -566,6 +775,26 @@ def _check_memoised(failures):
             "asking the same question twice ran the encoder twice"
         )
 
+    # A misheard question is corrected before answering. The memo has to
+    # be keyed on what was asked, or the router and the answer each pay.
+    calls.clear()
+    memory_subjects._last_query = None
+    memory_subjects._last_answer = None
+
+    with _applied(encode=counting_encode):
+        memory_subjects.local_answer("bmv fuel economy")
+        first = len(calls)
+
+        memory_subjects.local_answer("bmv fuel economy")
+        second = len(calls)
+
+    if not first:
+        failures.append("the misheard question never reached the encoder")
+    elif second != first:
+        failures.append(
+            "a corrected question missed the memo and ran the encoder twice"
+        )
+
 
 def _check_original_answer_still_runs(failures):
     """When nothing local matches, the existing answer path must be used."""
@@ -613,6 +842,10 @@ def main():
     _check_layers_independently(failures)
     _check_attribute(failures)
     _check_comparison(failures)
+    _check_sibling_models(failures)
+    _check_several(failures)
+    _check_all_held_never_reaches_model(failures)
+    _check_planner_bypass(failures)
     _check_declines(failures)
     _check_encoder_absent(failures)
     _check_memoised(failures)
