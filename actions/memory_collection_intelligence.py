@@ -1528,6 +1528,10 @@ def _take_pending(command):
     return entry["decision"]
 
 
+def _identity(value):
+    return "".join(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
+
+
 def _apply_collection_decision(decision, example, learn_schema=True):
     """Apply a collection mutation locally, returning True/False or None."""
     if not isinstance(decision, dict):
@@ -1546,6 +1550,23 @@ def _apply_collection_decision(decision, example, learn_schema=True):
         return None
 
     if operation not in {"add", "remove", "replace"} or not items:
+        return None
+
+    # A keyed fact and a collection must never own the same name. "my gym
+    # days are sunday, tuesday and thursday" matches a keyed pattern, so
+    # storing it as a collection creates a second copy in a different
+    # shape -- and then the two disagree about what the value is, and
+    # neither knows the other exists. Returning None hands it back to the
+    # ordinary remember path, which sets the keyed fact.
+    try:
+        keyed = memory.classify(example) if example else None
+    except Exception:
+        keyed = None
+
+    if keyed and _identity(keyed[0]) == _identity(key):
+        return None
+
+    if any(_identity(known) == _identity(key) for known in memory.KNOWN_KEYS):
         return None
 
     if any(safety.looks_like_instruction(item) for item in items):
