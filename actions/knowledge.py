@@ -312,7 +312,7 @@ def learn_subject(subject):
     if not isinstance(facts, list):
         return 0
 
-    stored = 0
+    cleaned = []
 
     for fact in facts[:6]:
         if not isinstance(fact, str):
@@ -323,10 +323,13 @@ def learn_subject(subject):
         if not fact or len(fact) > 180:
             continue
 
-        if memory.remember(f"{subject}: {fact}"):
-            stored += 1
+        cleaned.append(fact)
 
-    return stored
+    # Researched facts go to subjects.txt, not memory.txt. One write for
+    # the batch rather than one per fact.
+    from actions import subject_store
+
+    return subject_store.add_many(subject, cleaned)
 
 
 _COMMIT_PROMPT = """

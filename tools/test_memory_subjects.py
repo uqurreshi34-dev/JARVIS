@@ -5,8 +5,11 @@ with fixtures so the result does not depend on what happens to be stored on
 this machine today.
 """
 
+import re
 import sys
 from pathlib import Path
+
+import numpy as np
 from unittest.mock import patch
 
 
@@ -55,50 +58,64 @@ _COLLECTIONS = {
 }
 
 
-def _fake_rank(attribute, documents):
-    """Stand in for the ONNX encoder with predictable scores.
+_TOPICS = {
+    "mpg": ("mpg", ("fuel", "economy", "mpg", "diesel")),
+    "boot": ("boot", ("boot", "space", "litres")),
+    "seats": ("seat", ("seat", "seats", "passengers", "adults")),
+    "herbert": ("herbert", ("wrote", "author", "published")),
+    "hugo": ("hugo", ("award", "awards", "won", "prize")),
+}
 
-    The real encoder links "fuel economy" to "55 mpg". This fakes that
-    relationship so the test asserts the module's behaviour rather than
-    the quality of the embedding model.
+
+def _topic_of(text):
+    """Which stored subject-attribute a question or a fact is about."""
+    lowered = str(text or "").casefold()
+    words = set(re.findall(r"[a-z]+", lowered))
+
+    for name, (marker, cues) in _TOPICS.items():
+        if marker in lowered or words & set(cues):
+            return name
+
+    return None
+
+
+def _fake_encode(texts):
+    """Stand in for the ONNX encoder with vectors of known geometry.
+
+    _rank_semantically calls semantic_memory._encode directly, so THAT is
+    the seam a test has to replace. Patching _semantic_rank -- which the
+    module stopped calling -- left the whole semantic path untested while
+    the suite still looked like it covered it.
+
+    Two texts about the same attribute score 1.0 here, two about
+    different attributes score 0.15, and anything nothing is stored about
+    scores 0.0. Those are deliberately far from _MIN_ATTRIBUTE_SCORE:
+    this asserts the module's plumbing, while the real calibration is
+    what tools/probe_attribute_scores.py measures.
     """
-    topics = {
-        "mpg": ("fuel", "economy", "mpg", "diesel"),
-        "boot": ("boot", "space", "litres"),
-        "seats": ("seat", "seats", "passengers", "adults"),
-        "herbert": ("wrote", "author", "published", "who"),
-        "hugo": ("award", "awards", "won", "prize"),
-    }
+    order = list(_TOPICS)
+    width = len(order) + 2
+    rows = []
 
-    words = set(attribute.casefold().split())
-    scored = []
+    for text in texts:
+        topic = _topic_of(text)
+        vector = np.zeros(width, dtype=np.float32)
 
-    for index, (_key, value, _display) in enumerate(documents):
-        lowered = value.casefold()
+        if topic is None:
+            # Orthogonal to every stored fact: nothing answers this.
+            vector[-1] = 1.0
+        else:
+            vector[order.index(topic)] = 1.0
+            # A shared direction, so unrelated pairs score low but not
+            # zero, the way a real encoder behaves.
+            vector[-2] = 0.42
 
-        # A real encoder scores an unrelated fact weakly, not at zero. Using
-        # zero here would let every unrelated fact be filtered out by
-        # semantic_memory's own 0.38 floor, so the confidence check above it
-        # would never be exercised and could be deleted unnoticed.
-        score = 0.45
+        rows.append(vector / np.linalg.norm(vector))
 
-        for marker, cues in topics.items():
-            if marker in lowered and words & set(cues):
-                score = 0.90
-                break
-
-        scored.append((index, score))
-
-    scored.sort(key=lambda item: item[1], reverse=True)
-
-    return [
-        (index, score)
-        for index, score in scored
-        if score >= 0.38
-    ]
+    return np.vstack(rows)
 
 
-def _fixtures(rank=_fake_rank):
+def _fixtures(encode=_fake_encode):
     """Patch memory, collections and the encoder for one test."""
     memory_subjects._last_query = None
     memory_subjects._last_answer = None
@@ -121,8 +138,8 @@ def _fixtures(rank=_fake_rank):
         ),
         patch.object(
             semantic_memory,
-            "_semantic_rank",
-            side_effect=rank,
+            "_encode",
+            side_effect=encode,
         ),
         patch.object(
             memory_history,
@@ -132,8 +149,8 @@ def _fixtures(rank=_fake_rank):
     )
 
 
-def _answers(question, rank=_fake_rank):
-    facts, data, items, ranker, history = _fixtures(rank)
+def _answers(question, encode=_fake_encode):
+    facts, data, items, ranker, history = _fixtures(encode)
 
     with facts, data, items, ranker, history:
         return memory_subjects.local_answer(question)
@@ -447,7 +464,7 @@ def _check_encoder_absent(failures):
         raise RuntimeError("encoder unavailable")
 
     try:
-        category = _answers("what type of thing is BMW", rank=unavailable)
+        category = _answers("what type of thing is BMW", encode=unavailable)
     except Exception as error:
         failures.append(f"a missing encoder raised: {error}")
         return
@@ -463,11 +480,11 @@ def _check_memoised(failures):
     """The routing gate and the answer must not each do the work."""
     calls = []
 
-    def counting_rank(attribute, documents):
-        calls.append(attribute)
-        return _fake_rank(attribute, documents)
+    def counting_encode(texts):
+        calls.append(tuple(texts))
+        return _fake_encode(texts)
 
-    facts, data, items, ranker, history = _fixtures(rank=counting_rank)
+    facts, data, items, ranker, history = _fixtures(encode=counting_encode)
 
     with facts, data, items, ranker, history:
         memory_subjects.local_answer("BMW fuel economy")

@@ -243,6 +243,13 @@ def _write(groups):
 
     _invalidate()
 
+    # memory.json is the timestamped mirror of everything JARVIS knows, so
+    # it follows subjects.txt the same way it follows memory.txt.
+    try:
+        sync_to_json()
+    except Exception as error:
+        print(f"[JARVIS] could not mirror subjects to memory.json: {error}")
+
     return True
 
 
@@ -356,6 +363,101 @@ def add_many(subject, new_facts, source="learned"):
             return 0
 
         return stored_count if _write(_trim(groups)) else 0
+
+
+def sync_to_json(reason="moved to subjects.txt"):
+    """Mirror subjects.txt into memory.json, keeping each fact's history.
+
+    memory.json is the timestamped mirror of what JARVIS knows. Moving a
+    fact out of memory.txt must not mean losing when it was learned, so
+    its record is re-sourced and kept rather than dropped: same id, same
+    created_at, same kind. A record matches by its "subject: fact" text,
+    which is exactly the line that used to sit in memory.txt.
+
+    Returns how many subject records the mirror now holds, or None when
+    memory.json is unavailable.
+    """
+    try:
+        from actions import memory_history
+    except Exception as error:
+        print(f"[JARVIS] could not reach memory.json: {error}")
+        return None
+
+    with _lock:
+        data = memory_history._load()
+
+        if data is None:
+            # No memory.json yet: a fresh install, or subjects learned
+            # before memory_history installed. Start the mirror rather
+            # than silently skipping it.
+            data = memory_history._blank()
+
+        records = data.get("memories")
+
+        if not isinstance(records, list):
+            return None
+
+        wanted = {}
+
+        for group in _groups().values():
+            for fact, _source in group["facts"]:
+                wanted[f"{group['label']}: {fact}".casefold()] = (
+                    f"{group['label']}: {fact}"
+                )
+
+        kept = []
+        seen = set()
+        changed = False
+
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+
+            identity = str(record.get("value") or "").strip().casefold()
+
+            # A record that mirrors memory.txt is none of our business.
+            if not memory_history._is_subject_record(record):
+                if identity not in wanted:
+                    kept.append(record)
+                    continue
+
+                # This is one of the lines that just moved. Keep the
+                # record and its timestamps; only its home has changed.
+                record["source"] = f"{memory_history._SUBJECT_SOURCE}:sync"
+                record["updated_at"] = memory_history._now()
+                changed = True
+
+            if identity in wanted and identity not in seen:
+                seen.add(identity)
+                kept.append(record)
+                continue
+
+            # Sourced from subjects.txt but no longer in it: the line was
+            # deleted by hand, which is the documented way to forget one.
+            changed = True
+
+        for identity, display in wanted.items():
+            if identity in seen:
+                continue
+
+            kept.append(
+                memory_history._record(
+                    None,
+                    display,
+                    source=f"{memory_history._SUBJECT_SOURCE}:sync",
+                    kind="fact",
+                )
+            )
+            changed = True
+
+        if changed:
+            data["memories"] = kept
+            memory_history._save(data)
+
+        return sum(
+            1 for record in kept
+            if memory_history._is_subject_record(record)
+        )
 
 
 def facts():
@@ -495,5 +597,18 @@ def migrate_from_memory():
         memory._write(
             [line for index, line in enumerate(lines) if index not in doomed]
         )
+
+        # Order matters. sync_to_json() first, so the records for the lines
+        # just moved are re-sourced to subjects.txt and keep their ids and
+        # created_at dates. Only then does memory.txt's own sync run, and
+        # it now leaves subject records alone.
+        try:
+            from actions import memory_history
+
+            sync_to_json()
+            memory_history._sync(memory, reason="moved to subjects.txt")
+
+        except Exception as error:
+            print(f"[JARVIS] could not refresh memory.json: {error}")
 
         return len(moving), moved

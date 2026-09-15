@@ -73,9 +73,16 @@ _MIN_SUBJECT_TOKENS = 1
 
 # An attribute answer replaces one the language model would have given, so
 # a weak match must decline rather than recite the nearest stored fact.
-# semantic_memory's own floor of 0.38 is a retrieval threshold, not enough
-# confidence to answer instead of the model.
-_MIN_ATTRIBUTE_SCORE = 0.55
+#
+# Measured, not guessed. tools/probe_attribute_scores.py encoded eleven
+# questions against real stored facts: the weakest question that SHOULD be
+# answered scored 0.293, the strongest that should be DECLINED scored
+# 0.245. This sits between them. Note how wrong the old numbers were --
+# 0.55 was above every correct answer, and semantic_memory's shared 0.38
+# retrieval floor was above both groups.
+#
+# The band is only 0.048 wide, so re-run the probe after adding subjects.
+_MIN_ATTRIBUTE_SCORE = 0.27
 
 
 def _tokens(text):
@@ -117,6 +124,20 @@ def _subject_facts():
     about one attribute returns every fact about it.
     """
     grouped = {}
+    index = {}
+
+    # subjects.txt is where learned facts live now. memory.txt is still
+    # read afterwards, because a fact typed there by hand should work the
+    # same way, and because this has to keep answering during the move.
+    try:
+        from actions import subject_store
+
+        for label, stored in subject_store.facts().items():
+            grouped[label] = list(stored)
+            index[_identity(label)] = label
+
+    except Exception:
+        pass
 
     try:
         entries = memory.facts()
@@ -138,7 +159,11 @@ def _subject_facts():
         if not subject or not fact:
             continue
 
-        grouped.setdefault(subject, []).append(fact)
+        # The same subject under a different spelling is the same subject.
+        label = index.setdefault(_identity(subject), subject)
+
+        if fact not in grouped.setdefault(label, []):
+            grouped[label].append(fact)
 
     return grouped
 
@@ -727,6 +752,22 @@ def install_runtime(commands):
     with _lock:
         if _installed:
             return
+
+        # One-time move of learned facts out of memory.txt. Does nothing
+        # once it has run, and nothing at all on a fresh install.
+        try:
+            from actions import subject_store
+
+            subjects, moved = subject_store.migrate_from_memory()
+
+            if subjects:
+                print(
+                    f"[JARVIS] moved {moved} learned fact(s) about "
+                    f"{subjects} subject(s) into subjects.txt"
+                )
+
+        except Exception as error:
+            print(f"[JARVIS] subject migration skipped: {error}")
 
         _original_answer = commands.answer
         commands.answer = _wrapped_answer

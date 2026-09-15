@@ -255,6 +255,125 @@ def _check_batch(failures):
             )
 
 
+def _json_records():
+    """Subject-sourced records currently in memory.json."""
+    from actions import memory_history
+
+    data = memory_history._load() or {"memories": []}
+
+    return [
+        record
+        for record in data.get("memories", [])
+        if memory_history._is_subject_record(record)
+    ]
+
+
+def _check_json_mirror(failures):
+    """memory.json follows subjects.txt the way it follows memory.txt."""
+    holder, root = _sandbox()
+
+    with holder, root:
+        subject_store.add_many("Dune", ["Published in 1965.", "Won the Hugo."])
+
+        mirrored = _json_records()
+
+        if len(mirrored) != 2:
+            failures.append(
+                f"memory.json holds {len(mirrored)} subject records, "
+                f"expected 2"
+            )
+
+        if not all(record.get("created_at") for record in mirrored):
+            failures.append("a mirrored record has no created_at")
+
+        # Deleting a line by hand is the documented way to forget a fact,
+        # and the mirror has to follow it.
+        path = os.path.join(subject_store.files.root(), subject_store.FILENAME)
+
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("Dune: Published in 1965. [learned]\n")
+
+        subject_store._invalidate()
+        subject_store.sync_to_json()
+
+        if len(_json_records()) != 1:
+            failures.append(
+                f"a hand-deleted fact was left in memory.json: "
+                f"{len(_json_records())} records"
+            )
+
+        subject_store.forget("Dune")
+
+        if _json_records():
+            failures.append("forgetting a subject left records in memory.json")
+
+
+def _check_migration_keeps_timestamps(failures):
+    """A fact that moves keeps its id and the date it was learned.
+
+    This is the whole point of the mirror. Without it, moving a fact out
+    of memory.txt would quietly reset when JARVIS learned it.
+    """
+    import json
+
+    from actions import memory_history
+
+    holder, root = _sandbox()
+
+    with holder, root:
+        _memory_lines(
+            "name: Umer",
+            "Dune: Frank Herbert published it in 1965.",
+            "Dune: It won both the Hugo and the Nebula.",
+        )
+
+        # Seed the mirror the way a real session would have.
+        memory_history._sync(memory, reason="sync")
+
+        before = {
+            record["value"]: (record["id"], record["created_at"])
+            for record in (memory_history._load() or {}).get("memories", [])
+            if record.get("key") is None
+        }
+
+        if len(before) != 2:
+            failures.append(
+                f"the mirror was not seeded: {len(before)} loose records"
+            )
+            return
+
+        subject_store.migrate_from_memory()
+
+        after = _json_records()
+
+        if len(after) != 2:
+            failures.append(
+                f"migration left {len(after)} subject records, expected 2"
+            )
+
+        for record in after:
+            original = before.get(record.get("value"))
+
+            if not original:
+                failures.append(
+                    f"a migrated record lost its text: "
+                    f"{record.get('value')!r}"
+                )
+                continue
+
+            if record.get("id") != original[0]:
+                failures.append(f"id changed for {record['value'][:40]!r}")
+
+            if record.get("created_at") != original[1]:
+                failures.append(
+                    f"created_at changed for {record['value'][:40]!r}"
+                )
+
+        # The keyed fact is still memory.txt's, not the store's.
+        if memory.get("name") != "Umer":
+            failures.append("migration disturbed a keyed fact")
+
+
 def _check_forget(failures):
     """Forgetting a subject removes all of it and nothing else."""
     holder, root = _sandbox()
@@ -413,6 +532,8 @@ def main():
     _check_hand_edit_is_seen(failures)
     _check_eviction_is_whole_subjects(failures)
     _check_batch(failures)
+    _check_json_mirror(failures)
+    _check_migration_keeps_timestamps(failures)
     _check_forget(failures)
     _check_migration(failures)
     _check_scale_leaves_memory_alone(failures)
