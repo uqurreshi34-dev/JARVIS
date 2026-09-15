@@ -87,7 +87,14 @@ def _identity(text):
 
 
 def _content_tokens(text):
-    return [token for token in _tokens(text) if token not in _NOISE]
+    # Tokens under three characters carry no meaning and match everything:
+    # "what's" yields "s", and the lexical scorer's prefix match then hits
+    # series, saloon and systems alike.
+    return [
+        token
+        for token in _tokens(text)
+        if token not in _NOISE and len(token) >= 3
+    ]
 
 
 def _collections():
@@ -554,26 +561,30 @@ def _rank_semantically(attribute, facts):
     try:
         from actions import semantic_memory
 
-        documents = [(None, fact, fact) for fact in facts]
-        matches = semantic_memory._semantic_rank(attribute, documents)
+        vectors = semantic_memory._encode([attribute] + list(facts))
+
+        if vectors is None or len(vectors) < 2:
+            return None
+
+        query_vector = vectors[0]
+        scores = [float(vector @ query_vector) for vector in vectors[1:]]
     except Exception:
         return None
 
-    if not matches:
-        return None
+    best = max(scores)
 
-    best = matches[0][1]
-
+    # Relative, not absolute. A short query against a long sentence scores
+    # low in absolute terms even when it is the right sentence -- which is
+    # why the shared 0.38 retrieval floor rejected every BMW fact.
     if best < _MIN_ATTRIBUTE_SCORE:
-        # Nothing stored really answers this. Let the model have it.
         return None
 
-    # Keep only what matches the attribute nearly as well as the best, so
-    # asking about fuel economy does not recite the boot space too.
+    ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+
     chosen = [
-        documents[index][1]
-        for index, score in matches
-        if score >= best - 0.06
+        facts[i]
+        for i in ranked
+        if scores[i] >= best - 0.06
     ][:2]
 
     return chosen or None
