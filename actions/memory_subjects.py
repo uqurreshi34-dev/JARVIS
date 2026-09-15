@@ -1,9 +1,10 @@
 """Resolve spoken subjects against what JARVIS already knows, locally.
 
-Two questions are answered here without reaching a language model:
+Three questions are answered here without reaching a language model:
 
     "what type of thing is BMW"   -> the collection it belongs to
     "BMW fuel economy"            -> only the matching stored fact
+    "what were my old gym days"   -> the value archived when it changed
 
 Neither is driven by phrasing. The gate is whether the utterance names a
 subject JARVIS actually holds, in a collection or as stored facts, so no
@@ -37,6 +38,19 @@ _NOISE = frozenset({
     "not", "so", "some", "than", "that", "the", "their", "them", "then",
     "there", "these", "they", "this", "those", "us", "we", "will",
 })
+
+# Words that mark a question as being about a past value. Ordinary English,
+# not domain knowledge, and deliberately NOT in _NOISE: they have to survive
+# tokenising long enough to be detected, then are stripped before the key is
+# resolved.
+_HISTORICAL = frozenset({
+    "old", "older", "oldest", "previous", "previously", "prior", "former",
+    "formerly", "earlier", "before", "past", "used",
+})
+
+# A history answer replaces a keyed fact, so only a confident key match
+# should claim the question.
+_MIN_HISTORY_SCORE = 0.80
 
 # A subject needs at least this share of its tokens present for a partial
 # match such as "BMW" against "BMW 3 Series" to count.
@@ -105,6 +119,95 @@ def _subject_facts():
         grouped.setdefault(subject, []).append(fact)
 
     return grouped
+
+
+def _keyed_labels():
+    """Memory keys, which are the only things that carry a history.
+
+    Collections keep no archive: their items have created_at and updated_at
+    but nothing is retained when a value is replaced. So a question about a
+    past value can only ever be answered from the keyed fact's archive,
+    even when a collection happens to share the name.
+    """
+    labels = []
+
+    try:
+        for key, _value in memory.facts():
+            if key:
+                labels.append(str(key))
+    except Exception:
+        return []
+
+    return labels
+
+
+def _plural_verb(value):
+    """"were" for a list, "was" for a single value."""
+    lowered = str(value or "").casefold()
+
+    if "," in lowered or re.search(r"\band\b", lowered):
+        return "were"
+
+    return "was"
+
+
+def history_answer(text):
+    """Answer "what were my old X" from the archive, or None."""
+    spoken = _tokens(text)
+
+    if not _HISTORICAL.intersection(spoken):
+        return None
+
+    query = [
+        token
+        for token in _content_tokens(text)
+        if token not in _HISTORICAL
+    ]
+
+    if not query:
+        return None
+
+    best = None
+
+    for label in _keyed_labels():
+        score = _subject_matches(query, label)
+
+        if score >= _MIN_HISTORY_SCORE and (best is None or score > best[0]):
+            best = (score, label)
+
+    if not best:
+        return None
+
+    _score, label = best
+
+    try:
+        from actions import memory_history
+
+        data = memory_history._load() or {}
+    except Exception:
+        return None
+
+    archived = [
+        record
+        for record in data.get("history", [])
+        if isinstance(record, dict)
+        and _identity(record.get("key")) == _identity(label)
+        and str(record.get("value") or "").strip()
+    ]
+
+    if not archived:
+        return None
+
+    # One step back only. "the one before that" is not how anyone speaks,
+    # and guessing at ordinals is worse than letting the model try.
+    previous = max(
+        archived,
+        key=lambda record: str(record.get("archived_at") or ""),
+    )
+
+    value = str(previous.get("value")).strip()
+
+    return f"Your previous {label} {_plural_verb(value)} {value}, sir."
 
 
 def _subject_matches(query_tokens, label):
@@ -377,7 +480,11 @@ def local_answer(text):
             return _last_answer
 
     try:
-        answer = attribute_answer(text) or category_answer(text)
+        answer = (
+            history_answer(text)
+            or attribute_answer(text)
+            or category_answer(text)
+        )
     except Exception as error:
         print(f"[JARVIS] local subject answer failed: {error}")
         answer = None

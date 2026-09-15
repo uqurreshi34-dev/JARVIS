@@ -16,13 +16,17 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-from actions import memory_subjects, semantic_memory  # noqa: E402
+from actions import memory_history, memory_subjects, semantic_memory  # noqa: E402
 
 
 # Two unrelated domains on purpose. Nothing in memory_subjects.py should
 # care which one it is looking at.
 _FACTS = [
     ("name", "Umer"),
+    # Keyed facts are the only things that carry a history, so the archive
+    # cases below need their keys to exist here.
+    ("gym days", "sunday, tuesday and thursday"),
+    ("default project", "c sharp"),
     # Deliberately a multi-word subject label, because learn_subject stores
     # facts under the full name while people say the short one: "bmw fuel
     # economy" has to reach "bmw 3 series".
@@ -31,6 +35,18 @@ _FACTS = [
     (None, "BMW 3 Series: Seats five adults on long motorway journeys."),
     (None, "Dune: Frank Herbert published it in 1965."),
     (None, "Dune: It won both the Hugo and the Nebula awards."),
+]
+
+_HISTORY = [
+    {"key": "gym days", "value": "monday",
+     "archived_at": "2026-08-31T17:47:47+00:00"},
+    {"key": "gym days", "value": "tuesday, thursday and sunday",
+     "archived_at": "2026-09-01T10:56:48+00:00"},
+    # The most recently archived one is the answer, regardless of order.
+    {"key": "gym days", "value": "on monday, wednesday and friday",
+     "archived_at": "2026-09-14T22:18:59+00:00"},
+    {"key": "default project", "value": "c-shop",
+     "archived_at": "2026-09-02T09:00:00+00:00"},
 ]
 
 _COLLECTIONS = {
@@ -108,13 +124,18 @@ def _fixtures(rank=_fake_rank):
             "_semantic_rank",
             side_effect=rank,
         ),
+        patch.object(
+            memory_history,
+            "_load",
+            return_value={"history": _HISTORY},
+        ),
     )
 
 
 def _answers(question, rank=_fake_rank):
-    facts, data, items, ranker = _fixtures(rank)
+    facts, data, items, ranker, history = _fixtures(rank)
 
-    with facts, data, items, ranker:
+    with facts, data, items, ranker, history:
         return memory_subjects.local_answer(question)
 
 
@@ -175,6 +196,42 @@ def _check_attribute(failures):
                 )
 
 
+def _check_history(failures):
+    """A past-value question is answered from the archive, one step back."""
+    cases = (
+        ("what were my old gym days", "monday, wednesday and friday"),
+        ("what was my previous gym days", "monday, wednesday and friday"),
+        ("what was my previous default project", "c-shop"),
+    )
+
+    for question, expected in cases:
+        answer = _answers(question) or ""
+
+        if expected not in answer:
+            failures.append(
+                f"{question!r} answered {answer!r}, expected {expected!r}"
+            )
+
+        if "previous" not in answer.casefold():
+            failures.append(
+                f"{question!r} did not make clear the value is a past one"
+            )
+
+    # The current question must NOT be answered from the archive.
+    current = _answers("what are my gym days")
+
+    if current and "monday, wednesday and friday" in current:
+        failures.append(
+            "a question about the current value was answered from history"
+        )
+
+    # A key with no archive declines rather than inventing one.
+    if _answers("what was my old name") is not None:
+        failures.append(
+            "a key with no archived value still produced a history answer"
+        )
+
+
 def _check_declines(failures):
     """Anything it cannot answer well must fall through to the model."""
     cases = (
@@ -225,9 +282,9 @@ def _check_memoised(failures):
         calls.append(attribute)
         return _fake_rank(attribute, documents)
 
-    facts, data, items, ranker = _fixtures(rank=counting_rank)
+    facts, data, items, ranker, history = _fixtures(rank=counting_rank)
 
-    with facts, data, items, ranker:
+    with facts, data, items, ranker, history:
         memory_subjects.local_answer("BMW fuel economy")
         first = len(calls)
 
@@ -253,9 +310,9 @@ def _check_original_answer_still_runs(failures):
 
     memory_subjects._original_answer = fake.answer
 
-    facts, data, items, ranker = _fixtures()
+    facts, data, items, ranker, history = _fixtures()
 
-    with facts, data, items, ranker:
+    with facts, data, items, ranker, history:
         passed_through = memory_subjects._wrapped_answer(
             "what is the capital of France"
         )
@@ -282,6 +339,7 @@ def main():
     failures = []
 
     _check_category(failures)
+    _check_history(failures)
     _check_attribute(failures)
     _check_declines(failures)
     _check_encoder_absent(failures)
