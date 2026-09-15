@@ -704,6 +704,129 @@ def _rank_semantically(attribute, facts):
     return chosen or None
 
 
+# Words that ask for two things to be weighed against each other, and the
+# words that join the two. Language, not data: nothing here names a
+# subject, so it stays true whatever ends up in subjects.txt.
+_COMPARISON_CUES = frozenset({
+    "compare", "compared", "comparison", "difference", "differences",
+    "differ", "versus", "vs", "better", "worse", "between",
+})
+
+_COMPARISON_JOINERS = ("versus", "vs", "against", "with", "and", "or", "to")
+
+# How many paired facts a spoken comparison should carry. Beyond this it
+# stops being an answer and becomes a recital.
+_MAX_COMPARISON_PAIRS = 3
+
+
+def _stored_facts_for(label):
+    """The stored facts for a resolved label, matched on identity."""
+    identity = _identity(label)
+
+    for subject, facts in _subject_facts().items():
+        if _identity(subject) == identity:
+            return facts
+
+    return []
+
+
+def _comparison_pair(text):
+    """The two stored subjects an utterance asks to compare, or None."""
+    tokens = _tokens(text)
+
+    if not (_COMPARISON_CUES & set(tokens)):
+        return None
+
+    for index, token in enumerate(tokens):
+        if token not in _COMPARISON_JOINERS:
+            continue
+
+        left = resolve(" ".join(tokens[:index]))
+        right = resolve(" ".join(tokens[index + 1:]))
+
+        if not left or not right:
+            continue
+
+        if _identity(left[0]) == _identity(right[0]):
+            continue
+
+        return left[0], right[0]
+
+    return None
+
+
+def _mutual_best(left, right):
+    """Pair each fact with its counterpart, where both sides agree.
+
+    Mutual nearest neighbours: a is paired with b only when b is a's
+    closest match and a is b's closest. That needs no threshold, which
+    matters because a threshold here could not be measured the way
+    _MIN_ATTRIBUTE_SCORE was -- there is no set of right answers to
+    probe against, only pairs that either correspond or do not.
+
+    A fact with no counterpart is simply left out. Boot space against
+    boot space is a comparison; boot space against founding date is not.
+    """
+    try:
+        import numpy as np
+
+        from actions import semantic_memory
+
+        vectors = semantic_memory._encode(list(left) + list(right))
+    except Exception:
+        return []
+
+    if vectors is None or len(vectors) != len(left) + len(right):
+        return []
+
+    scores = vectors[:len(left)] @ vectors[len(left):].T
+    pairs = []
+
+    for row in range(len(left)):
+        column = int(np.argmax(scores[row]))
+
+        if int(np.argmax(scores[:, column])) == row:
+            pairs.append(
+                (float(scores[row][column]), left[row], right[column]))
+
+    pairs.sort(key=lambda item: item[0], reverse=True)
+
+    return [(first, second) for _score, first, second in pairs]
+
+
+def comparison_answer(text):
+    """Set two stored subjects side by side, or None.
+
+    Both have to be held locally. If either is missing the question goes
+    to the model, which is the right outcome: half a comparison built
+    from one side's facts and nothing for the other would read like an
+    answer while being worthless.
+    """
+    pair = _comparison_pair(text)
+
+    if not pair:
+        return None
+
+    first, second = pair
+    left = _stored_facts_for(first)
+    right = _stored_facts_for(second)
+
+    if not left or not right:
+        return None
+
+    matched = _mutual_best(left, right)
+
+    if not matched:
+        return None
+
+    lines = [
+        f"{first}: {one} {second}: {two}"
+        for one, two in matched[:_MAX_COMPARISON_PAIRS]
+    ]
+
+    return f"Comparing {first} and {second}, sir. " + " ".join(lines)
+
+
 def attribute_answer(text):
     """Answer a question about one attribute of a known subject, or None."""
     resolved = resolve(text)
@@ -768,7 +891,7 @@ _last_answer = None
 
 
 def local_answer(text):
-    """The full local route: attribute first, then category.
+    """The full local route: history, comparison, attribute, category.
 
     Memoised on the last utterance because the routing gate and the answer
     itself both ask, and each call reads every collection and runs the
@@ -790,6 +913,9 @@ def local_answer(text):
 
         answer = (
             history_answer(text)
+            # Before attribute_answer, which would resolve one of the two
+            # subjects and answer about it alone.
+            or comparison_answer(text)
             or attribute_answer(text)
             or category_answer(text)
         )

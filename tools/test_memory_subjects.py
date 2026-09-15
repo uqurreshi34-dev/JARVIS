@@ -460,6 +460,50 @@ def _check_layers_independently(failures):
         )
 
 
+def _check_comparison(failures):
+    """Two stored subjects compare locally; a missing one goes to the model."""
+    with _applied():
+        both = memory_subjects.comparison_answer(
+            "compare BMW 3 Series with Dune")
+
+        if not both:
+            failures.append(
+                "two subjects with stored facts were not compared locally"
+            )
+        else:
+            for label in ("BMW 3 Series", "Dune"):
+                if label not in both:
+                    failures.append(
+                        f"the comparison did not mention {label!r}: {both!r}"
+                    )
+
+        # Neuromancer is in a collection but has no stored facts, so half a
+        # comparison is all that could be built. That must go to the model.
+        half = memory_subjects.comparison_answer(
+            "compare BMW 3 Series with Neuromancer"
+        )
+
+        if half is not None:
+            failures.append(
+                f"a comparison was built with one side missing: {half!r}"
+            )
+
+        same = memory_subjects.comparison_answer(
+            "compare Dune with Dune"
+        )
+
+        if same is not None:
+            failures.append(f"a subject was compared with itself: {same!r}")
+
+        # Not a comparison at all.
+        plain = memory_subjects.comparison_answer("BMW fuel economy")
+
+        if plain is not None:
+            failures.append(
+                f"an ordinary question was treated as a comparison: {plain!r}"
+            )
+
+
 def _check_declines(failures):
     """Anything it cannot answer well must fall through to the model."""
     cases = (
@@ -568,6 +612,7 @@ def main():
     _check_correction_guards(failures)
     _check_layers_independently(failures)
     _check_attribute(failures)
+    _check_comparison(failures)
     _check_declines(failures)
     _check_encoder_absent(failures)
     _check_memoised(failures)
