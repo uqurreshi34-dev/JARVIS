@@ -26,12 +26,18 @@ _PROTECTED_NAMES = frozenset({
     "contacts.txt",
     "jarvis-log.txt",
     "memory.txt",
+    # The subject store and its metadata mirror. Both live in this folder
+    # and both are JARVIS's own state, so sorting them away silently
+    # empties what he knows.
+    "subjects.txt",
+    "memory.json",
     "patterns.txt",
     "spelling-ignore.txt",
     "tasks.txt",
     ".jarvis-folder-guard.json",
     "jarvis-pending.txt",
     "market-alerts.txt",
+
 })
 
 _REQUEST_RE = re.compile(

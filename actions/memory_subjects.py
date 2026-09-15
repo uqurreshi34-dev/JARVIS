@@ -766,6 +766,12 @@ def install_runtime(commands):
                     f"{subjects} subject(s) into subjects.txt"
                 )
 
+            # subjects.txt is meant to be edited in Notepad while JARVIS is
+            # closed, so the mirror is reconciled at every startup rather
+            # than only after a write. Without this, a hand edit stays
+            # invisible to memory.json until the next research command.
+            subject_store.sync_to_json()
+
         except Exception as error:
             print(f"[JARVIS] subject migration skipped: {error}")
 
