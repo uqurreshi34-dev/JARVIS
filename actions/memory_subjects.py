@@ -13,6 +13,7 @@ subject, category or domain is written down anywhere in this file.
 
 import re
 import threading
+from difflib import SequenceMatcher
 
 from actions import memory, memory_collections
 
@@ -51,6 +52,20 @@ _HISTORICAL = frozenset({
 # A history answer replaces a keyed fact, so only a confident key match
 # should claim the question.
 _MIN_HISTORY_SCORE = 0.80
+
+# Speech recognition mishears a key as often as not -- "gym days" arrives as
+# "jim days". Token matching cannot bridge that, so fall back to character
+# similarity. The runner-up margin matters more than the floor: a genuine
+# mishearing beats every other key by a wide gap, while a question that is
+# simply about something else scores low against all of them.
+_MIN_SIMILARITY = 0.70
+_MIN_MARGIN = 0.20
+
+# A single misheard word is repaired against the stored vocabulary before
+# anything else runs. This can be looser than whole-label matching because
+# the margin check does the real work: a mishearing beats its neighbours
+# clearly, while an ordinary unrelated word does not.
+_MIN_WORD_SIMILARITY = 0.62
 
 # A subject needs at least this share of its tokens present for a partial
 # match such as "BMW" against "BMW 3 Series" to count.
@@ -151,6 +166,145 @@ def _plural_verb(value):
     return "was"
 
 
+def _known_tokens():
+    """Every word that appears in something JARVIS has stored."""
+    words = set()
+
+    for collection_key in _collections():
+        words.update(_tokens(collection_key))
+
+        for item in memory_collections.items(collection_key):
+            words.update(_tokens(item))
+
+    for subject in _subject_facts():
+        words.update(_tokens(subject))
+
+    for label in _keyed_labels():
+        words.update(_tokens(label))
+
+    return words
+
+
+def correct(text):
+    """Repair misheard words against the vocabulary JARVIS actually holds.
+
+    Speech recognition returns "jim days" for "gym days" and "bmv" for
+    "bmw". Correcting once, up front, means every route below sees the same
+    repaired utterance rather than each having to cope with the mishearing
+    separately.
+
+    Only words that are close to something stored are touched, and only
+    when one candidate clearly beats the rest. Everything else is left
+    exactly as spoken.
+    """
+    known = _known_tokens()
+
+    if not known:
+        return text
+
+    repaired = []
+    changed = False
+
+    for token in _tokens(text):
+        if token in known or token in _NOISE or len(token) < 3:
+            repaired.append(token)
+            continue
+
+        scored = sorted(
+            (
+                (SequenceMatcher(None, token, word).ratio(), word)
+                for word in known
+            ),
+            reverse=True,
+        )
+
+        score, word = scored[0]
+        runner_up = scored[1][0] if len(scored) > 1 else 0.0
+
+        if score >= _MIN_WORD_SIMILARITY and score - runner_up >= _MIN_MARGIN:
+            repaired.append(word)
+            changed = True
+            continue
+
+        repaired.append(token)
+
+    if not changed:
+        return text
+
+    return " ".join(repaired)
+
+
+def _remaining_tokens(text, label):
+    """Spoken tokens not accounted for by the resolved label.
+
+    A token may have been misheard -- "toyoda" resolved to "toyota" -- so
+    comparing against the label by equality alone would count the subject
+    itself as an unanswered attribute. Anything close enough to a label
+    token counts as consumed.
+    """
+    label_tokens = _tokens(label)
+    remaining = []
+
+    for token in _content_tokens(text):
+        if token in label_tokens:
+            continue
+
+        if any(
+            SequenceMatcher(None, token, other).ratio() >= _MIN_SIMILARITY
+            for other in label_tokens
+        ):
+            continue
+
+        remaining.append(token)
+
+    return remaining
+
+
+def _closest_label(spoken, entries):
+    """Match a misheard name against stored labels, or None.
+
+    Speech recognition mangles names constantly -- "gym days" arrives as
+    "jim days", "toyota" as "toyoda". Token matching cannot bridge that, so
+    fall back to character similarity over whatever happens to be stored.
+
+    Requires a floor AND a clear margin over the runner-up. A misheard name
+    beats every other label by a wide gap, while an utterance that is simply
+    about something else scores low against all of them, so it declines
+    rather than grabbing the nearest.
+
+    `entries` is a sequence of (label, collection_key or None).
+    """
+    if not spoken or not entries:
+        return None
+
+    scored = sorted(
+        (
+            (
+                SequenceMatcher(
+                    None,
+                    spoken,
+                    str(label).casefold(),
+                ).ratio(),
+                str(label),
+                collection_key,
+            )
+            for label, collection_key in entries
+        ),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+
+    score, label, collection_key = scored[0]
+
+    if score < _MIN_SIMILARITY:
+        return None
+
+    if len(scored) > 1 and score - scored[1][0] < _MIN_MARGIN:
+        return None
+
+    return score, label, collection_key
+
+
 def history_answer(text):
     """Answer "what were my old X" from the archive, or None."""
     spoken = _tokens(text)
@@ -167,13 +321,23 @@ def history_answer(text):
     if not query:
         return None
 
+    labels = _keyed_labels()
     best = None
 
-    for label in _keyed_labels():
+    for label in labels:
         score = _subject_matches(query, label)
 
         if score >= _MIN_HISTORY_SCORE and (best is None or score > best[0]):
             best = (score, label)
+
+    if best is None:
+        closest = _closest_label(
+            " ".join(query),
+            [(label, None) for label in labels],
+        )
+
+        if closest:
+            best = (closest[0], closest[1])
 
     if not best:
         return None
@@ -292,7 +456,21 @@ def resolve(text):
             candidates.append((score - 0.05, subject, None))
 
     if not candidates:
-        return None
+        # Nothing matched on tokens, so the name was probably misheard.
+        entries = [
+            (item, collection_key)
+            for collection_key in _collections()
+            for item in memory_collections.items(collection_key)
+        ] + [(subject, None) for subject in _subject_facts()]
+
+        closest = _closest_label(" ".join(query_tokens), entries)
+
+        if not closest:
+            return None
+
+        score, label, collection_key = closest
+
+        return label, collection_key, score
 
     candidates.sort(key=lambda item: (item[0], -len(item[1])), reverse=True)
 
@@ -318,7 +496,20 @@ def resolve_in_collections(text):
                 candidates.append((score, str(item), collection_key))
 
     if not candidates:
-        return None
+        entries = [
+            (item, collection_key)
+            for collection_key in _collections()
+            for item in memory_collections.items(collection_key)
+        ]
+
+        closest = _closest_label(" ".join(query_tokens), entries)
+
+        if not closest:
+            return None
+
+        score, label, collection_key = closest
+
+        return label, collection_key, score
 
     candidates.sort(key=lambda item: (item[0], -len(item[1])), reverse=True)
 
@@ -340,14 +531,7 @@ def category_answer(text):
     # known subject. "what type of thing is BMW" leaves nothing over once
     # the subject and the question words are removed; "what is the BMW top
     # speed" leaves "top speed", which is a request this cannot answer.
-    subject_tokens = set(_tokens(label))
-    leftover = [
-        token
-        for token in _content_tokens(text)
-        if token not in subject_tokens
-    ]
-
-    if leftover:
+    if _remaining_tokens(text, label):
         return None
 
     if collection_key:
@@ -417,12 +601,7 @@ def attribute_answer(text):
         return None
 
     # Whatever is left after the subject is the attribute being asked about.
-    subject_tokens = set(_tokens(label))
-    attribute = [
-        token
-        for token in _content_tokens(text)
-        if token not in subject_tokens
-    ]
+    attribute = _remaining_tokens(text, label)
 
     if not attribute:
         return None
@@ -480,6 +659,10 @@ def local_answer(text):
             return _last_answer
 
     try:
+        # Repair the utterance once so every route below agrees on what
+        # was actually said.
+        text = correct(text)
+
         answer = (
             history_answer(text)
             or attribute_answer(text)

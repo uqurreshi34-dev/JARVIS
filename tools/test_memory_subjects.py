@@ -202,6 +202,9 @@ def _check_history(failures):
         ("what were my old gym days", "monday, wednesday and friday"),
         ("what was my previous gym days", "monday, wednesday and friday"),
         ("what was my previous default project", "c-shop"),
+        # Speech recognition mishears keys constantly: "gym" arrives as
+        # "jim". Token matching cannot bridge that on its own.
+        ("what were my old jim days", "monday, wednesday and friday"),
     )
 
     for question, expected in cases:
@@ -230,6 +233,75 @@ def _check_history(failures):
         failures.append(
             "a key with no archived value still produced a history answer"
         )
+
+    # Fuzzy key matching must not claim a question about something else.
+    for unrelated in (
+        "what were my old calendar entries",
+        "what did I do before lunch",
+    ):
+        if _answers(unrelated) is not None:
+            failures.append(
+                f"{unrelated!r} was matched to a memory key by similarity"
+            )
+
+
+def _check_misheard(failures):
+    """A misheard name must still resolve, everywhere it is used."""
+    cases = (
+        # Category: the word itself is wrong.
+        ("what type of thing is Dunes", "novels"),
+        ("what type of thing is Nueromancer", "novels"),
+    )
+
+    for question, collection in cases:
+        answer = _answers(question) or ""
+
+        if collection not in answer:
+            failures.append(
+                f"misheard {question!r} answered {answer!r}, expected the "
+                f"{collection} collection"
+            )
+
+    # Attribute: the subject is misheard but the attribute is not.
+    answer = _answers("BMW 3 Serees fuel economy") or ""
+
+    if "mpg" not in answer:
+        failures.append(
+            f"a misheard subject broke an attribute question: {answer!r}"
+        )
+
+    # A single misheard word is repaired against the stored vocabulary
+    # before any route runs.
+    facts, data, items, ranker, history = _fixtures()
+
+    with facts, data, items, ranker, history:
+        repairs = (
+            ("BMV fuel economy", "bmw"),
+            ("what type of thing is Dunne", "dune"),
+        )
+
+        for spoken, expected in repairs:
+            corrected = memory_subjects.correct(spoken)
+
+            if expected not in corrected.casefold():
+                failures.append(
+                    f"{spoken!r} corrected to {corrected!r}, expected "
+                    f"{expected!r} in it"
+                )
+
+        # An utterance with nothing stored in it must come back untouched,
+        # or ordinary commands would be quietly reworded.
+        for spoken in (
+            "open netflix",
+            "close notepad",
+            "what is the capital of France",
+            "what time is it",
+        ):
+            if memory_subjects.correct(spoken) != spoken:
+                failures.append(
+                    f"{spoken!r} was reworded to "
+                    f"{memory_subjects.correct(spoken)!r}"
+                )
 
 
 def _check_declines(failures):
@@ -340,6 +412,7 @@ def main():
 
     _check_category(failures)
     _check_history(failures)
+    _check_misheard(failures)
     _check_attribute(failures)
     _check_declines(failures)
     _check_encoder_absent(failures)
