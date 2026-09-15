@@ -426,7 +426,16 @@ def migrate_from_memory():
     exactly where it is. Both files are plain text, so a wrong call here
     is repaired by moving one line back by hand.
     """
-    from actions import memory
+    from actions import memory, memory_collections
+
+    # memory.txt ends with a mirrored block of collection text, kept there
+    # by a wrapper memory_collections installs over memory._write. Without
+    # that wrapper in place, rewriting the file here would drop the block.
+    # Installing it is idempotent and safe to call from a bare script.
+    try:
+        memory_collections._install_memory_writer()
+    except Exception as error:
+        print(f"[JARVIS] collection mirror unavailable: {error}")
 
     with _lock:
         lines = memory._read()
