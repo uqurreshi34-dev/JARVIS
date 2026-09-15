@@ -304,6 +304,119 @@ def _check_misheard(failures):
                 )
 
 
+def _check_correction_guards(failures):
+    """The floor and the margin must each be doing real work.
+
+    Uses its own deliberately confusable fixture: "Dune" and "Dunn" are
+    close enough that no repair is safe, while "encore" is nearest to
+    "Neuromancer" but nowhere near close enough to be a mishearing of it.
+    """
+    collections = {"novels": ["Dune", "Dunn", "Neuromancer"]}
+
+    with (
+        patch.object(
+            memory_subjects.memory,
+            "facts",
+            return_value=[],
+        ),
+        patch.object(
+            memory_subjects.memory_collections,
+            "_ensure_data",
+            return_value={"collections": collections},
+        ),
+        patch.object(
+            memory_subjects.memory_collections,
+            "items",
+            side_effect=lambda key: collections.get(key, []),
+        ),
+    ):
+        # Margin: "dunne" is equally close to Dune and Dunn, so guessing
+        # between them is worse than leaving it alone.
+        if memory_subjects.correct("dunne") != "dunne":
+            failures.append(
+                "an ambiguous word was repaired to one of two equally "
+                "close labels instead of being left alone"
+            )
+
+        # Floor: "encore" is closest to Neuromancer by a clear margin, but
+        # at 0.47 it is not a mishearing of anything stored.
+        if memory_subjects.correct("encore") != "encore":
+            failures.append(
+                "a word that resembles nothing stored was still repaired"
+            )
+
+        # Positive control: an unambiguous mishearing IS repaired, so the
+        # two checks above cannot pass by the feature being switched off.
+        if "neuromancer" not in memory_subjects.correct("romance"):
+            failures.append(
+                "a clear mishearing was not repaired, so the guards above "
+                "prove nothing"
+            )
+
+
+def _check_layers_independently(failures):
+    """Each layer must stand on its own.
+
+    Correction and fuzzy label matching overlap, so a whole-pipeline test
+    passes even when one of them is broken. These exercise each directly.
+    """
+    # Only word correction can rescue this: the whole utterance is nothing
+    # like the stored label, so similarity over the label cannot bridge it.
+    answer = _answers("BMV fuel economy") or ""
+
+    if "mpg" not in answer:
+        failures.append(
+            f"a misheard word inside a longer question was not repaired "
+            f"before the routes ran: {answer!r}"
+        )
+
+    entries = [
+        ("BMW 3 Series", "cars"),
+        ("Neuromancer", "novels"),
+    ]
+
+    # Floor: "remainder" is closest to "Neuromancer" by a clear margin, so
+    # only the similarity floor stops it being claimed. Without a case like
+    # this the floor can be deleted unnoticed, because the margin check
+    # happens to block most unrelated words on its own.
+    for unrelated in ("remainder", "announcer", "helicopter"):
+        if memory_subjects._closest_label(unrelated, entries) is not None:
+            failures.append(
+                f"{unrelated!r} was matched to a stored label despite "
+                "resembling nothing"
+            )
+
+    # Margin: equally close to both, so neither may be chosen.
+    ambiguous = [("Dune", "novels"), ("Dunn", "novels")]
+
+    if memory_subjects._closest_label("dunne", ambiguous) is not None:
+        failures.append(
+            "a label was chosen from two equally close candidates"
+        )
+
+    # Positive control, so the two checks above cannot pass by the matcher
+    # being disabled outright.
+    if memory_subjects._closest_label("Neuromancr", entries) is None:
+        failures.append(
+            "a clear label mishearing was not matched, so the guards "
+            "above prove nothing"
+        )
+
+    # A misheard subject word counts as consumed, not as an unanswered
+    # attribute. Without this, every misheard name looks like a question
+    # about something the subject does not have.
+    if memory_subjects._remaining_tokens("toyoda", "toyota"):
+        failures.append(
+            "a misheard subject word was left over and treated as an "
+            "unanswered attribute"
+        )
+
+    if not memory_subjects._remaining_tokens("toyota boot space", "toyota"):
+        failures.append(
+            "a genuine attribute was swallowed as part of the subject"
+        )
+
+
 def _check_declines(failures):
     """Anything it cannot answer well must fall through to the model."""
     cases = (
@@ -413,6 +526,8 @@ def main():
     _check_category(failures)
     _check_history(failures)
     _check_misheard(failures)
+    _check_correction_guards(failures)
+    _check_layers_independently(failures)
     _check_attribute(failures)
     _check_declines(failures)
     _check_encoder_absent(failures)
