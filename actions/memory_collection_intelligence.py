@@ -2058,19 +2058,25 @@ def _collection_answer(query):
         if not example or not example_items:
             return None
 
-        first_item = sorted(
-            example_items,
-            key=len,
-            reverse=True,
-        )[0]
-
         folded_example = example.casefold()
-        start = folded_example.find(first_item.casefold())
 
-        if start < 0:
+        # The prefix is everything before the list begins, so anchor on the
+        # item that appears EARLIEST, not the longest one. Picking the
+        # longest lands on the last item of the example, leaving the rest
+        # of the list inside the prefix and repeating it in the answer:
+        # "your gym days are sunday, tuesday and Sunday, Tuesday and
+        # Thursday". Longest still wins a tie, so a short item cannot match
+        # as a fragment of a longer one starting at the same place.
+        occurrences = [
+            (folded_example.find(item.casefold()), -len(item), item)
+            for item in example_items
+            if folded_example.find(item.casefold()) >= 0
+        ]
+
+        if not occurrences:
             return None
 
-        end = start + len(first_item)
+        start, _length, first_item = min(occurrences)
         prefix = example[:start].strip()
 
         if not prefix:
