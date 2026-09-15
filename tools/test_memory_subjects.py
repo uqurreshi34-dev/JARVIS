@@ -5,6 +5,7 @@ with fixtures so the result does not depend on what happens to be stored on
 this machine today.
 """
 
+import contextlib
 import re
 import sys
 from pathlib import Path
@@ -19,7 +20,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-from actions import memory_history, memory_subjects, semantic_memory  # noqa: E402
+from actions import (  # noqa: E402
+    memory_history,
+    memory_subjects,
+    semantic_memory,
+    subject_store,
+)
 
 
 # Two unrelated domains on purpose. Nothing in memory_subjects.py should
@@ -146,13 +152,35 @@ def _fixtures(encode=_fake_encode):
             "_load",
             return_value={"history": _HISTORY},
         ),
+        # _subject_facts() reads the subject store as well as memory.txt,
+        # so without this the suite silently tests whatever is in the real
+        # subjects.txt on this machine. It passed for exactly as long as
+        # that file was empty.
+        patch.object(
+            subject_store,
+            "facts",
+            return_value={},
+        ),
     )
 
 
-def _answers(question, encode=_fake_encode):
-    facts, data, items, ranker, history = _fixtures(encode)
+def _applied(encode=_fake_encode):
+    """Enter every fixture patch as one block.
 
-    with facts, data, items, ranker, history:
+    Deliberately not an unpack. The fixtures have grown from four to six,
+    and each time the count changed every call site broke -- or worse,
+    kept working while quietly missing a patch.
+    """
+    stack = contextlib.ExitStack()
+
+    for item in _fixtures(encode):
+        stack.enter_context(item)
+
+    return stack
+
+
+def _answers(question, encode=_fake_encode):
+    with _applied(encode):
         return memory_subjects.local_answer(question)
 
 
@@ -289,9 +317,7 @@ def _check_misheard(failures):
 
     # A single misheard word is repaired against the stored vocabulary
     # before any route runs.
-    facts, data, items, ranker, history = _fixtures()
-
-    with facts, data, items, ranker, history:
+    with _applied():
         repairs = (
             ("BMV fuel economy", "bmw"),
             ("what type of thing is Dunne", "dune"),
@@ -484,9 +510,7 @@ def _check_memoised(failures):
         calls.append(tuple(texts))
         return _fake_encode(texts)
 
-    facts, data, items, ranker, history = _fixtures(encode=counting_encode)
-
-    with facts, data, items, ranker, history:
+    with _applied(encode=counting_encode):
         memory_subjects.local_answer("BMW fuel economy")
         first = len(calls)
 
@@ -512,9 +536,7 @@ def _check_original_answer_still_runs(failures):
 
     memory_subjects._original_answer = fake.answer
 
-    facts, data, items, ranker, history = _fixtures()
-
-    with facts, data, items, ranker, history:
+    with _applied():
         passed_through = memory_subjects._wrapped_answer(
             "what is the capital of France"
         )

@@ -462,6 +462,86 @@ def _subject_matches(query_tokens, label):
     return 0.0
 
 
+# The verbs JARVIS already answers to, learned from his own phrase table
+# at startup rather than written down here. "open the toyota folder" names
+# a stored subject too, and a list of verbs kept in this file would go
+# stale the moment a command is added. None means the table could not be
+# read, in which case the subject gate below stays off rather than
+# guessing.
+_ACTION_WORDS = None
+
+
+def _learn_action_words(commands):
+    """The opening word of every phrase JARVIS already recognises."""
+    table = getattr(commands, "_FAST_PHRASES", None)
+
+    if not table:
+        return None
+
+    words = set()
+
+    try:
+        for phrases, _intent in table:
+            for phrase in phrases:
+                tokens = _tokens(phrase)
+
+                if tokens and len(tokens[0]) > 2:
+                    words.add(tokens[0])
+
+    except (TypeError, ValueError):
+        return None
+
+    words -= _NOISE
+
+    return frozenset(words) or None
+
+
+def names_known_subject(text):
+    """True when an utterance asks something about a subject JARVIS holds.
+
+    Deliberately not "can I answer this". The existing gate routes on
+    whether a stored fact clears the confidence floor, so everything else
+    goes to the classifier -- which answers "that's beyond me for now"
+    when the model would have answered perfectly well. Asking about the
+    history of a car whose facts mention 1975 is a real question about a
+    real subject, and it should reach the model rather than a shrug.
+
+    Whether the stored facts actually answer it is decided later, in
+    attribute_answer, which still declines and falls through.
+    """
+    if _ACTION_WORDS is None:
+        return False
+
+    corrected = correct(text)
+    resolved = resolve(corrected)
+
+    if not resolved:
+        return False
+
+    label = resolved[0]
+    identity = _identity(label)
+
+    # Stored facts, not merely membership of a collection. A bare
+    # collection item has nothing to answer an attribute question with,
+    # and category questions are already handled by category_answer.
+    if not any(
+        _identity(subject) == identity
+        for subject in _subject_facts()
+    ):
+        return False
+
+    attribute = _remaining_tokens(corrected, label)
+
+    if not attribute:
+        return False
+
+    # A command that happens to name a subject is still a command.
+    if _ACTION_WORDS & set(attribute):
+        return False
+
+    return True
+
+
 def resolve(text):
     """Find the stored subject an utterance names, or None.
 
@@ -740,7 +820,16 @@ def _wrapped_local_question(command):
             pass
 
     try:
-        return local_answer(command) is not None
+        if local_answer(command) is not None:
+            return True
+    except Exception:
+        return False
+
+    # Nothing stored answers it well enough, but it still asks about
+    # something JARVIS holds. Route it anyway: the wrapped answer falls
+    # through to the model, which beats the classifier's "unknown".
+    try:
+        return names_known_subject(command)
     except Exception:
         return False
 
@@ -774,6 +863,14 @@ def install_runtime(commands):
 
         except Exception as error:
             print(f"[JARVIS] subject migration skipped: {error}")
+
+        global _ACTION_WORDS
+
+        _ACTION_WORDS = _learn_action_words(commands)
+
+        if _ACTION_WORDS is None:
+            print("[JARVIS] command phrase table unreadable; "
+                  "subject routing limited to answerable questions")
 
         _original_answer = commands.answer
         commands.answer = _wrapped_answer
