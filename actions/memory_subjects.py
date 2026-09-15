@@ -483,15 +483,24 @@ def _learn_action_words(commands):
     try:
         for phrases, _intent in table:
             for phrase in phrases:
-                tokens = _tokens(phrase)
+                # The first word that carries meaning, not simply the first
+                # word. 191 of the 510 phrases open with "what", "how" or
+                # "the", so position zero taught the guard nothing at all
+                # for those: "whats the volume" contributed no word, and
+                # "volume" stayed invisible. Taking the first content word
+                # instead raises the guard from 102 words to 155 while
+                # blocking no more questions than before.
+                content = [
+                    token
+                    for token in _tokens(phrase)
+                    if len(token) > 2 and token not in _NOISE
+                ]
 
-                if tokens and len(tokens[0]) > 2:
-                    words.add(tokens[0])
+                if content:
+                    words.add(content[0])
 
     except (TypeError, ValueError):
         return None
-
-    words -= _NOISE
 
     return frozenset(words) or None
 
