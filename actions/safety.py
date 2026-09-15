@@ -44,6 +44,36 @@ _ROLE_MARKERS = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
+# The literals above are exact substrings, so one inserted word defeats
+# them: "ignore your instruction" is in the list, but "ignore your
+# PREVIOUS instructions" is not, and sailed straight through. These
+# patterns allow filler between the verb and what it acts on.
+#
+# The verb must open a clause, because that is how an order reads.
+# "Drivers often ignore the previous speed limit" keeps its verb in the
+# middle of a sentence and is left alone. The four-word gap was chosen by
+# testing against both shapes, not picked out of the air: three missed
+# "forget every one of your prior directives", five began reaching across
+# into ordinary prose.
+_INSTRUCTION_PATTERNS = re.compile(
+    r"(?:^|[.!?;:\n]\s*)(?:please\s+|now\s+)?"
+    r"(?:ignore|disregard|forget|override|bypass|discard)\b"
+    r"(?:\s+\w+){0,4}?\s+"
+    r"(?:instructions?|prompts?|rules?|guidelines?|directives?|"
+    r"restrictions?|everything|above|prior|previous)\b",
+    re.IGNORECASE,
+)
+
+# Orders aimed at the listener. Requiring the second person keeps
+# "from now on the engine uses less fuel" out of it.
+_SECOND_PERSON_ORDERS = re.compile(
+    r"\bfrom now on\W+you\b"
+    r"|\byou\s+(?:are|will|must|should)\s+now\b"
+    r"|\byour\s+(?:new\s+)?(?:instructions?|rules?|prompt)\b",
+    re.IGNORECASE,
+)
+
+
 # Characters used to break out of a quoted block.
 _FENCES = re.compile(r"[`\u0000-\u0008\u000b\u000c\u000e-\u001f]")
 
@@ -56,6 +86,12 @@ def looks_like_instruction(text):
     lowered = str(text).casefold()
 
     if any(marker in lowered for marker in _INSTRUCTION_MARKERS):
+        return True
+
+    if _INSTRUCTION_PATTERNS.search(lowered):
+        return True
+
+    if _SECOND_PERSON_ORDERS.search(lowered):
         return True
 
     return bool(_ROLE_MARKERS.search(str(text)))

@@ -83,6 +83,48 @@ def _read():
         return []
 
 
+def _is_keyed(line):
+    """True when a line stores one of the KNOWN_KEYS."""
+    match = _LINE.match(line)
+
+    return bool(match and match.group(1).strip().casefold() in KNOWN_KEYS)
+
+
+def _trim(lines):
+    """The lines to keep when the file is over MAX_FACTS.
+
+    The old rule kept the newest MAX_FACTS lines. That evicts oldest
+    first, which is your name, your location and your gym days: the facts
+    least likely to be said again and most likely to be wanted. Keyed
+    facts are few and irreplaceable, so they survive whatever the count,
+    and whatever does get dropped is named rather than vanishing.
+    """
+    if len(lines) <= MAX_FACTS:
+        return lines
+
+    loose = [
+        index
+        for index, line in enumerate(lines)
+        if not _is_keyed(line)
+    ]
+
+    room = max(0, MAX_FACTS - (len(lines) - len(loose)))
+    doomed = set(loose[:max(0, len(loose) - room)])
+
+    if doomed:
+        print(
+            f"[JARVIS] memory.txt is at its {MAX_FACTS} line limit; "
+            f"dropping {len(doomed)} older line(s), starting with "
+            f"{lines[min(doomed)][:60]!r}"
+        )
+
+    return [
+        line
+        for index, line in enumerate(lines)
+        if index not in doomed
+    ]
+
+
 def _write(lines):
     path = _path()
 
@@ -96,7 +138,7 @@ def _write(lines):
                 "# Edit or delete anything here; it is read at startup.\n"
             )
 
-            for line in lines[-MAX_FACTS:]:
+            for line in _trim(lines):
                 handle.write(f"{line}\n")
 
         return True
