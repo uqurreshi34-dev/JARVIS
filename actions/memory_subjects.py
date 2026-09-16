@@ -543,6 +543,74 @@ def _states_rather_than_asks(text):
     return tokens[0] in personal
 
 
+def _collection_words():
+    """Every word naming one of the user's own collections, singular too.
+
+    Read from their data, not listed here: add a collection tomorrow and
+    this covers it with no edit.
+    """
+    words = set()
+
+    try:
+        data = memory_collections._ensure_data()
+        keys = list((data or {}).get("collections") or {})
+    except Exception:
+        return words
+
+    for key in keys:
+        for token in _tokens(key):
+            words.add(token)
+
+            # "add it to my car" means the cars collection.
+            if (
+                len(token) > 3
+                and token.endswith("s")
+                and not token.endswith("ss")
+            ):
+                words.add(token[:-1])
+
+    return words
+
+
+def _subject_route_may_claim(text):
+    """Whether the subject route may claim an utterance at all.
+
+    One gate, checked before every branch. The guards used to sit inside
+    names_known_subject -- the last of three checks -- while local_answer
+    ran first and claimed anything it could produce words for. That is how
+    "add audi a3 to my cars" came back as a description of the A4 instead
+    of being stored.
+
+    Three ways an utterance is not a question about a subject. None of
+    them is a list of phrasings:
+
+      - it opens in the first person, so it states something about the
+        user rather than asking about a subject
+      - it names one of the user's own collections, so the collection
+        layer owns it, whatever else it mentions
+      - what remains after removing the subject holds a verb JARVIS
+        already answers to, so it is a command
+    """
+    if _states_rather_than_asks(text):
+        return False
+
+    if _collection_words() & set(_tokens(text)):
+        return False
+
+    if _ACTION_WORDS is None:
+        return True
+
+    corrected = correct(text)
+    resolved = resolve(corrected)
+
+    if not resolved:
+        return True
+
+    leftover = set(_remaining_tokens(corrected, resolved[0]))
+
+    return not (_ACTION_WORDS & leftover)
+
+
 def names_known_subject(text):
     """True when an utterance asks something about a subject JARVIS holds.
 
@@ -1285,23 +1353,22 @@ def _wrapped_local_question(command):
     is BMW" was sent to the interpreter even though the answer was sitting
     in memory. Naming something JARVIS holds is evidence enough.
     """
-    # Before anything else. A statement about the user is never a question
-    # about a subject, however well the subject route could answer it.
-    # "my car is bmw" resolves to the stored BMW, and its facts mention
-    # cars, so local_answer answers it -- and the classifier never sees a
-    # fact to store. The guard has to sit ahead of that, not after it.
-    try:
-        if _states_rather_than_asks(command):
-            return False
-    except Exception:
-        pass
-
+    # Personal-memory questions first: they are not about subjects and
+    # have their own gate.
     if _original_local_question is not None:
         try:
             if _original_local_question(command):
                 return True
         except Exception:
             pass
+
+    # Everything below is the subject route, so the gate goes here -- once,
+    # ahead of all of it -- rather than inside the last branch.
+    try:
+        if not _subject_route_may_claim(command):
+            return False
+    except Exception:
+        return False
 
     try:
         if local_answer(command) is not None:
