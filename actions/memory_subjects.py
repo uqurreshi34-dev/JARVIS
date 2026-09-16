@@ -597,6 +597,12 @@ def _subject_route_may_claim(text):
     if _collection_words() & set(_tokens(text)):
         return False
 
+    # A comparison asks, however it opens. "show me the difference between
+    # the A4 and the A6" begins with a command verb, and the guard below
+    # would read the whole thing as a command.
+    if asks_to_compare(text):
+        return True
+
     if _ACTION_WORDS is None:
         return True
 

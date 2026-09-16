@@ -213,9 +213,20 @@ def _guarded_fast_path(commands, original):
             text.endswith("?")
             or text.split(" ", 1)[0] in _MEMORY_QUESTION_WORDS
         ):
-            from actions import memory_collection_intelligence
+            from actions import memory_collection_intelligence, memory_subjects
 
-            if memory_collection_intelligence.locally_known(text):
+            # "compare the a4 with the a6" has no question mark and opens
+            # with a verb, so the test above reads it as a statement. It
+            # asks. Claiming it here stores the cars instead of comparing
+            # them, and the caller never sees a comparison at all.
+            comparing = False
+
+            try:
+                comparing = memory_subjects.asks_to_compare(text)
+            except Exception:
+                comparing = False
+
+            if not comparing and memory_collection_intelligence.locally_known(text):
                 print(
                     "[fast] remember "
                     "(learned collection; no API call)"
