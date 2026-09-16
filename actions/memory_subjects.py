@@ -475,7 +475,9 @@ def _subject_matches(query_tokens, label):
 # stale the moment a command is added. None means the table could not be
 # read, in which case the subject gate below stays off rather than
 # guessing.
-_ACTION_WORDS = None
+# Always a set, never None: an empty one already means "not learned", so
+# a second way of saying it only bought a None check at every use site.
+_ACTION_WORDS = frozenset()
 
 
 def _learn_action_words(commands):
@@ -483,7 +485,7 @@ def _learn_action_words(commands):
     table = getattr(commands, "_FAST_PHRASES", None)
 
     if not table:
-        return None
+        return frozenset()
 
     words = set()
 
@@ -507,9 +509,9 @@ def _learn_action_words(commands):
                     words.add(content[0])
 
     except (TypeError, ValueError):
-        return None
+        return frozenset()
 
-    return frozenset(words) or None
+    return frozenset(words)
 
 
 def _states_rather_than_asks(text):
@@ -603,18 +605,23 @@ def _subject_route_may_claim(text):
     if asks_to_compare(text):
         return True
 
-    if _ACTION_WORDS is None:
+    if not _ACTION_WORDS:
         return True
 
-    corrected = correct(text)
-    resolved = resolve(corrected)
+    # Judge the opening word, not every word. _learn_action_words takes the
+    # first content word of each command phrase, so the symmetric test is
+    # the first content word of the utterance: an imperative puts its verb
+    # there. "system" and "top" really are command words -- they open
+    # "system status" and "top stories" -- but in "toyota production
+    # system" and "bmw top speed" they are plainly nouns, and matching them
+    # anywhere in the sentence rejected both questions.
+    opening = [
+        token
+        for token in _tokens(text)
+        if len(token) > 2 and token not in _NOISE
+    ]
 
-    if not resolved:
-        return True
-
-    leftover = set(_remaining_tokens(corrected, resolved[0]))
-
-    return not (_ACTION_WORDS & leftover)
+    return not (opening and opening[0] in _ACTION_WORDS)
 
 
 def names_known_subject(text):
@@ -630,7 +637,7 @@ def names_known_subject(text):
     Whether the stored facts actually answer it is decided later, in
     attribute_answer, which still declines and falls through.
     """
-    if _ACTION_WORDS is None:
+    if not _ACTION_WORDS:
         return False
 
     # A statement about the user is not a question about a subject, even
@@ -1195,7 +1202,7 @@ def local_comparison(text):
     opens a known command ("compare audi and open the bmw folder"), leaves
     the planner in charge.
     """
-    if _ACTION_WORDS is None:
+    if not _ACTION_WORDS:
         return False
 
     corrected = correct(text)
@@ -1426,7 +1433,7 @@ def install_runtime(commands):
 
         _ACTION_WORDS = _learn_action_words(commands)
 
-        if _ACTION_WORDS is None:
+        if not _ACTION_WORDS:
             print("[JARVIS] command phrase table unreadable; "
                   "subject routing limited to answerable questions")
 
