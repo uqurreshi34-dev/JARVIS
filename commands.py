@@ -3185,9 +3185,51 @@ _SET_ALERT = re.compile(
 )
 
 
+# "watch bitcoin at 0.4%", "track xrp for 1 percent", "set the bitcoin
+# alert to 0.5". Only the tell-me-when form existed, so these went to the
+# model, which called them unknown.
+_WATCH_ALERT = re.compile(
+    r"^(?:watch|track|monitor|set|change|make)\s+(?:the\s+)?(.+?)\s+"
+    r"(?:(?:alerts?|threshold|watch|trigger)\s+)?"
+    r"(?:at|for|to|on|with)\s+(?:a\s+)?"
+    r"(?:(?:move|change|swing)\s+of\s+)?"
+    r"(\d+)(?:\s+(\d+))?\s*(?:percent|per cent)?"
+    r"(?:\s+(?:moves?|movement|changes?|swings?))?$"
+)
+
+_DIGIT_WORDS = {
+    "zero": "0", "nought": "0", "oh": "0", "one": "1", "two": "2",
+    "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7",
+    "eight": "8", "nine": "9", "ten": "10",
+}
+
+
+def _spoken_percent(text):
+    """Digits for a percentage said in words ("point four", "half a percent")."""
+    words = "|".join(_DIGIT_WORDS)
+
+    text = re.sub(r"\bhalf (?:a )?(?=percent|per cent)", "0 5 ", text)
+    text = re.sub(
+        rf"\b(?:({words})\s+)?point\s+({words})\b",
+        lambda match: (
+            f"{_DIGIT_WORDS.get(match.group(1) or 'zero')} "
+            f"{_DIGIT_WORDS[match.group(2)]}"
+        ),
+        text,
+    )
+    text = re.sub(
+        rf"\b({words})(?=\s+(?:percent|per cent)\b|$)",
+        lambda match: _DIGIT_WORDS[match.group(1)],
+        text,
+    )
+
+    return " ".join(text.split())
+
+
 def _alert_request(text):
     """Return (coin, percent) for a threshold change, or None."""
-    match = _SET_ALERT.match(text)
+    text = _spoken_percent(text)
+    match = _SET_ALERT.match(text) or _WATCH_ALERT.match(text)
 
     if not match:
         return None

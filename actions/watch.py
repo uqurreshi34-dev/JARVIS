@@ -23,6 +23,10 @@ from actions import files, journal
 
 PENDING_FILE = "jarvis-pending.txt"
 
+# The price each coin is measured from, kept on disk so a restart carries
+# on from it instead of starting again.
+MARKS_FILE = "jarvis-market-marks.txt"
+
 # How often the conditions are checked.
 POLL_SECONDS = 120
 
@@ -58,6 +62,95 @@ def _path():
     base = files.root()
 
     return os.path.join(base, PENDING_FILE) if base else None
+
+
+def _marks_path():
+    base = files.root()
+
+    return os.path.join(base, MARKS_FILE) if base else None
+
+
+def load_marks():
+    """Saved price marks as {coin: (price, epoch seconds)}.
+
+    Only marks younger than MARK_HOURS come back, so a baseline from days
+    ago cannot produce a "moved 9 percent" that means nothing.
+    """
+    path = _marks_path()
+
+    if not path or not os.path.exists(path):
+        return {}
+
+    marks = {}
+    now = time.time()
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                line = line.strip()
+
+                if not line or line.startswith("#") or ":" not in line:
+                    continue
+
+                name, _, rest = line.partition(":")
+                price, _, when = rest.partition("@")
+
+                try:
+                    price = float(price.strip())
+                    when = float(when.strip())
+                except ValueError:
+                    continue
+
+                if price > 0 and 0 <= now - when <= MARK_HOURS * 3600:
+                    marks[name.strip()] = (price, when)
+
+    except OSError as error:
+        print(f"[JARVIS] could not read price marks: {error}")
+        return {}
+
+    return marks
+
+
+def save_marks(marks):
+    """Write the price marks, replacing the file in one step."""
+    path = _marks_path()
+
+    if not path:
+        return False
+
+    lines = [
+        "# Where JARVIS last measured each coin from, so a restart carries",
+        "# on rather than starting again. Safe to delete: he starts afresh.",
+    ]
+
+    for name, (price, when) in sorted(marks.items()):
+        lines.append(f"{name}: {price!r} @ {int(when)}")
+
+    temporary = f"{path}.tmp"
+
+    try:
+        with _lock:
+            with open(temporary, "w", encoding="utf-8") as handle:
+                handle.write("\n".join(lines) + "\n")
+
+            os.replace(temporary, path)
+
+        return True
+
+    except OSError as error:
+        print(f"[JARVIS] could not save price marks: {error}")
+        return False
+
+
+def _since(when):
+    """"since 23:05", or "since yesterday at 23:05"."""
+    moment = datetime.fromtimestamp(when)
+    clock = moment.strftime("%H:%M")
+
+    if moment.date() == datetime.now().date():
+        return f"since {clock}"
+
+    return f"since yesterday at {clock}"
 
 
 def hold(text):
@@ -184,8 +277,12 @@ class Watcher:
         self._memory_high = 0
 
         # The price each coin is measured against, and when that mark was
-        # taken: {coin: (price, when)}.
-        self._marks = {}
+        # taken: {coin: (price, epoch seconds)}. Loaded from disk, because
+        # a mark held only in memory reset on every restart, so a move
+        # made while JARVIS was closed was never seen. Wall-clock time, not
+        # time.monotonic(), which restarts with each process.
+        self._marks = load_marks()
+        self._started = time.time()
 
     def set_listener(self, listener):
         """Register a callable taking the sentence to say."""
@@ -270,7 +367,8 @@ class Watcher:
         if not prices:
             return
 
-        now = time.monotonic()
+        now = time.time()
+        changed = False
 
         for name, (price, _) in prices.items():
             if price is None:
@@ -281,12 +379,14 @@ class Watcher:
             # First sighting, or the mark has gone stale, so start afresh.
             if mark is None or now - mark[1] > MARK_HOURS * 3600:
                 self._marks[name] = (price, now)
+                changed = True
                 continue
 
-            was, _when = mark
+            was, when = mark
 
             if not was:
                 self._marks[name] = (price, now)
+                changed = True
                 continue
 
             move = (price - was) / was * 100.0
@@ -303,11 +403,15 @@ class Watcher:
             spoken = markets.COINS.get(name, {}).get("spoken", name)
             direction = "up" if move > 0 else "down"
 
+            # A mark from before this run means the move happened, at
+            # least partly, while JARVIS was closed. Say since when.
+            since = f" {_since(when)}" if when < self._started else ""
+
             self._mention(
                 key,
                 (
                     f"{spoken} is {direction} "
-                    f"{abs(move):.1f} percent, sir, "
+                    f"{abs(move):.1f} percent{since}, sir, "
                     f"at {markets.spoken_price(price)}."
                 ),
             )
@@ -315,6 +419,10 @@ class Watcher:
             # Measuring from here on, so the next alert is about the next
             # move rather than the same one all over again.
             self._marks[name] = (price, now)
+            changed = True
+
+        if changed:
+            save_marks(self._marks)
 
     def _check_disk(self):
         if not self._due("disk"):

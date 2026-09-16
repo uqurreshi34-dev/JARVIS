@@ -37,6 +37,7 @@ _PROTECTED_NAMES = frozenset({
     ".jarvis-folder-guard.json",
     "jarvis-pending.txt",
     "market-alerts.txt",
+    "jarvis-market-marks.txt",
 
 })
 
