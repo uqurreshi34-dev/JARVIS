@@ -385,6 +385,11 @@ _FAST_PHRASES = (
       "what are my files called", "whats in my folder",
       "whats in my jarvis folder", "what is in my jarvis folder"),
      "list_files"),
+    (("what folders do i have", "what folders are there", "list my folders",
+      "name my folders", "show me my folders", "read my folders",
+      "what folders have i got"), "list_folders"),
+    (("how many folders do i have", "how many folders are there",
+      "how many folders"), "count_folders"),
     (("read my notes", "what are my notes", "read back my notes",
       "whats on my notes", "check my notes", "my notes",
       "whats in my notes", "what is in my notes", "whats in my notes file",
@@ -3272,6 +3277,25 @@ def _open_folder_request(text):
     return match.group(1).strip(" .") or None
 
 
+_CLOSE_FOLDER = re.compile(
+    r"^(?:close|shut|close down|get rid of)\s+"
+    r"(?:the\s+|my\s+|our\s+)?"
+    r"(.+?)"
+    r"\s*(?:folder|directory)$",
+    re.I,
+)
+
+
+def _close_folder_request(text):
+    """Return the folder to close, or None."""
+    match = _CLOSE_FOLDER.match(text)
+
+    if not match:
+        return None
+
+    return match.group(1).strip(" .") or None
+
+
 def _memory_request(text):
     """Return ("remember"|"forget", value) or None."""
     # Stated plainly, without "remember" in front.
@@ -3627,6 +3651,14 @@ def _fast_path(command):
             text=_original_case(command, folder),
         )
 
+    shutting = _close_folder_request(text)
+
+    if shutting:
+        return _blank_result(
+            "close_folder",
+            text=_original_case(command, shutting),
+        )
+
     remembering = _memory_request(text)
 
     if remembering:
@@ -3882,7 +3914,7 @@ _WRITE_INTENTS = frozenset({
     # Opens a window rather than writing a file, which is also true of
     # open_application, set_volume and minimise_all. This set is things
     # JARVIS did on your behalf, not things that touched the disk.
-    "open_folder",
+    "open_folder", "close_folder",
 })
 
 
@@ -5282,6 +5314,15 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "open_folder" and text:
         return _query(intent, lambda: folders.open_folder(text))
+
+    if intent == "close_folder" and text:
+        return _query(intent, lambda: folders.close_folder(text))
+
+    if intent == "list_folders":
+        return _query(intent, folders.describe_listing)
+
+    if intent == "count_folders":
+        return _query(intent, folders.describe_listing_count)
 
     if intent == "remember" and (text or result.get("memory")):
         def store():

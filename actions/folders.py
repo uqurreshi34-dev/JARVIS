@@ -23,8 +23,15 @@ import os
 import subprocess
 import sys
 from difflib import SequenceMatcher
+from urllib.parse import unquote, urlparse
 
+import phrases
 from actions import files
+
+try:
+    import win32com.client as win32com_client
+except ImportError:
+    win32com_client = None
 
 
 # A spoken name and a folder name rarely agree exactly: "technology" for
@@ -75,6 +82,71 @@ def folders():
     except OSError as error:
         print(f"[JARVIS] could not list folders: {error}")
         return []
+
+
+def listing():
+    """Folder names, newest first.
+
+    Same ordering as files.listing(), so "what folders do I have" reads
+    the way "what files do I have" already does.
+    """
+    base = files.root()
+
+    if not base:
+        return []
+
+    names = folders()
+
+    try:
+        names.sort(
+            key=lambda name: os.path.getmtime(os.path.join(base, name)),
+            reverse=True,
+        )
+    except OSError:
+        return sorted(names)
+
+    return names
+
+
+def describe_listing(limit=4, names=True):
+    """Spoken summary of the folders, mirroring files.describe_listing.
+
+    The true total is always given; only the most recent few are named,
+    because reading twenty folder names aloud would be unbearable.
+    """
+    entries = listing()
+
+    if not entries:
+        return "You have no folders in your JARVIS folder, sir."
+
+    if not names:
+        if len(entries) == 1:
+            return "One folder, sir."
+
+        return f"You have {phrases.number(len(entries))} folders, sir."
+
+    if len(entries) == 1:
+        return f"One folder, sir: {entries[0]}."
+
+    shown = entries[:limit]
+    listed = ", ".join(shown[:-1]) + f", and {shown[-1]}"
+
+    if len(entries) <= limit:
+        return (
+            f"You have {phrases.number(len(entries))} folders, sir: "
+            f"{listed}."
+        )
+
+    return (
+        f"You have {phrases.number(len(entries))} folders, sir. I won't "
+        f"list them all, but your {phrases.number(len(shown))} most "
+        f"recent are {listed}."
+    )
+
+
+def describe_listing_count():
+    """Just the number, for "how many folders do I have"."""
+    return describe_listing(names=False)
 
 
 def find(name):
@@ -188,6 +260,88 @@ def open_folder(name=None):
         return f"I couldn't open {spoken}, sir."
 
     return f"Opening {spoken}, sir."
+
+
+def _open_explorer_windows():
+    """Open Explorer windows as {folder path: window}, newest last.
+
+    Uses the Shell COM object, the same interface applications.py already
+    reaches for. Without pywin32 -- or on anything but Windows -- this is
+    empty, and closing a folder reports that nothing is open rather than
+    failing.
+    """
+    if win32com_client is None:
+        return {}
+
+    found = {}
+
+    try:
+        shell = win32com_client.Dispatch("Shell.Application")
+
+        for window in shell.Windows():
+            try:
+                location = window.LocationURL
+            except Exception:
+                continue
+
+            if not location:
+                continue
+
+            path = unquote(urlparse(location).path).lstrip("/")
+            path = os.path.normpath(path.replace("/", os.sep))
+
+            if path:
+                found[os.path.normcase(path)] = window
+
+    except Exception as error:
+        print(f"[JARVIS] could not list open folders: {error}")
+        return {}
+
+    return found
+
+
+def close_folder(name=None):
+    """Close an open Explorer window. Returns a spoken reply.
+
+    With no name, closes the JARVIS folder itself.
+    """
+    base = files.root()
+
+    if not base:
+        return "I can't reach your JARVIS folder, sir."
+
+    if name is None or not _identity(name) or _identity(name) in {
+        "jarvis", "jarvis root", "root",
+    }:
+        target = base
+        spoken = "your JARVIS folder"
+    else:
+        folder = find(name)
+
+        if not folder:
+            asked = _identity(name) or str(name).strip()
+
+            return (
+                f"There's no {asked} folder in your JARVIS folder, sir. "
+                f"{describe_available()}"
+            )
+
+        target = os.path.join(base, folder)
+        spoken = f"the {folder} folder"
+
+    windows = _open_explorer_windows()
+    window = windows.get(os.path.normcase(os.path.normpath(target)))
+
+    if window is None:
+        return f"{spoken[0].upper()}{spoken[1:]} isn't open, sir."
+
+    try:
+        window.Quit()
+    except Exception as error:
+        print(f"[JARVIS] could not close {target}: {error}")
+        return f"I couldn't close {spoken}, sir."
+
+    return f"Closing {spoken}, sir."
 
 
 def _reveal(path):
