@@ -25,6 +25,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+# Before every other project import. Mocking individual functions is not
+# enough: this suite patched memory_collections._ensure_data and assumed
+# nothing else reached disk, and a save further down the chain wrote the
+# fixture dict over a real memory.json. Redirecting the folder itself is
+# the only version that cannot be got round.
+from tools import sandbox  # noqa: E402
+
+sandbox.activate()
+
 # The trap has to be in place before anything does "from providers import
 # chat", or those modules keep a reference to the real one.
 import providers  # noqa: E402
