@@ -152,6 +152,14 @@ _priority = threading.Event()
 # Pause between warmed phrases, leaving the connection free for real replies.
 _PREWARM_GAP = 0.4
 
+# Set by the HUD stop button to cut off the utterance being spoken. Cleared
+# when the next one starts, so it never silences anything said later.
+_stop = threading.Event()
+
+# Told True when an utterance starts playing and False when it ends, so the
+# HUD shows its stop button only while there is something to stop.
+_speaking_listener = None
+
 
 def speech_epoch():
     """A counter that changes each time JARVIS finishes speaking."""
@@ -169,6 +177,35 @@ def _bump_epoch():
 
     with _epoch_lock:
         _epoch += 1
+
+
+def stop_speaking():
+    """Cut off whatever is being said now. True if something was."""
+    if not _speaking.is_set():
+        return False
+
+    _stop.set()
+
+    return True
+
+
+def stopped():
+    """True when the last utterance was cut off rather than finished."""
+    return _stop.is_set()
+
+
+def set_speaking_listener(listener):
+    """Register a callable taking True when speech starts, False when it ends."""
+    global _speaking_listener
+    _speaking_listener = listener
+
+
+def _report_speaking(active):
+    if _speaking_listener:
+        try:
+            _speaking_listener(bool(active))
+        except Exception:
+            pass
 
 
 class SpeechEngine:
@@ -238,7 +275,9 @@ class SpeechEngine:
         _priority.set()
 
         with self._lock:
+            _stop.clear()
             _speaking.set()
+            _report_speaking(True)
 
             global _neural_failed_at
 
@@ -261,16 +300,20 @@ class SpeechEngine:
                     try:
                         self._speak_neural(text)
                     except Exception as error:
-                        _neural_failed_at = time.monotonic()
-                        print(
-                            f"[JARVIS] neural voice unavailable "
-                            f"({error}); using fallback."
-                        )
-                        self._speak_fallback(text)
+                        # Stopped on purpose is not a voice failure: no
+                        # cooldown, and no fallback voice finishing the job.
+                        if not _stop.is_set():
+                            _neural_failed_at = time.monotonic()
+                            print(
+                                f"[JARVIS] neural voice unavailable "
+                                f"({error}); using fallback."
+                            )
+                            self._speak_fallback(text)
 
             finally:
                 self._report(0.0)
                 _speaking.clear()
+                _report_speaking(False)
                 _priority.clear()
                 _bump_epoch()
 
@@ -648,10 +691,18 @@ class SpeechEngine:
         _neural_busy.set()
         threading.Thread(target=work, daemon=True).start()
 
-        if not done.wait(timeout):
-            raise TimeoutError(
-                f"synthesis did not finish within {timeout}s"
-            )
+        # Polled rather than one long wait, so a stop pressed while the
+        # audio is still being made returns at once.
+        deadline = time.monotonic() + timeout
+
+        while not done.wait(0.05):
+            if _stop.is_set():
+                raise RuntimeError("speech stopped")
+
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"synthesis did not finish within {timeout}s"
+                )
 
         if "error" in outcome:
             raise outcome["error"]
@@ -679,7 +730,8 @@ class SpeechEngine:
                 _NEURAL_SYNTHESIS_DEADLINE,
             )
 
-            self._play_reactive(data, samplerate, boundaries)
+            if not _stop.is_set():
+                self._play_reactive(data, samplerate, boundaries)
 
             return
 
@@ -688,12 +740,18 @@ class SpeechEngine:
         spoken_sentences = 0
 
         for index, chunk in enumerate(chunks):
+            if _stop.is_set():
+                return
+
             try:
                 data, samplerate, boundaries = self._audio_for_bounded(
                     chunk,
                     _NEURAL_SYNTHESIS_DEADLINE,
                 )
             except Exception as error:
+                if _stop.is_set():
+                    return
+
                 # Only what is left goes to the fallback voice. Letting this
                 # reach speak() would replay the whole answer from the top
                 # in the other voice.
@@ -770,6 +828,10 @@ class SpeechEngine:
             if status:
                 print(status)
 
+            if _stop.is_set():
+                outdata.fill(0)
+                raise sd.CallbackStop
+
             end = position + frames
             chunk = data[position:end]
 
@@ -840,8 +902,19 @@ class SpeechEngine:
                 )
 
     def _speak_fallback(self, text):
+        if _stop.is_set():
+            return
+
         engine = pyttsx3.init()
         engine.setProperty("rate", self.rate)
+
+        # pyttsx3 can only be stopped from inside its own loop, so check
+        # the stop flag at every word.
+        def on_word(name, location, length):
+            if _stop.is_set():
+                engine.stop()
+
+        engine.connect("started-word", on_word)
         engine.say(text)
         engine.runAndWait()
         engine.stop()

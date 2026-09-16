@@ -403,6 +403,12 @@ def _arm():
     _armed_until = time.monotonic() + ARMED_SECONDS
 
 
+def disarm():
+    """Close any listening window, so only the wake word is heard."""
+    global _armed_until
+    _armed_until = 0.0
+
+
 def listen():
     """Block until an addressed command is heard, then return it."""
     engine.reset()
