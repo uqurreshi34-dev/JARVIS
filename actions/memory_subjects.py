@@ -1285,6 +1285,17 @@ def _wrapped_local_question(command):
     is BMW" was sent to the interpreter even though the answer was sitting
     in memory. Naming something JARVIS holds is evidence enough.
     """
+    # Before anything else. A statement about the user is never a question
+    # about a subject, however well the subject route could answer it.
+    # "my car is bmw" resolves to the stored BMW, and its facts mention
+    # cars, so local_answer answers it -- and the classifier never sees a
+    # fact to store. The guard has to sit ahead of that, not after it.
+    try:
+        if _states_rather_than_asks(command):
+            return False
+    except Exception:
+        pass
+
     if _original_local_question is not None:
         try:
             if _original_local_question(command):
