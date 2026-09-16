@@ -28,7 +28,7 @@ MAX_FACTS = 120
 # sentence otherwise.
 KNOWN_KEYS = (
     "name", "job", "default project", "location", "timezone", "birthday",
-    "email", "employer", "project", "gym days", "car",
+    "email", "employer", "project", "gym days",
     # Preferences that change what JARVIS actually does, rather than facts
     # he can only recite back.
     "reply length", "latitude", "longitude",
@@ -279,8 +279,6 @@ _KEYED_PATTERNS = (
      "job"),
     (re.compile(r"^(?:my birthday is|i was born on)\s+(.+)$", re.I),
      "birthday"),
-    (re.compile(r"^my car is\s+(.+)$", re.I),
-     "car"),
 )
 
 
