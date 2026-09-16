@@ -36,7 +36,7 @@ This prevents speech intended for the phone from being heard or acted on by
 the desktop listener. When the phone interaction finishes, the desktop
 microphone is restored.
 
-**113 language-model intents. 507 spoken phrases resolve locally with no API call.**
+**119 language-model intents. 520 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -370,7 +370,42 @@ Stored memory keys and collection item names are treated as data: JARVIS preserv
 them as stored rather than grammatically singularising or otherwise rewriting their 
 names when speaking them.
 
+### Subjects — `actions/subject_store.py`
 
+What JARVIS has learned about the world, in `subjects.txt`, kept apart from
+`memory.txt`. Same plain-text properties: one fact per line as
+`subject: fact`, every line self-contained, editable in Notepad. Delete a
+line and that fact is gone.
+
+    bmw 3 series: The 320d returns roughly 55-60 mpg combined. [learned]
+
+The trailing tag records where a fact came from -- `[learned]` from a model,
+`[you]` typed by hand -- so a wrong fact tells you which source to distrust.
+It is optional; an untagged line reads fine.
+
+The split exists because `memory.txt` is capped at 120 lines and evicts the
+oldest first. At six facts a subject, twenty researched subjects filled the
+budget and the next one silently dropped the user's name. `subjects.txt` has
+its own budget, and keyed facts in `memory.txt` now survive the cap whatever
+the count.
+
+`memory.json` mirrors both files with timestamps. When a fact moves between
+them its record is re-sourced rather than deleted, so the date it was learned
+survives the move. `subject_store.sync_to_json()` keeps the mirror following
+`subjects.txt`, and runs at every startup so a hand edit made while JARVIS is
+closed is picked up.
+
+### Comparing stored subjects
+
+"compare the A4 with the A6", "is the BMW better than the Mercedes",
+"audi a4 vs audi a6" — when **every** named subject has stored facts, the
+answer is built locally with no model request. Facts are matched by mutual
+nearest neighbour: boot space pairs with boot space, and a fact with no
+counterpart is left out. That needs no threshold.
+
+If any named subject is missing, nothing local answers it and the question
+goes to the model whole. Half a comparison built from one side's facts reads
+like an answer while dropping half the question.
 
 ### Contacts — `actions/contacts.py`
 Calling, WhatsApp and texting, from the phone only. The desk has no SIM,
@@ -878,6 +913,19 @@ later can't resurrect it.
 ## Things learned the hard way
 
 Each of these cost real time. They are here so they are not repeated.
+
+**A synthesis deadline is a limit on text length, not on network health.**
+`edge_tts` renders a whole request before a single sample plays, against
+`_NEURAL_SYNTHESIS_DEADLINE = 8.0`. So a 900-character answer could never
+make it, and every long reply finished in the local fallback voice --
+which reads as an intermittent network fault, because the short replies
+either side of it are fine. The message even says so: "synthesis did not
+finish within 8.0s". Raising the deadline is the wrong fix, since it buys
+twenty-five seconds of silence before the first word. Text is now split at
+sentence boundaries, each chunk synthesised while the previous one plays,
+so only the first is ever waited for and length stops mattering. A failure
+sends only the remaining chunks to the fallback rather than replaying the
+whole reply from the top in the other voice.
 
 **A certificate has to name every address, and two authorities must not
 share a name.** Reached over Tailscale a connection arrives on a
