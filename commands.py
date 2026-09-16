@@ -5278,6 +5278,19 @@ def _handle_command(command, *, fast_only=False, probe=False):
             verb = "is" if singular else "are"
 
             spoken = f"Noted, sir. Your {label} {verb} {value}."
+            try:
+                from actions import memory_collection_intelligence, memory_collections
+
+                if (
+                    memory_collections.cardinality(key)
+                    == memory_collections.CARDINALITY_COLLECTION
+                    and memory_collection_intelligence.operation_for_text(
+                        verbatim_text or text, key,
+                    ) == "add"
+                ):
+                    spoken = f"Noted, sir. I've added {value} to your {key}."
+            except Exception:
+                pass
         else:
             spoken = "I'll remember that, sir."
 

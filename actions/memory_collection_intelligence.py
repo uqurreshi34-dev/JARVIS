@@ -772,6 +772,10 @@ def _collection_key_is_mentioned(text, key):
 
 def locally_known(text):
     """Return True only when local collection meaning is sufficiently supported."""
+
+    if memory.singular_statement(_clean_example(text)):
+        return False
+
     key, cardinality, _score = _collection_match(text)
 
     if (
@@ -821,7 +825,30 @@ def operation_for_text(text, key=None):
     return "add"
 
 
-def _schema_detail(key):
+_FIRST_PERSON = frozenset({"i", "im", "ive", "me", "my", "mine"})
+_WH_WORDS = frozenset({
+    "what", "whats", "which", "who", "whom", "whose", "when", "where",
+    "why", "how", "list", "tell", "name", "show",
+})
+_YES_NO_OPENERS = frozenset({"do", "did", "am", "was", "have", "had"})
+_QUANTIFIERS = frozenset({
+    "any", "some", "all", "every", "anything", "something", "which", "what",
+})
+
+
+def _key_words(key):
+    words = set()
+
+    for token in re.findall(r"[a-z0-9]+", str(key or "").casefold()):
+        words.add(token)
+
+        if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+            words.add(token[:-1])
+
+    return words
+
+
+def _schema_detail(key, first_person=False):
     data = schema(key) or {}
     details = data.get("example_details") or []
 
@@ -830,6 +857,10 @@ def _schema_detail(key):
             continue
 
         example = _clean_example(detail.get("text"))
+        opening = re.findall(r"[a-z0-9]+", str(example or "").casefold())[:1]
+
+        if first_person and (not opening or opening[0] not in _FIRST_PERSON):
+            continue
         items = [
             _clean_example(item)
             for item in (detail.get("items") or ())
@@ -1068,8 +1099,39 @@ def _model_numbers(text):
     return tuple(re.findall(r"\d+", str(text or "").casefold()))
 
 
+def _name_words_match(one, other):
+    if one == other:
+        return True
+
+    if any(ch.isdigit() for ch in one + other):
+        return False
+
+    if min(len(one), len(other)) >= 4 and (
+        one.startswith(other) or other.startswith(one)
+    ):
+        return True
+
+    from difflib import SequenceMatcher
+
+    return SequenceMatcher(None, one, other).ratio() >= 0.8
+
+
+def _distinct_names(item, value):
+    """True when each name has a word the other lacks ("audi tt" / "audi a3")."""
+    first = re.findall(r"[a-z0-9]+", str(item or "").casefold())
+    second = re.findall(r"[a-z0-9]+", str(value or "").casefold())
+    only_first = [w for w in first if not any(
+        _name_words_match(w, o) for o in second)]
+    only_second = [w for w in second if not any(
+        _name_words_match(w, o) for o in first)]
+
+    return bool(only_first and only_second)
+
+
 def _may_canonicalise(item, value):
-    """False when two names carry different numbers, however alike they read."""
+    if _distinct_names(item, value):
+        return False
+
     first = _model_numbers(item)
     second = _model_numbers(value)
 
@@ -1485,6 +1547,27 @@ def accept_model_result(command, result):
 
     decision = copy.deepcopy(decision)
 
+    # "my X is Y" is single-valued, keyed by the spoken noun, whatever the
+    # model said. Sentences a fixed keyed pattern owns are left alone.
+    stated = memory.singular_statement(cleaned)
+
+    try:
+        already_keyed = memory._as_keyed(cleaned)
+    except Exception:
+        already_keyed = None
+
+    if stated and not already_keyed and len(items) <= 1:
+        key = _key(stated[0])
+        cardinality = memory_collections.CARDINALITY_SINGLE
+        operation = "replace"
+        items = [stated[1]]
+        decision.update({
+            "key": key,
+            "cardinality": cardinality,
+            "operation": operation,
+            "items": items,
+        })
+
     model_kind = _clean_example(
         decision.get("kind")
     )
@@ -1594,15 +1677,20 @@ def _apply_collection_decision(decision, example, learn_schema=True):
     # shape -- and then the two disagree about what the value is, and
     # neither knows the other exists. Returning None hands it back to the
     # ordinary remember path, which sets the keyed fact.
+    # The plain keyed parser: memory.classify is wrapped and also reports
+    # learned collections, which made this refuse genuine adds.
     try:
-        keyed = memory.classify(example) if example else None
+        keyed = (
+            memory._as_keyed(memory.safety.clean(example, 200))
+            if example else None
+        )
     except Exception:
         keyed = None
 
-    if keyed and _identity(keyed[0]) == _identity(key):
+    if keyed:
         return None
 
-    if any(_identity(known) == _identity(key) for known in memory.KNOWN_KEYS):
+    if memory.is_known_key(key):
         return None
 
     if any(safety.looks_like_instruction(item) for item in items):
@@ -1646,6 +1734,10 @@ def _remember_intercept(text):
             )
 
         # Single-valued memory continues through the original implementation.
+        return None
+
+    # "my car is volkswagen" is one current value, not another car.
+    if memory.singular_statement(cleaned):
         return None
 
     key, cardinality, _score = _collection_match(cleaned)
@@ -2053,18 +2145,62 @@ def _collection_answer(query):
     if re.search(r"\b(?:default|main|current)\b", folded):
         return None
 
+    words = re.findall(r"[a-z0-9]+", folded)
+
+    # Only questions about the user's own collection.
+    if not _FIRST_PERSON & set(words):
+        return None
+
+    # "what is my car" is a keyed fact once "car" is one.
+    for size in (2, 1):
+        for index in range(len(words) - size):
+            if words[index] != "my":
+                continue
+
+            phrase = " ".join(words[index + 1:index + 1 + size])
+
+            if phrase and memory.is_known_key(phrase):
+                return None
+
     key, cardinality, _score = _collection_match(cleaned)
 
-    if (
-        not key
-        or cardinality != memory_collections.CARDINALITY_COLLECTION
-    ):
+    if not key or cardinality != memory_collections.CARDINALITY_COLLECTION:
         return None
 
     values = memory_collections.items(key)
 
     if not values:
         return f"You don't currently have any {key} saved, sir."
+
+    # "do I like toyota" asks about one item.
+    if words and words[0] not in _WH_WORDS:
+        known = {_key(value): value for value in values}
+        named = [
+            value for value in known.values()
+            if re.search(
+                rf"(?<![a-z0-9]){re.escape(value.casefold())}(?![a-z0-9])",
+                folded,
+            )
+        ]
+
+        if named:
+            verb = "is" if len(named) == 1 else "are"
+            return f"Yes, sir. {' and '.join(named)} {verb} in your {key}."
+
+        if words[0] in _YES_NO_OPENERS and len(words) > 2:
+            statement = cleaned.split(None, 1)[1]
+            asked = [
+                item for item in _extract_items(statement, key)
+                if not (
+                    set(re.findall(r"[a-z0-9]+", item.casefold()))
+                    & (_QUANTIFIERS | _key_words(key))
+                )
+            ]
+            missing = [item for item in asked if _key(item) not in known]
+
+            if asked and missing == asked:
+                verb = "isn't" if len(missing) == 1 else "aren't"
+                return f"No, sir. {' and '.join(missing)} {verb} in your {key}."
 
     # Build the answer from the grammar of the QUESTION rather than copying
     # the wording of whichever example happened to teach the collection.
@@ -2094,6 +2230,12 @@ def _collection_answer(query):
 
         rest = match.group(1).strip()
 
+        rest = " ".join(
+            word for word in rest.split()
+            if re.sub(r"[^a-z0-9]", "", word.casefold())
+            not in (_QUANTIFIERS | _key_words(key))
+        )
+
         if rest:
             answer_prefix = builder(rest)
             break
@@ -2110,7 +2252,7 @@ def _collection_answer(query):
     # Extremely defensive fallback: use the learned example only when the
     # question form could not be transformed safely.
     if not answer_prefix:
-        example, example_items = _schema_detail(key)
+        example, example_items = _schema_detail(key, first_person=True)
 
         if not example or not example_items:
             return None
@@ -2170,6 +2312,9 @@ def _collection_answer(query):
             answer_prefix,
             flags=re.I,
         ).strip()
+
+        if not re.match(r"^(?:you|your)\b", answer_prefix, re.I):
+            answer_prefix = f"Your {key} are"
 
     if len(values) == 1:
         joined = values[0]

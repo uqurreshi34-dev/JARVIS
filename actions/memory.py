@@ -9,6 +9,7 @@ refused when stored, so the memory cannot become a way around the rules
 JARVIS already follows.
 """
 
+import json
 import os
 import re
 import threading
@@ -49,6 +50,79 @@ KNOWN_KEYS = (
     "home latitude", "home longitude",
 )
 
+
+# Keys the command model has already classified as single-valued ("my car
+# is porsche" -> car), read from memory.json's schemas so memory.txt parses
+# the same way however early it is read.
+_learned_keys_cache = {"stamp": None, "keys": frozenset()}
+
+
+def _learned_single_keys():
+    base = files.root()
+
+    if not base:
+        return frozenset()
+
+    path = os.path.join(base, "memory.json")
+
+    try:
+        stat = os.stat(path)
+        stamp = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return frozenset()
+
+    if _learned_keys_cache["stamp"] == stamp:
+        return _learned_keys_cache["keys"]
+
+    keys = set()
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            schemas = (json.load(handle) or {}).get("schemas") or {}
+
+        for key, schema in schemas.items():
+            if isinstance(schema, dict) and schema.get("cardinality") == "single":
+                cleaned = str(key or "").strip().casefold()
+
+                if cleaned:
+                    keys.add(cleaned)
+    except (OSError, ValueError, AttributeError):
+        return _learned_keys_cache["keys"]
+
+    _learned_keys_cache["stamp"] = stamp
+    _learned_keys_cache["keys"] = frozenset(keys)
+
+    return _learned_keys_cache["keys"]
+
+
+def is_known_key(key):
+    """A built-in key, or one learned as single-valued."""
+    wanted = str(key or "").strip().casefold()
+
+    return bool(wanted) and (
+        wanted in KNOWN_KEYS or wanted in _learned_single_keys()
+    )
+
+
+_GENERIC_KEYED = re.compile(
+    r"^my\s+([a-z][a-z0-9' -]*?)\s+is\s+(?:now\s+)?(.+)$",
+    re.I,
+)
+
+
+def singular_statement(text):
+    """("car", "porsche") for "my car is porsche", or None. Grammar only."""
+    match = _GENERIC_KEYED.match(str(text or "").strip())
+
+    if not match:
+        return None
+
+    key = match.group(1).strip().casefold()
+    value = match.group(2).strip(" .")
+
+    return (key, value) if key and value else None
+
+
 # How long an answer should be. Anything else is treated as medium.
 REPLY_LENGTHS = ("short", "medium", "long")
 
@@ -87,7 +161,7 @@ def _is_keyed(line):
     """True when a line stores one of the KNOWN_KEYS."""
     match = _LINE.match(line)
 
-    return bool(match and match.group(1).strip().casefold() in KNOWN_KEYS)
+    return bool(match and is_known_key(match.group(1)))
 
 
 def _trim(lines):
@@ -155,7 +229,7 @@ def facts():
     for line in _read():
         match = _LINE.match(line)
 
-        if match and match.group(1).strip().casefold() in KNOWN_KEYS:
+        if match and is_known_key(match.group(1)):
             entries.append((match.group(1).strip().casefold(),
                             match.group(2).strip()))
         else:
@@ -180,7 +254,7 @@ def set_fact(key, value):
     key = (key or "").strip().casefold()
     value = safety.clean(value, 200)
 
-    if key not in KNOWN_KEYS or not value:
+    if not is_known_key(key) or not value:
         return False
 
     if safety.looks_like_instruction(value):
@@ -302,6 +376,11 @@ def _as_keyed(fact):
 
             if value:
                 return key, value
+
+    stated = singular_statement(fact)
+
+    if stated and is_known_key(stated[0]):
+        return stated
 
     return None
 
