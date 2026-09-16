@@ -838,6 +838,21 @@ def _comparison_segments(text):
     ]
 
 
+def asks_to_compare(text):
+    """True when an utterance asks for two or more things to be compared.
+
+    Deliberately independent of whether those things are held locally.
+    That distinction is the whole point: "compare the A4 and the A5" with
+    only the A4 stored is still a comparison, and answering it from the
+    A4's facts alone reads like an answer while silently dropping half of
+    what was asked.
+    """
+    if not (_COMPARISON_CUES & set(_tokens(text))):
+        return False
+
+    return len(_comparison_segments(text)) >= 2
+
+
 def _comparison_subjects(text):
     """Every stored subject a comparison names, or None.
 
@@ -1174,14 +1189,15 @@ def local_answer(text):
         # was actually said.
         text = correct(text)
 
-        answer = (
-            history_answer(text)
-            # Before attribute_answer, which would resolve one of the two
-            # subjects and answer about it alone.
-            or comparison_answer(text)
-            or attribute_answer(text)
-            or category_answer(text)
-        )
+        answer = history_answer(text) or comparison_answer(text)
+
+        # A comparison that could not be completed belongs to the model,
+        # and nothing else local may have a go at it. attribute_answer
+        # would resolve whichever subject IS stored and answer about that
+        # one, which is how "compare the A4 and the A5" came back as a
+        # description of the A4.
+        if answer is None and not asks_to_compare(text):
+            answer = attribute_answer(text) or category_answer(text)
     except Exception as error:
         print(f"[JARVIS] local subject answer failed: {error}")
         answer = None
