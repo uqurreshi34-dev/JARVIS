@@ -209,6 +209,27 @@ def _guarded_fast_path(commands, original):
         if setup_request:
             return None
 
+        from actions import memory
+
+        # Explicit keyed facts must be recognised before the generic
+        # collection shortcut. Otherwise a value such as "audi a5" can
+        # make "my car is audi a5" look like a collection update and
+        # bypass the keyed fact that should replace the previous car.
+        if not (
+            text.endswith("?")
+            or text.split(" ", 1)[0] in _MEMORY_QUESTION_WORDS
+        ):
+            try:
+                keyed = memory.classify(text)
+            except Exception:
+                keyed = None
+
+            if keyed:
+                return commands._blank_result(
+                    "remember",
+                    text=(command or "").strip(),
+                )
+
         if not (
             text.endswith("?")
             or text.split(" ", 1)[0] in _MEMORY_QUESTION_WORDS
@@ -239,19 +260,6 @@ def _guarded_fast_path(commands, original):
 
         if text.endswith("?") or text.split(" ", 1)[0] in _MEMORY_QUESTION_WORDS:
             return None
-
-        from actions import memory
-
-        try:
-            keyed = memory.classify(text)
-        except Exception:
-            keyed = None
-
-        if keyed:
-            return commands._blank_result(
-                "remember",
-                text=(command or "").strip(),
-            )
 
         if re.match(r"^my\s+project\s+is\s+.+$", text, re.I):
             return commands._blank_result(
