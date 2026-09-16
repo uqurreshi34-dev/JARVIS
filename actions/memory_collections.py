@@ -372,7 +372,7 @@ def cardinality(key):
 
     with _lock:
         data = _ensure_data()
-        schema = data["schemas"].get(wanted)
+        schema = (data.get("schemas") or {}).get(wanted)
 
         if not isinstance(schema, dict):
             return None
@@ -397,7 +397,7 @@ def set_cardinality(key, value, source="local"):
 
     with _lock:
         data = _ensure_data()
-        existing = data["schemas"].get(wanted)
+        existing = (data.get("schemas") or {}).get(wanted)
 
         if (
             isinstance(existing, dict)
@@ -473,7 +473,7 @@ def add(key, value, source="user"):
     with _lock:
         data = _ensure_data()
 
-        if data["schemas"].get(wanted, {}).get("cardinality") != CARDINALITY_COLLECTION:
+        if (data.get("schemas") or {}).get(wanted, {}).get("cardinality") != CARDINALITY_COLLECTION:
             return False
 
         collection = data["collections"].setdefault(wanted, [])
@@ -572,7 +572,7 @@ def replace(key, values, source="user"):
     with _lock:
         data = _ensure_data()
 
-        if data["schemas"].get(wanted, {}).get("cardinality") != CARDINALITY_COLLECTION:
+        if (data.get("schemas") or {}).get(wanted, {}).get("cardinality") != CARDINALITY_COLLECTION:
             return False
 
         now = _now()

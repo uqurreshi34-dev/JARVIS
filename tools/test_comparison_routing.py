@@ -111,8 +111,11 @@ def _fixtures(encode):
     for target, name, kwargs in (
         (memory, "facts", {"return_value": []}),
         (memory, "relevant_summary", {"return_value": ""}),
+        # _ensure_data always setdefaults both keys, so a fake that omits
+        # "schemas" returns a shape the real one never produces -- and
+        # everything reading data["schemas"] raises KeyError.
         (memory_collections, "_ensure_data",
-         {"return_value": {"collections": _COLLECTIONS}}),
+         {"return_value": {"collections": _COLLECTIONS, "schemas": {}}}),
         (memory_collections, "items",
          {"side_effect": lambda key: _COLLECTIONS.get(key, [])}),
         (subject_store, "facts", {"return_value": _SUBJECTS}),
