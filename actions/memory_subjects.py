@@ -512,6 +512,37 @@ def _learn_action_words(commands):
     return frozenset(words) or None
 
 
+def _states_rather_than_asks(text):
+    """True when an utterance tells JARVIS something instead of asking.
+
+    "i like the audi a4" names a stored subject without being a question
+    about it: it is a new preference, and the collection layer learns it.
+    The mark separating the two is a first-person opening, which is closed
+    grammar -- English has a handful of first-person forms and the set
+    never grows, unlike subject names or command verbs, which is exactly
+    why both of those are derived at runtime instead of listed.
+
+    routing_guard already owns that definition, so this borrows it rather
+    than keeping a second copy here to drift out of step.
+    """
+    if str(text or "").strip().endswith("?"):
+        return False
+
+    tokens = _tokens(text)
+
+    if not tokens:
+        return False
+
+    try:
+        from actions import routing_guard
+
+        personal = routing_guard._MEMORY_PERSONAL_WORDS
+    except Exception:
+        return False
+
+    return tokens[0] in personal
+
+
 def names_known_subject(text):
     """True when an utterance asks something about a subject JARVIS holds.
 
@@ -526,6 +557,13 @@ def names_known_subject(text):
     attribute_answer, which still declines and falls through.
     """
     if _ACTION_WORDS is None:
+        return False
+
+    # A statement about the user is not a question about a subject, even
+    # when it names one. This route exists so questions reach the model
+    # instead of the classifier's shrug; claiming statements too stops the
+    # classifier ever seeing a new preference to learn.
+    if _states_rather_than_asks(text):
         return False
 
     corrected = correct(text)
@@ -719,7 +757,12 @@ _COMPARISON_CUES = frozenset({
     "differ", "versus", "vs", "better", "worse", "between",
 })
 
-_COMPARISON_JOINERS = ("versus", "vs", "against", "with", "and", "or", "to")
+# How English joins the two sides of a comparison. Closed grammar, like
+# the cues above: "better THAN the mercedes", "the a4 OR the a6", "bmw
+# VERSUS mercedes".
+_COMPARISON_JOINERS = (
+    "versus", "vs", "against", "than", "with", "and", "or", "to",
+)
 
 # How many paired facts a spoken comparison should carry. Beyond this it
 # stops being an answer and becomes a recital.
