@@ -403,7 +403,7 @@ answer is built locally with no model request. Facts are matched by mutual
 nearest neighbour: boot space pairs with boot space, and a fact with no
 counterpart is left out. That needs no threshold.
 
-If any named subject is missing, nothing local answers it and the question
+If any named subject is missing, the comparison cannot be built and the question
 goes to the model whole. Half a comparison built from one side's facts reads
 like an answer while dropping half the question.
 

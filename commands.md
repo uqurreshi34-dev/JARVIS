@@ -551,9 +551,16 @@ Questions about them are answered locally with no API call:
 | compare the A4 with the A6 | side by side, when both are stored |
 | is the BMW better than the Mercedes | same |
 
-If nothing stored answers the question, it goes to the model — with the
-subject's own facts as context, so "bmw 3 series history" is answered about
-the car rather than about your own.
+A question can name a stored subject without any one fact being a
+confident enough answer. "bmw 3 series history" is one: six facts are
+stored, and none of them matches the word *history* closely enough for
+JARVIS to recite it as the answer, even though one mentions the 1975
+launch. That goes to the model — and the model is given **those six facts**
+as its context, so it answers about the car.
+
+Only when the subject itself isn't in `subjects.txt` does the model fall
+back to your personal memory instead. That distinction is what stopped
+"bmw 3 series history" coming back as a summary of your own cars.
 
 
 ### Collections
