@@ -42,6 +42,7 @@ from actions import (
     folder_guard,
     folder_organizer,
     folder_undo,
+    folders,
     git_tasks,
     image_choices,
     images,
@@ -3247,6 +3248,30 @@ def _learn_subject_request(text):
     return subject or None
 
 
+_OPEN_FOLDER = re.compile(
+    r"^(?:open|open up|show me|show|bring up|go to|take me to)\s+"
+    r"(?:the\s+|my\s+|our\s+)?"
+    r"(.+?)"
+    r"\s*(?:folder|directory)$",
+    re.I,
+)
+
+
+def _open_folder_request(text):
+    """Return the folder to open, or None.
+
+    The trailing "folder" or "directory" is what makes this safe to sit in
+    front of the application opener. "open chrome", "open blender" and
+    "open the news" do not end that way and are left alone.
+    """
+    match = _OPEN_FOLDER.match(text)
+
+    if not match:
+        return None
+
+    return match.group(1).strip(" .") or None
+
+
 def _memory_request(text):
     """Return ("remember"|"forget", value) or None."""
     # Stated plainly, without "remember" in front.
@@ -3594,6 +3619,14 @@ def _fast_path(command):
             text=_original_case(command, subject),
         )
 
+    folder = _open_folder_request(text)
+
+    if folder:
+        return _blank_result(
+            "open_folder",
+            text=_original_case(command, folder),
+        )
+
     remembering = _memory_request(text)
 
     if remembering:
@@ -3846,6 +3879,10 @@ _WRITE_INTENTS = frozenset({
     "remember", "forget", "learn_subject", "set_market_alert", "market_report",
     "add_event", "remove_event", "clear_calendar", "undo_folder_organisation",
     "enable_folder_guard", "disable_folder_guard",
+    # Opens a window rather than writing a file, which is also true of
+    # open_application, set_volume and minimise_all. This set is things
+    # JARVIS did on your behalf, not things that touched the disk.
+    "open_folder",
 })
 
 
@@ -5242,6 +5279,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
             )
 
         return _query(intent, learn, detail=text)
+
+    if intent == "open_folder" and text:
+        return _query(intent, lambda: folders.open_folder(text))
 
     if intent == "remember" and (text or result.get("memory")):
         def store():
