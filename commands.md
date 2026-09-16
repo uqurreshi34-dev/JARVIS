@@ -174,6 +174,24 @@ Everything lives in `C:\Users\<you>\JARVIS\`. Nothing outside it is touched.
 Saying **"file"** always works. Leaving it off works when the file already
 exists.
 
+## Folders
+
+| Say | Does |
+|---|---|
+| open the technology folder | opens it in Explorer |
+| open jarvis folder | opens the JARVIS folder itself |
+| close the technology folder | closes that Explorer window |
+| list my folders | names the most recent four |
+| how many folders do I have | count only |
+
+Names are matched against what is really there, so "the technology folder"
+finds `Technologies`. A folder is never created to satisfy a request — if it
+doesn't exist, JARVIS says so and tells you what is there. If a folder exists
+but isn't open, "close it" says so rather than failing silently.
+
+Both listings count only your folders and files; JARVIS's own dot-prefixed
+state is excluded from each.
+
 ## Persistent JARVIS-folder housekeeping
 
 | Say | Does |
@@ -522,6 +540,27 @@ then stores the results locally for later questions and comparisons.
 | look up facts about Toyota | same                                                  |
 
 These are model-assisted learning commands, not part of the free path at learning time.
+
+Learned facts go to `subjects.txt`, not `memory.txt`, so researching a
+hundred subjects can never push out what you told him about yourself.
+Questions about them are answered locally with no API call:
+
+| Say | Does |
+|---|---|
+| audi a4 boot space | reads the one stored fact that answers it |
+| compare the A4 with the A6 | side by side, when both are stored |
+| is the BMW better than the Mercedes | same |
+
+A question can name a stored subject without any one fact being a
+confident enough answer. "bmw 3 series history" is one: six facts are
+stored, and none of them matches the word *history* closely enough for
+JARVIS to recite it as the answer, even though one mentions the 1975
+launch. That goes to the model — and the model is given **those six facts**
+as its context, so it answers about the car.
+
+Only when the subject itself isn't in `subjects.txt` does the model fall
+back to your personal memory instead. That distinction is what stopped
+"bmw 3 series history" coming back as a summary of your own cars.
 
 
 ### Collections

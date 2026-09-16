@@ -253,6 +253,21 @@ def _record_matches(record, key, value):
     )
 
 
+# Records whose source names subjects.txt mirror that file, not memory.txt.
+# _sync prunes anything missing from memory.txt, so without this every
+# researched fact would be deleted from the mirror the moment it moved out
+# of the text file -- losing when it was learned.
+_SUBJECT_SOURCE = "subjects.txt"
+
+
+def _is_subject_record(record):
+    """True when a record mirrors subjects.txt rather than memory.txt."""
+    if not isinstance(record, dict):
+        return False
+
+    return str(record.get("source") or "").startswith(_SUBJECT_SOURCE)
+
+
 def _sync(memory_module, reason="sync"):
     """Mirror memory.txt into memory.json and archive replaced values."""
     data = _ensure(memory_module)
@@ -264,7 +279,7 @@ def _sync(memory_module, reason="sync"):
         match_index = None
 
         for index, record in enumerate(data["memories"]):
-            if index in used:
+            if index in used or _is_subject_record(record):
                 continue
 
             if _record_matches(record, key, value):
@@ -307,13 +322,15 @@ def _sync(memory_module, reason="sync"):
 
     # Records deliberately removed from memory.txt disappear from the active
     # set, but they are not archived: an explicit "forget" must stay forgotten.
-    if len(used) != len(data["memories"]):
-        remaining = [
-            record
-            for index, record in enumerate(data["memories"])
-            if index in used
-        ]
+    # Subject records are exempt, because memory.txt was never where they
+    # lived; subject_store.sync_to_json() is what prunes those.
+    remaining = [
+        record
+        for index, record in enumerate(data["memories"])
+        if index in used or _is_subject_record(record)
+    ]
 
+    if len(remaining) != len(data["memories"]):
         data["memories"] = remaining
         changed = True
 

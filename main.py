@@ -2,6 +2,7 @@ from pathlib import Path
 from voice import (
     arm_follow_up,
     consume_follow_up_answer,
+    disarm,
     listen,
     set_follow_up_expired_listener,
     set_level_listener,
@@ -9,6 +10,7 @@ from voice import (
     set_wake_listener,
 )
 from speech import prewarm, set_amplitude_listener, speak, set_sentence_listener
+from speech import set_speaking_listener, stop_speaking as stop_speech
 from news_panel import NewsPanel
 from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
 from commands import (
@@ -123,8 +125,25 @@ class Assistant:
         self._interaction_open = False
         self._queued_alerts = []
 
+        # The HUD stop button ends the spoken part of a turn. Actions are
+        # never touched; only what JARVIS was going to say is dropped.
+        self._turn_stopped = threading.Event()
+        self._in_turn = False
+
     def stop(self):
         self._stop.set()
+
+    def stop_speaking(self):
+        """HUD stop button: silence him and send him to standby."""
+        if not stop_speech():
+            return
+
+        print("[JARVIS] speech stopped from the HUD", flush=True)
+
+        # An announcement spoken outside a turn is simply cut off, and the
+        # next one queued still plays.
+        if self._in_turn:
+            self._turn_stopped.set()
 
     def _state(self, state):
         self._current_state = state
@@ -137,9 +156,18 @@ class Assistant:
         self._hud.reply_changed.emit(text)
 
     def _say(self, text):
+        # Once stopped, the rest of the turn stays silent, including any
+        # "Done, sir" after an action that carries on in the background.
+        if self._turn_stopped.is_set():
+            print(f"[JARVIS] stopped; not saying: {text[:60]!r}", flush=True)
+            return
+
         self._reply(text)
         self._state(SPEAKING)
         speak(text)
+
+        if self._turn_stopped.is_set():
+            self._state(IDLE)
 
     def _begin_interaction(self):
         with self._alert_lock:
@@ -446,6 +474,10 @@ class Assistant:
             self._heard("")
             self._reply("")
 
+            # A new turn starts unstopped.
+            self._in_turn = False
+            self._turn_stopped.clear()
+
             _listen_started = time.monotonic()
 
             try:
@@ -469,6 +501,7 @@ class Assistant:
                 self._say("Shutting down.")
                 break
 
+            self._in_turn = True
             self._begin_interaction()
             self._state(THINKING)
 
@@ -509,13 +542,19 @@ class Assistant:
             # The interaction stays protected until the follow-up is
             # answered or expires. Only then may unsolicited announcements
             # speak.
-            if follow_up_answered:
+            if self._turn_stopped.is_set():
+                # Stopped: standby, as if the turn had ended with no
+                # follow-up. Queued announcements are read out as normal.
+                disarm()
+                self._end_interaction()
+            elif follow_up_answered:
                 self._finish_answered_follow_up()
             elif FOLLOW_UP:
                 self._open_follow_up()
             else:
                 self._end_interaction()
 
+            self._in_turn = False
             self._state(IDLE)
 
         self._state(IDLE)
@@ -715,10 +754,14 @@ def main():
     # which matters because playback runs on the worker/audio thread.
     set_amplitude_listener(hud.amplitude_changed.emit)
 
+    # The stop button appears only while there is speech to stop.
+    set_speaking_listener(hud.speaking_changed.emit)
+
     # Microphone levels drive the waveform when JARVIS is not talking.
     set_level_listener(hud.level_changed.emit)
 
     assistant = Assistant(hud)
+    hud.stop_clicked.connect(assistant.stop_speaking)
 
     hud.shutdown.connect(panel.hide_news.emit)
     hud.shutdown.connect(beam.hidden.emit)

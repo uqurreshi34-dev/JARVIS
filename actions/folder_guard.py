@@ -42,6 +42,7 @@ _PROTECTED_AUTO_NAMES = frozenset({
     _STATE_NAME,
     "jarvis-pending.txt",
     "market-alerts.txt",
+    "jarvis-market-marks.txt",
 })
 
 

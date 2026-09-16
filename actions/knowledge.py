@@ -112,7 +112,7 @@ def answer(question):
     except Exception as error:
         print(f"[JARVIS] local collection answer failed: {error}")
 
-    relevant_memory = memory.relevant_summary(question)
+    relevant_memory = _memory_context(question)
 
     historical_words = {
         "old", "older", "previous", "prior", "former",
@@ -168,6 +168,50 @@ def answer(question):
         return spoken
 
     return _memory_fallback(question)
+
+
+def _memory_context(question):
+    """The memory worth putting in front of the model for this question.
+
+    memory.relevant_summary searches personal memory only. Asked "bmw 3
+    series history" it returns the user's own cars, and the instruction
+    sent alongside it tells the model to treat that as authoritative and
+    to prefer its wording over the noun in the question -- so the answer
+    comes back about their Audi. The model was not wrong; it was told to
+    do that.
+
+    A question naming a stored subject is about the subject, so the
+    subject's own facts are the relevant memory. Nothing here is specific
+    to cars or to any subject: it reads whatever subjects.txt holds, so it
+    keeps working as that file grows.
+
+    Falls back to personal memory whenever no stored subject is named, or
+    the named thing is only a collection item with no facts behind it.
+    """
+    try:
+        from actions import memory_subjects, subject_store
+
+        resolved = memory_subjects.resolve(memory_subjects.correct(question))
+
+        if resolved:
+            label = resolved[0]
+            facts = subject_store.facts_for(label)
+
+            if facts:
+                lines = "\n".join(f"- {fact}" for fact in facts)
+
+                return (
+                    f"Stored facts about {label}, which is what the "
+                    f"question is about:\n{lines}\n"
+                    "Answer from these. They describe the subject itself, "
+                    "not the user. If they do not cover what was asked, "
+                    "say so and answer from general knowledge instead."
+                )
+
+    except Exception as error:
+        print(f"[JARVIS] subject context unavailable: {error}")
+
+    return memory.relevant_summary(question)
 
 
 def answer_with_documents(question, document_context):
@@ -312,7 +356,7 @@ def learn_subject(subject):
     if not isinstance(facts, list):
         return 0
 
-    stored = 0
+    cleaned = []
 
     for fact in facts[:6]:
         if not isinstance(fact, str):
@@ -323,10 +367,13 @@ def learn_subject(subject):
         if not fact or len(fact) > 180:
             continue
 
-        if memory.remember(f"{subject}: {fact}"):
-            stored += 1
+        cleaned.append(fact)
 
-    return stored
+    # Researched facts go to subjects.txt, not memory.txt. One write for
+    # the batch rather than one per fact.
+    from actions import subject_store
+
+    return subject_store.add_many(subject, cleaned)
 
 
 _COMMIT_PROMPT = """

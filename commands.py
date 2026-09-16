@@ -42,6 +42,7 @@ from actions import (
     folder_guard,
     folder_organizer,
     folder_undo,
+    folders,
     git_tasks,
     image_choices,
     images,
@@ -384,6 +385,11 @@ _FAST_PHRASES = (
       "what are my files called", "whats in my folder",
       "whats in my jarvis folder", "what is in my jarvis folder"),
      "list_files"),
+    (("what folders do i have", "what folders are there", "list my folders",
+      "name my folders", "show me my folders", "read my folders",
+      "what folders have i got"), "list_folders"),
+    (("how many folders do i have", "how many folders are there",
+      "how many folders"), "count_folders"),
     (("read my notes", "what are my notes", "read back my notes",
       "whats on my notes", "check my notes", "my notes",
       "whats in my notes", "what is in my notes", "whats in my notes file",
@@ -3179,9 +3185,51 @@ _SET_ALERT = re.compile(
 )
 
 
+# "watch bitcoin at 0.4%", "track xrp for 1 percent", "set the bitcoin
+# alert to 0.5". Only the tell-me-when form existed, so these went to the
+# model, which called them unknown.
+_WATCH_ALERT = re.compile(
+    r"^(?:watch|track|monitor|set|change|make)\s+(?:the\s+)?(.+?)\s+"
+    r"(?:(?:alerts?|threshold|watch|trigger)\s+)?"
+    r"(?:at|for|to|on|with)\s+(?:a\s+)?"
+    r"(?:(?:move|change|swing)\s+of\s+)?"
+    r"(\d+)(?:\s+(\d+))?\s*(?:percent|per cent)?"
+    r"(?:\s+(?:moves?|movement|changes?|swings?))?$"
+)
+
+_DIGIT_WORDS = {
+    "zero": "0", "nought": "0", "oh": "0", "one": "1", "two": "2",
+    "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7",
+    "eight": "8", "nine": "9", "ten": "10",
+}
+
+
+def _spoken_percent(text):
+    """Digits for a percentage said in words ("point four", "half a percent")."""
+    words = "|".join(_DIGIT_WORDS)
+
+    text = re.sub(r"\bhalf (?:a )?(?=percent|per cent)", "0 5 ", text)
+    text = re.sub(
+        rf"\b(?:({words})\s+)?point\s+({words})\b",
+        lambda match: (
+            f"{_DIGIT_WORDS.get(match.group(1) or 'zero')} "
+            f"{_DIGIT_WORDS[match.group(2)]}"
+        ),
+        text,
+    )
+    text = re.sub(
+        rf"\b({words})(?=\s+(?:percent|per cent)\b|$)",
+        lambda match: _DIGIT_WORDS[match.group(1)],
+        text,
+    )
+
+    return " ".join(text.split())
+
+
 def _alert_request(text):
     """Return (coin, percent) for a threshold change, or None."""
-    match = _SET_ALERT.match(text)
+    text = _spoken_percent(text)
+    match = _SET_ALERT.match(text) or _WATCH_ALERT.match(text)
 
     if not match:
         return None
@@ -3245,6 +3293,49 @@ def _learn_subject_request(text):
     subject = match.group(1).strip(" .")
 
     return subject or None
+
+
+_OPEN_FOLDER = re.compile(
+    r"^(?:open|open up|show me|show|bring up|go to|take me to)\s+"
+    r"(?:the\s+|my\s+|our\s+)?"
+    r"(.+?)"
+    r"\s*(?:folder|directory)$",
+    re.I,
+)
+
+
+def _open_folder_request(text):
+    """Return the folder to open, or None.
+
+    The trailing "folder" or "directory" is what makes this safe to sit in
+    front of the application opener. "open chrome", "open blender" and
+    "open the news" do not end that way and are left alone.
+    """
+    match = _OPEN_FOLDER.match(text)
+
+    if not match:
+        return None
+
+    return match.group(1).strip(" .") or None
+
+
+_CLOSE_FOLDER = re.compile(
+    r"^(?:close|shut|close down|get rid of)\s+"
+    r"(?:the\s+|my\s+|our\s+)?"
+    r"(.+?)"
+    r"\s*(?:folder|directory)$",
+    re.I,
+)
+
+
+def _close_folder_request(text):
+    """Return the folder to close, or None."""
+    match = _CLOSE_FOLDER.match(text)
+
+    if not match:
+        return None
+
+    return match.group(1).strip(" .") or None
 
 
 def _memory_request(text):
@@ -3594,6 +3685,22 @@ def _fast_path(command):
             text=_original_case(command, subject),
         )
 
+    folder = _open_folder_request(text)
+
+    if folder:
+        return _blank_result(
+            "open_folder",
+            text=_original_case(command, folder),
+        )
+
+    shutting = _close_folder_request(text)
+
+    if shutting:
+        return _blank_result(
+            "close_folder",
+            text=_original_case(command, shutting),
+        )
+
     remembering = _memory_request(text)
 
     if remembering:
@@ -3846,6 +3953,10 @@ _WRITE_INTENTS = frozenset({
     "remember", "forget", "learn_subject", "set_market_alert", "market_report",
     "add_event", "remove_event", "clear_calendar", "undo_folder_organisation",
     "enable_folder_guard", "disable_folder_guard",
+    # Opens a window rather than writing a file, which is also true of
+    # open_application, set_volume and minimise_all. This set is things
+    # JARVIS did on your behalf, not things that touched the disk.
+    "open_folder", "close_folder",
 })
 
 
@@ -5243,6 +5354,18 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
         return _query(intent, learn, detail=text)
 
+    if intent == "open_folder" and text:
+        return _query(intent, lambda: folders.open_folder(text))
+
+    if intent == "close_folder" and text:
+        return _query(intent, lambda: folders.close_folder(text))
+
+    if intent == "list_folders":
+        return _query(intent, folders.describe_listing)
+
+    if intent == "count_folders":
+        return _query(intent, folders.describe_listing_count)
+
     if intent == "remember" and (text or result.get("memory")):
         def store():
             remember_text = verbatim_text or text or command
@@ -5278,6 +5401,19 @@ def _handle_command(command, *, fast_only=False, probe=False):
             verb = "is" if singular else "are"
 
             spoken = f"Noted, sir. Your {label} {verb} {value}."
+            try:
+                from actions import memory_collection_intelligence, memory_collections
+
+                if (
+                    memory_collections.cardinality(key)
+                    == memory_collections.CARDINALITY_COLLECTION
+                    and memory_collection_intelligence.operation_for_text(
+                        verbatim_text or text, key,
+                    ) == "add"
+                ):
+                    spoken = f"Noted, sir. I've added {value} to your {key}."
+            except Exception:
+                pass
         else:
             spoken = "I'll remember that, sir."
 

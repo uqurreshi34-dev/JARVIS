@@ -499,7 +499,12 @@ def listing():
     try:
         entries = [
             entry for entry in os.listdir(base)
+            # A leading dot marks JARVIS's own state -- the folder guard
+            # and undo records, the Blender bridge. folders() already
+            # skips them, and counting them here made files and folders
+            # disagree about what belongs to the user.
             if os.path.isfile(os.path.join(base, entry))
+            and not entry.startswith(".")
         ]
     except OSError:
         return []

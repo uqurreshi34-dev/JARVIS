@@ -186,6 +186,30 @@ def _project_inventory_request(text):
     )
 
 
+_COLLECTION_VERBS = frozenset({
+    "add", "remove", "delete", "forget", "drop", "erase", "take", "put",
+    "include", "save", "store", "note", "remember", "also",
+})
+
+
+def _reads_as_statement(command):
+    """First-person opening, a collection verb, or a named collection."""
+    words = re.findall(r"[a-z0-9]+", str(command or "").casefold())
+
+    if not words:
+        return False
+
+    if words[0] in _MEMORY_PERSONAL_WORDS or words[0] in _COLLECTION_VERBS:
+        return True
+
+    try:
+        from actions import memory_subjects
+
+        return bool(memory_subjects._collection_words() & set(words))
+    except Exception:
+        return False
+
+
 def _guarded_fast_path(commands, original):
     """Route generic personal-memory statements through the existing remember intent."""
     def guarded(command):
@@ -213,9 +237,24 @@ def _guarded_fast_path(commands, original):
             text.endswith("?")
             or text.split(" ", 1)[0] in _MEMORY_QUESTION_WORDS
         ):
-            from actions import memory_collection_intelligence
+            from actions import memory_collection_intelligence, memory_subjects
 
-            if memory_collection_intelligence.locally_known(text):
+            # "compare the a4 with the a6" has no question mark and opens
+            # with a verb, so the test above reads it as a statement. It
+            # asks. Claiming it here stores the cars instead of comparing
+            # them, and the caller never sees a comparison at all.
+            comparing = False
+
+            try:
+                comparing = memory_subjects.asks_to_compare(text)
+            except Exception:
+                comparing = False
+
+            if (
+                not comparing
+                and _reads_as_statement(command)
+                and memory_collection_intelligence.locally_known(text)
+            ):
                 print(
                     "[fast] remember "
                     "(learned collection; no API call)"
@@ -235,6 +274,15 @@ def _guarded_fast_path(commands, original):
             keyed = memory.classify(text)
         except Exception:
             keyed = None
+
+        if keyed:
+            try:
+                fixed = memory._as_keyed(memory.safety.clean(text, 200))
+            except Exception:
+                fixed = None
+
+            if not fixed and not _reads_as_statement(command):
+                keyed = None
 
         if keyed:
             return commands._blank_result(

@@ -40,6 +40,11 @@ _WIDTH = 460
 _HEIGHT = 292
 
 _CENTRE = QPointF(132.0, 135.0)
+
+# The stop button: inside the top-left corner bracket, clear of the outer
+# ring. The click area is a little larger than what is drawn.
+_STOP_RECT = QRectF(22.0, 22.0, 26.0, 26.0)
+_STOP_HIT = _STOP_RECT.adjusted(-6.0, -6.0, 6.0, 6.0)
 _R_OUTER = 108.0
 _R_TICKS = 96.0
 _R_RING1 = 84.0
@@ -107,6 +112,8 @@ class Hud(QWidget):
     shutdown = pyqtSignal()
     closed = pyqtSignal()
     core_clicked = pyqtSignal()
+    speaking_changed = pyqtSignal(bool)
+    stop_clicked = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -122,6 +129,7 @@ class Hud(QWidget):
         self._drag_offset = None
         self._press_pos = None
         self._drag_hover = False
+        self._speaking = False
 
         self._target = 0.0
         self._level = 0.0
@@ -153,6 +161,7 @@ class Hud(QWidget):
         self.documents_changed.connect(self._on_documents)
         self.amplitude_changed.connect(self._on_amplitude)
         self.level_changed.connect(self._on_level)
+        self.speaking_changed.connect(self._on_speaking)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -230,6 +239,10 @@ class Hud(QWidget):
             self.files_dropped.emit(paths)
 
         event.acceptProposedAction()
+
+    def _on_speaking(self, active):
+        self._speaking = bool(active)
+        self.update()
 
     def _on_state(self, state):
         self._state = state if state in _PALETTE else IDLE
@@ -335,7 +348,14 @@ class Hud(QWidget):
         ):
             moved = (event.position() - self._press_pos).manhattanLength()
 
-            if moved < 6 and self._distance_from_centre(self._press_pos) <= _R_RING3:
+            if (
+                moved < 6
+                and self._speaking
+                and _STOP_HIT.contains(self._press_pos)
+            ):
+                self.stop_clicked.emit()
+
+            elif moved < 6 and self._distance_from_centre(self._press_pos) <= _R_RING3:
                 self.core_clicked.emit()
 
         self._drag_offset = None
@@ -364,6 +384,7 @@ class Hud(QWidget):
         self._paint_text(painter, accent)
         self._paint_telemetry(painter, accent)
         self._paint_scanline(painter, accent)
+        self._paint_stop(painter)
         self._paint_drop_hint(painter, accent)
 
         painter.end()
@@ -372,6 +393,25 @@ class Hud(QWidget):
         colour = QColor(accent)
         colour.setAlpha(alpha)
         return colour
+
+    def _paint_stop(self, painter):
+        """The stop button, top left, drawn only while JARVIS is speaking."""
+        if not self._speaking:
+            return
+
+        painter.save()
+
+        red = QColor(255, 88, 88)
+
+        painter.setPen(QPen(red, 1.6))
+        painter.setBrush(QColor(255, 88, 88, 40))
+        painter.drawRoundedRect(_STOP_RECT, 6, 6)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(red)
+        painter.drawRect(_STOP_RECT.adjusted(8, 8, -8, -8))
+
+        painter.restore()
 
     def _paint_drop_hint(self, painter, accent):
         """Glow around the reactor while a file is dragged over JARVIS."""

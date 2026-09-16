@@ -250,26 +250,86 @@ def _value_memories():
 
 
 def sync_memberships():
-    """Connect single memories to collection items with the same identity."""
-    memories = _value_memories()
-    collections = _data().get("collections", {})
-    if not memories or not isinstance(collections, dict):
-        return 0
+    """Connect single memories to collection items with the same identity.
 
-    added = 0
-    for key, value in memories:
-        wanted = _identity(value)
-        for collection_key in list(collections):
-            for item in memory_collections.items(collection_key):
-                if _identity(item) != wanted:
-                    continue
-                from_entity = memory_entity(key)
-                to_entity = collection_entity(collection_key, item)
-                if has(from_entity, _RELATION, to_entity):
-                    continue
-                if add(from_entity, _RELATION, to_entity, source="inferred-local"):
+    Loads and saves once. The previous version called has() per candidate
+    pair, and has() re-read and deep-copied the whole of memory.json every
+    time, so storing one fact cost memories x collections x items file
+    reads.
+    """
+    with _lock:
+        data = _data()
+        collections = data.get("collections", {})
+
+        if not isinstance(collections, dict):
+            return 0
+
+        memories = [
+            (_clean(record.get("key")), _clean(record.get("value")))
+            for record in data.get("memories", [])
+            if isinstance(record, dict)
+            and _clean(record.get("key"))
+            and _clean(record.get("value"))
+        ]
+
+        if not memories:
+            return 0
+
+        existing = {
+            (
+                _normalise(record.get("from")),
+                _normalise(record.get("relation")),
+                _normalise(record.get("to")),
+            )
+            for record in data["relations"]
+            if isinstance(record, dict)
+        }
+
+        # Read every collection once rather than once per memory.
+        members = {
+            collection_key: memory_collections.items(collection_key)
+            for collection_key in list(collections)
+        }
+
+        now = _now()
+        added = 0
+
+        for key, value in memories:
+            wanted = _identity(value)
+
+            for collection_key, collection_items in members.items():
+                for item in collection_items:
+                    if _identity(item) != wanted:
+                        continue
+
+                    from_entity = memory_entity(key)
+                    to_entity = collection_entity(collection_key, item)
+                    triple = (
+                        _normalise(from_entity),
+                        _normalise(_RELATION),
+                        _normalise(to_entity),
+                    )
+
+                    if triple in existing:
+                        continue
+
+                    existing.add(triple)
+                    data["relations"].append({
+                        "id": uuid.uuid4().hex,
+                        "from": from_entity,
+                        "relation": _RELATION,
+                        "to": to_entity,
+                        "confidence": 1.0,
+                        "source": "inferred-local",
+                        "created_at": now,
+                        "updated_at": now,
+                    })
                     added += 1
-    return added
+
+        if added:
+            memory_history._save(data)
+
+        return added
 
 
 def _answer_relation_question(query):

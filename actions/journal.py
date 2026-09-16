@@ -172,6 +172,8 @@ _VERBS = {
     "git_commit": "commit your staged changes: {detail}",
     "open_application": "open {detail}",
     "close_application": "close {detail}",
+    "open_folder": "open your {detail} folder",
+    "close_folder": "close your {detail} folder",
 }
 
 

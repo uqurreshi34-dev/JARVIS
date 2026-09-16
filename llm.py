@@ -757,7 +757,7 @@ class CommandInterpreter:
     def interpret(self, command, applications, projects=()):
 
         if _local_memory_question(command):
-            print("[fast] answer_question (local memory route; no classifier API call)")
+            print("[fast] answer_question (local routing; no classifier API call)")
 
             return {
                 "intent": "answer_question",
