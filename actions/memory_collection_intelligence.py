@@ -1049,6 +1049,36 @@ def _extract_template_items(text, key):
     return found
 
 
+def _model_numbers(text):
+    """The numbers in a name, in order.
+
+    Model names differ by their numbers and by nothing else: an Audi A3 and
+    an Audi A4 are two cars, not two spellings of one. Neither similarity
+    measure below can see that. SequenceMatcher scores "audia3" against
+    "audia4" at 0.83, near the 0.86 bar, and the encoder scores them well
+    past 0.78 because to an embedding they mean almost exactly the same
+    thing -- which is how "i like audi a3" came back as "Your car is
+    Audi A4".
+
+    So numbers are compared separately and exactly. Only when both names
+    carry numbers, because "bmw" and "bmw 3 series" is a genuine
+    shortening and should still canonicalise, while "bmw 3 series" and
+    "bmw 5 series" must not.
+    """
+    return tuple(re.findall(r"\d+", str(text or "").casefold()))
+
+
+def _may_canonicalise(item, value):
+    """False when two names carry different numbers, however alike they read."""
+    first = _model_numbers(item)
+    second = _model_numbers(value)
+
+    if not first or not second:
+        return True
+
+    return first == second
+
+
 def _canonicalise_collection_items(key, items):
     """Reuse an existing collection value when a new spelling means the same thing."""
     cleaned_items = [
@@ -1103,6 +1133,9 @@ def _canonicalise_collection_items(key, items):
                     value.casefold(),
                 )
 
+                if not _may_canonicalise(item, value):
+                    continue
+
                 if (
                     SequenceMatcher(
                         None,
@@ -1124,7 +1157,10 @@ def _canonicalise_collection_items(key, items):
                 if ranked:
                     index, score = ranked[0]
 
-                    if score >= 0.78:
+                    if (
+                        score >= 0.78
+                        and _may_canonicalise(item, existing[index])
+                    ):
                         chosen = existing[index]
 
             except Exception:
