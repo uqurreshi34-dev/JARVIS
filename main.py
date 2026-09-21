@@ -805,6 +805,12 @@ def main():
         # Announcements queue for the whole session and are released when
         # it ends, which is why this brackets rather than interleaves.
         assistant._begin_interaction()
+
+        # Claimed here rather than on the first verse. A verse that is
+        # not cached yet has to be fetched first, so waiting for it left
+        # the HUD reading LISTENING for the seconds before any sound.
+        assistant._state(RECITING)
+
         page.began.emit(state)
         page_beam.shown.emit()
 

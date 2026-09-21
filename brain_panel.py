@@ -31,7 +31,15 @@ _SWELL = 0.055
 _MAX_PULSES = 34
 _PULSE_SPEED = 0.06
 
-_RATES = {"idle": 0.04, "listening": 0.12, "thinking": 0.4, "speaking": 0.22}
+_RATES = {
+    "idle": 0.04,
+    "listening": 0.12,
+    "thinking": 0.4,
+    "speaking": 0.22,
+    # Slower than speaking: the sphere should settle while he recites
+    # rather than fire the way it does mid-sentence.
+    "reciting": 0.14,
+}
 
 # A dark disc behind the sphere. Without it the whole thing disappears
 # against a pale desktop, since everything drawn is light on nothing.
@@ -43,6 +51,9 @@ _COLOURS = {
     "listening": QColor(95, 210, 245),
     "thinking": QColor(255, 190, 90),
     "speaking": QColor(95, 235, 160),
+    # The same gold the HUD and the recitation page use, so the three
+    # read as one instrument rather than three that happen to be open.
+    "reciting": QColor(205, 175, 95),
 }
 
 

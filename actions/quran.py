@@ -164,8 +164,16 @@ def verse_count(number):
 
 
 def _normalise(text):
+    """Lower case, and nothing between the words but spaces.
+
+    Whisper punctuates what it hears -- "recite, surah, too" -- and a
+    trailing comma is enough to stop "surah" being recognised as the
+    word a number follows. Dropping punctuation here fixes it once, for
+    the slot reader and the pattern both.
+    """
     text = (text or "").casefold()
-    text = text.replace("'", "").replace("-", " ").replace("_", " ")
+    text = text.replace("'", "")
+    text = re.sub(r"[^a-z0-9]+", " ", text)
 
     return re.sub(r"\s+", " ", text).strip()
 
