@@ -12,7 +12,8 @@ from voice import (
 from speech import prewarm, set_amplitude_listener, speak, set_sentence_listener
 from speech import set_speaking_listener, stop_speaking as stop_speech
 from news_panel import NewsPanel
-from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
+from quran_panel import QuranPanel
+from hud import IDLE, LISTENING, RECITING, SPEAKING, THINKING, Hud
 from commands import (
     handle_command,
     look_at_phone_picture,
@@ -46,6 +47,8 @@ from actions import (
     images,
     blender_fidelity,
     folder_guard,
+    quran,
+    recitation,
 )
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
@@ -139,6 +142,10 @@ class Assistant:
             return
 
         print("[JARVIS] speech stopped from the HUD", flush=True)
+
+        # Otherwise stop would cut one verse and the next would follow,
+        # since the session decides what comes next rather than speech.
+        recitation.stop()
 
         # An announcement spoken outside a turn is simply cut off, and the
         # next one queued still plays.
@@ -295,6 +302,20 @@ class Assistant:
             self._speak_alert_locked(text)
             self._state(previous)
 
+    def _on_recitation_verse(self, state):
+        """Show which verse is sounding, while it sounds."""
+        self._reply(f"{state['name']} {state['ayah']} of {state['total']}")
+        self._state(RECITING)
+
+    def _on_recitation_end(self, reason):
+        """Close the gate, releasing anything that queued behind it."""
+        self._state(IDLE)
+        self._end_interaction()
+
+    def _on_recitation_error(self, text):
+        print(f"[JARVIS] {text}", flush=True)
+        self._reply(text)
+
     def _on_folder_guard(self, text):
         """Speak a folder-guard announcement without interrupting a turn."""
         with self._alert_lock:
@@ -312,6 +333,13 @@ class Assistant:
     def _on_status(self, status):
         """Called by the listener when it starts or stops accepting a
         follow-up, including when the window expires mid-wait."""
+        # A recitation owns the HUD state for as long as it runs. The
+        # microphone is still armed underneath -- that is how "stop" is
+        # heard -- but its status would otherwise put the HUD back into
+        # LISTENING over the top of a verse that is still sounding.
+        if recitation.current():
+            return
+
         self._state(LISTENING if status == "listening" else IDLE)
 
     def _on_wake(self):
@@ -405,20 +433,6 @@ class Assistant:
         set_follow_up_expired_listener(self._on_follow_up_expired)
         reminder_manager.set_alert_listener(self._on_alert)
 
-        # Battery warnings share the reminder announcer, so they queue
-        # behind whatever JARVIS is already saying.
-        battery_monitor.set_alert_listener(self._on_alert)
-        battery_monitor.start()
-
-        # Observations share the same announcer, so they queue behind
-        # whatever JARVIS is already saying rather than talking over him.
-        watcher.set_listener(self._on_alert)
-        watcher.start()
-
-        pattern_monitor.set_due_listener(self._on_pattern_due)
-        pattern_monitor.set_suggestion_listener(self._on_pattern_suggestion)
-        pattern_monitor.start()
-
         # A phone on the same network drives the same assistant. The
         # handler runs on the server's own thread, which is why
         # handle_command serialises itself -- see _command_lock.
@@ -458,11 +472,29 @@ class Assistant:
         except Exception as error:
             print(f"[JARVIS] could not read the diary: {error}")
 
+        # Everything that speaks unprompted starts here and not before.
+        # The greeting, what was missed while JARVIS was closed, and the
+        # diary are a scripted opening; a monitor started earlier talks
+        # over it. The folder check matters most, because start() runs it
+        # synchronously -- where that call sits is where its line lands.
+        battery_monitor.set_alert_listener(self._on_alert)
+        battery_monitor.start()
+
         folder_guard.folder_guard.set_listener(self._on_folder_guard)
         folder_guard.folder_guard.set_follow_up_listener(self._open_follow_up)
         folder_guard.folder_guard.set_busy_checker(
             lambda: self._interaction_open)
         folder_guard.folder_guard.start()
+
+        # Observations share the reminder announcer, so once the opening
+        # is done they queue behind whatever JARVIS is saying rather than
+        # talking over him.
+        watcher.set_listener(self._on_alert)
+        watcher.start()
+
+        pattern_monitor.set_due_listener(self._on_pattern_due)
+        pattern_monitor.set_suggestion_listener(self._on_pattern_suggestion)
+        pattern_monitor.start()
 
         # Warm the cache for stock replies while the greeting plays, so the
         # first "Done, sir." does not wait on a network round trip.
@@ -761,6 +793,105 @@ def main():
     set_level_listener(hud.level_changed.emit)
 
     assistant = Assistant(hud)
+    # The recitation page, projected like the news and chart panels. Built
+    # here rather than in Assistant because the gate, the HUD state and the
+    # page all have to move together, and this is the one place all three
+    # are in reach.
+    page = QuranPanel()
+    page.set_anchor(hud)
+    page_beam = Beam(page, hud)
+
+    def recitation_began(state):
+        # Announcements queue for the whole session and are released when
+        # it ends, which is why this brackets rather than interleaves.
+        assistant._begin_interaction()
+
+        # Claimed here rather than on the first verse. A verse that is
+        # not cached yet has to be fetched first, so waiting for it left
+        # the HUD reading LISTENING for the seconds before any sound.
+        assistant._state(RECITING)
+
+        page.began.emit(state)
+        page_beam.shown.emit()
+
+    def recitation_verse(verse, state):
+        assistant._on_recitation_verse(state)
+        page.verse.emit(verse, state)
+
+    def recitation_ended(reason, state):
+        page.ended.emit(reason)
+
+        # Only an explicit stop takes the page away. Finishing a verse
+        # is the moment the verse box and the auto tick are most wanted.
+        if reason == "stopped":
+            page_beam.hidden.emit()
+
+        assistant._on_recitation_end(reason)
+
+    recitation.set_listeners(
+        on_begin=recitation_began,
+        on_verse=recitation_verse,
+        on_end=recitation_ended,
+        on_error=page.message.emit,
+    )
+
+    def page_jump(ayah):
+        session = recitation.latest()
+
+        if not session:
+            return
+
+        # jump() answers with a sentence when the verse is out of range,
+        # which belongs on the page rather than spoken over the recitation.
+        refusal = session.jump(ayah)
+
+        if refusal:
+            page.message.emit(refusal)
+
+    def page_auto(on):
+        session = recitation.latest()
+
+        if not session:
+            return
+
+        session.set_auto(on)
+
+        # Ticking auto after a single verse means "carry on from here",
+        # so it starts again at the next verse rather than repeating the
+        # one just heard.
+        if on and not session.running and session.ayah < session.total:
+            session.ayah += 1
+            session.start()
+
+    def page_pause(paused):
+        session = recitation.latest()
+
+        if not session:
+            return
+
+        session.pause() if paused else session.resume()
+
+    def page_reciter(identifier):
+        session = recitation.latest()
+
+        if session:
+            # Takes effect on the next verse: the one sounding was
+            # already fetched, and cutting it to swap voices mid-ayah
+            # would be worse than finishing it.
+            session.reciter = identifier
+
+    page.jump_requested.connect(page_jump)
+    page.auto_changed.connect(page_auto)
+    page.pause_changed.connect(page_pause)
+    page.stop_requested.connect(lambda: recitation.stop())
+    page.reciter_changed.connect(page_reciter)
+
+    # 189 audio editions, fetched once and cached. Off the main thread so
+    # a slow first call cannot stall the HUD.
+    threading.Thread(
+        target=lambda: page.reciters_loaded.emit(quran.reciters()),
+        daemon=True,
+    ).start()
     hud.stop_clicked.connect(assistant.stop_speaking)
 
     hud.shutdown.connect(panel.hide_news.emit)

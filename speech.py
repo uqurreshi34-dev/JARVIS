@@ -156,6 +156,13 @@ _PREWARM_GAP = 0.4
 # when the next one starts, so it never silences anything said later.
 _stop = threading.Event()
 
+# Set while playback is held mid-utterance. The audio callback writes
+# silence and does not advance, so the device stays open and resuming is
+# instant rather than a re-buffer. Only recitation uses it: pausing a
+# spoken reply has no meaning, and anything left paused holds the speech
+# lock, so stopping always clears it.
+_paused = threading.Event()
+
 # Told True when an utterance starts playing and False when it ends, so the
 # HUD shows its stop button only while there is something to stop.
 _speaking_listener = None
@@ -185,8 +192,28 @@ def stop_speaking():
         return False
 
     _stop.set()
+    _paused.clear()
 
     return True
+
+
+def pause_speaking():
+    """Hold playback where it is. True if something was playing."""
+    if not _speaking.is_set():
+        return False
+
+    _paused.set()
+
+    return True
+
+
+def resume_speaking():
+    """Carry on from where pause_speaking stopped."""
+    _paused.clear()
+
+
+def is_paused():
+    return _paused.is_set()
 
 
 def stopped():
@@ -276,6 +303,7 @@ class SpeechEngine:
 
         with self._lock:
             _stop.clear()
+            _paused.clear()
             _speaking.set()
             _report_speaking(True)
 
@@ -309,6 +337,61 @@ class SpeechEngine:
                                 f"({error}); using fallback."
                             )
                             self._speak_fallback(text)
+
+            finally:
+                self._report(0.0)
+                _speaking.clear()
+                _report_speaking(False)
+                _priority.clear()
+                _bump_epoch()
+
+    def play_file(self, path):
+        """Play an audio file through the same path as synthesised speech.
+
+        Anything that arrives as a recording rather than as text -- a
+        recitation, say -- goes through here rather than opening its own
+        output stream. That is what keeps the stop button, the speaking
+        state and the HUD waveform working: all three come from
+        _play_reactive checking _stop and reporting amplitude, and from
+        the bookkeeping around it. A second player would have none of
+        them, and would talk over JARVIS besides, since the lock held
+        here is what serialises everything he says.
+
+        Returns True when it played to the end, and False when it was
+        stopped or could not be read.
+        """
+        if not path or not os.path.exists(path):
+            return False
+
+        _priority.set()
+
+        with self._lock:
+            _stop.clear()
+            _paused.clear()
+            _speaking.set()
+            _report_speaking(True)
+
+            try:
+                data, samplerate = sf.read(path, dtype="float32")
+
+                # Downloaded audio is often stereo; the output stream is
+                # opened with one channel.
+                if getattr(data, "ndim", 1) > 1:
+                    data = data.mean(axis=1)
+
+                # No sentence boundaries: those describe synthesised
+                # speech, and a recording has none to report.
+                self._play_reactive(data, samplerate, [])
+
+                return not _stop.is_set()
+
+            except Exception as error:
+                print(
+                    f"[JARVIS] could not play "
+                    f"{os.path.basename(path)}: {error}"
+                )
+
+                return False
 
             finally:
                 self._report(0.0)
@@ -832,6 +915,12 @@ class SpeechEngine:
                 outdata.fill(0)
                 raise sd.CallbackStop
 
+            # Checked after the stop, so a stop pressed while paused
+            # still ends the utterance rather than being swallowed.
+            if _paused.is_set():
+                outdata.fill(0)
+                return
+
             end = position + frames
             chunk = data[position:end]
 
@@ -950,6 +1039,11 @@ COMMON_PHRASES = (
 
 def speak(text):
     speech.speak(text)
+
+
+def play_file(path):
+    """Play a recording. True if it finished, False if stopped."""
+    return speech.play_file(path)
 
 
 def audio_bytes(text):

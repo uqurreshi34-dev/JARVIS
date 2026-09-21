@@ -22,11 +22,21 @@ LISTENING = "listening"
 THINKING = "thinking"
 SPEAKING = "speaking"
 
+# Distinct from SPEAKING because it is not JARVIS talking. The waveform
+# behaves the same -- it is still his output driving the strip rather
+# than the microphone -- but the label and the colour should not claim
+# the recitation as his own voice.
+RECITING = "reciting"
+
+# Anything that is JARVIS's own audio rather than the room's.
+_HIS_AUDIO = (SPEAKING, RECITING)
+
 _PALETTE = {
     IDLE: QColor(95, 165, 205),
     LISTENING: QColor(80, 215, 255),
     THINKING: QColor(255, 180, 65),
     SPEAKING: QColor(95, 255, 195),
+    RECITING: QColor(205, 175, 95),
 }
 
 _LABEL = {
@@ -34,6 +44,7 @@ _LABEL = {
     LISTENING: "LISTENING",
     THINKING: "PROCESSING",
     SPEAKING: "SPEAKING",
+    RECITING: "RECITING",
 }
 
 _WIDTH = 460
@@ -247,7 +258,7 @@ class Hud(QWidget):
     def _on_state(self, state):
         self._state = state if state in _PALETTE else IDLE
 
-        if self._state != SPEAKING:
+        if self._state not in _HIS_AUDIO:
             self._target = 0.0
 
         self.update()
@@ -281,13 +292,13 @@ class Hud(QWidget):
 
         # While JARVIS talks, the waveform shows his voice rather than the
         # microphone, so the strip is never dead.
-        if self._state == SPEAKING:
+        if self._state in _HIS_AUDIO:
             self._current_level = max(0.0, min(1.0, value))
             self._level_age = 0
 
     def _on_level(self, value):
-        """Microphone level, ignored while JARVIS is speaking."""
-        if self._state == SPEAKING:
+        """Microphone level, ignored while JARVIS's own audio plays."""
+        if self._state in _HIS_AUDIO:
             return
 
         self._current_level = max(0.0, min(1.0, value))
@@ -315,7 +326,7 @@ class Hud(QWidget):
         """0..1 drive for the core: voice envelope, or breathing when quiet."""
         breath = _BREATH_DEPTH * (0.5 + 0.5 * math.sin(self._phase))
 
-        if self._state == SPEAKING:
+        if self._state in _HIS_AUDIO:
             return max(breath * 0.4, self._level)
 
         return breath

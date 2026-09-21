@@ -14,6 +14,14 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from anthropic import AnthropicFoundry
 
+try:
+    # Anthropic's own API uses the plain client. Guarded so an SDK without
+    # it cannot stop JARVIS booting -- the provider that needs it simply
+    # refuses to build.
+    from anthropic import Anthropic
+except ImportError:
+    Anthropic = None
+
 
 load_dotenv()
 
@@ -30,7 +38,7 @@ PROVIDERS = {
         "default_model": "openai/gpt-oss-20b",
         # Vision needs a model that accepts images; the text default does not.
         "vision_env": "GROQ_VISION_MODEL",
-        "default_vision_model": "qwen/qwen3.6-27b",
+        "default_vision_model": "qwen/qwen3.8-27b",
         # Qwen narrates its thinking unless told to hide it.
         "vision_reasoning": True,
         "default_reasoning_effort": "low",
@@ -52,6 +60,23 @@ PROVIDERS = {
         "model_env": "ANTHROPIC_FOUNDRY_MODEL",
         "default_model": "claude-opus-5",
         "vision_env": "ANTHROPIC_FOUNDRY_VISION_MODEL",
+        "default_vision_model": "claude-opus-5",
+        "reasoning": True,
+        "default_effort_env": "CLAUDE_DEFAULT_EFFORT",
+        "answer_effort_env": "CLAUDE_ANSWER_EFFORT",
+        "vision_effort_env": "CLAUDE_VISION_EFFORT",
+    },
+    # Anthropic's own paid API. Same models and the same code path as the
+    # Foundry deployment; only the client class and the absent base URL
+    # differ. It is dropped from the pool when ANTHROPIC_API_KEY is unset,
+    # so it costs nothing until it is wanted, and it sits last in the
+    # natural order -- work that should prefer it asks for it by name.
+    "anthropic": {
+        "kind": "anthropic",
+        "key_env": "ANTHROPIC_API_KEY",
+        "model_env": "ANTHROPIC_MODEL",
+        "default_model": "claude-opus-5",
+        "vision_env": "ANTHROPIC_VISION_MODEL",
         "default_vision_model": "claude-opus-5",
         "reasoning": True,
         "default_effort_env": "CLAUDE_DEFAULT_EFFORT",
@@ -123,11 +148,54 @@ def is_permission_error(error):
     )
 
 
+def is_transient_error(error):
+    """True when a request failed for a reason that says nothing about
+    whether another provider would have succeeded.
+
+    A 500, a timeout, or a dropped connection is a fact about one
+    provider's servers at one moment, not about the request. Treating it
+    as fatal meant the command died outright while a healthy provider sat
+    idle -- the opposite of the point of having a pool.
+
+    Status code first, because the SDK exceptions carry one and matching
+    on the text alone would fire on any message that happens to contain
+    "500".
+    """
+    status = getattr(error, "status_code", None)
+
+    if isinstance(status, int) and status >= 500:
+        return True
+
+    name = type(error).__name__.casefold()
+
+    if (
+        "timeout" in name
+        or "connection" in name
+        or "internalserver" in name
+        or "serviceunavailable" in name
+    ):
+        return True
+
+    text = str(error).casefold()
+
+    return (
+        "timed out" in text
+        or "timeout" in text
+        or "overloaded" in text
+        or "temporarily unavailable" in text
+        or "service unavailable" in text
+        or "bad gateway" in text
+        or "connection reset" in text
+        or "connection error" in text
+    )
+
+
 def should_failover(error):
     return (
         is_rate_limit(error)
         or is_model_unavailable(error)
         or is_permission_error(error)
+        or is_transient_error(error)
     )
 
 
@@ -280,17 +348,30 @@ class Provider:
 
         if self.kind == "anthropic":
             base_url_env = config.get("base_url_env")
-            base_url = os.getenv(base_url_env) if base_url_env else None
 
-            if not base_url:
-                raise RuntimeError(
-                    f"{self.name} is configured but its base URL is missing"
+            if base_url_env:
+                base_url = os.getenv(base_url_env)
+
+                if not base_url:
+                    raise RuntimeError(
+                        f"{self.name} is configured but its base URL is missing"
+                    )
+
+                self._client = AnthropicFoundry(
+                    api_key=api_key,
+                    base_url=base_url,
                 )
 
-            self._client = AnthropicFoundry(
-                api_key=api_key,
-                base_url=base_url,
-            )
+            elif Anthropic is None:
+                raise RuntimeError(
+                    f"{self.name} needs the Anthropic client, which this "
+                    "version of the anthropic package does not provide"
+                )
+
+            else:
+                # No base URL configured means Anthropic's own endpoint,
+                # which the plain client already knows.
+                self._client = Anthropic(api_key=api_key)
         else:
             self._client = OpenAI(
                 api_key=api_key,
@@ -747,14 +828,44 @@ print(
 )
 
 
+def _ordered(prefer=None, pool=None):
+    """Providers in the order they should be tried.
+
+    Awake ones first, but a resting provider is still better than
+    failing. Any names in prefer are moved ahead of both, in the order
+    given, and only when they are actually present -- that is how work
+    whose quality depends on the model asks for a capable one without
+    pinning itself to a provider that may not be configured at all.
+
+    pool defaults to every provider; the vision paths pass the subset
+    that has a vision model.
+    """
+    candidates = _pool if pool is None else pool
+
+    order = [p for p in candidates if not p.resting] + \
+        [p for p in candidates if p.resting]
+
+    if not prefer:
+        return order
+
+    wanted = [str(name).casefold() for name in prefer]
+
+    def rank(provider):
+        try:
+            return wanted.index(provider.name.casefold())
+        except ValueError:
+            return len(wanted)
+
+    # Stable, so providers of equal rank keep the awake-first ordering.
+    return sorted(order, key=rank)
+
+
 def chat(messages, response_format=None, temperature=0, max_tokens=None,
-         reasoning_effort=None):
+         reasoning_effort=None, prefer=None):
     """Send a chat request, rotating providers when one is unavailable."""
     last_error = None
 
-    # Awake providers first, but a resting one is still better than failing.
-    order = [p for p in _pool if not p.resting] + \
-        [p for p in _pool if p.resting]
+    order = _ordered(prefer)
 
     for index, provider in enumerate(order):
         try:
@@ -964,6 +1075,7 @@ def vision(
     mime="image/png",
     max_tokens=3000,
     reasoning_effort=None,
+    prefer=None,
 ):
     """Ask about an image, rotating providers exactly as chat does."""
     if not image_bytes:
@@ -975,9 +1087,7 @@ def vision(
         print("[JARVIS] no provider is configured for vision")
         return None
 
-    order = [p for p in capable if not p.resting] + [
-        p for p in capable if p.resting
-    ]
+    order = _ordered(prefer, capable)
 
     last_error = None
 
@@ -1016,7 +1126,16 @@ def vision(
             if not should_failover(error):
                 print(
                     f"[JARVIS] {provider.name} could not see the image: {error}")
-                return None
+
+                # Not a provider-health problem, so it is not rested. But
+                # the next provider may still manage the picture -- one
+                # provider rejecting an image says little about another,
+                # and returning here threw that chance away. The empty
+                # answer branch above already continues; this matches it.
+                if len(order) - index - 1:
+                    print(f"[JARVIS] trying {order[index + 1].name}")
+
+                continue
 
             provider.rest()
 
@@ -1044,6 +1163,7 @@ def vision_chat(
     mime="image/png",
     max_tokens=12000,
     reasoning_effort=None,
+    prefer=None,
 ):
     """Run a multimodal chat request with provider failover."""
     if not image_bytes:
@@ -1061,10 +1181,7 @@ def vision_chat(
         )
         return ""
 
-    order = (
-        [provider for provider in capable if not provider.resting]
-        + [provider for provider in capable if provider.resting]
-    )
+    order = _ordered(prefer, capable)
 
     last_error = None
 
@@ -1190,7 +1307,13 @@ def vision_chat(
                     f"[JARVIS] {provider.name} could not process "
                     f"multimodal refinement: {error}"
                 )
-                return ""
+
+                # As in vision(): not rested, but not fatal to the whole
+                # request either. The next provider gets its turn.
+                if len(order) - index - 1:
+                    print(f"[JARVIS] trying {order[index + 1].name}")
+
+                continue
 
             provider.rest()
 

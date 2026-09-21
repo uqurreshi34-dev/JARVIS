@@ -54,6 +54,8 @@ from actions import (
     news,
     planner,
     proofread,
+    quran,
+    recitation,
     research,
     notes,
     patterns,
@@ -3572,6 +3574,12 @@ def _fast_path(command):
     if not text:
         return None
 
+    # Numbers only and three words required, so this cannot claim an
+    # ordinary "play" or "read". Parsed again in the handler rather than
+    # carried through the result, which has a fixed set of fields.
+    if quran.parse(command):
+        return _blank_result("recite_quran")
+
     if text in (
         "restore original",
         "restore the original",
@@ -4946,6 +4954,14 @@ def _handle_command(command, *, fast_only=False, probe=False):
                 _project_manager.names(limit=_PROJECT_CANDIDATES),
             )
 
+            # interpret() has its own local route for memory questions and
+            # answers those without calling anything. Without this the
+            # journal records them as model-routed, which is how 232
+            # answer_question lines came to be counted as API calls that
+            # never happened.
+            if getattr(_interpreter, "answered_locally", False):
+                took_free_path = True
+
         except Exception as error:
             if _is_rate_limit(error):
                 print(f"[JARVIS] rate limited: {error}")
@@ -4976,9 +4992,6 @@ def _handle_command(command, *, fast_only=False, probe=False):
             command,
             intent,
             took_free_path,
-            detail=(
-                ...
-            ),
         )
 
     application = result.get("application")
@@ -5330,6 +5343,34 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "market_summary":
         return _query(intent, markets.describe)
+
+    if intent == "recite_quran":
+        def recite():
+            request = quran.parse(command)
+
+            if not request:
+                return "I did not catch the chapter, sir."
+
+            started = recitation.begin(
+                surah=request["surah"],
+                ayah=request["ayah"],
+                auto=request["whole"],
+            )
+
+            # begin() answers with a sentence when it will not start --
+            # an unknown surah, or a verse the surah does not have.
+            if isinstance(started, str):
+                return started
+
+            entry = quran.surah(request["surah"]) or {}
+            name = entry.get("englishName") or f"chapter {request['surah']}"
+
+            if request["whole"]:
+                return f"{name}, sir. All {started.total} verses."
+
+            return f"{name}, verse {request['ayah']}, sir."
+
+        return _query(intent, recite)
 
     if intent == "read_market_alerts":
         return _query(intent, markets.describe_thresholds)

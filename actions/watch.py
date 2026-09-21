@@ -316,12 +316,21 @@ class Watcher:
 
         return time.monotonic() - last > window * 3600
 
-    def _mention(self, key, text, urgent=False):
-        """Say something, or hold it if now is not the time."""
+    def _record(self, key, text):
+        """Mark an observation as made, and write it to the journal.
+
+        Split out of _mention so several observations can be recorded
+        individually and still be spoken as one sentence. The journal
+        keeps one line per observation either way -- a batched market
+        update is still three separate things that happened, and "what
+        did I miss" reads the journal, not the utterance.
+        """
         self._last[key] = time.monotonic()
 
         journal.alert(text)
 
+    def _deliver(self, text, urgent=False):
+        """Say something, or hold it if now is not the time."""
         if not urgent and _quiet_hours():
             hold(text)
             return
@@ -338,6 +347,11 @@ class Watcher:
         except Exception as error:
             print(f"[JARVIS] could not speak an observation: {error}")
             hold(text)
+
+    def _mention(self, key, text, urgent=False):
+        """Record one observation and say it."""
+        self._record(key, text)
+        self._deliver(text, urgent=urgent)
 
     def _run(self):
         while not self._stop.is_set():
@@ -369,6 +383,7 @@ class Watcher:
 
         now = time.time()
         changed = False
+        due = []
 
         for name, (price, _) in prices.items():
             if price is None:
@@ -407,22 +422,73 @@ class Watcher:
             # least partly, while JARVIS was closed. Say since when.
             since = f" {_since(when)}" if when < self._started else ""
 
-            self._mention(
+            # Held rather than spoken, because two coins crossing their
+            # thresholds in the same pass should arrive as one sentence.
+            # Said separately they are two utterances that both end in
+            # "sir", which is the single thing that most makes an
+            # assistant sound like a machine.
+            due.append((
                 key,
-                (
-                    f"{spoken} is {direction} "
-                    f"{abs(move):.1f} percent{since}, sir, "
-                    f"at {markets.spoken_price(price)}."
-                ),
-            )
+                spoken,
+                direction,
+                move,
+                since,
+                markets.spoken_price(price),
+            ))
 
             # Measuring from here on, so the next alert is about the next
             # move rather than the same one all over again.
             self._marks[name] = (price, now)
             changed = True
 
+        self._announce_moves(due)
+
         if changed:
             save_marks(self._marks)
+
+    @staticmethod
+    def _move_sentence(spoken, direction, move, since, price_phrase,
+                       polite=True):
+        """One coin's move. polite carries the form of address.
+
+        Only the last coin in a batch is addressed, so a single update
+        reads exactly as it always has and three read as one remark
+        rather than three.
+        """
+        address = ", sir," if polite else ""
+
+        return (
+            f"{spoken} is {direction} "
+            f"{abs(move):.1f} percent{since}{address} "
+            f"at {price_phrase}."
+        )
+
+    def _announce_moves(self, due):
+        """Record every move, and speak them as a single utterance."""
+        if not due:
+            return
+
+        # The journal keeps one line per coin whatever is said out loud.
+        # Batching is a speaking decision; the record of what happened
+        # should not change shape because two things happened at once.
+        for key, spoken, direction, move, since, phrase in due:
+            self._record(
+                key,
+                self._move_sentence(spoken, direction, move, since, phrase),
+            )
+
+        last = len(due) - 1
+
+        self._deliver(
+            " ".join(
+                self._move_sentence(
+                    spoken, direction, move, since, phrase,
+                    polite=(index == last),
+                )
+                for index, (_, spoken, direction, move, since, phrase)
+                in enumerate(due)
+            )
+        )
 
     def _check_disk(self):
         if not self._due("disk"):
