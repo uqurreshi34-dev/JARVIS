@@ -821,6 +821,12 @@ def main():
             page_beam.hidden.emit()
 
         assistant._on_recitation_end(reason)
+        recitation.set_listeners(
+            on_begin=recitation_began,
+            on_verse=recitation_verse,
+            on_end=recitation_ended,
+            on_error=page.message.emit,
+        )
 
     def page_jump(ayah):
         session = recitation.latest()
