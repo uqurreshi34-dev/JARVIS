@@ -4976,9 +4976,6 @@ def _handle_command(command, *, fast_only=False, probe=False):
             command,
             intent,
             took_free_path,
-            detail=(
-                ...
-            ),
         )
 
     application = result.get("application")
