@@ -63,37 +63,6 @@ _BISMILLAH = re.compile(
 # router so the router only has to ask this module.
 BOOK_WORDS = ("quran", "qur'an", "quraan", "koran", "kuran", "qoran")
 
-# Names people use that are not the catalogue's spelling. Deliberately
-# short: the catalogue's own englishName and englishNameTranslation
-# already cover most of it, and a long list of guesses would be a long
-# list of things to be wrong about.
-_ALIASES = {
-    "fatiha": 1,
-    "fatihah": 1,
-    "the opening": 1,
-    "baqarah": 2,
-    "baqara": 2,
-    "the cow": 2,
-    "imran": 3,
-    "yaseen": 36,
-    "yasin": 36,
-    "ya sin": 36,
-    "rahman": 55,
-    "waqiah": 56,
-    "mulk": 67,
-    "kahf": 18,
-    "ikhlas": 112,
-    "falaq": 113,
-    "nas": 114,
-}
-
-# Verses with names of their own.
-NAMED_VERSES = {
-    "ayat al kursi": (2, 255),
-    "ayatul kursi": (2, 255),
-    "the throne verse": (2, 255),
-}
-
 _lock = threading.Lock()
 _catalogue = None
 
@@ -201,69 +170,23 @@ def _normalise(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _key(text):
-    """A spelling-insensitive form for comparing transliterations.
-
-    Editions disagree about Faatiha and Fatiha, Baqara and Baqarah,
-    Yaseen and Yasin. Dropping a leading "al", collapsing doubled
-    vowels and dropping a trailing h makes those the same string,
-    which is cheaper and more predictable than fuzzy distance.
-    """
-    text = _normalise(text)
-    text = re.sub(r"^al\s+", "", text)
-    text = re.sub(r"([aeiou])\1+", r"\1", text)
-    text = re.sub(r"h\b", "", text)
-
-    return re.sub(r"[^a-z0-9]", "", text)
-
-
 def find_surah(text):
-    """Resolve a spoken surah reference to its number, or None.
+    """A surah number from a spoken reference, or None.
 
-    Tries, in order: a plain number, a known alias, and then the
-    catalogue's own names -- the transliteration, the English
-    translation, and the Arabic.
+    Numbers only, deliberately. Transliterated names arrive from speech
+    recognition in too many spellings to match reliably, and a misheard
+    name becoming a confidently wrong surah is worse than not
+    understanding at all. The catalogue still carries the names, for
+    display.
     """
     text = _normalise(text)
 
-    if not text:
+    if not text.isdigit():
         return None
 
-    if text.isdigit():
-        number = int(text)
+    number = int(text)
 
-        return number if 1 <= number <= 114 else None
-
-    if text in _ALIASES:
-        return _ALIASES[text]
-
-    for entry in catalogue():
-        names = (
-            _normalise(entry.get("englishName")),
-            _normalise(entry.get("englishNameTranslation")),
-            _normalise(entry.get("name")),
-        )
-
-        if text in names:
-            return entry.get("number")
-
-    # Spelling-insensitive, tried only after the exact names have failed
-    # so a real name is never beaten by a near miss on another.
-    wanted = _key(text)
-
-    if len(wanted) < 3:
-        return None
-
-    for entry in catalogue():
-        keys = (
-            _key(entry.get("englishName")),
-            _key(entry.get("englishNameTranslation")),
-        )
-
-        if wanted in keys:
-            return entry.get("number")
-
-    return None
+    return number if 1 <= number <= 114 else None
 
 
 def strip_opening(arabic):
@@ -391,70 +314,56 @@ def _download(url, path):
         return False
 
 
+# "surah 2 verse 255", "chapter 36", "sura 112 ayah 1". The verse is
+# optional: without one the whole surah is meant.
 _REFERENCE = re.compile(
-    r"(?:surah|sura|chapter)?\s*"
-    r"(?P<surah>[a-z' \-]+?|\d{1,3})\s*"
-    r"(?:,|\s)\s*"
-    r"(?:ayah|aya|ayat|verse|v)\s*"
-    r"(?P<ayah>\d{1,3})\s*$"
+    r"\b(?:surah|sura|chapter)\s*(?P<surah>\d{1,3})"
+    r"(?:\s*[, ]\s*(?:ayah|aya|ayat|verse|v)\s*(?P<ayah>\d{1,3}))?"
 )
+
+_ASKED = re.compile(r"\b(recite|play|read)\b")
 
 
 def parse(command):
     """Understand a recitation request, or return None.
 
-    Deliberately local and deliberately narrow. Anything this does not
-    recognise falls through to the usual routing rather than being
-    guessed at -- a misheard surah number should not become a
-    confidently wrong recitation.
+    Narrow on purpose. It wants an asking word, something that marks the
+    request as being about the Quran, and a surah number -- all three,
+    or it declines. Anything it does not recognise falls through to the
+    usual routing rather than being guessed at.
     """
     text = _normalise(command)
 
-    if not text:
+    if not text or not _ASKED.search(text):
         return None
 
-    asked = any(word in text for word in ("recite", "read", "play"))
-    book = any(word in text for word in BOOK_WORDS)
-
-    for name, (number, ayah) in NAMED_VERSES.items():
-        if name in text:
-            return {"surah": number, "ayah": ayah, "whole": False}
-
-    if not asked and not book:
-        return None
-
-    # Strip the framing so what is left is the reference itself.
-    body = re.sub(
-        r"\b(recite|read|play|from|the|me|please|of|in|to)\b", " ", text
+    # "surah" and "sura" are specific enough to qualify on their own;
+    # "chapter" is not, which is why it is absent here. Without this,
+    # "play chapter 3" of anything at all would become recitation.
+    marked = (
+        any(word in text for word in BOOK_WORDS)
+        or re.search(r"\b(surah|sura)\b", text)
     )
 
-    # Only after the reference pattern has had its chance, since it uses
-    # "surah" and "chapter" as anchors itself.
-    stripped = re.sub(r"\b(surah|sura|chapter)\b", " ", body)
+    if not marked:
+        return None
 
-    for word in BOOK_WORDS:
-        body = body.replace(word, " ")
+    match = _REFERENCE.search(text)
 
-    body = re.sub(r"\s+", " ", body).strip()
+    if not match:
+        return None
 
-    match = _REFERENCE.match(body)
+    number = find_surah(match.group("surah"))
 
-    if match:
-        number = find_surah(match.group("surah"))
+    if not number:
+        return None
 
-        if number:
-            return {
-                "surah": number,
-                "ayah": int(match.group("ayah")),
-                "whole": False,
-            }
+    ayah = match.group("ayah")
 
-    number = find_surah(re.sub(r"\s+", " ", stripped).strip())
-
-    if number:
+    if ayah is None:
         return {"surah": number, "ayah": 1, "whole": True}
 
-    return None
+    return {"surah": number, "ayah": int(ayah), "whole": False}
 
 
 def bounds_message(number, ayah):
