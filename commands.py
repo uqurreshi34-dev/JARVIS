@@ -5346,7 +5346,13 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "recite_quran":
         def recite():
-            request = quran.parse(command)
+            # The loose parser, not the strict one. Reaching here means
+            # the intent is already settled -- either the free path
+            # matched, or the model classified it -- so insisting on an
+            # asking word again would throw away an understanding that
+            # has already been arrived at, which is what turned a
+            # misheard 'recite' into a refusal.
+            request = quran.parse_reference(command)
 
             if not request:
                 return "I did not catch the chapter, sir."
