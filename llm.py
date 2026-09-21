@@ -767,6 +767,7 @@ class CommandInterpreter:
                 "amount": None,
                 "text": None,
                 "unit": None,
+                "memory": None,
             }
 
         # These names come from the machine, not from the user speaking, so
