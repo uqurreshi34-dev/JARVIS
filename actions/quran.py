@@ -273,6 +273,20 @@ def _write_text(path, translation, arabic, english):
         print(f"[JARVIS] could not cache verse text: {error}")
 
 
+def _from_cache(number, ayah, path, cached):
+    """Whatever is already on disk, when the API cannot be relied on."""
+    if not path or not os.path.exists(path):
+        return None
+
+    return {
+        "surah": number,
+        "ayah": ayah,
+        "arabic": (cached or {}).get("arabic") or "",
+        "english": (cached or {}).get("english") or "",
+        "audio": path,
+    }
+
+
 def fetch_verse(number, ayah, reciter=DEFAULT_RECITER,
                 translation=DEFAULT_TRANSLATION):
     """One verse: its Arabic, its translation, and a local mp3.
@@ -312,24 +326,30 @@ def fetch_verse(number, ayah, reciter=DEFAULT_RECITER,
         print(f"[JARVIS] could not fetch {number}:{ayah}: {error}")
 
         # The text is gone, but a cached recitation is still playable.
-        if os.path.exists(path):
-            return {
-                "surah": number,
-                "ayah": ayah,
-                "arabic": "",
-                "english": "",
-                "audio": path,
-            }
+        return _from_cache(number, ayah, path, cached)
 
-        return None
+    editions = payload.get("data")
 
-    editions = payload.get("data") or []
+    # Errors come back in the same envelope as success, with data as a
+    # message string rather than a list of editions -- a rate limit
+    # after a run of quick fetches is the usual way to see one. Reading
+    # that string as editions raised inside the recitation thread and
+    # killed the whole session, so the shape is checked rather than
+    # assumed, and the code is logged so the next one is diagnosable.
+    if not isinstance(editions, list):
+        code = payload.get("code") or payload.get("status") or "something"
+        print(f"[JARVIS] the Quran API answered {code} for {number}:{ayah}")
+
+        return _from_cache(number, ayah, path, cached)
 
     arabic = ""
     english = ""
     audio_url = ""
 
     for edition in editions:
+        if not isinstance(edition, dict):
+            continue
+
         identifier = (edition.get("edition") or {}).get("identifier")
 
         if identifier == reciter:

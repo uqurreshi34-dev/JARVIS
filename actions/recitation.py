@@ -266,6 +266,20 @@ class Session:
 
                 self.ayah += 1
 
+        except Exception as error:
+            # The loop runs on its own thread, so anything unhandled used
+            # to end the thread and leave the HUD and the page believing
+            # a recitation was still going. Ending deliberately is worse
+            # than not failing, and far better than failing silently.
+            reason = "unavailable"
+
+            print(f"[JARVIS] the recitation stopped: {error}")
+
+            self._notify(
+                self._on_error,
+                "The recitation stopped unexpectedly, sir.",
+            )
+
         finally:
             self._playing = False
             self._notify(self._on_end, reason, self.state())
