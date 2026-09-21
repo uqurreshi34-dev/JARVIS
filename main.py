@@ -405,30 +405,6 @@ class Assistant:
         set_follow_up_expired_listener(self._on_follow_up_expired)
         reminder_manager.set_alert_listener(self._on_alert)
 
-        # Battery warnings share the reminder announcer, so they queue
-        # behind whatever JARVIS is already saying.
-        battery_monitor.set_alert_listener(self._on_alert)
-        battery_monitor.start()
-
-        # The folder check runs synchronously here, before the watcher
-        # thread exists. Started after it, its one startup line landed in
-        # the middle of the market observations -- bitcoin, folder, then
-        # ethereum -- because the two have no ordering between them.
-        folder_guard.folder_guard.set_listener(self._on_folder_guard)
-        folder_guard.folder_guard.set_follow_up_listener(self._open_follow_up)
-        folder_guard.folder_guard.set_busy_checker(
-            lambda: self._interaction_open)
-        folder_guard.folder_guard.start()
-
-        # Observations share the same announcer, so they queue behind
-        # whatever JARVIS is already saying rather than talking over him.
-        watcher.set_listener(self._on_alert)
-        watcher.start()
-
-        pattern_monitor.set_due_listener(self._on_pattern_due)
-        pattern_monitor.set_suggestion_listener(self._on_pattern_suggestion)
-        pattern_monitor.start()
-
         # A phone on the same network drives the same assistant. The
         # handler runs on the server's own thread, which is why
         # handle_command serialises itself -- see _command_lock.
@@ -467,6 +443,30 @@ class Assistant:
 
         except Exception as error:
             print(f"[JARVIS] could not read the diary: {error}")
+
+        # Everything that speaks unprompted starts here and not before.
+        # The greeting, what was missed while JARVIS was closed, and the
+        # diary are a scripted opening; a monitor started earlier talks
+        # over it. The folder check matters most, because start() runs it
+        # synchronously -- where that call sits is where its line lands.
+        battery_monitor.set_alert_listener(self._on_alert)
+        battery_monitor.start()
+
+        folder_guard.folder_guard.set_listener(self._on_folder_guard)
+        folder_guard.folder_guard.set_follow_up_listener(self._open_follow_up)
+        folder_guard.folder_guard.set_busy_checker(
+            lambda: self._interaction_open)
+        folder_guard.folder_guard.start()
+
+        # Observations share the reminder announcer, so once the opening
+        # is done they queue behind whatever JARVIS is saying rather than
+        # talking over him.
+        watcher.set_listener(self._on_alert)
+        watcher.start()
+
+        pattern_monitor.set_due_listener(self._on_pattern_due)
+        pattern_monitor.set_suggestion_listener(self._on_pattern_suggestion)
+        pattern_monitor.start()
 
         # Warm the cache for stock replies while the greeting plays, so the
         # first "Done, sir." does not wait on a network round trip.
