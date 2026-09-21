@@ -1059,7 +1059,16 @@ def vision(
             if not should_failover(error):
                 print(
                     f"[JARVIS] {provider.name} could not see the image: {error}")
-                return None
+
+                # Not a provider-health problem, so it is not rested. But
+                # the next provider may still manage the picture -- one
+                # provider rejecting an image says little about another,
+                # and returning here threw that chance away. The empty
+                # answer branch above already continues; this matches it.
+                if len(order) - index - 1:
+                    print(f"[JARVIS] trying {order[index + 1].name}")
+
+                continue
 
             provider.rest()
 
@@ -1233,7 +1242,13 @@ def vision_chat(
                     f"[JARVIS] {provider.name} could not process "
                     f"multimodal refinement: {error}"
                 )
-                return ""
+
+                # As in vision(): not rested, but not fatal to the whole
+                # request either. The next provider gets its turn.
+                if len(order) - index - 1:
+                    print(f"[JARVIS] trying {order[index + 1].name}")
+
+                continue
 
             provider.rest()
 
