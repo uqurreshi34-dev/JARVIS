@@ -324,6 +324,133 @@ _REFERENCE = re.compile(
 _ASKED = re.compile(r"\b(recite|play|read)\b")
 
 
+# Spoken numbers, because speech recognition writes them as words. The
+# list stops at ninety-nine and relies on "hundred" for the rest, which
+# covers every surah (114) and every verse (286) without enumerating
+# anything.
+_ONES = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19,
+}
+
+_TENS = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+    "seventy": 70, "eighty": 80, "ninety": 90,
+}
+
+# What Whisper writes instead. These are real words in their own right --
+# "to" and "for" above all -- which is why they are only ever consulted
+# in the slot straight after "surah" or "verse", never anywhere else in
+# the sentence. "play the video" is untouched; "sura too" is not.
+_MISHEARD = {
+    "to": 2, "too": 2, "tu": 2,
+    "for": 4, "fore": 4, "faw": 4,
+    "won": 1, "wun": 1,
+    "ate": 8, "ait": 8,
+    "tree": 3, "free": 3, "thre": 3,
+    "sicks": 6, "sax": 6,
+    "nain": 9,
+    "fife": 5,
+    "tan": 10,
+}
+
+_NUMBER_WORDS = set(_ONES) | set(_TENS) | set(_MISHEARD) | {"hundred", "and"}
+
+# The words a number can follow.
+_SLOTS = frozenset({
+    "surah", "sura", "chapter", "ayah", "aya", "ayat", "verse", "v",
+})
+
+
+def _run_value(words):
+    """The number a run of number-words adds up to, or None.
+
+    Reads them the way they are said: hundreds multiply what came just
+    before, tens and units add. "one hundred and fourteen" is 114,
+    "thirty six" is 36, and a bare "and" is ignored rather than ending
+    the run.
+    """
+    total = 0
+    current = 0
+    seen = False
+
+    for word in words:
+        if word == "and":
+            continue
+
+        if word == "hundred":
+            current = (current or 1) * 100
+            seen = True
+            continue
+
+        value = _ONES.get(word)
+
+        if value is None:
+            value = _TENS.get(word)
+
+        if value is None:
+            value = _MISHEARD.get(word)
+
+        if value is None:
+            return None
+
+        current += value
+        seen = True
+
+    total += current
+
+    return total if seen else None
+
+
+def _digitise(text):
+    """Turn spoken numbers into digits, but only where one belongs.
+
+    Restricted to the words straight after "surah", "chapter", "verse"
+    and their kin. That restriction is the whole point: "to" and "for"
+    are ordinary English everywhere else, and rewriting them wherever
+    they appeared would turn "play the video for me" into nonsense.
+    """
+    words = text.split()
+    out = []
+    index = 0
+
+    while index < len(words):
+        word = words[index]
+        out.append(word)
+        index += 1
+
+        if word not in _SLOTS:
+            continue
+
+        # Gather the run of number-words that follows, stopping at the
+        # next slot word so "chapter two verse four" keeps its two
+        # numbers apart.
+        run = []
+
+        while index < len(words) and words[index] in _NUMBER_WORDS:
+            if words[index] in _SLOTS:
+                break
+
+            run.append(words[index])
+            index += 1
+
+        if not run:
+            continue
+
+        value = _run_value(run)
+
+        if value is None:
+            out.extend(run)
+            continue
+
+        out.append(str(value))
+
+    return " ".join(out)
+
+
 def parse(command):
     """Understand a recitation request, or return None.
 
@@ -348,7 +475,7 @@ def parse(command):
     if not marked:
         return None
 
-    match = _REFERENCE.search(text)
+    match = _REFERENCE.search(_digitise(text))
 
     if not match:
         return None
