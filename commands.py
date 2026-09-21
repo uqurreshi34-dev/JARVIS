@@ -4946,6 +4946,14 @@ def _handle_command(command, *, fast_only=False, probe=False):
                 _project_manager.names(limit=_PROJECT_CANDIDATES),
             )
 
+            # interpret() has its own local route for memory questions and
+            # answers those without calling anything. Without this the
+            # journal records them as model-routed, which is how 232
+            # answer_question lines came to be counted as API calls that
+            # never happened.
+            if getattr(_interpreter, "answered_locally", False):
+                took_free_path = True
+
         except Exception as error:
             if _is_rate_limit(error):
                 print(f"[JARVIS] rate limited: {error}")

@@ -410,6 +410,16 @@ class Assistant:
         battery_monitor.set_alert_listener(self._on_alert)
         battery_monitor.start()
 
+        # The folder check runs synchronously here, before the watcher
+        # thread exists. Started after it, its one startup line landed in
+        # the middle of the market observations -- bitcoin, folder, then
+        # ethereum -- because the two have no ordering between them.
+        folder_guard.folder_guard.set_listener(self._on_folder_guard)
+        folder_guard.folder_guard.set_follow_up_listener(self._open_follow_up)
+        folder_guard.folder_guard.set_busy_checker(
+            lambda: self._interaction_open)
+        folder_guard.folder_guard.start()
+
         # Observations share the same announcer, so they queue behind
         # whatever JARVIS is already saying rather than talking over him.
         watcher.set_listener(self._on_alert)
@@ -457,12 +467,6 @@ class Assistant:
 
         except Exception as error:
             print(f"[JARVIS] could not read the diary: {error}")
-
-        folder_guard.folder_guard.set_listener(self._on_folder_guard)
-        folder_guard.folder_guard.set_follow_up_listener(self._open_follow_up)
-        folder_guard.folder_guard.set_busy_checker(
-            lambda: self._interaction_open)
-        folder_guard.folder_guard.start()
 
         # Warm the cache for stock replies while the greeting plays, so the
         # first "Done, sir." does not wait on a network round trip.

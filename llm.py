@@ -754,10 +754,19 @@ def _local_memory_question(command):
 
 
 class CommandInterpreter:
+    # True when the last interpret() answered without calling a model.
+    # The caller cannot tell otherwise: this returns the same shape either
+    # way, so anything counting model usage would count a local answer as
+    # an API call.
+    answered_locally = False
+
     def interpret(self, command, applications, projects=()):
+        self.answered_locally = False
 
         if _local_memory_question(command):
             print("[fast] answer_question (local routing; no classifier API call)")
+
+            self.answered_locally = True
 
             return {
                 "intent": "answer_question",

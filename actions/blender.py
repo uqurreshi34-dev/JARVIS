@@ -14,11 +14,26 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from functools import partial
 from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from providers import chat, vision, vision_chat
+import providers
+
+# Blender is the one place where model capability decides whether the
+# output is usable at all, rather than merely good: a 12,000-token bpy
+# script that is only plausible still runs, and produces a wrong model
+# that passes every syntax and allowlist check. So these three prefer the
+# Anthropic providers when either is configured -- the Foundry deployment
+# first, then the paid API -- and fall through to the free providers only
+# when neither is there. Nothing else in JARVIS asks for them, so the
+# paid key is spent on this and not on misheard fragments.
+_PREFER = ("claude", "anthropic")
+
+chat = partial(providers.chat, prefer=_PREFER)
+vision = partial(providers.vision, prefer=_PREFER)
+vision_chat = partial(providers.vision_chat, prefer=_PREFER)
 
 from actions import files, images
 
