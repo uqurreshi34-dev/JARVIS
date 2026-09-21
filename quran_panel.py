@@ -272,8 +272,21 @@ class QuranPanel(QWidget):
             self._verse_box.setText(str(state.get("ayah", "")))
 
     def _on_ended(self, reason):
-        self._animate.stop()
-        self.hide()
+        """A finished recitation leaves the page up; a stopped one does not.
+
+        Reaching the end of a verse or of a surah is not a reason to
+        take the page away -- that is the moment the verse box and the
+        auto tick are most wanted. Only the stop button, which means
+        "enough", closes it.
+        """
+        self._pause.blockSignals(True)
+        self._pause.setChecked(False)
+        self._pause.setText("Pause")
+        self._pause.blockSignals(False)
+
+        if reason == "stopped":
+            self._animate.stop()
+            self.hide()
 
     def _on_message(self, text):
         self._message.setText(text or "")

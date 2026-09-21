@@ -168,6 +168,12 @@ class Session:
             speech.stop_speaking()
 
         elif not self.running:
+            # Nothing is playing, so there is no verse to interrupt and
+            # the pending jump has no loop to be read by. Clearing it
+            # before starting stops the new verse being played twice --
+            # once because it is where we start, and again because a
+            # jump to it was still outstanding.
+            self._take_jump()
             self.ayah = ayah
             self.start()
 
@@ -297,6 +303,18 @@ def current():
             return _current
 
         return None
+
+
+def latest():
+    """The last session, whether or not it is still running.
+
+    A session ends when a single verse finishes, but the page stays up
+    so the next one is a click away. Its controls need the session that
+    just ended, not only one still playing -- current() answers "is
+    something sounding", this answers "what were we reciting".
+    """
+    with _current_lock:
+        return _current
 
 
 def begin(surah, ayah=1, auto=False, **listeners):

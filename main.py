@@ -814,18 +814,16 @@ def main():
 
     def recitation_ended(reason, state):
         page.ended.emit(reason)
-        page_beam.hidden.emit()
+
+        # Only an explicit stop takes the page away. Finishing a verse
+        # is the moment the verse box and the auto tick are most wanted.
+        if reason == "stopped":
+            page_beam.hidden.emit()
+
         assistant._on_recitation_end(reason)
 
-    recitation.set_listeners(
-        on_begin=recitation_began,
-        on_verse=recitation_verse,
-        on_end=recitation_ended,
-        on_error=page.message.emit,
-    )
-
     def page_jump(ayah):
-        session = recitation.current()
+        session = recitation.latest()
 
         if not session:
             return
@@ -838,13 +836,22 @@ def main():
             page.message.emit(refusal)
 
     def page_auto(on):
-        session = recitation.current()
+        session = recitation.latest()
 
-        if session:
-            session.set_auto(on)
+        if not session:
+            return
+
+        session.set_auto(on)
+
+        # Ticking auto after a single verse means "carry on from here",
+        # so it starts again at the next verse rather than repeating the
+        # one just heard.
+        if on and not session.running and session.ayah < session.total:
+            session.ayah += 1
+            session.start()
 
     def page_pause(paused):
-        session = recitation.current()
+        session = recitation.latest()
 
         if not session:
             return
@@ -852,7 +859,7 @@ def main():
         session.pause() if paused else session.resume()
 
     def page_reciter(identifier):
-        session = recitation.current()
+        session = recitation.latest()
 
         if session:
             # Takes effect on the next verse: the one sounding was
