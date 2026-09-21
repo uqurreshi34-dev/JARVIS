@@ -4938,15 +4938,33 @@ def _handle_command(command, *, fast_only=False, probe=False):
         candidates = _application_manager.candidates(command)
 
         try:
-            journal.write("model", f"asking about {command!r}")
-
             result = _interpreter.interpret(
                 command,
                 candidates,
                 _project_manager.names(limit=_PROJECT_CANDIDATES),
             )
 
+            # Every line written here is speech the fast path could not
+            # resolve, which makes the journal the standing record of what
+            # a deterministic route would have to cover. That is only
+            # usable if it says what the model decided, not merely that it
+            # was asked -- the question alone cannot be matched against an
+            # intent later.
+            journal.write(
+                "model",
+                f"asking about {command!r}",
+                outcome=(result or {}).get("intent") or "unknown",
+            )
+
         except Exception as error:
+            # A failure is as worth recording as an answer: repeated
+            # failures on the same phrasing are exactly what a local route
+            # should take off the model entirely.
+            journal.write(
+                "model",
+                f"asking about {command!r}",
+                outcome=f"failed: {type(error).__name__}",
+            )
             if _is_rate_limit(error):
                 print(f"[JARVIS] rate limited: {error}")
 
