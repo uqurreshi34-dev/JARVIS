@@ -156,6 +156,13 @@ _PREWARM_GAP = 0.4
 # when the next one starts, so it never silences anything said later.
 _stop = threading.Event()
 
+# Set while playback is held mid-utterance. The audio callback writes
+# silence and does not advance, so the device stays open and resuming is
+# instant rather than a re-buffer. Only recitation uses it: pausing a
+# spoken reply has no meaning, and anything left paused holds the speech
+# lock, so stopping always clears it.
+_paused = threading.Event()
+
 # Told True when an utterance starts playing and False when it ends, so the
 # HUD shows its stop button only while there is something to stop.
 _speaking_listener = None
@@ -185,8 +192,28 @@ def stop_speaking():
         return False
 
     _stop.set()
+    _paused.clear()
 
     return True
+
+
+def pause_speaking():
+    """Hold playback where it is. True if something was playing."""
+    if not _speaking.is_set():
+        return False
+
+    _paused.set()
+
+    return True
+
+
+def resume_speaking():
+    """Carry on from where pause_speaking stopped."""
+    _paused.clear()
+
+
+def is_paused():
+    return _paused.is_set()
 
 
 def stopped():
@@ -276,6 +303,7 @@ class SpeechEngine:
 
         with self._lock:
             _stop.clear()
+            _paused.clear()
             _speaking.set()
             _report_speaking(True)
 
@@ -339,6 +367,7 @@ class SpeechEngine:
 
         with self._lock:
             _stop.clear()
+            _paused.clear()
             _speaking.set()
             _report_speaking(True)
 
@@ -885,6 +914,12 @@ class SpeechEngine:
             if _stop.is_set():
                 outdata.fill(0)
                 raise sd.CallbackStop
+
+            # Checked after the stop, so a stop pressed while paused
+            # still ends the utterance rather than being swallowed.
+            if _paused.is_set():
+                outdata.fill(0)
+                return
 
             end = position + frames
             chunk = data[position:end]

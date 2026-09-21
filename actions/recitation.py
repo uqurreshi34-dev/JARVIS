@@ -116,9 +116,19 @@ class Session:
             speech.stop_speaking()
 
     def pause(self):
+        """Hold it where it is, mid-verse.
+
+        The flag stops the loop starting another verse; the call into
+        speech stops the one already sounding. Both are needed: without
+        the first, pausing between verses would be ignored, and without
+        the second, pause would mean "after this verse", which is not
+        what a pause button means.
+        """
         self._paused.set()
+        speech.pause_speaking()
 
     def resume(self):
+        speech.resume_speaking()
         self._paused.clear()
 
     def set_auto(self, auto):
@@ -267,6 +277,18 @@ class Session:
 _current = None
 _current_lock = threading.Lock()
 
+# Set once at startup by whoever owns the HUD and the announcement gate.
+# Kept here rather than passed through every caller so commands.py can
+# start a recitation without knowing anything about main.py.
+_listeners = {}
+
+
+def set_listeners(**listeners):
+    """Register the default on_verse, on_begin, on_end and on_error."""
+    _listeners.update(
+        {name: call for name, call in listeners.items() if call}
+    )
+
 
 def current():
     """The session in progress, or None."""
@@ -294,11 +316,14 @@ def begin(surah, ayah=1, auto=False, **listeners):
     if refusal:
         return refusal
 
+    wanted = dict(_listeners)
+    wanted.update(listeners)
+
     with _current_lock:
         if _current and _current.running:
             _current.stop()
 
-        _current = Session(surah, ayah=ayah, auto=auto, **listeners)
+        _current = Session(surah, ayah=ayah, auto=auto, **wanted)
 
     _current.start()
 

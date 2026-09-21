@@ -46,6 +46,7 @@ from actions import (
     images,
     blender_fidelity,
     folder_guard,
+    recitation,
 )
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
@@ -139,6 +140,10 @@ class Assistant:
             return
 
         print("[JARVIS] speech stopped from the HUD", flush=True)
+
+        # Otherwise stop would cut one verse and the next would follow,
+        # since the session decides what comes next rather than speech.
+        recitation.stop()
 
         # An announcement spoken outside a turn is simply cut off, and the
         # next one queued still plays.
@@ -294,6 +299,20 @@ class Assistant:
             # since being at the desk is still the normal case.
             self._speak_alert_locked(text)
             self._state(previous)
+
+    def _on_recitation_verse(self, state):
+        """Show which verse is sounding, while it sounds."""
+        self._reply(f"{state['name']} {state['ayah']} of {state['total']}")
+        self._state(SPEAKING)
+
+    def _on_recitation_end(self, reason):
+        """Close the gate, releasing anything that queued behind it."""
+        self._state(IDLE)
+        self._end_interaction()
+
+    def _on_recitation_error(self, text):
+        print(f"[JARVIS] {text}", flush=True)
+        self._reply(text)
 
     def _on_folder_guard(self, text):
         """Speak a folder-guard announcement without interrupting a turn."""
@@ -457,6 +476,17 @@ class Assistant:
         folder_guard.folder_guard.set_busy_checker(
             lambda: self._interaction_open)
         folder_guard.folder_guard.start()
+
+        # A recitation holds the announcement gate open for its whole
+        # length, so anything falling due while it plays queues behind it
+        # and is released when it ends -- the same machinery that holds
+        # announcements during a follow-up. Nothing interrupts a verse.
+        recitation.set_listeners(
+            on_begin=lambda state: self._begin_interaction(),
+            on_end=lambda reason, state: self._on_recitation_end(reason),
+            on_verse=lambda verse, state: self._on_recitation_verse(state),
+            on_error=self._on_recitation_error,
+        )
 
         # Observations share the reminder announcer, so once the opening
         # is done they queue behind whatever JARVIS is saying rather than
