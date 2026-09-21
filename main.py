@@ -12,7 +12,7 @@ from voice import (
 from speech import prewarm, set_amplitude_listener, speak, set_sentence_listener
 from speech import set_speaking_listener, stop_speaking as stop_speech
 from news_panel import NewsPanel
-from hud import IDLE, LISTENING, SPEAKING, THINKING, Hud
+from hud import IDLE, LISTENING, RECITING, SPEAKING, THINKING, Hud
 from commands import (
     handle_command,
     look_at_phone_picture,
@@ -303,7 +303,7 @@ class Assistant:
     def _on_recitation_verse(self, state):
         """Show which verse is sounding, while it sounds."""
         self._reply(f"{state['name']} {state['ayah']} of {state['total']}")
-        self._state(SPEAKING)
+        self._state(RECITING)
 
     def _on_recitation_end(self, reason):
         """Close the gate, releasing anything that queued behind it."""
@@ -331,6 +331,13 @@ class Assistant:
     def _on_status(self, status):
         """Called by the listener when it starts or stops accepting a
         follow-up, including when the window expires mid-wait."""
+        # A recitation owns the HUD state for as long as it runs. The
+        # microphone is still armed underneath -- that is how "stop" is
+        # heard -- but its status would otherwise put the HUD back into
+        # LISTENING over the top of a verse that is still sounding.
+        if recitation.current():
+            return
+
         self._state(LISTENING if status == "listening" else IDLE)
 
     def _on_wake(self):
