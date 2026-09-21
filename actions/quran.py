@@ -528,13 +528,67 @@ def _digitise(text):
     return " ".join(out)
 
 
+def _reference(number, ayah=None):
+    """One parsed reference, in the shape both parsers return."""
+    number = find_surah(number)
+
+    if not number:
+        return None
+
+    if ayah is None:
+        return {"surah": number, "ayah": 1, "whole": True}
+
+    return {"surah": number, "ayah": int(ayah), "whole": False}
+
+
+def parse_reference(command):
+    """Which chapter and verse a command names, or None.
+
+    No asking word and no Quran marker required. This is for the case
+    where something else has already established that recitation is what
+    was meant and the only question left is which verse -- which is
+    exactly the situation when the model classifies the intent.
+
+    That separation is what makes a misheard verb survive. Whisper
+    writes 'reslight' or 'resight' for recite and 'gouran' for Quran,
+    and it will invent new manglings tomorrow; none of them touch the
+    reference, which is carried by a marker word and a number. Nothing
+    here has to know how a word was mangled, so nothing here needs
+    updating when it is mangled differently.
+    """
+    text = _digitise(_normalise(command))
+
+    if not text:
+        return None
+
+    match = _REFERENCE.search(text)
+
+    if match:
+        return _reference(match.group("surah"), match.group("ayah"))
+
+    # No marker word survived either -- 'resight 3 of the gouran'. The
+    # intent is already settled, so bare numbers are the reference: one
+    # is a chapter, two are a chapter and a verse. Three or more is
+    # genuinely ambiguous and is declined rather than guessed at.
+    numbers = re.findall(r"\b\d{1,3}\b", text)
+
+    if len(numbers) == 1:
+        return _reference(numbers[0])
+
+    if len(numbers) == 2:
+        return _reference(numbers[0], numbers[1])
+
+    return None
+
+
 def parse(command):
     """Understand a recitation request, or return None.
 
-    Narrow on purpose. It wants an asking word, something that marks the
-    request as being about the Quran, and a surah number -- all three,
-    or it declines. Anything it does not recognise falls through to the
-    usual routing rather than being guessed at.
+    Narrow on purpose, because this one guards the free path. It wants
+    an asking word, something that marks the request as being about the
+    Quran, and a surah number -- all three, or it declines and lets the
+    usual routing have the command. parse_reference is the loose
+    counterpart, for once the intent is no longer in question.
     """
     text = _normalise(command)
 
@@ -557,17 +611,7 @@ def parse(command):
     if not match:
         return None
 
-    number = find_surah(match.group("surah"))
-
-    if not number:
-        return None
-
-    ayah = match.group("ayah")
-
-    if ayah is None:
-        return {"surah": number, "ayah": 1, "whole": True}
-
-    return {"surah": number, "ayah": int(ayah), "whole": False}
+    return _reference(match.group("surah"), match.group("ayah"))
 
 
 def bounds_message(number, ayah):
