@@ -317,6 +317,60 @@ class SpeechEngine:
                 _priority.clear()
                 _bump_epoch()
 
+    def play_file(self, path):
+        """Play an audio file through the same path as synthesised speech.
+
+        Anything that arrives as a recording rather than as text -- a
+        recitation, say -- goes through here rather than opening its own
+        output stream. That is what keeps the stop button, the speaking
+        state and the HUD waveform working: all three come from
+        _play_reactive checking _stop and reporting amplitude, and from
+        the bookkeeping around it. A second player would have none of
+        them, and would talk over JARVIS besides, since the lock held
+        here is what serialises everything he says.
+
+        Returns True when it played to the end, and False when it was
+        stopped or could not be read.
+        """
+        if not path or not os.path.exists(path):
+            return False
+
+        _priority.set()
+
+        with self._lock:
+            _stop.clear()
+            _speaking.set()
+            _report_speaking(True)
+
+            try:
+                data, samplerate = sf.read(path, dtype="float32")
+
+                # Downloaded audio is often stereo; the output stream is
+                # opened with one channel.
+                if getattr(data, "ndim", 1) > 1:
+                    data = data.mean(axis=1)
+
+                # No sentence boundaries: those describe synthesised
+                # speech, and a recording has none to report.
+                self._play_reactive(data, samplerate, [])
+
+                return not _stop.is_set()
+
+            except Exception as error:
+                print(
+                    f"[JARVIS] could not play "
+                    f"{os.path.basename(path)}: {error}"
+                )
+
+                return False
+
+            finally:
+                self._report(0.0)
+                _speaking.clear()
+                _report_speaking(False)
+                _priority.clear()
+                _bump_epoch()
+
     def prewarm(self, phrases):
         """Synthesise phrases ahead of time so they play instantly later.
 
@@ -950,6 +1004,11 @@ COMMON_PHRASES = (
 
 def speak(text):
     speech.speak(text)
+
+
+def play_file(path):
+    """Play a recording. True if it finished, False if stopped."""
+    return speech.play_file(path)
 
 
 def audio_bytes(text):
