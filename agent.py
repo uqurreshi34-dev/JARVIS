@@ -631,17 +631,26 @@ def _clean_spoken_response(text):
     return text
 
 
-def run_agent(task, report=False, fix=False, code_task=False):
-    """Run bounded Agent Mode through the configured provider."""
-    task = str(task or "").strip()
+# run_agent moves to the next provider only when a request fails before
+# any tool has run. Once a tool has executed there are side effects -- a
+# file written, the focused editor replaced -- and starting the run again
+# on another provider would apply them twice.
+_PROVIDER_FAILED = object()
 
-    if not task:
-        return None
 
-    if not providers._pool:
-        return None
+def _run_with_provider(provider, task, report, fix, code_task):
+    """One complete agent run against a single provider.
 
-    provider = providers._pool[0]
+    Returns the spoken text, None when the agent finished with nothing to
+    say, or _PROVIDER_FAILED when the provider itself failed before any
+    tool ran -- the only point at which trying another provider is safe.
+
+    The conversation cannot be moved between providers mid-run: messages
+    accumulates Anthropic content blocks or OpenAI tool_calls depending on
+    who is answering, and the two shapes are not interchangeable. A retry
+    therefore restarts the run rather than swapping partway through it.
+    """
+    tools_executed = False
 
     allowed_tool_names = None
 
@@ -710,9 +719,15 @@ def run_agent(task, report=False, fix=False, code_task=False):
 
             if providers.should_failover(error):
                 provider.rest()
+
+            # Worth trying elsewhere whatever the error, not just the three
+            # should_failover recognises -- a timeout or a 500 from one
+            # provider says nothing about the next. But only while nothing
+            # has been executed yet.
+            if tools_executed:
                 return None
 
-            return None
+            return _PROVIDER_FAILED
 
         if provider.kind == "anthropic":
             messages.append(
@@ -749,6 +764,8 @@ def run_agent(task, report=False, fix=False, code_task=False):
                     block.name,
                     block.input,
                 )
+
+                tools_executed = True
 
                 print(f"[JARVIS] agent tool: {block.name}")
 
@@ -828,6 +845,8 @@ def run_agent(task, report=False, fix=False, code_task=False):
                 arguments,
             )
 
+            tools_executed = True
+
             print(
                 f"[JARVIS] agent tool: {call.function.name}"
             )
@@ -843,6 +862,47 @@ def run_agent(task, report=False, fix=False, code_task=False):
     print("[JARVIS] agent reached its turn limit")
 
     return "I couldn't finish that investigation within my limit, sir."
+
+
+def run_agent(task, report=False, fix=False, code_task=False):
+    """Run bounded Agent Mode, trying each provider until one answers."""
+    task = str(task or "").strip()
+
+    if not task:
+        return None
+
+    if not providers._pool:
+        return None
+
+    # Awake providers first, resting ones last -- the same order chat()
+    # uses at providers.py:756, and for the same reason: a resting
+    # provider is still better than no answer at all.
+    order = [p for p in providers._pool if not p.resting] + \
+        [p for p in providers._pool if p.resting]
+
+    for index, provider in enumerate(order):
+        result = _run_with_provider(provider, task, report, fix, code_task)
+
+        if result is not _PROVIDER_FAILED:
+            # It answered, so it is clearly available again.
+            provider.wake()
+
+            return result
+
+        remaining = len(order) - index - 1
+
+        if remaining:
+            print(
+                f"[JARVIS] {provider.name} agent unavailable; "
+                f"switching to {order[index + 1].name}"
+            )
+        else:
+            print(
+                f"[JARVIS] {provider.name} agent unavailable, "
+                f"no fallback left"
+            )
+
+    return None
 
 
 def write_agent_report(report_text):
