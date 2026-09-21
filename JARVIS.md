@@ -590,8 +590,10 @@ their pictures shown.
 Say a chapter and JARVIS recites it. The catalogue of all 114 surahs is
 fetched once into `C:\Users\<you>\JARVIS\quran-surahs.json`, so every name
 lookup, verse count and bounds check afterwards happens with no network at
-all. Audio is cached per ayah under `quran-audio\<reciter>\`, so a chapter
-heard twice costs the network nothing the second time.
+all. Each ayah is cached twice over under `quran-audio\<reciter>\` — the
+mp3, and a small JSON beside it holding the Arabic and the translation —
+so a verse heard once needs no request at all the next time, and a surah
+already listened to plays with no internet.
 
 `quran.parse` is deliberately narrow. It wants an asking word, a marker
 that the request is about the Quran, and a chapter number — all three, or

@@ -7,9 +7,16 @@ no network at all, which is what makes "Al-Baqarah has 286 verses" an
 answer JARVIS can give instantly rather than one he has to go and ask
 about.
 
-The same goes for the audio. An ayah is fetched once and cached as an
-mp3; hearing it again is a local file read. A surah listened to twice
-costs the network nothing the second time.
+The same goes for a verse itself. Its audio is cached as an mp3 and its
+Arabic and translation as a small JSON file beside it, so a verse that
+has been heard once needs no request at all the next time -- text
+included. A surah listened to twice costs the network nothing the second
+time, and plays with no internet at all.
+
+The text is kept beside the recitation rather than in one central place
+so that nothing here has to assume two audio editions carry identical
+Arabic. Switching reciter refetches both halves, which it was going to
+do for the audio regardless.
 
 Nothing here decides how anything is said. It returns a path and the
 text; speech.py owns playback, which is what keeps the stop button, the
@@ -223,17 +230,77 @@ def _audio_path(number, ayah, reciter):
     return os.path.join(folder, f"{number:03d}{ayah:03d}.mp3")
 
 
+def _text_path(number, ayah, reciter):
+    """Where a verse's Arabic and translation are kept: beside its mp3."""
+    path = _audio_path(number, ayah, reciter)
+
+    return f"{path[:-4]}.json" if path else None
+
+
+def _read_text(path, translation):
+    """Cached text for a verse, or None when it cannot be trusted."""
+    if not path or not os.path.exists(path):
+        return None
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            cached = json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+    if not isinstance(cached, dict):
+        return None
+
+    # Which translation it was is recorded so that changing
+    # DEFAULT_TRANSLATION refetches rather than quietly serving English
+    # from the edition that is no longer wanted.
+    return cached if cached.get("t") == translation else None
+
+
+def _write_text(path, translation, arabic, english):
+    """Keep a verse's text so the next play needs no request."""
+    if not path or not (arabic or english):
+        return
+
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(
+                {"t": translation, "arabic": arabic, "english": english},
+                handle,
+                ensure_ascii=False,
+            )
+    except OSError as error:
+        print(f"[JARVIS] could not cache verse text: {error}")
+
+
 def fetch_verse(number, ayah, reciter=DEFAULT_RECITER,
                 translation=DEFAULT_TRANSLATION):
     """One verse: its Arabic, its translation, and a local mp3.
 
-    Returns None when the verse cannot be had at all. The audio is
-    downloaded once; afterwards this costs one file check.
+    Returns None when the verse cannot be had at all. Both halves are
+    fetched once; afterwards this costs two file checks and a small
+    read, with no request of any kind.
     """
     path = _audio_path(number, ayah, reciter)
 
     if not path:
         return None
+
+    text_path = _text_path(number, ayah, reciter)
+    cached = _read_text(text_path, translation)
+
+    # Both halves present means the verse is entirely local. This is the
+    # check that was missing: the request below used to fire on every
+    # play, cached or not, so a surah heard twice still cost a call per
+    # ayah and would not play at all without a connection.
+    if cached and os.path.exists(path):
+        return {
+            "surah": number,
+            "ayah": ayah,
+            "arabic": cached.get("arabic") or "",
+            "english": cached.get("english") or "",
+            "audio": path,
+        }
 
     url = f"{_API}/ayah/{number}:{ayah}/editions/{reciter},{translation}"
 
@@ -278,6 +345,8 @@ def fetch_verse(number, ayah, reciter=DEFAULT_RECITER,
 
     if not os.path.exists(path):
         return None
+
+    _write_text(text_path, translation, arabic, english)
 
     return {
         "surah": number,
