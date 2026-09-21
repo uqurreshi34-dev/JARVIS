@@ -36,7 +36,7 @@ This prevents speech intended for the phone from being heard or acted on by
 the desktop listener. When the phone interaction finishes, the desktop
 microphone is restored.
 
-**119 language-model intents. 520 spoken phrases resolve locally with no API call.**
+**120 language-model intents. 520 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -586,6 +586,45 @@ BBC and Sky RSS, ten regions, no key. Headlines appear in a panel with live
 Bitcoin and currency prices along the foot. Stories can be expanded and
 their pictures shown.
 
+### Quran recitation — `actions/quran.py`, `actions/recitation.py`, `quran_panel.py`
+Say a chapter and JARVIS recites it. The catalogue of all 114 surahs is
+fetched once into `C:\Users\<you>\JARVIS\quran-surahs.json`, so every name
+lookup, verse count and bounds check afterwards happens with no network at
+all. Audio is cached per ayah under `quran-audio\<reciter>\`, so a chapter
+heard twice costs the network nothing the second time.
+
+`quran.parse` is deliberately narrow. It wants an asking word, a marker
+that the request is about the Quran, and a chapter number — all three, or
+it declines and lets the usual routing have the command. That is what stops
+`play chapter 3` of an audiobook becoming a recitation. Chapters are
+matched by number only: transliterated names arrive from speech recognition
+in too many spellings, and a misheard name becoming a confidently wrong
+chapter is worse than not understanding at all.
+
+Bismillah is not counted as a verse. The API already numbers it that way,
+but it carries in front of the Arabic of verse 1, so `strip_opening()`
+removes it for display — leaving Al-Fatiha alone, where it is the verse,
+and finding nothing to strip in At-Tawbah, where there is none.
+
+A session owns a thread. Stop, pause, jump and auto-continue are flags that
+thread reads between verses rather than interruptions of one, so no control
+can land halfway through an ayah and leave two playing at once. Pause cuts
+the sound immediately and holds the place; the reciter changes from the
+next verse on, since cutting the one already fetched would be worse than
+finishing it.
+
+The projected page carries the Arabic, the Saheeh International
+translation, the reciter dropdown, a verse box, the auto tick, pause and
+stop. Only an explicit stop takes it away — finishing a verse is the moment
+the verse box and the auto tick are most wanted. The HUD and the brain
+sphere both turn gold for the duration.
+
+The whole session is bracketed in the existing interaction gate, so
+anything falling due while he recites is queued by the machinery that
+already queues announcements during a follow-up, and released when the
+session ends. Nothing in the recitation code knows market alerts or
+reminders exist.
+
 ### Camera — `actions/camera.py`
 Captures through pygrabber (pure Python DirectShow). Sends one frame to a
 vision model and says what it sees. Detects a too-dark frame locally and
@@ -855,14 +894,40 @@ beam joining them to the HUD.
 
 ---
 
-### Memory and routing regression checks
+### Regression checks
 
-The local memory layer has two small regression tests:
+Three small offline tests, no network and no keys:
 
 ```text
 python tools/test_memory_semantic.py
 python tools/test_routing_regressions.py
+python tools/test_failover_classifier.py
 ```
+
+### Providers and failover
+
+The pool is tried in order: awake providers first, resting ones after, on
+the reasoning that a rested provider is still better than failing. A
+request moves to the next provider on a rate limit, a retired model and a
+refused model, and now on transient faults as well — 500s, 502s, 503s,
+timeouts and dropped connections.
+
+The other direction matters more. A malformed schema or a bad argument is
+a fact about the request, not about the provider, so it is raised where it
+happened rather than retried identically down the whole pool and buried
+under a rotation log.
+
+`agent.py` retries a whole task against the next provider, so it marks a
+task as having executed tools the moment any tool runs. A retry can
+therefore never re-apply a side effect that already landed.
+
+`ANTHROPIC_API_KEY` adds Anthropic's own paid API as a provider. It is
+dropped from the pool when the key is unset, so it costs nothing until it
+is wanted, and it sits last in the natural order — work whose quality
+depends on the model asks for it by name. Blender does: `actions/blender.py`
+prefers Claude, then Anthropic, for all twelve of its model calls.
+
+---
 
 ## The rules that keep it safe
 
@@ -1026,6 +1091,7 @@ voice, Graph credentials, weather fallback.
 | `audio_check.py` | whether cached speech is sound |
 | `speed_test.py` | where the time in a reply goes |
 | `test_console.py` | typed commands, no microphone |
+| `tools/mine_journal.py` | which intents reach the model, and what was said |
 
 `TIMING = True` in `main.py`, `voice.py`, `speech.py` and `transcriber.py`
 prints where each stage's time goes.

@@ -315,6 +315,39 @@ still works.
 | show me the picture for story 2 | shows the photograph |
 | close the news | dismisses it |
 
+## Quran
+
+| Say | Does |
+|---|---|
+| recite surah 36 | the whole chapter, verse by verse |
+| recite quran chapter 2 verse 255 | that one verse |
+| play surah 112 | the whole chapter |
+| read chapter 18 ayah 10 | that one verse |
+
+Quran, Qur'an, quraan and koran are all recognised, and so are surah, sura
+and chapter. The chapter has to be a number — names are too easily
+misheard to act on.
+
+A verse the chapter does not have is refused with the real count, so
+`recite surah 112 verse 40` gets told Al-Ikhlas has 4 verses.
+
+The rest is on the projected page rather than spoken:
+
+| Control | Does |
+|---|---|
+| reciter dropdown | changes voice from the next verse on |
+| verse box | jumps to that verse |
+| auto | carries on to the next verse when this one ends |
+| pause | cuts the sound immediately, holds the place |
+| stop | ends the recitation and closes the page |
+
+Ticking auto after a single verse carries on from the next verse rather
+than repeating the one just heard. Finishing a verse leaves the page up;
+only stop takes it away. The HUD stop button ends the recitation too.
+
+Anything he would have announced while reciting — a market alert, a
+reminder — waits and is delivered when the session ends.
+
 ## Calendar
 
 JARVIS keeps his own calendar, and also writes to Outlook and an `.ics`.
