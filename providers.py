@@ -30,7 +30,7 @@ PROVIDERS = {
         "default_model": "openai/gpt-oss-20b",
         # Vision needs a model that accepts images; the text default does not.
         "vision_env": "GROQ_VISION_MODEL",
-        "default_vision_model": "qwen/qwen3.6-27b",
+        "default_vision_model": "qwen/qwen3.8-27b",
         # Qwen narrates its thinking unless told to hide it.
         "vision_reasoning": True,
         "default_reasoning_effort": "low",
@@ -123,11 +123,54 @@ def is_permission_error(error):
     )
 
 
+def is_transient_error(error):
+    """True when a request failed for a reason that says nothing about
+    whether another provider would have succeeded.
+
+    A 500, a timeout, or a dropped connection is a fact about one
+    provider's servers at one moment, not about the request. Treating it
+    as fatal meant the command died outright while a healthy provider sat
+    idle -- the opposite of the point of having a pool.
+
+    Status code first, because the SDK exceptions carry one and matching
+    on the text alone would fire on any message that happens to contain
+    "500".
+    """
+    status = getattr(error, "status_code", None)
+
+    if isinstance(status, int) and status >= 500:
+        return True
+
+    name = type(error).__name__.casefold()
+
+    if (
+        "timeout" in name
+        or "connection" in name
+        or "internalserver" in name
+        or "serviceunavailable" in name
+    ):
+        return True
+
+    text = str(error).casefold()
+
+    return (
+        "timed out" in text
+        or "timeout" in text
+        or "overloaded" in text
+        or "temporarily unavailable" in text
+        or "service unavailable" in text
+        or "bad gateway" in text
+        or "connection reset" in text
+        or "connection error" in text
+    )
+
+
 def should_failover(error):
     return (
         is_rate_limit(error)
         or is_model_unavailable(error)
         or is_permission_error(error)
+        or is_transient_error(error)
     )
 
 
