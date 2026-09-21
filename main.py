@@ -12,6 +12,7 @@ from voice import (
 from speech import prewarm, set_amplitude_listener, speak, set_sentence_listener
 from speech import set_speaking_listener, stop_speaking as stop_speech
 from news_panel import NewsPanel
+from quran_panel import QuranPanel
 from hud import IDLE, LISTENING, RECITING, SPEAKING, THINKING, Hud
 from commands import (
     handle_command,
@@ -46,6 +47,7 @@ from actions import (
     images,
     blender_fidelity,
     folder_guard,
+    quran,
     recitation,
 )
 from actions.battery import battery_monitor
@@ -484,17 +486,6 @@ class Assistant:
             lambda: self._interaction_open)
         folder_guard.folder_guard.start()
 
-        # A recitation holds the announcement gate open for its whole
-        # length, so anything falling due while it plays queues behind it
-        # and is released when it ends -- the same machinery that holds
-        # announcements during a follow-up. Nothing interrupts a verse.
-        recitation.set_listeners(
-            on_begin=lambda state: self._begin_interaction(),
-            on_end=lambda reason, state: self._on_recitation_end(reason),
-            on_verse=lambda verse, state: self._on_recitation_verse(state),
-            on_error=self._on_recitation_error,
-        )
-
         # Observations share the reminder announcer, so once the opening
         # is done they queue behind whatever JARVIS is saying rather than
         # talking over him.
@@ -802,6 +793,85 @@ def main():
     set_level_listener(hud.level_changed.emit)
 
     assistant = Assistant(hud)
+    # The recitation page, projected like the news and chart panels. Built
+    # here rather than in Assistant because the gate, the HUD state and the
+    # page all have to move together, and this is the one place all three
+    # are in reach.
+    page = QuranPanel()
+    page.set_anchor(hud)
+    page_beam = Beam(page, hud)
+
+    def recitation_began(state):
+        # Announcements queue for the whole session and are released when
+        # it ends, which is why this brackets rather than interleaves.
+        assistant._begin_interaction()
+        page.began.emit(state)
+        page_beam.shown.emit()
+
+    def recitation_verse(verse, state):
+        assistant._on_recitation_verse(state)
+        page.verse.emit(verse, state)
+
+    def recitation_ended(reason, state):
+        page.ended.emit(reason)
+        page_beam.hidden.emit()
+        assistant._on_recitation_end(reason)
+
+    recitation.set_listeners(
+        on_begin=recitation_began,
+        on_verse=recitation_verse,
+        on_end=recitation_ended,
+        on_error=page.message.emit,
+    )
+
+    def page_jump(ayah):
+        session = recitation.current()
+
+        if not session:
+            return
+
+        # jump() answers with a sentence when the verse is out of range,
+        # which belongs on the page rather than spoken over the recitation.
+        refusal = session.jump(ayah)
+
+        if refusal:
+            page.message.emit(refusal)
+
+    def page_auto(on):
+        session = recitation.current()
+
+        if session:
+            session.set_auto(on)
+
+    def page_pause(paused):
+        session = recitation.current()
+
+        if not session:
+            return
+
+        session.pause() if paused else session.resume()
+
+    def page_reciter(identifier):
+        session = recitation.current()
+
+        if session:
+            # Takes effect on the next verse: the one sounding was
+            # already fetched, and cutting it to swap voices mid-ayah
+            # would be worse than finishing it.
+            session.reciter = identifier
+
+    page.jump_requested.connect(page_jump)
+    page.auto_changed.connect(page_auto)
+    page.pause_changed.connect(page_pause)
+    page.stop_requested.connect(lambda: recitation.stop())
+    page.reciter_changed.connect(page_reciter)
+
+    # 189 audio editions, fetched once and cached. Off the main thread so
+    # a slow first call cannot stall the HUD.
+    threading.Thread(
+        target=lambda: page.reciters_loaded.emit(quran.reciters()),
+        daemon=True,
+    ).start()
     hud.stop_clicked.connect(assistant.stop_speaking)
 
     hud.shutdown.connect(panel.hide_news.emit)
