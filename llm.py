@@ -481,6 +481,7 @@ _SCHEMA = {
                 "media_play_pause",
                 "media_next",
                 "media_previous",
+                "recite_quran",
                 "minimise_all",
                 "restore_all",
                 "set_reminder",
