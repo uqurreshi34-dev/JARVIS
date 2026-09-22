@@ -24,6 +24,7 @@ from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QFont,
+    QFontMetricsF,
     QPainter,
     QPainterPath,
     QPen,
@@ -62,6 +63,10 @@ _CEILING = 11000.0
 
 # How close the pointer has to be to a mark to count as pointing at it.
 _HOVER_RADIUS = 18.0
+
+# The widest a place tag may be before it is elided. Wide enough for
+# "Sutton Coldfield, Birmingham", narrow enough not to cross the face.
+_PLACE_MAX_WIDTH = 250.0
 
 _FACE = QColor(10, 18, 26)
 _RING = QColor(120, 210, 250)
@@ -560,12 +565,42 @@ class RadarPanel(QWidget):
         # Below the mark, so it cannot collide with the callsign above
         # it, and only for the one being pointed at.
         if place:
-            painter.setPen(QPen(_TEXT))
-            painter.drawText(
-                QRectF(point.x() - 80, point.y() + 11, 160, 12),
-                Qt.AlignmentFlag.AlignCenter,
-                f"over {place}",
-            )
+            self._paint_place(painter, point, place)
+
+    def _paint_place(self, painter, point, place):
+        """Where an aircraft is, on a plate sized to the words.
+
+        The box was a fixed width, which clipped both ends of anything
+        longer -- and centred text clips symmetrically, so it lost the
+        start as well as the end. Measured now, and shifted to stay
+        inside the panel, so a long name near the rim reads in full.
+        """
+        metrics = QFontMetricsF(painter.font())
+
+        text = metrics.elidedText(f"over {place}",
+                                  Qt.TextElideMode.ElideRight,
+                                  _PLACE_MAX_WIDTH)
+
+        width = metrics.horizontalAdvance(text) + 14.0
+        height = metrics.height() + 4.0
+
+        left = max(4.0, min(point.x() - width / 2.0,
+                            self.width() - width - 4.0))
+
+        box = QRectF(left, point.y() + 11.0, width, height)
+
+        # A plate behind it, so the rings and the sweep do not read
+        # through the letters.
+        plate = QColor(6, 12, 18)
+        plate.setAlpha(214)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(plate)
+        painter.drawRoundedRect(box, 4.0, 4.0)
+
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(_TEXT))
+        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
 
     def _paint_legend(self, painter):
         font = QFont()

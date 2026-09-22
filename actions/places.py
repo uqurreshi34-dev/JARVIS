@@ -17,6 +17,7 @@ which is equally useful for anything else that has coordinates.
 
 import json
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -50,6 +51,19 @@ _ZOOM = 14
 # are present and different from each other are used, so a point lands
 # as "Erdington, Birmingham" in a city and "Wythall, Worcestershire" in
 # the country, with no special cases for either.
+# Administrative wrapping that adds length without adding meaning.
+# "Metropolitan Borough of Solihull" is Solihull to everyone who lives
+# there, and a radar tag has no room for the rest. Matched by shape, so
+# it handles the ones nobody thought to list.
+_NOISE = re.compile(
+    r"^(?:the\s+)?"
+    r"(?:city|town|royal\s+borough|metropolitan\s+borough|london\s+borough|"
+    r"borough|district|county|municipality|unitary\s+authority|"
+    r"administrative\s+county)"
+    r"\s+of\s+",
+    re.IGNORECASE,
+)
+
 _PARTS = (
     "neighbourhood", "suburb", "village", "town", "hamlet",
     "city_district", "city", "county", "state", "country",
@@ -118,7 +132,7 @@ def _name_from(address):
     seen = []
 
     for part in _PARTS:
-        value = (address.get(part) or "").strip()
+        value = _NOISE.sub("", (address.get(part) or "").strip()).strip()
 
         if value and value not in seen:
             seen.append(value)
