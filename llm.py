@@ -485,6 +485,7 @@ _SCHEMA = {
                 "presence_check",
                 "aircraft_overhead",
                 "aircraft_hide",
+                "aircraft_range",
                 "minimise_all",
                 "restore_all",
                 "set_reminder",

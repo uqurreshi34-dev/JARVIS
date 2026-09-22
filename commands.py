@@ -3601,6 +3601,11 @@ def _fast_path(command):
     if aircraft.dismissed(text):
         return _blank_result("aircraft_hide")
 
+    # A range only counts when the sky was named too, so "remind me in
+    # 20 minutes" carries a number past here untouched.
+    if aircraft.wanted(text) and aircraft.parse_range(text):
+        return _blank_result("aircraft_range")
+
     # Two halves in either order -- something that flies, and somewhere to
     # look -- so the module decides rather than the router.
     if aircraft.wanted(text):
@@ -5391,6 +5396,29 @@ def _handle_command(command, *, fast_only=False, probe=False):
             return aircraft.describe()
 
         return _query(intent, sky)
+
+    if intent == "aircraft_range":
+        def range_change():
+            # Parsed here rather than carried through the result, which
+            # has a fixed set of fields. The model can route here too, so
+            # a spoken range has to survive that path as well.
+            asked = aircraft.parse_range(command)
+
+            if not asked:
+                return (f"The radar is set to "
+                        f"{phrases.number(aircraft.radius())} nautical "
+                        f"miles, sir.")
+
+            aircraft.set_radius(asked)
+
+            # Open the face before refetching, so a range change on a
+            # closed radar shows the new sweep rather than only saying it.
+            aircraft.watch()
+            aircraft.refresh(force=True)
+
+            return aircraft.describe()
+
+        return _query(intent, range_change)
 
     if intent == "presence_check":
         return _query(intent, lambda: phrases.pick("presence"))

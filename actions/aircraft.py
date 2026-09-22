@@ -38,6 +38,12 @@ from actions import location, memory
 # mentioning, near enough that the radar face is not a smear.
 DEFAULT_RADIUS_NM = 25
 
+# What the radar may be set to. Below a couple of miles there is nothing
+# to see; beyond a hundred the face is a smear and the feeds are being
+# asked for half a county.
+MIN_RADIUS_NM = 2
+MAX_RADIUS_NM = 100
+
 # A fetch is reused for this long. The radar sweeps continuously but the
 # sky does not change in a second, and a feed asked ten times a second
 # stops answering whoever asks it next.
@@ -84,12 +90,55 @@ _POINTS = (
 )
 
 
+# The range in force. Held here rather than passed about, so the spoken
+# summary, the watcher and the face cannot disagree about it.
+_radius = DEFAULT_RADIUS_NM
+
 _lock = threading.Lock()
 _cache = {"at": 0.0, "key": None, "aircraft": [], "source": ""}
 
 # name -> (until, penalty). A feed that refused is not asked again until
 # its cool-off expires.
 _cooloff = {}
+
+
+def radius():
+    """How far out the radar is currently looking."""
+    return _radius
+
+
+def set_radius(radius_nm):
+    """Change the range. Returns what it ended up as."""
+    global _radius
+
+    _radius = max(MIN_RADIUS_NM, min(MAX_RADIUS_NM, int(radius_nm)))
+
+    return _radius
+
+
+# "radar fifty miles", "set the radar to 10 miles", "radar range 40".
+# The unit is optional because the number plus the word radar is already
+# unambiguous, and Whisper drops short words constantly.
+_RANGE = re.compile(
+    r"\b(\d{1,3})\s*(?:nm|nautical\s+miles?|miles?|mi)?\b"
+)
+
+
+def parse_range(command):
+    """A range in nautical miles from a spoken command, or None.
+
+    Spoken numbers are turned into numerals first, since "fifty" and
+    "50" are equally likely out of speech recognition.
+    """
+    text = phrases.digits((command or "").casefold())
+
+    for match in _RANGE.finditer(text):
+        value = int(match.group(1))
+
+        if MIN_RADIUS_NM <= value <= MAX_RADIUS_NM:
+            return value
+
+    return None
 
 
 def centre():
@@ -326,7 +375,7 @@ def compass(degrees):
     return _POINTS[int((degrees + step / 2) % 360.0 // step)]
 
 
-def overhead(radius_nm=DEFAULT_RADIUS_NM, force=False):
+def overhead(radius_nm=None, force=False):
     """Everything flying near you, nearest first.
 
     Returns (aircraft, source, origin) where origin is (lat, lon, how), or
@@ -335,6 +384,8 @@ def overhead(radius_nm=DEFAULT_RADIUS_NM, force=False):
     Cached briefly, so a radar face redrawing at thirty frames a second
     costs one request every few seconds rather than thirty thousand.
     """
+    radius_nm = radius_nm or _radius
+
     here = centre()
 
     if not here:
@@ -485,13 +536,13 @@ def dismiss():
     return running
 
 
-def refresh(radius_nm=DEFAULT_RADIUS_NM, force=False):
+def refresh(radius_nm=None, force=False):
     """Fetch, and tell whoever is listening. Returns the aircraft."""
     craft, source, here = overhead(radius_nm, force=force)
 
     if _listener and craft is not None and here:
         try:
-            _listener(craft, here, source)
+            _listener(craft, here, source, float(_radius))
         except Exception as error:
             print(f"[JARVIS] radar listener failed: {error}")
 
@@ -548,8 +599,8 @@ def _overhead_sentence(entry):
     if entry["range"] <= CALLOUT_OVERHEAD_NM * _METRES_PER_NM:
         where = "is passing overhead"
     else:
-        where = (f"is passing {_miles(entry['range']):.0f} miles "
-                 f"{compass(entry.get('bearing'))}")
+        where = (f"is passing {_miles(entry['range']):.0f} nautical "
+                 f"miles {compass(entry.get('bearing'))}")
 
     return f"{label} {where}, sir. {height}{doing}.{described}"
 
@@ -607,7 +658,7 @@ def _call_out(craft):
     _first_pass.set()
 
 
-def watch(radius_nm=DEFAULT_RADIUS_NM, seconds=_WATCH_SECONDS):
+def watch(radius_nm=None, seconds=_WATCH_SECONDS):
     """Keep the radar fed until stop_watching(). Safe to call twice.
 
     One thread, forced fetches, at the cache interval -- the panel dead
@@ -674,14 +725,17 @@ def _away(metres, degrees):
     if miles < 1.5:
         return ", almost directly overhead"
 
-    if miles < 2.5:
-        return f", a mile or so {compass(degrees)}"
+    # Nautical, and said so. A nautical mile is fifteen percent longer
+    # than the one people picture, and the feeds, the rings and the
+    # spoken range are all in nautical miles -- calling them "miles"
+    # quietly understates every distance JARVIS gives.
+    return f", {miles:.0f} nautical miles {compass(degrees)}"
 
-    return f", {miles:.0f} miles {compass(degrees)}"
 
-
-def describe(radius_nm=DEFAULT_RADIUS_NM):
+def describe(radius_nm=None):
     """One spoken sentence about the sky, or why there isn't one."""
+    radius_nm = radius_nm or _radius
+
     craft, source, here = overhead(radius_nm)
 
     if here is None:
@@ -694,7 +748,8 @@ def describe(radius_nm=DEFAULT_RADIUS_NM):
     flying = [e for e in craft if e["altitude"] is not None]
 
     if not flying:
-        return f"Nothing in the air within {radius_nm:g} miles, sir."
+        return (f"Nothing in the air within {radius_nm:g} "
+                f"nautical miles, sir.")
 
     # Not "Four aircraft within..." -- a number opening a sentence is
     # unstressed, and "four" said quickly is indistinguishable from
@@ -702,7 +757,7 @@ def describe(radius_nm=DEFAULT_RADIUS_NM):
     # speech engine.
     lines = [
         f"I count {phrases.number(len(flying))} aircraft within "
-        f"{radius_nm:g} miles, sir."
+        f"{radius_nm:g} nautical miles, sir."
     ]
 
     nearest = flying[0]

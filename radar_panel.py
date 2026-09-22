@@ -128,7 +128,7 @@ class RadarPanel(QWidget):
     """Live traffic, projected beside the HUD."""
 
     # In.
-    updated = pyqtSignal(list, tuple, str)
+    updated = pyqtSignal(list, tuple, str, float)
     message = pyqtSignal(str)
     place_known = pyqtSignal(str, str)
 
@@ -189,7 +189,12 @@ class RadarPanel(QWidget):
         """How far the outer ring is, in nautical miles."""
         self._radius_nm = max(1.0, float(radius_nm))
 
-    def _on_updated(self, aircraft, centre, source):
+    def _on_updated(self, aircraft, centre, source, radius_nm):
+        # Range first: the rings and the scale that places every aircraft
+        # are both drawn from it, so setting it after would put this
+        # sweep on the last sweep's scale.
+        self.set_radius(radius_nm)
+
         self._aircraft = list(aircraft)
         self._centre = tuple(centre[:2]) if centre else None
         self._source = source or ""

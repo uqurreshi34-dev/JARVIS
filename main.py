@@ -902,8 +902,8 @@ def main():
     radar.set_anchor(hud)
     radar_beam = Beam(radar, hud)
 
-    def radar_updated(craft, here, source):
-        radar.updated.emit(list(craft), tuple(here), source)
+    def radar_updated(craft, here, source, radius_nm):
+        radar.updated.emit(list(craft), tuple(here), source, float(radius_nm))
         radar_beam.shown.emit()
 
     # Through the signal, not straight to hide(): the request arrives on

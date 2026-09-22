@@ -181,6 +181,71 @@ _RADIO_DIGITS = (
 )
 
 
+# Spoken numbers, built compositionally rather than listed. Whisper
+# writes "50" as often as "fifty" and there is no telling which, so
+# anything reading a number out of speech has to cope with both.
+_ONES = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19,
+}
+
+_TENS = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fourty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}
+
+
+def digits(text):
+    """Spoken numbers turned into numerals, everything else untouched.
+
+    Handles the shapes people actually say -- forty, forty five, a
+    hundred, one hundred and twenty -- by adding the parts up rather
+    than matching whole phrases, so combinations nobody listed still
+    work.
+    """
+    words = (text or "").casefold().split()
+
+    out = []
+    total = 0
+    running = False
+
+    def flush():
+        nonlocal total, running
+
+        if running:
+            out.append(str(total))
+
+        total = 0
+        running = False
+
+    for word in words:
+        bare = word.strip(".,;:!?")
+
+        if bare in _ONES:
+            total += _ONES[bare]
+            running = True
+        elif bare in _TENS:
+            total += _TENS[bare]
+            running = True
+        elif bare == "hundred":
+            # "a hundred" has no number in front of it, so hundred on
+            # its own still counts as one of them.
+            total = max(1, total) * 100
+            running = True
+        elif bare in ("a", "and") and running:
+            continue
+        else:
+            flush()
+            out.append(word)
+
+    flush()
+
+    return " ".join(out)
+
+
 def spell(text, phonetic=True):
     """A code said character by character, so it is heard as one.
 
