@@ -49,9 +49,16 @@ _CACHE_SECONDS = 12
 _WATCH_SECONDS = 25
 
 # How near an aircraft has to be before it is worth mentioning without
-# being asked. A mile and a half is overhead in any sense that matters,
-# and is the same threshold the spoken summary uses for that phrase.
-CALLOUT_NM = 1.5
+# being asked. A mile and a half is overhead in any sense that matters;
+# out to three it is still close enough to look for.
+CALLOUT_NM = 3.0
+CALLOUT_OVERHEAD_NM = 1.5
+
+# And how low. An airliner crossing the middle of the face at thirty
+# thousand feet is four miles straight up -- it is overhead on a map and
+# nowhere at all to someone standing outside. Five thousand keeps
+# everything on approach and drops everything at cruise.
+CALLOUT_CEILING_FT = 5000
 
 # ... and how long before the same one may be mentioned again, so a
 # helicopter working a circuit does not become a running commentary.
@@ -536,8 +543,16 @@ def _overhead_sentence(entry):
     height = f"{_feet(entry['altitude']):,} feet"
     described = f" {_article(kind).capitalize()} {kind}." if kind else ""
 
-    return (f"{label} is passing overhead, sir. "
-            f"{height}{doing}.{described}")
+    # Overhead means overhead. Anything further out is given its bearing,
+    # because "overhead" for something three miles away would send you
+    # outside looking at the wrong bit of sky.
+    if entry["range"] <= CALLOUT_OVERHEAD_NM * _METRES_PER_NM:
+        where = "is passing overhead"
+    else:
+        where = (f"is passing {_miles(entry['range']):.0f} miles "
+                 f"{compass(entry.get('bearing'))}")
+
+    return f"{label} {where}, sir. {height}{doing}.{described}"
 
 
 def _call_out(craft):
@@ -563,6 +578,9 @@ def _call_out(craft):
             continue
 
         if entry["range"] > CALLOUT_NM * _METRES_PER_NM:
+            continue
+
+        if _feet(entry["altitude"]) > CALLOUT_CEILING_FT:
             continue
 
         identifier = entry.get("id") or entry.get("callsign")

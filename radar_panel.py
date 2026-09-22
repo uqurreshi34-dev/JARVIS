@@ -625,19 +625,24 @@ class RadarPanel(QWidget):
 
         painter.setPen(QPen(_TEXT))
         painter.drawText(
-            QRectF(point.x() - 46, point.y() - 27, 92, 11),
+            QRectF(point.x() - 65, point.y() - 27, 130, 11),
             Qt.AlignmentFlag.AlignCenter,
             name,
         )
 
-        if height:
+        # The type shares the altitude line rather than taking one of its
+        # own, so a tag stays two lines tall however much is known.
+        kind = (entry.get("type") or "").strip()
+        detail = f"{kind}  {height}" if kind and height else (height or kind)
+
+        if detail:
             faint = QColor(colour)
             faint.setAlpha(205)
             painter.setPen(QPen(faint))
             painter.drawText(
-                QRectF(point.x() - 46, point.y() - 17, 92, 11),
+                QRectF(point.x() - 65, point.y() - 17, 130, 11),
                 Qt.AlignmentFlag.AlignCenter,
-                height,
+                detail,
             )
 
         # Below the mark, so it cannot collide with the callsign above
