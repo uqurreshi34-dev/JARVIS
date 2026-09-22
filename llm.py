@@ -484,6 +484,7 @@ _SCHEMA = {
                 "recite_quran",
                 "presence_check",
                 "aircraft_overhead",
+                "aircraft_hide",
                 "minimise_all",
                 "restore_all",
                 "set_reminder",

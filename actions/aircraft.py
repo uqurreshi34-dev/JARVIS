@@ -43,6 +43,17 @@ DEFAULT_RADIUS_NM = 25
 # stops answering whoever asks it next.
 _CACHE_SECONDS = 12
 
+# How often the watcher asks while the radar is open. Deliberately longer
+# than the cache: the panel dead reckons between fetches, so asking more
+# often buys nothing and these feeds are free and shared.
+_WATCH_SECONDS = 25
+
+# How long a feed is left alone after it refuses, doubling each time it
+# refuses again, up to the ceiling. Being rate limited and carrying on
+# regardless is how a free service stops being free for everyone.
+_COOLOFF_SECONDS = 120
+_COOLOFF_MAX = 1800
+
 _TIMEOUT = 12
 
 _METRES_PER_FOOT = 0.3048
@@ -59,6 +70,10 @@ _POINTS = (
 
 _lock = threading.Lock()
 _cache = {"at": 0.0, "key": None, "aircraft": [], "source": ""}
+
+# name -> (until, penalty). A feed that refused is not asked again until
+# its cool-off expires.
+_cooloff = {}
 
 
 def centre():
@@ -89,18 +104,54 @@ def centre():
 
 
 def _get(url):
-    """The body of a GET, or None."""
+    """(body, status). Body is None when nothing usable came back.
+
+    The status matters because being refused is not the same as being
+    unreachable: a refusal means back off, and a dropped connection
+    means try again.
+    """
     request = urllib.request.Request(
         url, headers={"User-Agent": "JARVIS/1.0"}
     )
 
     try:
         with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
-            return response.read().decode("utf-8", errors="replace")
+            return response.read().decode("utf-8", errors="replace"), 200
+
+    except urllib.error.HTTPError as error:
+        return None, error.code
 
     except (urllib.error.URLError, OSError) as error:
         print(f"[JARVIS] aircraft feed unreachable: {error}")
-        return None
+        return None, None
+
+
+# 429 is the standard refusal; 420 and 503 are the ones these feeds send
+# when they would rather you slowed down than stopped.
+_REFUSALS = frozenset({420, 429, 503})
+
+
+def _rest(name, status):
+    """Leave a feed alone for a while after it refuses."""
+    if status not in _REFUSALS:
+        return
+
+    _, penalty = _cooloff.get(name, (0.0, 0))
+    penalty = min(_COOLOFF_SECONDS * (2 ** penalty), _COOLOFF_MAX)
+
+    _cooloff[name] = (
+        time.monotonic() + penalty,
+        min(_cooloff.get(name, (0.0, 0))[1] + 1, 4),
+    )
+
+    print(f"[JARVIS] {name} asked for {status}; resting it "
+          f"{penalty // 60:.0f} minute(s)")
+
+
+def _resting(name):
+    until, _ = _cooloff.get(name, (0.0, 0))
+
+    return time.monotonic() < until
 
 
 def _number(value):
@@ -113,11 +164,12 @@ def _number(value):
 
 def _from_adsb_lol(lat, lon, radius_nm):
     """adsb.lol. Feet, knots, and a registration worth having."""
-    body = _get(
+    body, status = _get(
         f"https://api.adsb.lol/v2/point/{lat:.4f}/{lon:.4f}/{radius_nm:g}"
     )
 
     if not body:
+        _rest("adsb.lol", status)
         return None
 
     try:
@@ -177,13 +229,14 @@ def _from_opensky(lat, lon, radius_nm):
     lat_span = radius_nm / 60.0
     lon_span = radius_nm / (60.0 * max(0.1, math.cos(math.radians(lat))))
 
-    body = _get(
+    body, status = _get(
         "https://opensky-network.org/api/states/all"
         f"?lamin={lat - lat_span:.4f}&lomin={lon - lon_span:.4f}"
         f"&lamax={lat + lat_span:.4f}&lomax={lon + lon_span:.4f}"
     )
 
     if not body:
+        _rest("OpenSky", status)
         return None
 
     try:
@@ -285,6 +338,9 @@ def overhead(radius_nm=DEFAULT_RADIUS_NM, force=False):
             return list(_cache["aircraft"]), _cache["source"], here
 
     for name, fetch in _SOURCES:
+        if _resting(name):
+            continue
+
         try:
             craft = fetch(lat, lon, radius_nm)
         except Exception as error:
@@ -306,6 +362,8 @@ def overhead(radius_nm=DEFAULT_RADIUS_NM, force=False):
             entry["bearing"] = bearing((lat, lon), target)
 
         craft.sort(key=lambda e: (e["range"] is None, e["range"] or 0.0))
+
+        _cooloff.pop(name, None)
 
         with _lock:
             _cache.update({
@@ -333,6 +391,18 @@ _SKY = re.compile(
 
 _RADAR = re.compile(r"\b(radar|the sky)\b")
 
+# Checked before wanted(), because "close the radar" contains "radar"
+# and would otherwise open what you just asked to shut.
+_DISMISS = re.compile(
+    r"\b(close|hide|dismiss|shut|get rid of|stop)\b"
+    r"[^.]*?\b(radar|aircraft|aeroplanes?|airplanes?|planes?|the sky)\b"
+)
+
+
+def dismissed(command):
+    """Whether a command is asking for the radar to go away."""
+    return bool(_DISMISS.search((command or "").casefold()))
+
 
 def wanted(command):
     """Whether a command is asking about the sky. True or False."""
@@ -349,15 +419,42 @@ _watch = None
 _watch_stop = threading.Event()
 
 
-def set_listener(callback):
-    """Who to tell when a fetch lands. The radar panel, in practice.
+_hide_listener = None
+
+
+def set_listeners(on_update=None, on_hide=None):
+    """Who to tell when a fetch lands, and when to go away.
 
     The same arrangement recitation.py uses: this module knows nothing
     about windows, and main.py knows nothing about feeds.
     """
-    global _listener
+    global _listener, _hide_listener
 
-    _listener = callback
+    if on_update is not None:
+        _listener = on_update
+
+    if on_hide is not None:
+        _hide_listener = on_hide
+
+
+def set_listener(callback):
+    """Kept so older callers still work."""
+    set_listeners(on_update=callback)
+
+
+def dismiss():
+    """Stop the feed and put the radar away. True if it was running."""
+    running = _watch is not None and _watch.is_alive()
+
+    stop_watching()
+
+    if _hide_listener:
+        try:
+            _hide_listener()
+        except Exception as error:
+            print(f"[JARVIS] radar hide listener failed: {error}")
+
+    return running
 
 
 def refresh(radius_nm=DEFAULT_RADIUS_NM, force=False):
@@ -373,7 +470,7 @@ def refresh(radius_nm=DEFAULT_RADIUS_NM, force=False):
     return craft
 
 
-def watch(radius_nm=DEFAULT_RADIUS_NM, seconds=_CACHE_SECONDS):
+def watch(radius_nm=DEFAULT_RADIUS_NM, seconds=_WATCH_SECONDS):
     """Keep the radar fed until stop_watching(). Safe to call twice.
 
     One thread, forced fetches, at the cache interval -- the panel dead

@@ -3596,6 +3596,11 @@ def _fast_path(command):
     if quran.parse(command):
         return _blank_result("recite_quran")
 
+    # Dismissal first: "close the radar" names the radar, so asking to
+    # open it would win the race and reopen what was just shut.
+    if aircraft.dismissed(text):
+        return _blank_result("aircraft_hide")
+
     # Two halves in either order -- something that flies, and somewhere to
     # look -- so the module decides rather than the router.
     if aircraft.wanted(text):
@@ -5369,6 +5374,13 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "market_summary":
         return _query(intent, markets.describe)
+
+    if intent == "aircraft_hide":
+        return _query(
+            intent,
+            lambda: ("Radar off, sir." if aircraft.dismiss()
+                     else "The radar is already off, sir."),
+        )
 
     if intent == "aircraft_overhead":
         def sky():

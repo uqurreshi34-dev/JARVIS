@@ -905,7 +905,7 @@ def main():
         radar.updated.emit(list(craft), tuple(here), source)
         radar_beam.shown.emit()
 
-    aircraft.set_listener(radar_updated)
+    aircraft.set_listeners(on_update=radar_updated, on_hide=radar.hide)
 
     # Closing the face stops the feed. Without this it would keep asking
     # for traffic nobody is looking at, for the rest of the session.
