@@ -27,6 +27,13 @@ from actions import quran
 # resuming feels immediate, long enough to cost nothing.
 _TICK = 0.05
 
+# How far ahead of the verse being played to fetch. One was enough to
+# hide the network on a good connection; a few more costs nothing and
+# covers a bad one. Only the audio is actually fetched here -- the text
+# for the whole surah arrives in a single request when the session
+# starts.
+PREFETCH_AHEAD = 5
+
 
 class Session:
     """A surah being recited, verse by verse."""
@@ -58,6 +65,9 @@ class Session:
         self._lock = threading.Lock()
         self._thread = None
         self._playing = False
+
+        self._prefetched_to = 0
+        self._prefetched_reciter = None
 
         self._on_verse = on_verse
         self._on_end = on_end
@@ -201,8 +211,27 @@ class Session:
         while self._paused.is_set() and not self._stop.is_set():
             self._stop.wait(_TICK)
 
+    def _cache_text(self):
+        """Pull the whole surah's text in one request, in the background.
+
+        Nothing waits on it. If it lands, every verse after this one
+        needs only its mp3; if it does not, each verse asks for its own
+        text exactly as before.
+        """
+        reciter = self.reciter
+
+        def fetch():
+            try:
+                quran.cache_surah_text(self.surah, reciter=reciter)
+            except Exception as error:
+                print(f"[JARVIS] could not cache surah text: {error}")
+
+        threading.Thread(target=fetch, daemon=True).start()
+
     def _run(self):
         self._notify(self._on_begin, self.state())
+
+        self._cache_text()
 
         reason = "finished"
 
@@ -245,7 +274,7 @@ class Session:
 
                 self._notify(self._on_verse, verse, self.state())
 
-                # Fetched while this verse plays, so the next one starts
+                # Fetched while this verse plays, so the next ones start
                 # without a pause for the network. Only worth doing when
                 # there is going to be a next one.
                 if self.auto and self.ayah < self.total:
@@ -301,12 +330,43 @@ class Session:
             self._playing = False
             self._notify(self._on_end, reason, self.state())
 
-    def _prefetch(self, ayah):
+    def _prefetch(self, start):
+        """Fetch the next few verses while the current one plays.
+
+        One thread doing several verses in order, rather than a thread
+        per verse: they queue on the same connection anyway, and a
+        thread each would mean five of them spawned on every verse.
+
+        A verse already on disk costs nothing here, so overlapping calls
+        are harmless; _prefetched_to keeps them from being pointless.
+        """
+        reciter = self.reciter
+
+        # Changing voice invalidates what was fetched ahead, since the
+        # cache is per reciter.
+        if reciter != self._prefetched_reciter:
+            self._prefetched_reciter = reciter
+            self._prefetched_to = 0
+            self._cache_text()
+
+        last = min(start + PREFETCH_AHEAD - 1, self.total)
+
+        if last <= self._prefetched_to:
+            return
+
+        first = max(start, self._prefetched_to + 1)
+        self._prefetched_to = last
+
         def fetch():
-            try:
-                quran.fetch_verse(self.surah, ayah, reciter=self.reciter)
-            except Exception as error:
-                print(f"[JARVIS] could not prefetch {ayah}: {error}")
+            for ayah in range(first, last + 1):
+                if self._stop.is_set():
+                    return
+
+                try:
+                    quran.fetch_verse(self.surah, ayah, reciter=reciter)
+                except Exception as error:
+                    print(f"[JARVIS] could not prefetch {ayah}: {error}")
+                    return
 
         threading.Thread(target=fetch, daemon=True).start()
 

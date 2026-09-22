@@ -369,20 +369,106 @@ def _read_text(path, translation):
     return cached if cached.get("t") == translation else None
 
 
-def _write_text(path, translation, arabic, english):
-    """Keep a verse's text so the next play needs no request."""
+def _write_text(path, translation, arabic, english, audio=""):
+    """Keep a verse's text so the next play needs no request.
+
+    The audio url is kept with it. Without that, a verse whose text is
+    cached but whose mp3 is not still has to ask the API where the sound
+    lives, which would undo the whole point of fetching a surah's text
+    in one go.
+    """
     if not path or not (arabic or english):
         return
 
     try:
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(
-                {"t": translation, "arabic": arabic, "english": english},
+                {
+                    "t": translation,
+                    "arabic": arabic,
+                    "english": english,
+                    "audio": audio,
+                },
                 handle,
                 ensure_ascii=False,
             )
     except OSError as error:
         print(f"[JARVIS] could not cache verse text: {error}")
+
+
+def cache_surah_text(number, reciter=DEFAULT_RECITER,
+                     translation=DEFAULT_TRANSLATION):
+    """Fetch a whole surah's text in one request. Returns verses written.
+
+    Al-Baqarah played verse by verse asked the API 286 times for text it
+    could have had in one answer. The audio cannot be batched -- those
+    are separate files on the CDN and are still fetched as playback
+    reaches them -- but the text can, and asking a free service 286
+    times for one surah was never reasonable.
+
+    Verses already cached are left alone, so this is cheap to call again
+    and safe to call on a surah half heard.
+    """
+    url = f"{_API}/surah/{number}/editions/{reciter},{translation}"
+
+    try:
+        with urllib.request.urlopen(url, timeout=_TIMEOUT) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+    except (urllib.error.URLError, ValueError, OSError) as error:
+        print(f"[JARVIS] could not fetch surah {number}: {error}")
+        return 0
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+
+    if not isinstance(data, list):
+        return 0
+
+    arabic = {}
+    english = {}
+    audio = {}
+
+    for edition in data:
+        if not isinstance(edition, dict):
+            continue
+
+        identifier = (edition.get("edition") or {}).get("identifier")
+
+        for ayah in edition.get("ayahs") or []:
+            if not isinstance(ayah, dict):
+                continue
+
+            position = ayah.get("numberInSurah")
+
+            if not position:
+                continue
+
+            if identifier == reciter:
+                arabic[position] = ayah.get("text") or ""
+                audio[position] = ayah.get("audio") or ""
+
+            elif identifier == translation:
+                english[position] = ayah.get("text") or ""
+
+    written = 0
+
+    for position in sorted(arabic):
+        path = _text_path(number, position, reciter)
+
+        if not path or _read_text(path, translation):
+            continue
+
+        _write_text(
+            path,
+            translation,
+            arabic[position],
+            english.get(position, ""),
+            audio.get(position, ""),
+        )
+
+        written += 1
+
+    return written
 
 
 def _from_cache(number, ayah, path, cached):
@@ -420,6 +506,19 @@ def fetch_verse(number, ayah, reciter=DEFAULT_RECITER,
     # play, cached or not, so a surah heard twice still cost a call per
     # ayah and would not play at all without a connection.
     if cached and os.path.exists(path):
+        return {
+            "surah": number,
+            "ayah": ayah,
+            "arabic": cached.get("arabic") or "",
+            "english": cached.get("english") or "",
+            "audio": path,
+        }
+
+    # Text cached but no mp3 yet -- the usual state after a surah's text
+    # has been fetched in one go. The url came with it, so the sound can
+    # be had straight from the CDN without asking the API a second time.
+    # Falls through to the request below if that download fails.
+    if cached and cached.get("audio") and _download(cached["audio"], path):
         return {
             "surah": number,
             "ayah": ayah,
@@ -478,7 +577,7 @@ def fetch_verse(number, ayah, reciter=DEFAULT_RECITER,
     if not os.path.exists(path):
         return None
 
-    _write_text(text_path, translation, arabic, english)
+    _write_text(text_path, translation, arabic, english, audio_url)
 
     return {
         "surah": number,
