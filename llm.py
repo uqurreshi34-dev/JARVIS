@@ -482,6 +482,7 @@ _SCHEMA = {
                 "media_next",
                 "media_previous",
                 "recite_quran",
+                "presence_check",
                 "minimise_all",
                 "restore_all",
                 "set_reminder",

@@ -3555,6 +3555,21 @@ _OPEN_PROJECT = re.compile(
 )
 
 
+# "you up", "are you awake", "you still there", "r u around" -- a check
+# that JARVIS is present rather than a request for anything at all.
+#
+# Matched by shape rather than by a list of sentences. Presence checks are
+# improvised every time, and a fixed list would answer four of them and
+# send the fifth to a model that charges for the privilege of saying yes.
+# The shape is narrow enough to be safe: it has to be the whole utterance,
+# so "what are you up to" and "you up for a game" both fall through.
+_PRESENCE = re.compile(
+    r"^(?:are\s+you|r\s+u|r\s+you|are\s+u|you)\s+"
+    r"(?:still\s+)?"
+    r"(?:up|awake|there|around|on|listening|alive|here|about|with\s+me)$"
+)
+
+
 def _open_project_request(text):
     """Return a named project from an explicit project request, or None."""
     match = _OPEN_PROJECT.match(text)
@@ -3579,6 +3594,11 @@ def _fast_path(command):
     # carried through the result, which has a fixed set of fields.
     if quran.parse(command):
         return _blank_result("recite_quran")
+
+    # Costs nothing and answers instantly, which is the whole point: being
+    # asked whether you are there is not a question worth a model request.
+    if _PRESENCE.match(text):
+        return _blank_result("presence_check")
 
     if text in (
         "restore original",
@@ -5343,6 +5363,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "market_summary":
         return _query(intent, markets.describe)
+
+    if intent == "presence_check":
+        return _query(intent, lambda: phrases.pick("presence"))
 
     if intent == "recite_quran":
         def recite():

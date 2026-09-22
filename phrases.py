@@ -55,6 +55,18 @@ POOLS = {
         "At your service, sir.",
         "Listening, sir.",
     ),
+    # Answering "are you there" rather than "what do you want". The wake
+    # pool prompts for an instruction; this one reassures and asks for
+    # nothing, because nothing was asked for.
+    "presence": (
+        "I'm here, sir.",
+        "Always here, sir.",
+        "For you, sir. Always.",
+        "Awake and listening, sir.",
+        "Never far, sir.",
+        "Right here, sir.",
+        "Here, sir. As ever.",
+    ),
     "declined": (
         "Very well, sir. I'll leave it to you.",
         "As you wish, sir.",
