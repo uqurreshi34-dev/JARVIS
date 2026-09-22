@@ -218,6 +218,23 @@ class Session:
                     self.surah, self.ayah, reciter=self.reciter
                 )
 
+                if not verse and self.reciter != quran.DEFAULT_RECITER:
+                    # The chosen voice cannot deliver this verse. Falling
+                    # back beats stopping: the point of the session is to
+                    # hear the surah, and the reciter is a preference
+                    # within that rather than the thing being asked for.
+                    self._notify(
+                        self._on_error,
+                        "That reciter has no audio for this verse, sir. "
+                        "Returning to the default.",
+                    )
+
+                    self.reciter = quran.DEFAULT_RECITER
+
+                    verse = quran.fetch_verse(
+                        self.surah, self.ayah, reciter=self.reciter
+                    )
+
                 if not verse:
                     reason = "unavailable"
                     self._notify(

@@ -54,6 +54,13 @@ DEFAULT_TRANSLATION = "en.sahih"
 
 _CATALOGUE_NAME = "quran-surahs.json"
 _RECITERS_NAME = "quran-reciters.json"
+
+# Which editions actually have verse-by-verse audio, learned by asking.
+_RECITER_AUDIO_NAME = "quran-reciter-audio.json"
+
+# The cheapest possible question: the first verse of the first surah.
+# An edition that has no audio for that has none at all.
+_PROBE = (1, 1)
 _AUDIO_DIR = "quran-audio"
 
 _TIMEOUT = 20
@@ -132,19 +139,98 @@ def catalogue():
     return _catalogue
 
 
-def reciters():
-    """Arabic recitations only, for the HUD's dropdown.
+def _support_path():
+    root = _folder()
 
-    The API offers 189 audio editions, but most are translations read
-    aloud in other languages. Someone choosing a reciter wants the ones
-    reciting the Arabic.
+    return os.path.join(root, _RECITER_AUDIO_NAME) if root else None
+
+
+def _load_support():
+    """What is already known about which editions can be played."""
+    path = _support_path()
+
+    if not path or not os.path.exists(path):
+        return {}
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            known = json.load(handle)
+    except (OSError, ValueError) as error:
+        print(f"[JARVIS] could not read reciter support: {error}")
+        return {}
+
+    return known if isinstance(known, dict) else {}
+
+
+def _save_support(known):
+    path = _support_path()
+
+    if not path:
+        return
+
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(known, handle, indent=1, sort_keys=True)
+    except OSError as error:
+        print(f"[JARVIS] could not cache reciter support: {error}")
+
+
+def _has_verse_audio(identifier):
+    """Whether an edition offers audio for a single verse.
+
+    True, False, or None when the question could not be put.
+
+    The API lists 176 Arabic audio editions and only a minority have
+    verse-by-verse files. The rest are whole-surah recordings and
+    catalogue entries: they answer the text endpoint perfectly and come
+    back with no audio url at all. Choosing one used to end a recitation
+    on its first verse, because there was nothing to play and nothing
+    else to try.
+
+    No field distinguishes them, so the only honest test is to ask, and
+    the answer is kept so it is only ever asked once per edition.
+    """
+    number, ayah = _PROBE
+    url = f"{_API}/ayah/{number}:{ayah}/editions/{identifier}"
+
+    try:
+        with urllib.request.urlopen(url, timeout=_TIMEOUT) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+    except (urllib.error.URLError, ValueError, OSError):
+        # Unreachable is not the same as unsupported. Returning None
+        # leaves it unrecorded, so a dropped connection cannot blacklist
+        # a perfectly good reciter for ever.
+        return None
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    editions = data if isinstance(data, list) else [data]
+
+    for edition in editions:
+        if isinstance(edition, dict) and edition.get("audio"):
+            return True
+
+    return False
+
+
+def reciters():
+    """Arabic recitations that can actually be played, for the dropdown.
+
+    Two filters, not one. Language, because most audio editions are
+    translations read aloud in other languages; and whether the edition
+    has verse-by-verse audio, because offering one that has not is
+    offering a choice that cannot work.
+
+    The second filter costs one request per unknown edition, once ever.
+    Called from a background thread at startup, so the first run is the
+    only slow one and nothing waits on it.
     """
     editions = _cached_json(_RECITERS_NAME, f"{_API}/edition/format/audio")
 
     if not editions:
         return []
 
-    return [
+    arabic = [
         {
             "identifier": edition.get("identifier"),
             "name": edition.get("englishName") or edition.get("name"),
@@ -152,6 +238,32 @@ def reciters():
         for edition in editions
         if edition.get("language") == "ar" and edition.get("identifier")
     ]
+
+    known = _load_support()
+    learned = False
+    playable = []
+
+    for entry in arabic:
+        identifier = entry["identifier"]
+        state = known.get(identifier)
+
+        if state is None:
+            state = _has_verse_audio(identifier)
+
+            if state is not None:
+                known[identifier] = state
+                learned = True
+
+        if state:
+            playable.append(entry)
+
+    if learned:
+        _save_support(known)
+
+    # Nothing verified and nothing remembered means the network was down
+    # throughout. An unchecked list is more use than an empty one, and
+    # the default reciter is known good regardless.
+    return playable if (playable or known) else arabic
 
 
 def surah(number):
