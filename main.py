@@ -908,8 +908,12 @@ def main():
 
     # Through the signal, not straight to hide(): the request arrives on
     # the command thread and a Qt timer may only be stopped by its own.
+    # The callout goes through the same gate as every other unprompted
+    # announcement, so it queues behind a recitation or a follow-up
+    # rather than talking over one.
     aircraft.set_listeners(on_update=radar_updated,
-                           on_hide=radar.hide_requested.emit)
+                           on_hide=radar.hide_requested.emit,
+                           on_callout=assistant._on_alert)
 
     def find_place(latitude, longitude, identifier):
         """Name the ground under an aircraft, off the drawing thread."""

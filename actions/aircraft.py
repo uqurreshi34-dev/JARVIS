@@ -48,6 +48,15 @@ _CACHE_SECONDS = 12
 # often buys nothing and these feeds are free and shared.
 _WATCH_SECONDS = 25
 
+# How near an aircraft has to be before it is worth mentioning without
+# being asked. A mile and a half is overhead in any sense that matters,
+# and is the same threshold the spoken summary uses for that phrase.
+CALLOUT_NM = 1.5
+
+# ... and how long before the same one may be mentioned again, so a
+# helicopter working a circuit does not become a running commentary.
+_CALLOUT_AGAIN = 900
+
 # How long a feed is left alone after it refuses, doubling each time it
 # refuses again, up to the ceiling. Being rate limited and carrying on
 # regardless is how a free service stops being free for everyone.
@@ -420,21 +429,33 @@ _watch_stop = threading.Event()
 
 
 _hide_listener = None
+_callout_listener = None
+
+# id -> when it was last announced.
+_called = {}
+
+# The first fetch of a session announces nothing. Whatever is overhead
+# the moment the radar opens has just been named in the spoken summary,
+# and saying it twice in three seconds is worse than not saying it.
+_first_pass = threading.Event()
 
 
-def set_listeners(on_update=None, on_hide=None):
+def set_listeners(on_update=None, on_hide=None, on_callout=None):
     """Who to tell when a fetch lands, and when to go away.
 
     The same arrangement recitation.py uses: this module knows nothing
     about windows, and main.py knows nothing about feeds.
     """
-    global _listener, _hide_listener
+    global _listener, _hide_listener, _callout_listener
 
     if on_update is not None:
         _listener = on_update
 
     if on_hide is not None:
         _hide_listener = on_hide
+
+    if on_callout is not None:
+        _callout_listener = on_callout
 
 
 def set_listener(callback):
@@ -467,7 +488,106 @@ def refresh(radius_nm=DEFAULT_RADIUS_NM, force=False):
         except Exception as error:
             print(f"[JARVIS] radar listener failed: {error}")
 
+    _call_out(craft)
+
     return craft
+
+
+# Letters whose names begin with a vowel sound. An aircraft type is read
+# out letter-then-digits -- A320 is "ay three twenty" -- so the article
+# follows how the first letter sounds, not how it is spelled. That is why
+# it is an A320 and a B738.
+_SPOKEN_VOWELS = frozenset("AEFHILMNORSX")
+
+
+def _article(word):
+    """'a' or 'an', by how the word is actually said."""
+    if not word:
+        return "a"
+
+    first = word[0].upper()
+
+    # A letter followed by a digit is read as a letter, not as a word.
+    spoken_letter = len(word) > 1 and word[1].isdigit()
+
+    if spoken_letter or word.isupper():
+        return "an" if first in _SPOKEN_VOWELS else "a"
+
+    return "an" if first in "AEIOU" else "a"
+
+
+def _overhead_sentence(entry):
+    """What to say about something that has come over the top."""
+    label = (entry.get("callsign") or entry.get("registration")
+             or entry.get("type") or "An aircraft")
+
+    kind = entry.get("type")
+    climb = entry.get("climb") or 0.0
+
+    # A metre a second is about two hundred feet a minute -- enough to be
+    # worth remarking on, and above the noise in the reported rate.
+    if climb > 1.0:
+        doing = ", climbing"
+    elif climb < -1.0:
+        doing = ", descending"
+    else:
+        doing = ""
+
+    height = f"{_feet(entry['altitude']):,} feet"
+    described = f" {_article(kind).capitalize()} {kind}." if kind else ""
+
+    return (f"{label} is passing overhead, sir. "
+            f"{height}{doing}.{described}")
+
+
+def _call_out(craft):
+    """Mention anything that has come overhead, once.
+
+    Only ever reached from the watcher, so nothing is announced unless
+    the radar is actually open and being looked at.
+    """
+    if not _callout_listener or not craft:
+        return
+
+    now = time.monotonic()
+
+    # Forget the long departed, so this cannot grow all day.
+    for identifier, when in list(_called.items()):
+        if now - when > _CALLOUT_AGAIN * 2:
+            del _called[identifier]
+
+    seeding = not _first_pass.is_set()
+
+    for entry in craft:
+        if entry.get("range") is None or entry.get("altitude") is None:
+            continue
+
+        if entry["range"] > CALLOUT_NM * _METRES_PER_NM:
+            continue
+
+        identifier = entry.get("id") or entry.get("callsign")
+
+        if not identifier:
+            continue
+
+        if now - _called.get(identifier, -1e9) < _CALLOUT_AGAIN:
+            continue
+
+        _called[identifier] = now
+
+        if seeding:
+            continue
+
+        try:
+            _callout_listener(_overhead_sentence(entry))
+        except Exception as error:
+            print(f"[JARVIS] radar callout failed: {error}")
+
+        # The nearest is enough. Announcing three at once is a weather
+        # forecast, not a remark.
+        break
+
+    _first_pass.set()
 
 
 def watch(radius_nm=DEFAULT_RADIUS_NM, seconds=_WATCH_SECONDS):
@@ -482,6 +602,7 @@ def watch(radius_nm=DEFAULT_RADIUS_NM, seconds=_WATCH_SECONDS):
         return
 
     _watch_stop.clear()
+    _first_pass.clear()
 
     def loop():
         while not _watch_stop.is_set():
