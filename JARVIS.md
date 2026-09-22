@@ -36,7 +36,7 @@ This prevents speech intended for the phone from being heard or acted on by
 the desktop listener. When the phone interaction finishes, the desktop
 microphone is restored.
 
-**120 language-model intents. 520 spoken phrases resolve locally with no API call.**
+**123 language-model intents. 520 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -627,6 +627,53 @@ already queues announcements during a follow-up, and released when the
 session ends. Nothing in the recitation code knows market alerts or
 reminders exist.
 
+### Presence — `phrases.py`, `commands.py`
+"Jarvis, you there?" is not a request for anything, and answering it with
+"Yes, sir?" replies to a question that was not asked. It gets its own
+pool now, which reassures and asks for nothing back.
+
+Matched by shape rather than by a list of sentences — an optional "are",
+"you", an optional "still", then one of a dozen state words, and nothing
+else in the utterance. Presence checks are improvised every time, and a
+fixed list would have answered four of them and sent the fifth to a model
+that charges for the privilege of saying yes. The whole-utterance anchor
+is what keeps "what are you up to" and "you up for a game" out.
+
+### Aircraft — `actions/aircraft.py`, `actions/places.py`, `radar_panel.py`
+Live ADS-B traffic, spoken and drawn. Two public feeds, neither needing a
+key, tried in order exactly as providers.py tries models: adsb.lol first
+because its budget is not visibly finite, OpenSky second because its four
+hundred requests are. A feed that answers 420, 429 or 503 is rested for
+two minutes, doubling to half an hour, and a good fetch clears the
+penalty — being rate limited and carrying on regardless is how a free
+service stops being free for everyone.
+
+The feeds agree on nothing else. One reports altitude in feet and speed
+in knots, the other in metres and metres per second; one carries a
+registration and type, the other the operator's country. Everything is
+normalised on the way in, so nothing above the module sees a feed's own
+shape.
+
+Where to look is never a fixed coordinate: the phone's last position
+first, the remembered home next, the weather city last.
+
+`radar_panel.py` draws it — you at the centre, north up, four range rings
+at quarters of whatever the range is. A mark's colour is its altitude,
+warm amber low to cold cyan at cruise, so height reads without a legend,
+and the mark is a delta rotated to the aircraft's real track.
+
+Nothing on screen waits for the network. Between fetches each aircraft is
+advanced along its own track at its own speed and climbed at its own
+rate, thirty times a second — dead reckoning, the same thing a cockpit
+does between fixes, and the difference between a display that looks alive
+and one that twitches every twenty-five seconds.
+
+Hovering a mark names the ground beneath it through OpenStreetMap's
+Nominatim. That service is free and keyless and asks for one request a
+second and a caller that identifies itself; both are enforced rather than
+hoped for, every answer is cached to disk by position, and lookups happen
+on hover alone rather than for every contact at once.
+
 ### Camera — `actions/camera.py`
 Captures through pygrabber (pure Python DirectShow). Sends one frame to a
 vision model and says what it sees. Detects a too-dark frame locally and
@@ -1094,6 +1141,8 @@ voice, Graph credentials, weather fallback.
 | `speed_test.py` | where the time in a reply goes |
 | `test_console.py` | typed commands, no microphone |
 | `tools/mine_journal.py` | which intents reach the model, and what was said |
+| `tools/adsb_probe.py` | which aircraft feeds answer, and how hard they can be pushed |
+| `tools/quran_api_probe.py` | which reciters have verse-by-verse audio |
 
 `TIMING = True` in `main.py`, `voice.py`, `speech.py` and `transcriber.py`
 prints where each stage's time goes.

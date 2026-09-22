@@ -348,6 +348,56 @@ only stop takes it away. The HUD stop button ends the recitation too.
 Anything he would have announced while reciting — a market alert, a
 reminder — waits and is delivered when the session ends.
 
+## The sky
+
+Live aircraft within twenty-five miles, spoken and then drawn on a radar
+face beside the HUD.
+
+| Say | Does |
+|---|---|
+| what's flying overhead | counts them, names the nearest and the highest |
+| show me the radar | the same, with the radar face |
+| aircraft above me | the same |
+| any jets nearby | the same |
+| close the radar | puts it away and stops the feed |
+
+He needs something that flies and somewhere to look, in either order, so
+"book me a flight to Dubai" and "I'm flying to Spain on Tuesday" both
+fall through to the usual routing.
+
+Reading the face: you are the cross at the centre, north is at the top,
+and the rings are quarters of the range. Where a mark sits is where the
+aircraft is on the ground below — its height is the number beneath the
+callsign, not its distance from the middle. So an aircraft crossing
+directly over you slides through the centre without its altitude
+changing at all.
+
+| On the face | Means |
+|---|---|
+| amber mark | low — circuits, approach, helicopters |
+| pale mark | climbing or descending through the middle altitudes |
+| cyan mark | at cruise, thirty thousand feet and above |
+| which way the delta points | the direction it is actually flying |
+| ↑ or ↓ by the altitude | climbing or descending faster than 100 feet a minute |
+| hovering a mark | names the ground underneath it |
+
+Close it when you are not watching. The feeds are free and shared, and
+the radar keeps asking them for as long as it is open.
+
+## Is he there
+
+| Say | Does |
+|---|---|
+| you up | I'm here, sir. |
+| you awake | Always here, sir. |
+| you there | For you, sir. Always. |
+| you still there | Never far, sir. |
+| you with me | Right here, sir. |
+
+Seven replies, never the same one twice running. Costs nothing and
+answers instantly — being asked whether you are there is not a question
+worth a model request.
+
 ## Calendar
 
 JARVIS keeps his own calendar, and also writes to Outlook and an `.ics`.
