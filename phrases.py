@@ -162,14 +162,22 @@ _PHONETIC = {
 }
 
 
-# Digits as the radio says them. Four is the reason this list exists:
-# spoken plainly it is indistinguishable from "for", which is why ICAO
-# has said "fower" since the 1950s. Niner, tree and fife are there for
-# the same reason -- nine against five, three against a hesitation.
+# Digits as the radio says them, where that earns its keep.
+#
+# ICAO also gives TREE for three and FIFE for five, and they are correct
+# procedure -- but they exist for non-native speakers on noisy HF, not
+# for a neural voice in a quiet room. Neither three nor five is
+# confusable with anything here, and both read as a glitch to anyone who
+# does not know the table.
+#
+# Fower and niner stay because they solve collisions that are real in
+# this room: four against for, which is what sent us looking, and nine
+# against five over any imperfect channel.
+#
 # Only used for spelled codes; ordinary prose still counts normally.
 _RADIO_DIGITS = (
-    "zero", "one", "two", "tree", "fower",
-    "fife", "six", "seven", "eight", "niner",
+    "zero", "one", "two", "three", "fower",
+    "five", "six", "seven", "eight", "niner",
 )
 
 
