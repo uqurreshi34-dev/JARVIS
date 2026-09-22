@@ -525,8 +525,7 @@ def _article(word):
 
 def _overhead_sentence(entry):
     """What to say about something that has come over the top."""
-    label = (entry.get("callsign") or entry.get("registration")
-             or entry.get("type") or "An aircraft")
+    label = _spoken_label(entry, fallback="An aircraft")
 
     kind = entry.get("type")
     climb = entry.get("climb") or 0.0
@@ -636,6 +635,22 @@ def stop_watching():
     _watch_stop.set()
 
 
+def _spoken_label(entry, fallback="One"):
+    """What to call an aircraft out loud.
+
+    Callsigns and registrations are codes, and a speech engine reads
+    codes as words -- LOG9LB comes out as LOG nine pounds. Spelled on
+    the radio alphabet they are unmistakable, and they sound like what
+    they are. A type is left alone: A320 already reads correctly.
+    """
+    code = (entry.get("callsign") or entry.get("registration") or "").strip()
+
+    if code:
+        return phrases.spell(code)
+
+    return (entry.get("type") or "").strip() or fallback
+
+
 def _feet(metres):
     return int(round(metres / _METRES_PER_FOOT / 100.0) * 100)
 
@@ -681,16 +696,17 @@ def describe(radius_nm=DEFAULT_RADIUS_NM):
     if not flying:
         return f"Nothing in the air within {radius_nm:g} miles, sir."
 
-    # "One aircraft" rather than "1 aircraft" -- the same helper every
-    # other spoken count in JARVIS goes through.
+    # Not "Four aircraft within..." -- a number opening a sentence is
+    # unstressed, and "four" said quickly is indistinguishable from
+    # "for". Giving it a word to lean on fixes it without touching the
+    # speech engine.
     lines = [
-        f"{phrases.number(len(flying)).capitalize()} aircraft within "
+        f"I count {phrases.number(len(flying))} aircraft within "
         f"{radius_nm:g} miles, sir."
     ]
 
     nearest = flying[0]
-    label = (nearest["callsign"] or nearest["registration"]
-             or nearest["type"] or "One")
+    label = _spoken_label(nearest)
 
     if nearest["range"] is not None:
         lines.append(
@@ -701,8 +717,7 @@ def describe(radius_nm=DEFAULT_RADIUS_NM):
     highest = max(flying, key=lambda e: e["altitude"])
 
     if highest is not nearest:
-        top = (highest["callsign"] or highest["registration"]
-               or highest["type"] or "the highest")
+        top = _spoken_label(highest, fallback="the highest")
 
         lines.append(f"The highest is {top} at "
                      f"{_feet(highest['altitude']):,} feet.")

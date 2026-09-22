@@ -147,6 +147,48 @@ def number(value):
     return str(count)
 
 
+# The radio alphabet. A callsign is a string of characters, not a word,
+# and a speech engine given LOG9LB will helpfully read LB as pounds.
+# Spelling it the way it is actually said on the radio removes the
+# ambiguity completely and happens to sound the part.
+_PHONETIC = {
+    "A": "Alpha", "B": "Bravo", "C": "Charlie", "D": "Delta",
+    "E": "Echo", "F": "Foxtrot", "G": "Golf", "H": "Hotel",
+    "I": "India", "J": "Juliet", "K": "Kilo", "L": "Lima",
+    "M": "Mike", "N": "November", "O": "Oscar", "P": "Papa",
+    "Q": "Quebec", "R": "Romeo", "S": "Sierra", "T": "Tango",
+    "U": "Uniform", "V": "Victor", "W": "Whiskey", "X": "X-ray",
+    "Y": "Yankee", "Z": "Zulu",
+}
+
+
+def spell(text, phonetic=True):
+    """A code said character by character, so it is heard as one.
+
+    Anything that is not a letter or a digit becomes a pause, which is
+    what turns G-CLBN into Golf, Charlie Lima Bravo November rather than
+    into a word the engine tries to pronounce.
+
+    phonetic=False spells with the bare letters instead, which is
+    shorter and still unambiguous.
+    """
+    if not text:
+        return ""
+
+    said = []
+
+    for character in str(text).upper():
+        if character.isdigit():
+            said.append(number(int(character)))
+        elif character.isalpha():
+            said.append(_PHONETIC.get(character, character)
+                        if phonetic else character)
+        elif said and said[-1] != ",":
+            said.append(",")
+
+    return " ".join(said).replace(" ,", ",")
+
+
 def pick(key, **fields):
     """A line from the pool, never the same one twice running."""
     pool = POOLS.get(key)
