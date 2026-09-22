@@ -13,6 +13,20 @@ from PyQt6.QtWidgets import QWidget
 
 _COLOUR = QColor(120, 210, 250)
 
+# The hot centre of the beam. Projected light is near-white at its core
+# and takes its colour at the edges; one flat hue throughout is what made
+# the cone read as a drawn shape rather than as light.
+_CORE_COLOUR = QColor(236, 250, 255)
+
+# Half-height of that core, as a fraction of the cone's own half-height.
+# Derived from the cone at paint time, so it holds at any window size.
+_CORE_SPREAD = 0.52
+
+# The core is drawn as nested cones rather than one, so its top and
+# bottom fade out instead of ending on a visible seam. More layers is a
+# smoother falloff for one more fill each.
+_CORE_LAYERS = 8
+
 _FRAME_MS = 33
 
 # Each end of the projection is pulled in from its window's edge by this
@@ -23,9 +37,16 @@ _EDGE_INSET = 14
 _BANDS = 4
 _BAND_SPEED = 0.0055
 
+# Irrational, so band offsets derived from it never fall into step.
+_GOLDEN = 0.6180339887
+
 # Fine horizontal lines across the cone, which is what makes it read as a
 # projection rather than a painted shape.
-_SCANLINE_GAP = 7
+_SCANLINE_GAP = 9
+
+# Peak alpha of a scanline. Low, because the texture should be felt more
+# than seen -- a bright regular grid is a CRT, not a hologram.
+_SCANLINE_ALPHA = 16
 
 
 class Beam(QWidget):
@@ -181,6 +202,13 @@ class Beam(QWidget):
 
         painter.fillPath(cone, gradient)
 
+        # A second, narrower cone of near-white down the middle. This is
+        # the single change that stops the beam reading as a 1970s
+        # hologram: it gives the light a hot core and leaves the colour
+        # at the edges, which is how a real projection behaves.
+        self._paint_core(painter, apex_x, far_x,
+                         apex_top, apex_bottom, far_top, far_bottom)
+
         painter.save()
         painter.setClipPath(cone)
 
@@ -190,18 +218,13 @@ class Beam(QWidget):
 
         painter.restore()
 
-        # Crisp edges, which is what stops it looking like a smudge.
-        edge = QColor(_COLOUR)
-        edge.setAlpha(205)
-        painter.setPen(QPen(edge, 1.8))
-        painter.drawLine(QPointF(apex_x, apex_top), QPointF(far_x, far_top))
-        painter.drawLine(
-            QPointF(apex_x, apex_bottom), QPointF(far_x, far_bottom)
-        )
+        # Definition at the rim without drawing a border around light.
+        self._paint_edges(painter, apex_x, far_x,
+                          apex_top, apex_bottom, far_top, far_bottom)
 
         # A bright core where the light leaves the HUD.
-        glow = QColor(_COLOUR)
-        glow.setAlpha(210)
+        glow = QColor(_CORE_COLOUR)
+        glow.setAlpha(225)
         painter.setPen(QPen(glow, 2.6, Qt.PenStyle.SolidLine,
                             Qt.PenCapStyle.RoundCap))
         painter.drawLine(
@@ -210,22 +233,98 @@ class Beam(QWidget):
 
         painter.end()
 
-    def _paint_scanlines(self, painter, width, height):
-        """Fine horizontal lines, the giveaway of a projected image."""
-        line = QColor(_COLOUR)
-        line.setAlpha(34)
-        painter.setPen(QPen(line, 1.0))
+    def _paint_core(self, painter, apex_x, far_x,
+                    apex_top, apex_bottom, far_top, far_bottom):
+        """The near-white centre, a narrower cone inside the coloured one.
 
+        Its half-height is a fraction of the cone's at each end rather
+        than a fixed number of pixels, so it stays proportionate whether
+        the panel is a small chart or a full page.
+        """
+        apex_mid = (apex_top + apex_bottom) / 2.0
+        far_mid = (far_top + far_bottom) / 2.0
+
+        apex_reach = (apex_bottom - apex_top) / 2.0 * _CORE_SPREAD
+        far_reach = (far_bottom - far_top) / 2.0 * _CORE_SPREAD
+
+        for layer in range(_CORE_LAYERS):
+            # Widest and faintest first, narrowing and brightening inward.
+            # The alphas accumulate, which is what produces a falloff
+            # rather than a band with two visible edges.
+            scale = (_CORE_LAYERS - layer) / _CORE_LAYERS
+
+            apex_half = apex_reach * scale
+            far_half = far_reach * scale
+
+            core = QPainterPath()
+            core.moveTo(apex_x, apex_mid - apex_half)
+            core.lineTo(far_x, far_mid - far_half)
+            core.lineTo(far_x, far_mid + far_half)
+            core.lineTo(apex_x, apex_mid + apex_half)
+            core.closeSubpath()
+
+            gradient = QLinearGradient(apex_x, 0.0, far_x, 0.0)
+
+            for stop, alpha in ((0.0, 30), (0.5, 12), (1.0, 0)):
+                colour = QColor(_CORE_COLOUR)
+                colour.setAlpha(alpha)
+                gradient.setColorAt(stop, colour)
+
+            painter.fillPath(core, gradient)
+
+    def _paint_edges(self, painter, apex_x, far_x,
+                     apex_top, apex_bottom, far_top, far_bottom):
+        """Glow along the rim rather than a line around it.
+
+        One crisp stroke draws a border, and a border is the one thing
+        real light never has. Three passes -- wide and faint, then
+        narrower and brighter -- read as the edge of a volume instead.
+        """
+        for width, alpha in ((5.0, 32), (2.6, 74), (1.1, 170)):
+            colour = QColor(_COLOUR)
+            colour.setAlpha(alpha)
+
+            painter.setPen(QPen(colour, width, Qt.PenStyle.SolidLine,
+                                Qt.PenCapStyle.RoundCap))
+            painter.drawLine(QPointF(apex_x, apex_top),
+                             QPointF(far_x, far_top))
+            painter.drawLine(QPointF(apex_x, apex_bottom),
+                             QPointF(far_x, far_bottom))
+
+    def _paint_scanlines(self, painter, width, height):
+        """Faint horizontal texture, drifting.
+
+        A fixed pitch at a fixed brightness is a television, not a
+        projection. The pitch stays regular because that is cheap, but
+        the brightness varies down the beam and drifts with the phase,
+        which is enough to break the pattern the eye reads as retro.
+        """
         offset = int(self._phase * _SCANLINE_GAP)
 
         for y in range(offset, height, _SCANLINE_GAP):
+            strength = 0.3 + 0.7 * abs(
+                math.sin(y * 0.07 + self._phase * math.tau)
+            )
+
+            line = QColor(_COLOUR)
+            line.setAlpha(int(_SCANLINE_ALPHA * strength))
+
+            painter.setPen(QPen(line, 1.0))
             painter.drawLine(0, y, width, y)
 
     def _paint_bands(self, painter, apex_x, far_x,
                      apex_top, apex_bottom, far_top, far_bottom):
-        """Bands of light travelling from the lens out to the panel."""
+        """Bands of light travelling from the lens out to the panel.
+
+        Spaced by the golden ratio and each travelling at its own speed,
+        so they drift rather than march in step. Both are derived from
+        the index, so raising _BANDS needs no other edit.
+        """
         for index in range(_BANDS):
-            position = (self._phase + index / _BANDS) % 1.0
+            offset = (index * _GOLDEN) % 1.0
+            speed = 1.0 + (index % 3) * 0.11
+
+            position = (self._phase * speed + offset) % 1.0
 
             x = apex_x + (far_x - apex_x) * position
 
@@ -237,7 +336,7 @@ class Beam(QWidget):
             strength = math.sin(position * math.pi)
 
             band = QColor(_COLOUR)
-            band.setAlpha(int(140 * strength))
+            band.setAlpha(int(130 * strength))
 
-            painter.setPen(QPen(band, 2.4))
+            painter.setPen(QPen(band, 1.5 + 1.3 * strength))
             painter.drawLine(QPointF(x, top), QPointF(x, bottom))
