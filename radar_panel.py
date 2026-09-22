@@ -60,6 +60,9 @@ _HIGH = QColor(120, 210, 250)
 # The altitude at which a mark is fully _HIGH. Roughly airliner cruise.
 _CEILING = 11000.0
 
+# How close the pointer has to be to a mark to count as pointing at it.
+_HOVER_RADIUS = 18.0
+
 _FACE = QColor(10, 18, 26)
 _RING = QColor(120, 210, 250)
 _TEXT = QColor(214, 238, 250)
@@ -116,9 +119,16 @@ class RadarPanel(QWidget):
     # In.
     updated = pyqtSignal(list, tuple, str)
     message = pyqtSignal(str)
+    place_known = pyqtSignal(str, str)
+
+    # Emitted rather than calling hide() directly, because a Qt timer may
+    # only be stopped by the thread that owns it and the request to close
+    # arrives on the command thread.
+    hide_requested = pyqtSignal()
 
     # Out.
     closed = pyqtSignal()
+    place_wanted = pyqtSignal(float, float, str)
 
     def __init__(self):
         super().__init__()
@@ -133,6 +143,14 @@ class RadarPanel(QWidget):
         self._anchor = None
         self._drag_offset = None
 
+        # Where each mark was last drawn, so the mouse can be matched to
+        # an aircraft without recomputing the whole face.
+        self._plotted = []
+        self._hovered = ""
+        self._places = {}
+
+        self.setMouseTracking(True)
+
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -143,6 +161,8 @@ class RadarPanel(QWidget):
 
         self.updated.connect(self._on_updated)
         self.message.connect(self._on_message)
+        self.place_known.connect(self._on_place)
+        self.hide_requested.connect(self.hide)
 
         self._animate = QTimer(self)
         self._animate.timeout.connect(self._tick)
@@ -172,6 +192,12 @@ class RadarPanel(QWidget):
             self._animate.start(_FRAME_MS)
 
         self.update()
+
+    def _on_place(self, identifier, name):
+        """A place name has come back for one of the marks."""
+        if name:
+            self._places[identifier] = name
+            self.update()
 
     def _on_message(self, text):
         self._note = text or ""
@@ -214,6 +240,41 @@ class RadarPanel(QWidget):
     def mouseMoveEvent(self, event):
         if self._drag_offset is not None:
             self.move(event.globalPosition().toPoint() - self._drag_offset)
+            return
+
+        self._hover(event.position())
+
+    def leaveEvent(self, event):
+        if self._hovered:
+            self._hovered = ""
+            self.update()
+
+        super().leaveEvent(event)
+
+    def _hover(self, point):
+        """Match the pointer to the nearest mark, if it is near enough."""
+        nearest = ""
+        best = _HOVER_RADIUS
+
+        for mark, entry, lat, lon in self._plotted:
+            distance = math.hypot(mark.x() - point.x(), mark.y() - point.y())
+
+            if distance < best:
+                best = distance
+                nearest = entry.get("id") or entry.get("callsign") or ""
+                found = (lat, lon)
+
+        if nearest == self._hovered:
+            return
+
+        self._hovered = nearest
+        self.update()
+
+        # Asked for once per aircraft. The lookup happens elsewhere, on a
+        # thread that is allowed to wait for the network.
+        if nearest and nearest not in self._places:
+            self._places[nearest] = ""
+            self.place_wanted.emit(found[0], found[1], nearest)
 
     def mouseReleaseEvent(self, event):
         self._drag_offset = None
@@ -385,6 +446,8 @@ class RadarPanel(QWidget):
         elapsed = time.monotonic() - self._fetched_at
         pixels_per_metre = radius / (self._radius_nm * _METRES_PER_NM)
 
+        self._plotted = []
+
         font = QFont()
         font.setPointSize(7)
         painter.setFont(font)
@@ -409,13 +472,28 @@ class RadarPanel(QWidget):
             colour = _blend(_LOW, _HIGH,
                             (altitude or 0.0) / _CEILING)
 
-            self._paint_mark(painter, point, entry.get("track"), colour)
-            self._paint_tag(painter, point, entry, altitude, colour)
+            lat, lon, _ = _advance(entry, elapsed)
+            self._plotted.append((point, entry, lat, lon))
 
-    def _paint_mark(self, painter, point, track, colour):
+            identifier = entry.get("id") or entry.get("callsign") or ""
+
+            self._paint_mark(painter, point, entry.get("track"), colour,
+                             identifier == self._hovered)
+            self._paint_tag(painter, point, entry, altitude, colour,
+                            self._places.get(identifier, "")
+                            if identifier == self._hovered else "")
+
+    def _paint_mark(self, painter, point, track, colour, highlighted=False):
         """A small delta pointing the way the aircraft is going."""
         painter.save()
         painter.translate(point)
+
+        if highlighted:
+            ring = QColor(_TEXT)
+            ring.setAlpha(150)
+            painter.setPen(QPen(ring, 1.2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(0.0, 0.0), 13.0, 13.0)
 
         if track is not None:
             painter.rotate(track)
@@ -439,8 +517,8 @@ class RadarPanel(QWidget):
 
         painter.restore()
 
-    def _paint_tag(self, painter, point, entry, altitude, colour):
-        """Callsign and height, sitting just above the mark."""
+    def _paint_tag(self, painter, point, entry, altitude, colour, place=""):
+        """Callsign and height above the mark, and where it is below it."""
         name = (entry.get("callsign") or entry.get("registration")
                 or entry.get("type") or "")
 
@@ -477,6 +555,16 @@ class RadarPanel(QWidget):
                 QRectF(point.x() - 46, point.y() - 17, 92, 11),
                 Qt.AlignmentFlag.AlignCenter,
                 height,
+            )
+
+        # Below the mark, so it cannot collide with the callsign above
+        # it, and only for the one being pointed at.
+        if place:
+            painter.setPen(QPen(_TEXT))
+            painter.drawText(
+                QRectF(point.x() - 80, point.y() + 11, 160, 12),
+                Qt.AlignmentFlag.AlignCenter,
+                f"over {place}",
             )
 
     def _paint_legend(self, painter):

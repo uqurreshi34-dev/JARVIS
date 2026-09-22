@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import QApplication
 
 from actions import (
     aircraft,
+    places,
     camera,
     contacts,
     diary,
@@ -905,7 +906,22 @@ def main():
         radar.updated.emit(list(craft), tuple(here), source)
         radar_beam.shown.emit()
 
-    aircraft.set_listeners(on_update=radar_updated, on_hide=radar.hide)
+    # Through the signal, not straight to hide(): the request arrives on
+    # the command thread and a Qt timer may only be stopped by its own.
+    aircraft.set_listeners(on_update=radar_updated,
+                           on_hide=radar.hide_requested.emit)
+
+    def find_place(latitude, longitude, identifier):
+        """Name the ground under an aircraft, off the drawing thread."""
+        def look():
+            name = places.describe_point(latitude, longitude)
+
+            if name:
+                radar.place_known.emit(identifier, name)
+
+        threading.Thread(target=look, daemon=True).start()
+
+    radar.place_wanted.connect(find_place)
 
     # Closing the face stops the feed. Without this it would keep asking
     # for traffic nobody is looking at, for the rest of the session.
