@@ -5371,7 +5371,14 @@ def _handle_command(command, *, fast_only=False, probe=False):
         return _query(intent, markets.describe)
 
     if intent == "aircraft_overhead":
-        return _query(intent, aircraft.describe)
+        def sky():
+            # Start feeding the radar before speaking, so the face is
+            # already populated by the time the sentence finishes.
+            aircraft.watch()
+
+            return aircraft.describe()
+
+        return _query(intent, sky)
 
     if intent == "presence_check":
         return _query(intent, lambda: phrases.pick("presence"))

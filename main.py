@@ -13,6 +13,7 @@ from speech import prewarm, set_amplitude_listener, speak, set_sentence_listener
 from speech import set_speaking_listener, stop_speaking as stop_speech
 from news_panel import NewsPanel
 from quran_panel import QuranPanel
+from radar_panel import RadarPanel
 from hud import IDLE, LISTENING, RECITING, SPEAKING, THINKING, Hud
 from commands import (
     handle_command,
@@ -39,6 +40,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
 from actions import (
+    aircraft,
     camera,
     contacts,
     diary,
@@ -892,6 +894,28 @@ def main():
         target=lambda: page.reciters_loaded.emit(quran.reciters()),
         daemon=True,
     ).start()
+    # The radar, projected like the recitation page. aircraft.py fetches
+    # on its own thread and hands the result here; nothing in this block
+    # touches the network, and nothing in aircraft.py touches a window.
+    radar = RadarPanel()
+    radar.set_anchor(hud)
+    radar_beam = Beam(radar, hud)
+
+    def radar_updated(craft, here, source):
+        radar.updated.emit(list(craft), tuple(here), source)
+        radar_beam.shown.emit()
+
+    aircraft.set_listener(radar_updated)
+
+    # Closing the face stops the feed. Without this it would keep asking
+    # for traffic nobody is looking at, for the rest of the session.
+    radar.closed.connect(aircraft.stop_watching)
+    radar.closed.connect(radar_beam.hidden.emit)
+
+    hud.shutdown.connect(aircraft.stop_watching)
+    hud.shutdown.connect(radar.hide)
+    hud.shutdown.connect(radar_beam.hidden.emit)
+
     hud.stop_clicked.connect(assistant.stop_speaking)
 
     hud.shutdown.connect(panel.hide_news.emit)

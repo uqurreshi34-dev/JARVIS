@@ -344,6 +344,62 @@ def wanted(command):
     return bool(_CRAFT.search(text) and _SKY.search(text))
 
 
+_listener = None
+_watch = None
+_watch_stop = threading.Event()
+
+
+def set_listener(callback):
+    """Who to tell when a fetch lands. The radar panel, in practice.
+
+    The same arrangement recitation.py uses: this module knows nothing
+    about windows, and main.py knows nothing about feeds.
+    """
+    global _listener
+
+    _listener = callback
+
+
+def refresh(radius_nm=DEFAULT_RADIUS_NM, force=False):
+    """Fetch, and tell whoever is listening. Returns the aircraft."""
+    craft, source, here = overhead(radius_nm, force=force)
+
+    if _listener and craft is not None and here:
+        try:
+            _listener(craft, here, source)
+        except Exception as error:
+            print(f"[JARVIS] radar listener failed: {error}")
+
+    return craft
+
+
+def watch(radius_nm=DEFAULT_RADIUS_NM, seconds=_CACHE_SECONDS):
+    """Keep the radar fed until stop_watching(). Safe to call twice.
+
+    One thread, forced fetches, at the cache interval -- the panel dead
+    reckons between them, so this is as often as the sky needs asking.
+    """
+    global _watch
+
+    if _watch is not None and _watch.is_alive():
+        return
+
+    _watch_stop.clear()
+
+    def loop():
+        while not _watch_stop.is_set():
+            refresh(radius_nm, force=True)
+            _watch_stop.wait(seconds)
+
+    _watch = threading.Thread(target=loop, daemon=True)
+    _watch.start()
+
+
+def stop_watching():
+    """Stop asking. Called when the radar is closed."""
+    _watch_stop.set()
+
+
 def _feet(metres):
     return int(round(metres / _METRES_PER_FOOT / 100.0) * 100)
 
