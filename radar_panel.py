@@ -68,6 +68,12 @@ _HOVER_RADIUS = 18.0
 # "Sutton Coldfield, Birmingham", narrow enough not to cross the face.
 _PLACE_MAX_WIDTH = 250.0
 
+# How many real fixes of history to keep behind each aircraft. At one
+# fetch every twenty-five seconds that is a couple of minutes of actual
+# track -- real positions, so a turn shows as a turn rather than every
+# aircraft appearing to have flown in a straight line for ever.
+_TRAIL_POINTS = 6
+
 _FACE = QColor(10, 18, 26)
 _RING = QColor(120, 210, 250)
 _TEXT = QColor(214, 238, 250)
@@ -153,6 +159,7 @@ class RadarPanel(QWidget):
         self._plotted = []
         self._hovered = ""
         self._places = {}
+        self._trails = {}
 
         self.setMouseTracking(True)
 
@@ -189,6 +196,8 @@ class RadarPanel(QWidget):
         self._note = ""
         self._fetched_at = time.monotonic()
 
+        self._remember_fixes()
+
         if not self.isVisible():
             self._position()
             self.show()
@@ -197,6 +206,36 @@ class RadarPanel(QWidget):
             self._animate.start(_FRAME_MS)
 
         self.update()
+
+    def _remember_fixes(self):
+        """Append each aircraft's real position to its trail.
+
+        Only real fixes are kept. Dead reckoning fills the gap between
+        them at draw time, so the stored track is what actually
+        happened rather than what was extrapolated.
+        """
+        seen = set()
+
+        for entry in self._aircraft:
+            identifier = entry.get("id") or entry.get("callsign") or ""
+
+            if not identifier or entry.get("latitude") is None:
+                continue
+
+            seen.add(identifier)
+
+            trail = self._trails.setdefault(identifier, [])
+            fix = (entry["latitude"], entry["longitude"])
+
+            if not trail or trail[-1] != fix:
+                trail.append(fix)
+
+            del trail[:-_TRAIL_POINTS]
+
+        # Anything that has left the area takes its history with it,
+        # otherwise the panel accumulates every aircraft of the day.
+        for gone in set(self._trails) - seen:
+            del self._trails[gone]
 
     def _on_place(self, identifier, name):
         """A place name has come back for one of the marks."""
@@ -303,17 +342,18 @@ class RadarPanel(QWidget):
         if lat is None or lon is None:
             return None
 
-        # Flat earth is fine across twenty-odd miles, and it keeps this
-        # to two multiplications per aircraft per frame.
+        return (self._to_screen(lat, lon, centre_point, pixels_per_metre),
+                altitude)
+
+    def _to_screen(self, lat, lon, centre_point, pixels_per_metre):
+        """A position on the face. Flat earth, which is fine at this size."""
         north = (lat - self._centre[0]) * _METRES_PER_DEGREE
         east = (lon - self._centre[1]) * _METRES_PER_DEGREE * math.cos(
             math.radians(self._centre[0])
         )
 
-        x = centre_point.x() + east * pixels_per_metre
-        y = centre_point.y() - north * pixels_per_metre
-
-        return QPointF(x, y), altitude
+        return QPointF(centre_point.x() + east * pixels_per_metre,
+                       centre_point.y() - north * pixels_per_metre)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -482,11 +522,49 @@ class RadarPanel(QWidget):
 
             identifier = entry.get("id") or entry.get("callsign") or ""
 
+            self._paint_trail(painter, identifier, point, centre_point,
+                              pixels_per_metre, colour)
+
             self._paint_mark(painter, point, entry.get("track"), colour,
                              identifier == self._hovered)
             self._paint_tag(painter, point, entry, altitude, colour,
                             self._places.get(identifier, "")
                             if identifier == self._hovered else "")
+
+    def _paint_trail(self, painter, identifier, point, centre_point,
+                     pixels_per_metre, colour):
+        """Where it has been, fading with age.
+
+        Drawn segment by segment rather than as one path, because the
+        whole point is that the far end is faint and the near end is
+        not, and a single pen cannot do both.
+        """
+        trail = self._trails.get(identifier)
+
+        if not trail or len(trail) < 2:
+            return
+
+        points = [
+            self._to_screen(lat, lon, centre_point, pixels_per_metre)
+            for lat, lon in trail
+        ]
+
+        # The live position closes the trail, so it stays attached to
+        # the mark as that mark is dead reckoned forward.
+        points.append(point)
+
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        for index in range(len(points) - 1):
+            fade = (index + 1) / len(points)
+
+            line = QColor(colour)
+            line.setAlpha(int(20 + 95 * fade))
+
+            painter.setPen(QPen(line, 0.7 + 1.5 * fade,
+                                Qt.PenStyle.SolidLine,
+                                Qt.PenCapStyle.RoundCap))
+            painter.drawLine(points[index], points[index + 1])
 
     def _paint_mark(self, painter, point, track, colour, highlighted=False):
         """A small delta pointing the way the aircraft is going."""
