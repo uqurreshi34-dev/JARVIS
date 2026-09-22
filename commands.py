@@ -30,6 +30,7 @@ from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
 import phrases
 from actions import (
+    aircraft,
     blender,
     browser,
     camera,
@@ -3595,6 +3596,11 @@ def _fast_path(command):
     if quran.parse(command):
         return _blank_result("recite_quran")
 
+    # Two halves in either order -- something that flies, and somewhere to
+    # look -- so the module decides rather than the router.
+    if aircraft.wanted(text):
+        return _blank_result("aircraft_overhead")
+
     # Costs nothing and answers instantly, which is the whole point: being
     # asked whether you are there is not a question worth a model request.
     if _PRESENCE.match(text):
@@ -5363,6 +5369,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "market_summary":
         return _query(intent, markets.describe)
+
+    if intent == "aircraft_overhead":
+        return _query(intent, aircraft.describe)
 
     if intent == "presence_check":
         return _query(intent, lambda: phrases.pick("presence"))

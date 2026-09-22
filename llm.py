@@ -483,6 +483,7 @@ _SCHEMA = {
                 "media_previous",
                 "recite_quran",
                 "presence_check",
+                "aircraft_overhead",
                 "minimise_all",
                 "restore_all",
                 "set_reminder",
