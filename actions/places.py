@@ -144,7 +144,15 @@ def _name_from(address):
 
 
 def describe_point(latitude, longitude):
-    """Where this is, in words. Empty string when it cannot be had.
+    """Where this is, in words.
+
+    Three outcomes, and the caller needs to tell them apart:
+
+        "Erdington, Birmingham"   a name
+        ""                        no name here -- open sea, usually.
+                                  Remembered, so it is never asked twice
+        None                      the lookup failed. Nothing is
+                                  remembered, and asking again is fair
 
     Blocks for up to a second while it waits its turn, so it belongs on
     a background thread -- never on the one drawing the radar.
@@ -194,7 +202,11 @@ def describe_point(latitude, longitude):
 
         except (urllib.error.URLError, ValueError, OSError) as error:
             print(f"[JARVIS] could not look up a place: {error}")
-            return ""
+
+            # None, not "". A refused or timed-out request says nothing
+            # about the ground below, so remembering it as nameless
+            # would blank that point for good.
+            return None
 
     name = _name_from(payload.get("address") if isinstance(payload, dict)
                       else None)

@@ -920,7 +920,12 @@ def main():
         def look():
             name = places.describe_point(latitude, longitude)
 
-            if name:
+            # None means the lookup itself failed, so the panel is told
+            # to forget it was asked and may ask again. A name, or an
+            # empty one, is an answer either way and is kept.
+            if name is None:
+                radar.place_failed.emit(identifier)
+            else:
                 radar.place_known.emit(identifier, name)
 
         threading.Thread(target=look, daemon=True).start()

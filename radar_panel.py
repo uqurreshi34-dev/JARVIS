@@ -64,6 +64,21 @@ _CEILING = 11000.0
 # How close the pointer has to be to a mark to count as pointing at it.
 _HOVER_RADIUS = 18.0
 
+# How long the pointer has to stay on a mark before its position is
+# looked up. Place names come from a free service that permits one
+# request a second, so every mark the pointer merely crosses on its way
+# somewhere costs a second of the queue the mark you actually want is
+# waiting in. At a hundred miles the face is four times as crowded as it
+# is at fifty, so a single sweep across it used to spend a dozen seconds
+# of that queue and the tag never arrived while you were still pointing.
+# Resting is the signal; passing over is not.
+_HOVER_SETTLE = 0.3
+
+# How many times a failed lookup is retried before that mark is left
+# alone. Covers a dropped request without hammering a service that is
+# simply down.
+_PLACE_ATTEMPTS = 2
+
 # The widest a place tag may be before it is elided. Wide enough for
 # "Sutton Coldfield, Birmingham", narrow enough not to cross the face.
 _PLACE_MAX_WIDTH = 250.0
@@ -132,6 +147,11 @@ class RadarPanel(QWidget):
     message = pyqtSignal(str)
     place_known = pyqtSignal(str, str)
 
+    # A lookup that did not come back. Separate from a lookup that came
+    # back with nothing, because the sea genuinely has no name and asking
+    # again is waste, while a refused request is worth retrying.
+    place_failed = pyqtSignal(str)
+
     # Emitted rather than calling hide() directly, because a Qt timer may
     # only be stopped by the thread that owns it and the request to close
     # arrives on the command thread.
@@ -158,6 +178,10 @@ class RadarPanel(QWidget):
         # an aircraft without recomputing the whole face.
         self._plotted = []
         self._hovered = ""
+        self._hovered_at = 0.0
+        self._hovered_point = None
+        self._asked = set()
+        self._failures = {}
         self._places = {}
         self._trails = {}
 
@@ -174,6 +198,7 @@ class RadarPanel(QWidget):
         self.updated.connect(self._on_updated)
         self.message.connect(self._on_message)
         self.place_known.connect(self._on_place)
+        self.place_failed.connect(self._on_place_failed)
         self.hide_requested.connect(self.hide)
 
         self._animate = QTimer(self)
@@ -243,10 +268,38 @@ class RadarPanel(QWidget):
             del self._trails[gone]
 
     def _on_place(self, identifier, name):
-        """A place name has come back for one of the marks."""
+        """A place name has come back for one of the marks.
+
+        Kept even when empty, which means the point genuinely has no
+        name -- open sea, most often -- so it is never asked about
+        again. Kept even if the pointer has moved on, so coming back to
+        the same aircraft shows it instantly.
+        """
+        self._places[identifier] = name or ""
+
         if name:
-            self._places[identifier] = name
             self.update()
+
+    def _on_place_failed(self, identifier):
+        """The lookup did not come back. Let it be asked again, twice.
+
+        Unbounded retries would be a hot loop: still pointing at the
+        mark, the next frame asks again, fails again, and the only thing
+        holding it back is the one-a-second floor in places.py. Twice
+        covers a dropped request; a third failure is the service being
+        down, and hammering it will not bring it back.
+        """
+        attempts = self._failures.get(identifier, 0) + 1
+        self._failures[identifier] = attempts
+
+        if attempts > _PLACE_ATTEMPTS:
+            return
+
+        self._asked.discard(identifier)
+
+        # The settle wait starts again, so a retry is not fired on the
+        # very next frame.
+        self._hovered_at = time.monotonic()
 
     def _on_message(self, text):
         self._note = text or ""
@@ -296,6 +349,7 @@ class RadarPanel(QWidget):
     def leaveEvent(self, event):
         if self._hovered:
             self._hovered = ""
+            self._hovered_point = None
             self.update()
 
         super().leaveEvent(event)
@@ -317,13 +371,37 @@ class RadarPanel(QWidget):
             return
 
         self._hovered = nearest
+        self._hovered_at = time.monotonic()
+        self._hovered_point = found if nearest else None
+
         self.update()
 
-        # Asked for once per aircraft. The lookup happens elsewhere, on a
-        # thread that is allowed to wait for the network.
-        if nearest and nearest not in self._places:
-            self._places[nearest] = ""
-            self.place_wanted.emit(found[0], found[1], nearest)
+    def _ask_place(self):
+        """Look up the mark the pointer has settled on, once.
+
+        Called every frame from the tick, so the wait is measured from
+        when the pointer arrived rather than from a timer of its own.
+        """
+        identifier = self._hovered
+
+        if not identifier or self._hovered_point is None:
+            return
+
+        if identifier in self._asked or identifier in self._places:
+            return
+
+        if time.monotonic() - self._hovered_at < _HOVER_SETTLE:
+            return
+
+        # Claimed before the request goes out, so a slow answer is not
+        # asked for again on every one of the next thirty frames.
+        self._asked.add(identifier)
+
+        # The lookup happens elsewhere, on a thread that is allowed to
+        # wait for the network.
+        self.place_wanted.emit(self._hovered_point[0],
+                               self._hovered_point[1],
+                               identifier)
 
     def mouseReleaseEvent(self, event):
         self._drag_offset = None
@@ -332,6 +410,7 @@ class RadarPanel(QWidget):
 
     def _tick(self):
         self._sweep = (self._sweep + _FRAME_MS / 1000.0 / _SWEEP_SECONDS) % 1.0
+        self._ask_place()
         self.update()
 
     def _plot(self, entry, elapsed, centre_point, pixels_per_metre):
