@@ -162,6 +162,17 @@ _PHONETIC = {
 }
 
 
+# Digits as the radio says them. Four is the reason this list exists:
+# spoken plainly it is indistinguishable from "for", which is why ICAO
+# has said "fower" since the 1950s. Niner, tree and fife are there for
+# the same reason -- nine against five, three against a hesitation.
+# Only used for spelled codes; ordinary prose still counts normally.
+_RADIO_DIGITS = (
+    "zero", "one", "two", "tree", "fower",
+    "fife", "six", "seven", "eight", "niner",
+)
+
+
 def spell(text, phonetic=True):
     """A code said character by character, so it is heard as one.
 
@@ -179,7 +190,8 @@ def spell(text, phonetic=True):
 
     for character in str(text).upper():
         if character.isdigit():
-            said.append(number(int(character)))
+            said.append(_RADIO_DIGITS[int(character)] if phonetic
+                        else number(int(character)))
         elif character.isalpha():
             said.append(_PHONETIC.get(character, character)
                         if phonetic else character)
