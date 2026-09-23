@@ -61,6 +61,13 @@ _HIGH = QColor(120, 210, 250)
 # The altitude at which a mark is fully _HIGH. Roughly airliner cruise.
 _CEILING = 11000.0
 
+# For a mark whose height is not known. Deliberately off the warm-to-cold
+# scale rather than at one end of it: blending an absent altitude as zero
+# painted it the same colour as something on the deck, so an aircraft
+# nobody could measure looked like an aircraft flying very low. Grey says
+# unknown, which is the truth, and it still gets counted.
+_UNKNOWN = QColor(150, 158, 168)
+
 # How close the pointer has to be to a mark to count as pointing at it.
 _HOVER_RADIUS = 18.0
 
@@ -598,8 +605,10 @@ class RadarPanel(QWidget):
             if offset > radius - 2:
                 continue
 
-            colour = _blend(_LOW, _HIGH,
-                            (altitude or 0.0) / _CEILING)
+            # `is None` rather than a falsy test: nought feet is a real
+            # altitude, and an aircraft that low should read as low.
+            colour = (_UNKNOWN if altitude is None
+                      else _blend(_LOW, _HIGH, altitude / _CEILING))
 
             lat, lon, _ = _advance(entry, elapsed)
             self._plotted.append((point, entry, lat, lon))

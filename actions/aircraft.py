@@ -745,7 +745,13 @@ def describe(radius_nm=None):
     if craft is None:
         return "I couldn't reach the aircraft feeds, sir."
 
-    flying = [e for e in craft if e["altitude"] is not None]
+    # Two lists, because they answer different questions. Everything the
+    # feed returned is airborne -- anything on the ground was dropped at
+    # the parser -- so that is the count, and it matches the contacts on
+    # the face. A handful broadcast no altitude, and those cannot be the
+    # nearest or the highest without inventing a height for them.
+    flying = craft
+    measured = [e for e in craft if e["altitude"] is not None]
 
     if not flying:
         return (f"Nothing in the air within {radius_nm:g} "
@@ -760,7 +766,12 @@ def describe(radius_nm=None):
         f"{radius_nm:g} nautical miles, sir."
     ]
 
-    nearest = flying[0]
+    if not measured:
+        return " ".join(lines)
+
+    # Sorted by range already, so the first with a height is the nearest
+    # one there is anything to say about.
+    nearest = measured[0]
     label = _spoken_label(nearest)
 
     if nearest["range"] is not None:
@@ -769,7 +780,7 @@ def describe(radius_nm=None):
             f"{_away(nearest['range'], nearest['bearing'])}."
         )
 
-    highest = max(flying, key=lambda e: e["altitude"])
+    highest = max(measured, key=lambda e: e["altitude"])
 
     if highest is not nearest:
         top = _spoken_label(highest, fallback="the highest")
