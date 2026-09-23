@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import QApplication
 from actions import (
     aircraft,
     places,
+    sensors,
     camera,
     contacts,
     diary,
@@ -305,6 +306,21 @@ class Assistant:
             self._speak_alert_locked(text)
             self._state(previous)
 
+    def _on_sensor(self, payload):
+        """A board on the wifi has reported. Returns what was said.
+
+        Runs on the web server's thread, so it does no talking itself:
+        it decides, and hands anything worth saying to the same gate
+        every other unprompted announcement goes through. That gate is
+        what stops a doorbell interrupting a recitation.
+        """
+        said = sensors.report(payload)
+
+        if said:
+            self._on_alert(said)
+
+        return said
+
     def _on_recitation_verse(self, state):
         """Show which verse is sounding, while it sounds."""
         self._reply(f"{state['name']} {state['ayah']} of {state['total']}")
@@ -441,6 +457,7 @@ class Assistant:
         # handle_command serialises itself -- see _command_lock.
         phone_server.set_handler(self._on_phone_command)
         phone_server.set_look_handler(look_at_phone_picture)
+        phone_server.set_sensor_handler(self._on_sensor)
         phone_server.start()
 
         self._say(_greeting())

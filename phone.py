@@ -495,6 +495,7 @@ class PhoneServer:
         self._server = None
         self._thread = None
         self._look_handler = None
+        self._sensor_handler = None
 
         # Things JARVIS said unprompted that the phone hasn't collected
         # yet. Battery warnings, market alerts, pattern runs and the
@@ -650,6 +651,14 @@ class PhoneServer:
         Takes (image bytes, question) and returns what to say.
         """
         self._look_handler = handler
+
+    def set_sensor_handler(self, handler):
+        """Register what to do when a sensor on the wifi reports in.
+
+        Takes the reported payload and returns what to say, or None
+        when the report was worth recording and not worth saying.
+        """
+        self._sensor_handler = handler
 
     def set_handler(self, handler):
         """Register what actually runs a command.
@@ -828,6 +837,42 @@ class PhoneServer:
                 return jsonify({"error": "Unusable position."}), 400
 
             return jsonify({"ok": True, "home": location.is_home()})
+
+        @app.post("/sensor")
+        def sensor_report():
+            """A board on the wifi saying what it can feel.
+
+            The same door the phone uses, and the same token: being on
+            the network is not by itself permission to make someone's
+            desktop talk.
+
+            Answers immediately and always. A microcontroller waiting
+            on a reply is a microcontroller not watching its pin, and
+            one that gets an error will usually just reboot and try
+            again -- so a report that says nothing worth announcing is
+            still a success, and says so.
+            """
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            payload = request.get_json(silent=True) or {}
+
+            if not self._sensor_handler:
+                return jsonify({"ok": True, "spoke": False}), 200
+
+            try:
+                said = self._sensor_handler(payload)
+
+            except Exception as error:
+                # A failure up here must never look like a failure down
+                # there. The board did its job by reporting; whatever
+                # went wrong is ours, and it is logged rather than
+                # bounced back as a status the board would retry.
+                print(f"[JARVIS] sensor report failed: {error}", flush=True)
+
+                return jsonify({"ok": True, "spoke": False}), 200
+
+            return jsonify({"ok": True, "spoke": bool(said)}), 200
 
         @app.get("/health")
         def health():
