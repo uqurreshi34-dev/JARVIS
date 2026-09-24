@@ -97,6 +97,13 @@ check(isinstance(result, dict) and "broken" in result.get("error", ""),
 
 check(isinstance(mcp_services.call("mcp_test_nope", {}), dict), "an unknown tool is refused")
 
+result = mcp_services.call("mcp_test_readme", {})
+check("Django REST API" in str(result) and "omitted" not in str(result),
+      "a file sent back as a resource reaches the model as its text (GitHub's README case)")
+
+result = mcp_services.call("mcp_test_readme_blob", {})
+check("Notes from a blob." in str(result), "a base64 resource is decoded to its text")
+
 leaked = mcp_services.call("mcp_test_environment", {"name": "JARVIS_TEST_SECRET"})
 check("should-never-leak" not in leaked, "the server does not see JARVIS's own secrets")
 
@@ -109,6 +116,20 @@ check(mcp_services.mentioned("what is the latest news") is None, "an ordinary co
 check(mcp_services.mentioned("contest the result") is None, "a service name inside another word does not count")
 
 check(any("connected, " in line for line in mcp_services.status()), "status reports the connected service")
+
+# How speech recognition really delivers names: split, joined, hyphenated.
+names_only = os.path.join(folder, mcp_services.CONFIG_NAME)
+with open(names_only, encoding="utf-8") as handle:
+    saved = handle.read()
+with open(names_only, "w", encoding="utf-8") as handle:
+    json.dump({"mcpServers": {"filesystem": {"command": "x"}, "github": {"url": "https://example.invalid"}}}, handle)
+check(mcp_services.mentioned("use file system to find the biggest files") == "filesystem",
+      "'file system' said as two words finds the filesystem service")
+check(mcp_services.mentioned("what are my git hub issues") == "github", "'git hub' finds github with no alias needed")
+check(mcp_services.mentioned("list my github repositories") == "github", "'github' as one word still works")
+check(mcp_services.mentioned("my file is in the system tray") is None, "the words apart from each other do not count")
+with open(names_only, "w", encoding="utf-8") as handle:
+    handle.write(saved)
 
 # ---- Agent Mode ------------------------------------------------------------
 

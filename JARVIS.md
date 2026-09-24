@@ -852,8 +852,9 @@ setup can be pasted in:
 ```
 
 `${NAME}` is filled from the environment or `.env`, so keys are never
-written into the file. `aliases` are other names the service may be spoken
-as; `disabled: true` switches an entry off; `trusted_read_only` lists tools
+written into the file. A service is recognised by its name however speech
+recognition splits it ("file system" finds `filesystem`, "git hub" finds
+`github`); `aliases` are other names it may be spoken as; `disabled: true` switches an entry off; `trusted_read_only` lists tools
 the user has checked but whose server forgot to mark them.
 
 The tools join Agent Mode. A command naming a configured service goes to

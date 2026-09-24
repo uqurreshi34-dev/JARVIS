@@ -137,24 +137,42 @@ def configured():
     return tuple(_read_config())
 
 
+_SPOKEN_WORD = re.compile(r"[a-z0-9]+")
+
+# Speech recognition splits one written name into up to this many words:
+# "filesystem" arrives as "file system", "askfiles" as "ask files".
+_MAX_NAME_WORDS = 4
+
+
+def _squash(text):
+    """Letters and digits only: 'file system', 'file-system' and 'filesystem' agree."""
+    return "".join(_SPOKEN_WORD.findall(str(text or "").casefold()))
+
+
 def mentioned(text):
     """The configured service a command names, or None.
 
     Matched on the server's name in mcp.json and any aliases listed for it,
-    as whole words, so "look at my github issues" finds "github" and nothing
-    has to be written into JARVIS for a new service.
+    ignoring spaces and punctuation, against whole words of the command: so
+    "use file system to list my documents" finds "filesystem" and "git hub"
+    finds "github", while "contest" does not find "test". Nothing has to be
+    written into JARVIS for a new service.
     """
-    lowered = f" {' '.join(str(text or '').casefold().split())} "
+    words = _SPOKEN_WORD.findall(str(text or "").casefold())
+
+    runs = {
+        "".join(words[start:start + size])
+        for size in range(1, _MAX_NAME_WORDS + 1)
+        for start in range(len(words) - size + 1)
+    }
 
     for name, entry in _read_config().items():
-        spoken = {name.casefold().replace("_", " ").replace("-", " ")}
-        spoken.update(
-            str(alias).casefold() for alias in entry.get("aliases") or () if str(alias).strip()
-        )
+        spoken = {_squash(name)}
+        spoken.update(_squash(alias) for alias in entry.get("aliases") or ())
+        spoken.discard("")
 
-        for word in spoken:
-            if f" {word} " in lowered:
-                return name
+        if spoken & runs:
+            return name
 
     return None
 
@@ -361,16 +379,46 @@ def owns(tool_name):
     return tool_name in _tools
 
 
+def _resource_text(resource):
+    """The text of an embedded resource, such as a file GitHub sends back."""
+    text = getattr(resource, "text", None)
+
+    if text is not None:
+        return str(text)
+
+    blob = getattr(resource, "blob", None)
+
+    if blob:
+        import base64
+
+        try:
+            return base64.b64decode(blob).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            pass
+
+    mime = getattr(resource, "mime_type", None) or "binary"
+    return f"[{mime} file at {getattr(resource, 'uri', '')} not shown]"
+
+
 def _result_text(result):
     parts = []
 
     for item in getattr(result, "content", None) or ():
+        kind = getattr(item, "type", None)
         text = getattr(item, "text", None)
 
         if text is not None:
             parts.append(str(text))
+        elif kind == "resource":
+            # Servers send files this way: GitHub's get_file_contents
+            # answers with the README as a resource, not as text. Showing
+            # the model a placeholder instead had it retry until it ran
+            # out of turns.
+            parts.append(_resource_text(getattr(item, "resource", None)))
+        elif kind == "resource_link":
+            parts.append(f"[link: {getattr(item, 'name', '')} {getattr(item, 'uri', '')}]")
         else:
-            parts.append(f"[{getattr(item, 'type', 'non-text')} content omitted]")
+            parts.append(f"[{kind or 'non-text'} content omitted]")
 
     structured = getattr(result, "structured_content", None)
 
