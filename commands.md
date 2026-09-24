@@ -403,6 +403,23 @@ Seven replies, never the same one twice running. Costs nothing and
 answers instantly — being asked whether you are there is not a question
 worth a model request.
 
+## Thanks, praise and how he is
+
+| Say | Does |
+|---|---|
+| thank you jarvis | You're welcome, sir. |
+| thanks for that | My pleasure, sir. |
+| cheers mate | Any time, sir. |
+| well done | I do my best, sir. |
+| good job jarvis | Kind of you to say, sir. |
+| jarvis, you good? | Never better, sir. |
+| how are you | Very well, sir. Thank you for asking. |
+
+Improvise freely — "excellent, thank you so much", "brilliant, cheers",
+"are you okay jarvis" all work. Free and instant. Anything more than the
+pleasantry itself ("thanks, now open chrome") is treated as a command.
+If a language model is resting after a rate limit, "you good?" says so.
+
 ## Calendar
 
 JARVIS keeps his own calendar, and also writes to Outlook and an `.ics`.

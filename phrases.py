@@ -67,6 +67,32 @@ POOLS = {
         "Right here, sir.",
         "Here, sir. As ever.",
     ),
+    # Said back to thanks. Nothing is asked in return: a question here
+    # would reopen a conversation that the thanks was closing.
+    "welcome": (
+        "You're welcome, sir.",
+        "My pleasure, sir.",
+        "Any time, sir.",
+        "Always a pleasure, sir.",
+        "Happy to help, sir.",
+        "Glad to be of use, sir.",
+    ),
+    "praised": (
+        "Thank you, sir.",
+        "Kind of you to say, sir.",
+        "I do my best, sir.",
+        "Much appreciated, sir.",
+        "High praise, sir. Thank you.",
+    ),
+    # "You good?" when nothing is wrong. social.py says otherwise when
+    # something honestly is.
+    "wellbeing": (
+        "All systems running smoothly, sir. Thank you for asking.",
+        "Never better, sir.",
+        "In fine form, sir.",
+        "Very well, sir. Thank you for asking.",
+        "Running like clockwork, sir.",
+    ),
     "declined": (
         "Very well, sir. I'll leave it to you.",
         "As you wish, sir.",

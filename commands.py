@@ -63,6 +63,7 @@ from actions import (
     patterns,
     safety,
     screen_control,
+    social,
     tasks,
     project_setup,
     tripo,
@@ -3571,6 +3572,15 @@ _OPEN_PROJECT = re.compile(
 # send the fifth to a model that charges for the privilege of saying yes.
 # The shape is narrow enough to be safe: it has to be the whole utterance,
 # so "what are you up to" and "you up for a game" both fall through.
+# social.py's kinds and the intents they route to, both ways. The model can
+# name the same intents for anything the shapes miss.
+_SOCIAL_INTENTS = {
+    "gratitude": "gratitude",
+    "praise": "praise",
+    "wellbeing": "wellbeing_check",
+}
+_SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
+
 _PRESENCE = re.compile(
     r"^(?:are\s+you|r\s+u|r\s+you|are\s+u|you)\s+"
     r"(?:still\s+)?"
@@ -3627,6 +3637,13 @@ def _fast_path(command):
     # asked whether you are there is not a question worth a model request.
     if _PRESENCE.match(text):
         return _blank_result("presence_check")
+
+    # Thanks, praise and "you good?" -- said to him, not asked of him.
+    # Whole utterances only, so "thanks, now open chrome" is a command.
+    said = social.kind(command)
+
+    if said:
+        return _blank_result(_SOCIAL_INTENTS[said])
 
     if text in (
         "restore original",
@@ -5450,6 +5467,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "presence_check":
         return _query(intent, lambda: phrases.pick("presence"))
+
+    if intent in _SOCIAL_REPLIES:
+        return _query(intent, lambda: social.reply(_SOCIAL_REPLIES[intent]))
 
     if intent == "close_quran":
         return _query(

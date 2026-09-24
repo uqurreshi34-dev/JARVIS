@@ -36,7 +36,7 @@ This prevents speech intended for the phone from being heard or acted on by
 the desktop listener. When the phone interaction finishes, the desktop
 microphone is restored.
 
-**124 language-model intents. 520 spoken phrases resolve locally with no API call.**
+**127 language-model intents. 520 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -649,6 +649,23 @@ else in the utterance. Presence checks are improvised every time, and a
 fixed list would have answered four of them and sent the fifth to a model
 that charges for the privilege of saying yes. The whole-utterance anchor
 is what keeps "what are you up to" and "you up for a game" out.
+
+### Thanks, praise and "you good?" — `actions/social.py`, `phrases.py`, `commands.py`
+"Thank you, Jarvis" is said to him, not asked of him, and used to cost a
+model call that answered "I'm not equipped for that". Now it is matched
+locally, the same way presence is: by shape, not by a list. A shape is a
+few interchangeable parts — an optional lead-in ("great", "excellent"), the
+heart of it ("thank you", "cheers", "much appreciated"), an optional amount
+("so much"), an optional reason ("for that", "for the help") and an
+optional way of addressing him ("jarvis", "mate"). Praise ("well done",
+"good job") and wellbeing ("you good?", "how are you") work the same way.
+
+Every shape must be the whole utterance, so "thanks, now open chrome",
+"no thanks" and "how are you getting the data" still go where commands go.
+social.py normalises the raw utterance itself, because the router's
+normaliser trims edge words like "well" and "okay" that these need.
+"You good?" answers honestly: if a language model is resting after a
+rate limit, he says so rather than claiming all is well.
 
 ### Aircraft — `actions/aircraft.py`, `actions/places.py`, `radar_panel.py`
 Live ADS-B traffic, spoken and drawn. Two public feeds, neither needing a

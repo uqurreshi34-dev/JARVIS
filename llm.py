@@ -451,6 +451,10 @@ the matching intent above instead. Never use answer_question for opening
 or closing things, for volume or media, or for the time, weather, or
 system status.
 
+Use gratitude when the whole utterance only thanks JARVIS, praise when it
+only compliments him, and wellbeing_check when it only asks how he is. An
+utterance that also asks for something is not one of these.
+
 Use unknown for anything else.
 """
 
@@ -484,6 +488,9 @@ _SCHEMA = {
                 "recite_quran",
                 "close_quran",
                 "presence_check",
+                "gratitude",
+                "praise",
+                "wellbeing_check",
                 "aircraft_overhead",
                 "aircraft_hide",
                 "aircraft_range",
