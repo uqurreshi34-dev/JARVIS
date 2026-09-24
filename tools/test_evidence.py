@@ -78,10 +78,33 @@ def run_suite(label):
           f"[{label}] a page with nothing relevant sends nothing")
 
 
+# A figure that scores well below the page's best passage must still be kept:
+# relevance on the embedding model's scale, not relative to the leader.
+ARTICLE = (
+    "The Hyundai Ioniq 5 competes with the Model Y and uses an 800-volt architecture.\n"
+    "The Long Range version has an EPA-rated range of 331 miles, while the Standard trim offers about 260 miles.\n"
+    "Critics praised its interior space and software but noted a firm ride.\n"
+    "Subscribe to our newsletter for the latest deals. Accept cookies. Follow us on social media."
+)
+
+
+# A request that names both subjects, while the figure's sentence names neither.
+FIGURE_FOCUS = "Compare the Tesla Model Y and Hyundai Ioniq 5 Tesla Model Y Hyundai Ioniq 5 Model Y review"
+
+
+def run_figures(label):
+    kept = evidence.reduce(ARTICLE, FIGURE_FOCUS, 2800)
+    check("331 miles" in kept and "800-volt" in kept, f"[{label}] a supporting figure is kept beside the strongest passage")
+
+
 semantic_available = evidence._semantic("test", ["a passage"]) is not None
 
 if semantic_available:
     run_suite("embedding model")
+    original_size = evidence.PASSAGE_CHARS
+    evidence.PASSAGE_CHARS = 120
+    run_figures("embedding model")
+    evidence.PASSAGE_CHARS = original_size
 
 original = evidence._semantic
 evidence._semantic = lambda focus, chunks: None

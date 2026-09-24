@@ -32,16 +32,29 @@ MAX_PASSAGES = 240
 # How much a passage containing digits is lifted, on a 0 to 1 scale.
 FIGURE_LIFT = 0.05
 
-# A passage must score at least this share of the best passage's score to be
-# kept. Without it, a generous budget would be topped up with noise.
+# With word overlap only, a passage must score at least this share of the
+# best passage's score to be kept; word counts have no absolute meaning, and
+# without it a generous budget would be topped up with noise. The embedding
+# model has a real scale, so it uses SEMANTIC_MINIMUM instead: a relative bar
+# there was measured dropping key figures that scored 0.25 beside a 0.74 lead.
 RELEVANCE_FLOOR = 0.35
+
+# The least similarity, from the local embedding model, for a passage to count
+# as about the request at all. Measured on that model: menus, cookie notices
+# and unrelated stories stayed at or under 0.07 for every request tried, while
+# a key figure in a sentence that never names its subject ('The Long Range
+# version has a range of 331 miles') scored 0.19. The bar sits between, low
+# enough to keep that sentence, high enough that a page with nothing relevant
+# sends nothing.
+SEMANTIC_MINIMUM = 0.12
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[\"'(\[A-Z0-9])")
 _WORD = re.compile(r"[a-z0-9]{3,}")
 
 
-def passages(text, size=PASSAGE_CHARS):
+def passages(text, size=None):
     """Split text into passages of about [size] characters on sentence edges."""
+    size = size or PASSAGE_CHARS
     units = []
 
     for block in re.split(r"\n\s*\n|\n", str(text or "")):
@@ -139,15 +152,24 @@ def reduce(text, focus, budget, seen=None):
     scores = []
 
     for index, chunk in enumerate(chunks):
-        score = lexical[index] if semantic is None else semantic[index] + 0.15 * lexical[index]
+        if semantic is None:
+            relevant = lexical[index] > 0
+            score = lexical[index]
+        else:
+            relevant = semantic[index] >= SEMANTIC_MINIMUM
+            score = semantic[index] + 0.15 * lexical[index]
 
-        if score > 0 and any(ch.isdigit() for ch in chunk):
+        if not relevant:
+            scores.append(0.0)
+            continue
+
+        if any(ch.isdigit() for ch in chunk):
             score += FIGURE_LIFT
 
         scores.append(score)
 
     ranked = sorted(range(len(chunks)), key=lambda i: scores[i], reverse=True)
-    floor = max(scores[ranked[0]], 0.0) * RELEVANCE_FLOOR
+    floor = max(scores[ranked[0]], 0.0) * RELEVANCE_FLOOR if semantic is None else 0.0
 
     kept = []
     used = 0
