@@ -70,6 +70,7 @@ from actions import (
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
 from llm import CommandInterpreter
+import agent
 from agent import run_agent
 
 
@@ -794,11 +795,6 @@ def _agent_task(command):
     ):
         return text
 
-    # A command that names a connected service (mcp.json) is work for the
-    # tools that service offers, which live in Agent Mode.
-    if mcp_services.mentioned(text):
-        return text
-
     return None
 
 
@@ -865,6 +861,11 @@ def _run_agent_investigation(task):
 
     if not summary:
         return None
+
+    # A run that stopped at its ceiling found nothing worth fixing or
+    # writing up, so it is not followed by an offer to do either.
+    if summary == agent.LIMIT_MESSAGE:
+        return summary
 
     if is_code:
         _awaiting = {
@@ -4934,6 +4935,22 @@ def _handle_command(command, *, fast_only=False, probe=False):
         print(f"[fast] {result['intent']} (no API call)")
 
     if not fast_only:
+
+        # A command that names a connected service (mcp.json) is work for
+        # that service's tools, in Agent Mode. Checked first, so a local
+        # phrase ("read the readme") or the multi-step planner ("open
+        # github and read it") cannot take a request meant for the service.
+        service = mcp_services.mentioned(command)
+
+        if service:
+            print(f"[agent] Agent Mode for connected service {service!r}")
+            task = _normalise(command)
+
+            return _query(
+                "agent_mode",
+                lambda: _run_agent_investigation(task),
+                detail=task,
+            )
 
         if folder_organizer.is_request(command):
             prepared = folder_organizer.prepare(command)

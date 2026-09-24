@@ -172,6 +172,32 @@ else:
     check("JARVIS" in str(agent._execute_tool_call("mcp_test_upper", {"text": "jarvis"})),
           "Agent Mode dispatches a connected-service call")
 
+    # A model that never stops asking for a tool: how many rounds is it given?
+    import types as _types
+
+    class _Endless:
+        kind = "anthropic"
+        name = "endless"
+
+        def __init__(self, tool):
+            self.turns = 0
+            self.tool = tool
+
+        def agent_turn(self, messages, tools, **kwargs):
+            self.turns += 1
+            block = _types.SimpleNamespace(type="tool_use", id=f"t{self.turns}", name=self.tool, input={"text": "x"})
+            return _types.SimpleNamespace(stop_reason="tool_use", content=[block])
+
+    endless = _Endless("mcp_test_upper")
+    said = agent._run_with_provider(endless, "ask the test service", False, False, False)
+    check(endless.turns == agent._SERVICE_MAX_TURNS and said == agent.LIMIT_MESSAGE,
+          f"with connected services, a run gets {agent._SERVICE_MAX_TURNS} rounds before its limit")
+
+    endless = _Endless("list_jarvis_files")
+    agent._run_with_provider(endless, "what is in my folder", False, False, True)
+    check(endless.turns == agent._AGENT_MAX_TURNS,
+          f"a code task keeps the ordinary {agent._AGENT_MAX_TURNS}-round limit")
+
 # ---- a service that cannot connect ----------------------------------------
 
 write_config({
