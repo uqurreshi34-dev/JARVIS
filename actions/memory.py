@@ -525,6 +525,62 @@ def describe():
     return f"{spoken}, sir.{extra}"
 
 
+# "What do you know about me?" is the general summary, not a topic.
+_ABOUT_ME = frozenset({"me", "myself", "i", "you", "us", "the user", "yourself"})
+
+
+def describe_about(topic, limit=3):
+    """What is remembered about one topic, or plainly that nothing is.
+
+    "What do you know about football?" used to read out the general summary
+    -- name, home coordinates, default project -- whatever the topic. Only
+    memories relevant to the topic are said now, found by relevant_summary,
+    which semantic_memory upgrades to matching by meaning.
+    """
+    topic = " ".join(str(topic or "").split())
+
+    if not topic or topic.casefold() in _ABOUT_ME:
+        return describe()
+
+    try:
+        summary = relevant_summary(topic, limit=limit)
+    except Exception as error:
+        print(f"[JARVIS] could not search memory for {topic!r}: {error}")
+        summary = ""
+
+    parts = []
+
+    for line in summary.splitlines():
+        line = line.strip()
+
+        if not line.startswith("- "):
+            continue
+
+        remembered = line[2:].strip()
+        key, separator, value = remembered.partition(":")
+
+        if separator and key.strip() and value.strip():
+            value = value.strip()
+            several = "," in value or " and " in f" {value} "
+            parts.append(f"your {key.strip()} {'are' if several else 'is'} {value}")
+        elif remembered:
+            parts.append(remembered.rstrip(" ."))
+
+    if not parts:
+        return f"I don't know anything about {_yours(topic)}, sir."
+
+    spoken = ". ".join(part[0].upper() + part[1:] for part in parts)
+
+    return f"{spoken}, sir."
+
+
+def _yours(topic):
+    """The topic as JARVIS says it back: "my car" becomes "your car"."""
+    swaps = {"my": "your", "mine": "yours", "me": "you", "i": "you", "myself": "yourself"}
+
+    return " ".join(swaps.get(word.casefold(), word) for word in topic.split())
+
+
 def greeting():
     """A greeting that uses your name if it is known."""
     hour = datetime.now().hour

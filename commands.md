@@ -630,6 +630,7 @@ Facts are kept in `memory.txt`, editable by hand.
 | my default project is JARVIS | for "open my project" |
 | my calendar is local | stops pushing to Outlook |
 | what do you know about me | reads it back |
+| what do you know about my car | only what's remembered about that, or says there's nothing |
 | forget about London | removes it |
 | what are my gym days | retrieves the remembered gym schedule semantically |
 | when do I train | finds the same memory even though the wording differs |

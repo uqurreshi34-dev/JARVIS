@@ -198,4 +198,15 @@ else:
     result = commands._fast_path("make a note about the boiler")
     check(bool(result) and result["intent"] == "make_note", "fast path: making a note is unchanged")
 
+    # "note down that ..." saved "that the dht22 needs a 10k resistor".
+    for said, saved in (
+        ("note down that the dht22 needs a 10k resistor", "the dht22 needs a 10k resistor"),
+        ("note that the boiler needs a service", "the boiler needs a service"),
+        ("note down the wifi password is on the router", "the wifi password is on the router"),
+        ("make a note that the car needs tax", "the car needs tax"),
+    ):
+        result = commands._fast_path(said)
+        check(bool(result) and result["intent"] == "make_note" and result.get("text") == saved,
+              f"saved as said: {said!r} -> {saved!r} (got {result and result.get('text')!r})")
+
 sys.exit(1 if failures else 0)

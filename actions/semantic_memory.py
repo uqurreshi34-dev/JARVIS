@@ -46,14 +46,8 @@ def _load_model():
             from huggingface_hub import hf_hub_download
             from tokenizers import Tokenizer
 
-            tokenizer_path = hf_hub_download(
-                repo_id=_MODEL_REPO,
-                filename=_TOKENIZER_FILE,
-            )
-            model_path = hf_hub_download(
-                repo_id=_MODEL_REPO,
-                filename=_MODEL_FILE,
-            )
+            tokenizer_path = _model_file(hf_hub_download, _TOKENIZER_FILE)
+            model_path = _model_file(hf_hub_download, _MODEL_FILE)
 
             tokenizer = Tokenizer.from_file(tokenizer_path)
             session = ort.InferenceSession(
@@ -71,6 +65,18 @@ def _load_model():
             print(
                 f"[JARVIS] semantic memory unavailable; using lexical retrieval: {error}")
             return False
+
+
+def _model_file(download, filename):
+    """The model file from the local cache, fetched only if it is missing.
+
+    Asking the Hub first on every start meant a network round trip for a
+    file already on disk, and an unauthenticated-request warning each time.
+    """
+    try:
+        return download(repo_id=_MODEL_REPO, filename=filename, local_files_only=True)
+    except Exception:
+        return download(repo_id=_MODEL_REPO, filename=filename)
 
 
 def _encode(texts):

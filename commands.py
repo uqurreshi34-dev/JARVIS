@@ -1212,7 +1212,8 @@ _NOTE_PATTERNS = (
     # "add dentist appointment to my notes", including "at ... to my notes"
     re.compile(rf"^{_ADD_VERBS}\s+(.+?)\s+{_TO_WORDS}\s+"
                r"(?:my\s+|the\s+)?notes$"),
-    re.compile(r"^note\s+(?:that\s+|down\s+)?(.+)$"),
+    # "note down that ..." -- both words can lead, and neither is the note.
+    re.compile(r"^note\s+(?:down\s+)?(?:that\s+)?(.+)$"),
     re.compile(r"^remember\s+(?:that\s+)?(.+)$"),
     # The leading verb is sometimes lost entirely ("and" is stripped as
     # filler), but "... to my notes" still says exactly what is wanted.
@@ -5528,6 +5529,11 @@ def _handle_command(command, *, fast_only=False, probe=False):
         return _query(intent, markets.describe_thresholds)
 
     if intent == "recall_memory":
+        topic = verbatim_text or text
+
+        if topic:
+            return _query(intent, lambda: memory.describe_about(topic))
+
         return _query(intent, memory.describe)
 
     if intent == "learn_subject" and text:

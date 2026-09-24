@@ -389,6 +389,13 @@ Stored memory keys and collection item names are treated as data: JARVIS preserv
 them as stored rather than grammatically singularising or otherwise rewriting their 
 names when speaking them.
 
+
+"What do you know about my car?" answers only from memories relevant to
+that topic (`memory.describe_about`, through the same meaning-based
+retrieval), and says plainly when there are none; it used to read the
+general summary whatever the topic. "What do you know about me?" still
+gives the summary. The MiniLM model is loaded from the local cache first
+and fetched only if missing, so startup makes no network call for it.
 ### Subjects — `actions/subject_store.py`
 
 What JARVIS has learned about the world, in `subjects.txt`, kept apart from

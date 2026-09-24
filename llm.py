@@ -316,6 +316,8 @@ For non-remember intents, set "memory" to null.
 
 Use forget when they want something removed from that memory.
 Use recall_memory when they ask what JARVIS knows or remembers about them.
+When they ask about one topic, such as "what do you know about my car",
+put only the topic in "text"; for everything about them, leave it empty.
 Use open_default_project when they say "open my project" without naming
 which one.
 
