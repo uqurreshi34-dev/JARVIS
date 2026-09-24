@@ -38,8 +38,35 @@ _PROTECTED_NAMES = frozenset({
     "jarvis-pending.txt",
     "market-alerts.txt",
     "jarvis-market-marks.txt",
-
+    # Moved into a Notes folder, notes.txt left JARVIS with no notes and
+    # every new note at risk of the same.
+    "notes.txt",
+    # Connected services; moving it silently disconnects them.
+    "mcp.json",
+    # The Outlook sign-in; moving it signs calendar sync out.
+    "outlook_token_cache.json",
+    # Caches, cheap to lose but fetched again over the network if moved.
+    "places.json",
+    "quran-surahs.json",
+    "quran-reciters.json",
+    "quran-reciter-audio.json",
 })
+
+# Files JARVIS names by date: rotated logs and the monthly token ledger.
+_PROTECTED_PATTERNS = (
+    re.compile(r"^jarvis-log-.+\.txt$", re.IGNORECASE),
+    re.compile(r"^usage-\d{4}-\d{2}\.jsonl$", re.IGNORECASE),
+)
+
+
+def is_protected(name):
+    """True for a file that is JARVIS's own state and must stay where it is."""
+    name = str(name or "").casefold()
+
+    return (
+        name in {value.casefold() for value in _PROTECTED_NAMES}
+        or any(pattern.match(name) for pattern in _PROTECTED_PATTERNS)
+    )
 
 _REQUEST_RE = re.compile(
     r"\b(?:organise|organize)\b.*\b(?:folder|directory)\b",
@@ -165,16 +192,11 @@ def _inventory(base):
 
     records = []
 
-    protected = {
-        name.casefold()
-        for name in _PROTECTED_NAMES
-    }
-
     for entry in entries:
         if not entry.is_file():
             continue
 
-        if entry.name.casefold() in protected:
+        if is_protected(entry.name):
             continue
 
         try:

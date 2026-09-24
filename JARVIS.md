@@ -249,6 +249,13 @@ move or delete anything.
 The manual `organise my JARVIS folder` command remains available separately and can still use the full organisation
 planner when broader judgement is useful.
 
+Neither ever moves JARVIS's own files: memory, subjects, notes, calendar,
+contacts, tasks, market alerts, `mcp.json`, the Outlook sign-in, the
+caches, rotated logs and the monthly usage ledger
+(`folder_organizer.is_protected`). `tools/test_folder_protection.py` finds
+every file the code keeps in the JARVIS folder by reading the source, so a
+new store fails that test until it is protected.
+
 ### Documents — `actions/documents.py`
 
 Drag Word documents, PDFs, TXT, Markdown, CSV or JSON files directly onto the JARVIS HUD to create a temporary working set. Once loaded, JARVIS can answer questions about individual documents, find information across the set, compare documents and combine information from several documents.
