@@ -176,6 +176,11 @@ class FakeSession:
         self.running = True
         self.stopped = False
 
+    @property
+    def active(self):
+        # Mirrors Session.active: a running session that is not winding up.
+        return self.running
+
     def stop(self):
         self.stopped = True
         self.running = False

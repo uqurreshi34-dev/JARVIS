@@ -162,6 +162,12 @@ class Assistant:
             self._turn_stopped.set()
 
     def _state(self, state):
+        # A recitation owns the HUD while it sounds. Anything asking for
+        # standby or listening in that time is shown as reciting instead;
+        # thinking and speaking still show, and a pause lets standby through.
+        if state in (IDLE, LISTENING) and recitation.owns_hud():
+            state = RECITING
+
         self._current_state = state
         self._hud.state_changed.emit(state)
 
@@ -357,13 +363,9 @@ class Assistant:
     def _on_status(self, status):
         """Called by the listener when it starts or stops accepting a
         follow-up, including when the window expires mid-wait."""
-        # A recitation owns the HUD state for as long as it runs. The
-        # microphone is still armed underneath -- that is how "stop" is
-        # heard -- but its status would otherwise put the HUD back into
-        # LISTENING over the top of a verse that is still sounding.
-        if recitation.current():
-            return
-
+        # The microphone is still armed during a recitation -- that is how
+        # "stop" is heard. _state keeps the HUD on reciting while a verse
+        # is sounding, and lets this through while the recitation is paused.
         self._state(LISTENING if status == "listening" else IDLE)
 
     def _on_wake(self):
@@ -902,6 +904,10 @@ def main():
             return
 
         session.pause() if paused else session.resume()
+
+        # Paused shows standby, resumed shows reciting again: _state
+        # decides which from the session, so this only has to ask.
+        assistant._state(IDLE)
 
     def page_reciter(identifier):
         session = recitation.latest()

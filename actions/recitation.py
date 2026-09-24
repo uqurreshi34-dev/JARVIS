@@ -66,6 +66,11 @@ class Session:
         self._thread = None
         self._playing = False
 
+        # Set as the session winds up, before anyone is told it ended. The
+        # thread is still alive while the end is announced, so without this
+        # the session would still look current to whoever is listening.
+        self._ending = False
+
         self._prefetched_to = 0
         self._prefetched_reciter = None
 
@@ -87,6 +92,11 @@ class Session:
     @property
     def running(self):
         return bool(self._thread and self._thread.is_alive())
+
+    @property
+    def active(self):
+        """Running and not already winding up."""
+        return self.running and not self._ending
 
     def state(self):
         """Everything the HUD needs, in one read."""
@@ -112,6 +122,7 @@ class Session:
             return False
 
         self._stop.clear()
+        self._ending = False
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -328,6 +339,7 @@ class Session:
 
         finally:
             self._playing = False
+            self._ending = True
             self._notify(self._on_end, reason, self.state())
 
     def _prefetch(self, start):
@@ -401,10 +413,25 @@ def set_listeners(on_hide=None, **listeners):
 def current():
     """The session in progress, or None."""
     with _current_lock:
-        if _current and _current.running:
+        if _current and _current.active:
             return _current
 
         return None
+
+
+def owns_hud():
+    """Whether the HUD should read RECITING rather than standby or listening.
+
+    True from the moment a session starts until it ends, including the
+    seconds spent fetching a verse before any sound, and false while it is
+    paused: nothing is sounding then, and the HUD should say so. Whatever
+    else asks for standby or listening during a session -- the end of the
+    command turn that started it, the microphone re-arming underneath --
+    is shown as RECITING instead, so a single short verse is no longer
+    hidden behind a standby set a moment after it began.
+    """
+    session = current()
+    return bool(session and not session.paused)
 
 
 def latest():
