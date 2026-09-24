@@ -9,14 +9,21 @@ import requests
 
 import providers
 
-from actions import browser, files
+from actions import browser, evidence, files
 
 
 _MAX_QUERIES = 5
 _MAX_INITIAL_SOURCES = 10
 _MAX_SOURCES_PER_QUERY = 2
 _MAX_FOLLOWUP_QUERIES = 2
-_MAX_SOURCE_CHARS = 7000
+# How much of each page is read. The whole of it, within reason: the part
+# that answers the question is often well below the top.
+_MAX_SOURCE_CHARS = 60000
+
+# How much of each page the model is shown, after evidence.reduce has kept
+# only the passages that bear on the request.
+_REPORT_EVIDENCE_CHARS = 2800
+_REFINE_EVIDENCE_CHARS = 1000
 _SEARCH_TIMEOUT = 20
 _SOURCE_TIMEOUT = 20
 
@@ -391,18 +398,36 @@ def _read_sources(results):
     return sources
 
 
+def _focus(request, subjects, source):
+    """What a page is being read for: the request, its subjects, the search."""
+    return " ".join(
+        part for part in (
+            str(request or "").strip(),
+            " ".join(subjects),
+            str(source.get("query") or "").strip(),
+        ) if part
+    )
+
+
 def _refine_queries(request, subjects, sources):
     """Ask the normal provider chain whether important research gaps remain."""
-    evidence = []
+    gathered = []
+    seen = set()
 
     for source in sources[:8]:
-        evidence.append(
-            f"TITLE: {source['title']}\n"
-            f"URL: {source['url']}\n"
-            f"CONTENT:\n{source['text'][:2500]}"
+        passages = evidence.reduce(
+            source["text"], _focus(request, subjects, source),
+            _REFINE_EVIDENCE_CHARS, seen,
         )
 
-    if not evidence:
+        if passages:
+            gathered.append(
+                f"TITLE: {source['title']}\n"
+                f"URL: {source['url']}\n"
+                f"CONTENT:\n{passages}"
+            )
+
+    if not gathered:
         return ()
 
     try:
@@ -415,7 +440,7 @@ def _refine_queries(request, subjects, sources):
                         f"USER REQUEST:\n{str(request or '').strip()}\n\n"
                         f"SUBJECTS:\n{', '.join(subjects)}\n\n"
                         "CURRENT EVIDENCE:\n"
-                        + "\n\n---\n\n".join(evidence)
+                        + "\n\n---\n\n".join(gathered)
                     ),
                 },
             ],
@@ -447,22 +472,31 @@ def _refine_queries(request, subjects, sources):
 
 def _report(request, subjects, sources):
     """Generate the final report through JARVIS's central provider chain."""
-    evidence = []
+    gathered = []
+    seen = set()
 
     for index, source in enumerate(sources, start=1):
-        evidence.append(
+        passages = evidence.reduce(
+            source["text"], _focus(request, subjects, source),
+            _REPORT_EVIDENCE_CHARS, seen,
+        )
+
+        if not passages:
+            continue
+
+        gathered.append(
             f"SOURCE {index}\n"
             f"TITLE: {source['title']}\n"
             f"URL: {source['url']}\n"
             f"SEARCH QUERY: {source['query']}\n"
-            f"CONTENT:\n{source['text']}"
+            f"CONTENT:\n{passages}"
         )
 
     prompt = (
         f"USER REQUEST:\n{str(request or '').strip()}\n\n"
         f"SUBJECTS:\n{', '.join(subjects)}\n\n"
         "SOURCE MATERIAL:\n"
-        + "\n\n---\n\n".join(evidence)
+        + "\n\n---\n\n".join(gathered)
     )
 
     try:

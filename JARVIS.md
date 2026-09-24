@@ -805,6 +805,16 @@ evidence, checks whether important gaps remain, and then synthesises the
 report. A failed source does not normally abort the research: unreadable,
 blocked or timed-out pages are discarded and the remaining sources are used.
 
+Each page is read in full, then cut down on this PC before any model sees it
+(`actions/evidence.py`): the page is split into short passages, and only the
+ones closest to the request are kept, within a fixed budget per source, in
+the page's own order and word for word. Closeness uses the same local
+embedding model as memory search, with word overlap as the fallback.
+Passages with figures and dates get a slight lift, and a passage already
+taken from one source is not sent again from another. This keeps menus,
+cookie notices and unrelated stories out of the report prompt, and finds
+the answering paragraph even when it sits far down the page.
+
 Reports include a Sources section containing the source titles and URLs
 actually used.
 
