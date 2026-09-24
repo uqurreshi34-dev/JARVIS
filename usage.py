@@ -187,15 +187,18 @@ def summary(days=1):
     """Totals by caller and by provider, biggest first."""
     calls = entries(days)
 
-    by_caller = defaultdict(lambda: {"calls": 0, "in": 0, "out": 0})
-    by_provider = defaultdict(lambda: {"calls": 0, "in": 0, "out": 0})
+    fields = ("in", "out", "cache_read", "cache_write")
+
+    by_caller = defaultdict(lambda: dict(calls=0, **{f: 0 for f in fields}))
+    by_provider = defaultdict(lambda: dict(calls=0, **{f: 0 for f in fields}))
 
     for entry in calls:
         for bucket in (by_caller[entry.get("caller", "unknown")],
                        by_provider[entry.get("provider", "unknown")]):
             bucket["calls"] += 1
-            bucket["in"] += entry.get("in", 0)
-            bucket["out"] += entry.get("out", 0)
+
+            for field in fields:
+                bucket[field] += entry.get(field, 0)
 
     def ranked(table):
         return sorted(table.items(),
@@ -205,6 +208,8 @@ def summary(days=1):
         "calls": len(calls),
         "in": sum(e.get("in", 0) for e in calls),
         "out": sum(e.get("out", 0) for e in calls),
+        "cache_read": sum(e.get("cache_read", 0) for e in calls),
+        "cache_write": sum(e.get("cache_write", 0) for e in calls),
         "by_caller": ranked(by_caller),
         "by_provider": ranked(by_provider),
     }
@@ -221,7 +226,13 @@ def _print(days):
     total = report["in"] + report["out"]
 
     print(f"{report['calls']} model calls {span}: "
-          f"{report['in']:,} tokens in, {report['out']:,} out.\n")
+          f"{report['in']:,} tokens in, {report['out']:,} out.")
+
+    # Prompt caching: a write stores the unchanging start of a request for a few
+    # minutes, a read reuses it at a fraction of the price. Reads well above
+    # writes means caching is paying for itself.
+    print(f"Cached: {report['cache_read']:,} read back, "
+          f"{report['cache_write']:,} written.\n")
 
     for title, rows in (("By caller", report["by_caller"]),
                         ("By provider", report["by_provider"])):
@@ -230,7 +241,8 @@ def _print(days):
         for name, row in rows:
             share = 100 * (row["in"] + row["out"]) / total if total else 0
             print(f"  {share:5.1f}%  {row['calls']:>4} calls  "
-                  f"{row['in']:>9,} in  {row['out']:>7,} out   {name}")
+                  f"{row['in']:>9,} in  {row['out']:>7,} out  "
+                  f"{row['cache_read']:>9,} read  {row['cache_write']:>8,} written   {name}")
 
         print()
 

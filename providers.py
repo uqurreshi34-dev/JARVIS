@@ -382,6 +382,10 @@ class Provider:
 
         self._resting_until = 0.0
 
+        # Whether this endpoint accepts prompt caching. Assumed yes, and switched
+        # off for the rest of the run the first time a request is refused over it.
+        self._cache_system = True
+
     @property
     def resting(self):
         return time.monotonic() < self._resting_until
@@ -391,6 +395,63 @@ class Provider:
 
     def wake(self):
         self._resting_until = 0.0
+
+    def _system(self, text):
+        """The system prompt, marked for prompt caching.
+
+        The instructions at the front of a request are the same every time; for
+        the command interpreter they are about six thousand tokens against a
+        reply of a dozen. Marked like this, Anthropic keeps them for five minutes
+        after each use, and any request inside that window reads them back at a
+        tenth of the normal price instead of paying for them again. Writing them
+        the first time costs a quarter more than normal, so this only pays when
+        requests come close together; usage.py shows the reads and writes, so
+        that is measured rather than assumed.
+
+        A prompt shorter than the model's caching minimum is simply sent at the
+        normal price, so nothing here needs to know that minimum.
+        """
+        if not text or not self._cache_system or not isinstance(text, str):
+            return text
+
+        return [
+            {
+                "type": "text",
+                "text": text,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+    def _send_anthropic(self, kwargs, stream=True):
+        """Send one Messages request, dropping prompt caching if it is refused."""
+        try:
+            return self._call_anthropic(kwargs, stream)
+
+        except Exception as error:
+            if not (self._cache_system and "cache_control" in str(error).casefold()):
+                raise
+
+            print(f"[JARVIS] {self.name} does not accept prompt caching; "
+                  "sending without it from now on")
+
+            self._cache_system = False
+
+            retried = dict(kwargs)
+            system = retried.get("system")
+
+            if isinstance(system, list):
+                retried["system"] = "\n\n".join(
+                    block.get("text", "") for block in system
+                )
+
+            return self._call_anthropic(retried, stream)
+
+    def _call_anthropic(self, kwargs, stream):
+        if stream:
+            with self._client.messages.stream(**kwargs) as live:
+                return live.get_final_message()
+
+        return self._client.messages.create(**kwargs)
 
     def _chat_anthropic(
         self,
@@ -444,7 +505,7 @@ class Provider:
         }
 
         if system_parts:
-            kwargs["system"] = "\n\n".join(system_parts)
+            kwargs["system"] = self._system("\n\n".join(system_parts))
 
         output_config = {}
 
@@ -475,8 +536,7 @@ class Provider:
         if output_config:
             kwargs["output_config"] = output_config
 
-        with self._client.messages.stream(**kwargs) as stream:
-            response = stream.get_final_message()
+        response = self._send_anthropic(kwargs)
 
         usage.record(self.name, self.model, "chat", response)
 
@@ -613,8 +673,7 @@ class Provider:
                 "effort": effort,
             }
 
-        with self._client.messages.stream(**kwargs) as stream:
-            response = stream.get_final_message()
+        response = self._send_anthropic(kwargs)
 
         usage.record(self.name, self.vision_model, "vision", response)
 
@@ -708,7 +767,7 @@ class Provider:
         }
 
         if system_parts:
-            kwargs["system"] = "\n\n".join(system_parts)
+            kwargs["system"] = self._system("\n\n".join(system_parts))
 
         effort = reasoning_effort or self.vision_effort
 
@@ -717,8 +776,7 @@ class Provider:
                 "effort": effort,
             }
 
-        with self._client.messages.stream(**kwargs) as stream:
-            response = stream.get_final_message()
+        response = self._send_anthropic(kwargs)
 
         usage.record(self.name, self.vision_model, "vision", response)
 
@@ -746,14 +804,14 @@ class Provider:
             }
 
             if system:
-                kwargs["system"] = system
+                kwargs["system"] = self._system(system)
 
             if self.answer_effort:
                 kwargs["output_config"] = {
                     "effort": self.answer_effort,
                 }
 
-            response = self._client.messages.create(**kwargs)
+            response = self._send_anthropic(kwargs, stream=False)
             usage.record(self.name, self.model, "agent", response)
 
             return response
