@@ -3596,6 +3596,11 @@ def _fast_path(command):
     if quran.parse(command):
         return _blank_result("recite_quran")
 
+    # Before the fuzzy table ever sees it, which read "close the quran"
+    # as a near miss on "close the brain".
+    if quran.dismissed(text):
+        return _blank_result("close_quran")
+
     # Dismissal first: "close the radar" names the radar, so asking to
     # open it would win the race and reopen what was just shut.
     if aircraft.dismissed(text):
@@ -5422,6 +5427,13 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "presence_check":
         return _query(intent, lambda: phrases.pick("presence"))
+
+    if intent == "close_quran":
+        return _query(
+            intent,
+            lambda: ("Recitation stopped, sir." if recitation.dismiss()
+                     else "Quran closed, sir."),
+        )
 
     if intent == "recite_quran":
         def recite():

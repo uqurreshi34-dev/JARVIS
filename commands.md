@@ -323,6 +323,9 @@ still works.
 | recite quran chapter 2 verse 255 | that one verse |
 | play surah 112 | the whole chapter |
 | read chapter 18 ayah 10 | that one verse |
+| close the quran | stops the recitation and closes the page |
+| stop reciting | the same |
+| close the recitation | the same |
 
 Quran, Qur'an, quraan and koran are all recognised, and so are surah, sura
 and chapter. The chapter has to be a number — names are too easily
@@ -344,6 +347,8 @@ The rest is on the projected page rather than spoken:
 Ticking auto after a single verse carries on from the next verse rather
 than repeating the one just heard. Finishing a verse leaves the page up;
 only stop takes it away. The HUD stop button ends the recitation too.
+Stop and close work whether the recitation is still playing or has
+already finished.
 
 Anything he would have announced while reciting — a market alert, a
 reminder — waits and is delivered when the session ends.

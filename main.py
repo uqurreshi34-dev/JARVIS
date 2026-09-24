@@ -143,6 +143,11 @@ class Assistant:
     def stop_speaking(self):
         """HUD stop button: silence him and send him to standby."""
         if not stop_speech():
+            # Silence is not nothing to stop. A recitation fetching its
+            # next verse is quiet but still running, and a page left up
+            # after the last verse is still on screen; stop means enough,
+            # so both go.
+            recitation.dismiss()
             return
 
         print("[JARVIS] speech stopped from the HUD", flush=True)
@@ -848,11 +853,18 @@ def main():
 
         assistant._on_recitation_end(reason)
 
+    def recitation_hidden():
+        # Signals rather than calls: a spoken "close the quran" arrives on
+        # a command thread, and a widget belongs to the thread it lives on.
+        page.dismissed.emit()
+        page_beam.hidden.emit()
+
     recitation.set_listeners(
         on_begin=recitation_began,
         on_verse=recitation_verse,
         on_end=recitation_ended,
         on_error=page.message.emit,
+        on_hide=recitation_hidden,
     )
 
     def page_jump(ayah):
@@ -903,7 +915,7 @@ def main():
     page.jump_requested.connect(page_jump)
     page.auto_changed.connect(page_auto)
     page.pause_changed.connect(page_pause)
-    page.stop_requested.connect(lambda: recitation.stop())
+    page.stop_requested.connect(lambda: recitation.dismiss())
     page.reciter_changed.connect(page_reciter)
 
     # 189 audio editions, fetched once and cached. Off the main thread so

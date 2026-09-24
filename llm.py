@@ -482,6 +482,7 @@ _SCHEMA = {
                 "media_next",
                 "media_previous",
                 "recite_quran",
+                "close_quran",
                 "presence_check",
                 "aircraft_overhead",
                 "aircraft_hide",

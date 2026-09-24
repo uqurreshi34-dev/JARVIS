@@ -845,6 +845,54 @@ def parse(command):
     return _reference(match.group("surah"), match.group("ayah"))
 
 
+# Asking for the recitation to go away, read by shape rather than from a
+# list of sentences -- the same way aircraft.dismissed reads "close the
+# radar". Something that ends a thing, then the thing, a few words apart
+# at most: "close the quran", "stop reciting", "end the recitation now".
+#
+# The book's own spellings come from BOOK_WORDS, so a spelling added
+# there for asking is understood here for closing with no second edit.
+_ENDS = (
+    r"close|hide|dismiss|shut|stop|end|finish|exit|quit|cancel|kill"
+    r"|get rid of|turn off|switch off|put away"
+)
+
+_RECITED = "|".join(sorted(
+    {_normalise(word) for word in BOOK_WORDS}
+    | {"surah", "sura", "recitation", "recitations", "reciting",
+       "recital", "reciter"},
+    key=len, reverse=True,
+))
+
+# Up to three words between the halves -- "stop playing the holy quran".
+# Bounded, so a sentence that merely contains both, far apart, is not
+# mistaken for an instruction to close anything.
+_DISMISS = re.compile(
+    rf"\b(?:{_ENDS})\b(?:\s+\S+){{0,3}}?\s+(?:{_RECITED})\b"
+    # Or the verb split around it: "turn the quran off", "put it away".
+    rf"|\b(?:turn|switch|shut|put)\b(?:\s+\S+){{0,3}}?\s+(?:{_RECITED})"
+    rf"(?:\s+\S+){{0,2}}?\s+(?:off|away|down)\b"
+)
+
+# A question about the book is not an instruction to close it: "does the
+# quran say to stop", "what does the recitation end with". Requests that
+# happen to be phrased as questions -- "can you close the quran" -- start
+# with a different word and are unaffected.
+_QUESTION = re.compile(
+    r"^(?:what|why|how|when|where|who|which|does|do|did|is|are|should)\b"
+)
+
+
+def dismissed(command):
+    """Whether a command is asking for the recitation to stop and go."""
+    text = _normalise(command)
+
+    if not text or _QUESTION.match(text):
+        return False
+
+    return bool(_DISMISS.search(text))
+
+
 def bounds_message(number, ayah):
     """Why a verse number will not do, or None when it is fine."""
     total = verse_count(number)

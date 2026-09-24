@@ -36,7 +36,7 @@ This prevents speech intended for the phone from being heard or acted on by
 the desktop listener. When the phone interaction finishes, the desktop
 microphone is restored.
 
-**123 language-model intents. 520 spoken phrases resolve locally with no API call.**
+**124 language-model intents. 520 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -620,6 +620,17 @@ translation, the reciter dropdown, a verse box, the auto tick, pause and
 stop. Only an explicit stop takes it away — finishing a verse is the moment
 the verse box and the auto tick are most wanted. The HUD and the brain
 sphere both turn gold for the duration.
+
+Stop means `recitation.dismiss()`, never `stop()` alone: `stop()` ends a
+session that is running, and after the last verse nothing is, so the page
+would be left up with nothing able to close it. `dismiss()` ends whatever
+is running and then puts the page away regardless. The page's Stop, the
+HUD stop when nothing is being said, and a spoken close all go through
+it. `quran.dismissed` reads the spoken form by shape, the way
+`aircraft.dismissed` reads the radar's — a verb that ends something and
+the Quran, a recitation or a surah within three words of it, spellings
+taken from `BOOK_WORDS` — and it runs before the fuzzy table, which
+otherwise heard "close the quran" as "close the brain".
 
 The whole session is bracketed in the existing interaction gate, so
 anything falling due while he recites is queued by the machinery that

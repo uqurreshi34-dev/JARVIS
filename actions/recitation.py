@@ -379,9 +379,20 @@ _current_lock = threading.Lock()
 # start a recitation without knowing anything about main.py.
 _listeners = {}
 
+# Who puts the page away. Kept apart from the session listeners because
+# it is the one thing that must happen when no session exists at all --
+# a page left up after the last verse has nothing running to close it.
+_hide_listener = None
 
-def set_listeners(**listeners):
-    """Register the default on_verse, on_begin, on_end and on_error."""
+
+def set_listeners(on_hide=None, **listeners):
+    """Register the default on_verse, on_begin, on_end and on_error,
+    and on_hide for taking the page away."""
+    global _hide_listener
+
+    if on_hide is not None:
+        _hide_listener = on_hide
+
     _listeners.update(
         {name: call for name, call in listeners.items() if call}
     )
@@ -449,3 +460,23 @@ def stop():
     session.stop()
 
     return True
+
+
+def dismiss():
+    """End any recitation and put the page away. True if one was running.
+
+    stop() alone is not enough for a stop button. It ends a session that
+    is running, and once the last verse has finished nothing is -- so
+    the button did nothing, and the page stayed up until a new recitation
+    was started just so it could be stopped. This takes the page away
+    whether or not anything was left to end.
+    """
+    stopped = stop()
+
+    if _hide_listener:
+        try:
+            _hide_listener()
+        except Exception as error:
+            print(f"[JARVIS] recitation hide listener failed: {error}")
+
+    return stopped

@@ -99,6 +99,7 @@ class QuranPanel(QWidget):
     began = pyqtSignal(dict)
     verse = pyqtSignal(dict, dict)
     ended = pyqtSignal(str)
+    dismissed = pyqtSignal()
     message = pyqtSignal(str)
     reciters_loaded = pyqtSignal(list)
 
@@ -133,6 +134,7 @@ class QuranPanel(QWidget):
         self.began.connect(self._on_began)
         self.verse.connect(self._on_verse)
         self.ended.connect(self._on_ended)
+        self.dismissed.connect(self._on_dismissed)
         self.message.connect(self._on_message)
         self.reciters_loaded.connect(self._on_reciters)
 
@@ -285,8 +287,12 @@ class QuranPanel(QWidget):
         self._pause.blockSignals(False)
 
         if reason == "stopped":
-            self._animate.stop()
-            self.hide()
+            self._on_dismissed()
+
+    def _on_dismissed(self):
+        """Put the page away, whether or not a recitation is running."""
+        self._animate.stop()
+        self.hide()
 
     def _on_message(self, text):
         self._message.setText(text or "")
