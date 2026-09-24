@@ -287,6 +287,18 @@ A timestamped list in `notes.txt`. Add, read, remove one entry, clear all.
 Distinct from files: "add milk to my notes" is the notes skill, "copy my
 notes" treats `notes.txt` as a file.
 
+"What did I note about the boiler?" finds notes by meaning, locally and for
+free, through the same MiniLM model memory uses
+(`semantic_memory.similarities`, which caches each note's vector so a new
+note costs one encoding). The question is matched by shape — a way of
+asking, a word meaning "about", then the topic — and the topic is scored
+twice, bare and as "a note about" it, keeping the better; a shared word
+adds 0.25 for short topics the model underrates ("my car"). The 0.30
+minimum was measured: every true match scored at or above it, every
+unrelated topic below, with one known exception ("holiday" sits close to a
+note about a birthday present). Without the model, shared words alone
+still work.
+
 ### Memory — `actions/memory.py`
 What JARVIS knows about you, in `memory.txt`, one fact per line and
 editable by hand. Some facts change behaviour rather than being recited:

@@ -394,12 +394,57 @@ def install():
     _installed = True
 
 
+# Vectors for texts outside memory.txt (notes, and next the log and saved
+# reports), kept per text so adding one note encodes one note rather than
+# every note again. Bounded, oldest dropped first, because it only ever
+# saves time and a miss simply encodes again.
+_TEXT_CACHE_LIMIT = 5000
+_text_vectors = {}
+
+
+def similarities(query, texts):
+    """Cosine similarity of [query] to each of [texts], or None without the model.
+
+    The general form of what relevant_summary does for memories, for any
+    list of short texts. Encodes only texts it has not seen before.
+    """
+    texts = [str(text or "") for text in texts]
+    query = str(query or "").strip()
+
+    if not query or not texts:
+        return None
+
+    missing = list(dict.fromkeys(text for text in texts if text not in _text_vectors))
+
+    if missing:
+        vectors = _encode(missing)
+
+        if vectors is None:
+            return None
+
+        for text, vector in zip(missing, vectors):
+            _text_vectors[text] = vector
+
+        while len(_text_vectors) > _TEXT_CACHE_LIMIT:
+            _text_vectors.pop(next(iter(_text_vectors)))
+
+    query_vector = _encode([query])
+
+    if query_vector is None:
+        return None
+
+    matrix = np.stack([_text_vectors[text] for text in texts])
+
+    return [float(score) for score in matrix @ query_vector[0]]
+
+
 def clear_cache():
     """Drop encoded-memory cache; useful after tests or external edits."""
     global _document_cache_key, _document_cache_vectors
 
     _document_cache_key = None
     _document_cache_vectors = None
+    _text_vectors.clear()
 
 
 def prewarm():

@@ -3645,6 +3645,13 @@ def _fast_path(command):
     if said:
         return _blank_result(_SOCIAL_INTENTS[said])
 
+    # "What did I note about the boiler?" Before the phrase table, so
+    # "read my notes about the boiler" is not taken as plain "read my notes".
+    topic = notes.search_topic(text)
+
+    if topic:
+        return _blank_result("read_notes", text=_original_case(command, topic))
+
     if text in (
         "restore original",
         "restore the original",
@@ -5220,6 +5227,11 @@ def _handle_command(command, *, fast_only=False, probe=False):
         )
 
     if intent == "read_notes":
+        topic = verbatim_text or text
+
+        if topic:
+            return _query(intent, lambda: notes.describe_search(topic))
+
         return _query(intent, notes.describe)
 
     if intent == "clear_notes":

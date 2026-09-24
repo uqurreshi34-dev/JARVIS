@@ -152,8 +152,14 @@ Notes are a timestamped list, separate from files.
 |---|---|
 | add milk to my notes | appends |
 | read my notes | reads them back |
+| what did I note about the boiler | finds notes on a topic, by meaning |
+| do I have a note about my car | same — also "search my notes for…", "any notes on…" |
 | remove milk from my notes | takes one out |
 | clear my notes | removes all — asks first |
+
+Topic searches are free and local. "Heating" finds the note about the
+boiler; very broad words ("travel", "money") may miss, and now and then a
+loosely related note is read out instead.
 
 ## Files
 

@@ -141,7 +141,9 @@ All files live in one JARVIS folder, so never include a path.
 
 Use make_note when the user wants something written down or remembered as a
 note, and put the note itself in "text".
-Use read_notes when the user asks what their notes say.
+Use read_notes when the user asks what their notes say. When they ask
+about notes on one topic, such as "what did I note about the boiler",
+put only the topic in "text"; otherwise leave "text" empty.
 Use clear_notes ONLY when the user wants every note deleted, such as "clear
 my notes" or "delete all my notes".
 Use remove_note when they want one thing taken out, such as "remove juice
