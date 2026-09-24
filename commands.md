@@ -580,6 +580,21 @@ overwritten; a new unique filename is used beside previous reports.
 Destination folders are direct children of the JARVIS folder. JARVIS cannot
 use the feature to escape the JARVIS root.
 
+## Connected services
+
+Services that speak MCP (GitHub, Notion, a database, Home Assistant and many
+more) can be connected by listing them in `mcp.json` in the JARVIS folder,
+in the same `mcpServers` format Claude Desktop and Cursor use. Keys go in
+`.env` and are referred to as `${NAME}`.
+
+| Say | Does |
+|---|---|
+| name the service in the request, e.g. what's in my github issues | JARVIS uses that service's tools to answer |
+| investigate … / look into … | Agent Mode, which can also use connected services |
+
+Uses a model request. JARVIS only uses tools a service marks as read-only,
+so asking cannot change anything in the service.
+
 ## Memory
 
 Facts are kept in `memory.txt`, editable by hand.

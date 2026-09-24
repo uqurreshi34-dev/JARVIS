@@ -833,6 +833,47 @@ root rather than creating `JARVIS\JARVIS`.
 Folder destinations are optional: leaving the destination out preserves the
 existing JARVIS-folder behaviour.
 
+### Connected services — `actions/mcp_services.py`
+
+JARVIS is an MCP client. Any service that speaks the Model Context Protocol
+can be connected by listing it in `mcp.json` in the JARVIS folder, using the
+`mcpServers` format of Claude Desktop and Cursor, so a service's published
+setup can be pasted in:
+
+```json
+{
+  "mcpServers": {
+    "time":   {"command": "uvx", "args": ["mcp-server-time"]},
+    "github": {"url": "https://api.githubcopilot.com/mcp/",
+               "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"},
+               "aliases": ["git hub"]}
+  }
+}
+```
+
+`${NAME}` is filled from the environment or `.env`, so keys are never
+written into the file. `aliases` are other names the service may be spoken
+as; `disabled: true` switches an entry off; `trusted_read_only` lists tools
+the user has checked but whose server forgot to mark them.
+
+The tools join Agent Mode. A command naming a configured service goes to
+Agent Mode directly, skipping the command interpreter, and ordinary Agent
+Mode investigations can use the tools too. Code tasks and fix passes do not.
+
+What a service may do is decided by JARVIS, not by the service:
+
+- only tools the server marks read-only are offered; a tool marked as
+  writing, or one that says nothing either way, is left out;
+- tool names and descriptions are outside text: they are cleaned, and a
+  tool whose description reads like an instruction to the model is dropped;
+- results reach the model as quoted data, never instructions;
+- a server started as a program sees only basic variables such as PATH and
+  the ones its entry names, never the API keys JARVIS holds;
+- every connection and call is written to the journal.
+
+Nothing connects until Agent Mode first needs a tool. A service that fails
+to start, or whose key is missing, prints one line and is left out.
+
 ### Compound tasks — `actions/planner.py`
 
 JARVIS can execute multiple actions from one spoken request.

@@ -51,6 +51,7 @@ from actions import (
     journal,
     market_report,
     markets,
+    mcp_services,
     memory,
     news,
     planner,
@@ -791,6 +792,11 @@ def _agent_task(command):
     if has_diagnostic_language and (
         has_screen_context or has_code_context
     ):
+        return text
+
+    # A command that names a connected service (mcp.json) is work for the
+    # tools that service offers, which live in Agent Mode.
+    if mcp_services.mentioned(text):
         return text
 
     return None
