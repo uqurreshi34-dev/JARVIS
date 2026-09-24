@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from anthropic import AnthropicFoundry
 
+import usage
+
 try:
     # Anthropic's own API uses the plain client. Guarded so an SDK without
     # it cannot stop JARVIS booting -- the provider that needs it simply
@@ -476,6 +478,8 @@ class Provider:
         with self._client.messages.stream(**kwargs) as stream:
             response = stream.get_final_message()
 
+        usage.record(self.name, self.model, "chat", response)
+
         for block in response.content:
             if getattr(block, "type", None) == "text":
                 text = (block.text or "").strip()
@@ -545,6 +549,8 @@ class Provider:
 
             response = self._client.chat.completions.create(**retried)
 
+        usage.record(self.name, self.model, "chat", response)
+
         message = response.choices[0].message
         content = (message.content or "").strip()
 
@@ -609,6 +615,8 @@ class Provider:
 
         with self._client.messages.stream(**kwargs) as stream:
             response = stream.get_final_message()
+
+        usage.record(self.name, self.vision_model, "vision", response)
 
         for block in response.content:
             if getattr(block, "type", None) == "text":
@@ -712,6 +720,8 @@ class Provider:
         with self._client.messages.stream(**kwargs) as stream:
             response = stream.get_final_message()
 
+        usage.record(self.name, self.vision_model, "vision", response)
+
         for block in response.content:
             if getattr(block, "type", None) == "text":
                 text = (block.text or "").strip()
@@ -743,7 +753,10 @@ class Provider:
                     "effort": self.answer_effort,
                 }
 
-            return self._client.messages.create(**kwargs)
+            response = self._client.messages.create(**kwargs)
+            usage.record(self.name, self.model, "agent", response)
+
+            return response
 
         if system:
             messages = [
@@ -767,7 +780,10 @@ class Provider:
         if effort and self.reasoning:
             kwargs["reasoning_effort"] = effort
 
-        return self._client.chat.completions.create(**kwargs)
+        response = self._client.chat.completions.create(**kwargs)
+        usage.record(self.name, self.model, "agent", response)
+
+        return response
 
 
 def _is_parameter_error(error):
@@ -1043,6 +1059,8 @@ def _describe_image(
 
         response = provider._client.chat.completions.create(**retried)
 
+    usage.record(provider.name, provider.vision_model, "vision", response)
+
     message = response.choices[0].message
     content = (message.content or "").strip()
 
@@ -1271,6 +1289,9 @@ def vision_chat(
                 response = provider._client.chat.completions.create(
                     **kwargs
                 )
+
+                usage.record(provider.name, provider.vision_model,
+                             "vision", response)
 
                 message = response.choices[0].message
                 answer = (message.content or "").strip()
