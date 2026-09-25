@@ -305,6 +305,10 @@ else:
 
     commands.run_agent = fake_agent
 
+    # What the HUD's countdown ring is told.
+    reported = []
+    commands.set_confirmation_listener(lambda seconds, outcome: reported.append((seconds, outcome)))
+
     try:
         if os.path.exists(MARKER):
             os.remove(MARKER)
@@ -374,6 +378,46 @@ else:
             check(commands._pending is None, "a real command in between still drops it")
         finally:
             commands._interpreter.interpret = real_interpret
+
+        # The countdown ring: started on asking, ended once with how it ended.
+        def ring_after(steps):
+            reported.clear()
+            steps()
+            return list(reported)
+
+        seconds = float(commands._ACTION_CONFIRM_SECONDS)
+        commands.run_agent = fake_agent
+
+        def ask():
+            commands._run_agent_investigation("add a note on the test service", actions=True)
+
+        check(ring_after(ask) == [(seconds, None)], "asking starts the countdown ring with the time allowed")
+        check(ring_after(lambda: commands._resolve_pending("no")) == [(None, "no")], "no ends it as no")
+
+        ask()
+        check(ring_after(lambda: commands._resolve_pending("yes")) == [(None, "yes")], "yes ends it as yes")
+
+        ask()
+        commands._pending["lapses_at"] -= seconds + 1
+        check(ring_after(lambda: commands._resolve_pending("yes")) == [(None, "lapsed")], "a late yes ends it as lapsed")
+
+        commands._interpreter.interpret = lambda *args, **kwargs: None
+
+        try:
+            ask()
+            check(ring_after(lambda: commands.handle_command("i'm a fan of the")) == [],
+                  "misheard speech leaves the ring running")
+            check(ring_after(lambda: commands.handle_command("what time is it")) == [(None, "dropped")],
+                  "a real command in between ends it as dropped")
+
+            ask()
+            check(ring_after(ask) == [(None, "dropped"), (seconds, None)],
+                  "a new held question ends the old ring before starting its own")
+        finally:
+            commands._interpreter.interpret = real_interpret
+            commands._pending = None
+
+        commands.set_confirmation_listener(None)
 
         commands._run_agent_investigation("what does the test service say", actions=False)
         check(commands._pending is None or commands._pending.get("intent") != "service_action",

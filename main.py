@@ -23,6 +23,7 @@ from commands import (
     select_image_choice,
     set_brain_listener,
     set_camera_listener,
+    set_confirmation_listener,
     set_chart_listener,
     set_choices_listener,
     set_highlight_listener,
@@ -837,6 +838,9 @@ def main():
 
     # The stop button appears only while there is speech to stop.
     set_speaking_listener(hud.speaking_changed.emit)
+    set_confirmation_listener(
+        lambda seconds, outcome: hud.confirmation_changed.emit(float(seconds or 0.0), outcome or "")
+    )
 
     # Microphone levels drive the waveform when JARVIS is not talking.
     set_level_listener(hud.level_changed.emit)

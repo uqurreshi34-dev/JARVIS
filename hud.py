@@ -1,4 +1,5 @@
 import math
+import time
 
 import psutil
 import re
@@ -92,6 +93,16 @@ _WAVE_HEIGHT = 13
 _LEVEL_STALE_FRAMES = 3
 _LEVEL_DECAY = 0.72
 
+# The countdown for a held question ("Shall I go ahead?") is drawn on the
+# outer ring: amber while there is time, red for the last stretch, a green
+# flash for yes and a grey fade for anything else.
+_CONFIRM_COLOUR = QColor(255, 196, 80)
+_CONFIRM_URGENT = QColor(255, 88, 88)
+_CONFIRM_YES = QColor(95, 255, 160)
+_CONFIRM_ENDED = QColor(150, 165, 180)
+_CONFIRM_URGENT_SECONDS = 15.0
+_CONFIRM_FLASH_SECONDS = 0.8
+
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
@@ -126,6 +137,9 @@ class Hud(QWidget):
     speaking_changed = pyqtSignal(bool)
     stop_clicked = pyqtSignal()
 
+    # (seconds, "") when a held question is asked; (0, outcome) when it ends.
+    confirmation_changed = pyqtSignal(float, str)
+
     def __init__(self):
         super().__init__()
 
@@ -142,6 +156,10 @@ class Hud(QWidget):
         self._press_on_stop = False
         self._drag_hover = False
         self._speaking = False
+
+        self._confirm_until = None      # monotonic deadline of a held question
+        self._confirm_total = 0.0
+        self._confirm_ended = None      # (outcome, when, fraction left)
 
         self._target = 0.0
         self._level = 0.0
@@ -174,6 +192,7 @@ class Hud(QWidget):
         self.amplitude_changed.connect(self._on_amplitude)
         self.level_changed.connect(self._on_level)
         self.speaking_changed.connect(self._on_speaking)
+        self.confirmation_changed.connect(self._on_confirmation)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -254,6 +273,20 @@ class Hud(QWidget):
 
     def _on_speaking(self, active):
         self._speaking = bool(active)
+        self.update()
+
+    def _on_confirmation(self, seconds, outcome):
+        now = time.monotonic()
+
+        if seconds > 0:
+            self._confirm_until = now + seconds
+            self._confirm_total = seconds
+            self._confirm_ended = None
+        elif self._confirm_until is not None:
+            left = max(0.0, (self._confirm_until - now) / self._confirm_total)
+            self._confirm_ended = (outcome or "dropped", now, left)
+            self._confirm_until = None
+
         self.update()
 
     def _on_state(self, state):
@@ -395,6 +428,7 @@ class Hud(QWidget):
         self._paint_panel(painter, accent)
         self._paint_ticks(painter, accent)
         self._paint_rings(painter, accent, energy)
+        self._paint_countdown(painter)
         self._paint_reticle(painter, accent)
         self._paint_core(painter, accent, energy)
         self._paint_text(painter, accent)
@@ -428,6 +462,62 @@ class Hud(QWidget):
         painter.drawRect(_STOP_RECT.adjusted(8, 8, -8, -8))
 
         painter.restore()
+
+    def _paint_countdown(self, painter):
+        """Time left to answer a held question, draining round the outer ring."""
+        now = time.monotonic()
+
+        # Run out with nothing said: shown as lapsed here, whatever arrives.
+        if self._confirm_until is not None and now >= self._confirm_until:
+            self._confirm_ended = ("lapsed", now, 0.0)
+            self._confirm_until = None
+
+        if self._confirm_until is not None:
+            remaining = self._confirm_until - now
+            fraction = remaining / self._confirm_total
+
+            if remaining <= _CONFIRM_URGENT_SECONDS:
+                # Red, pulsing a little faster as the end nears.
+                colour = QColor(_CONFIRM_URGENT)
+                colour.setAlpha(int(170 + 85 * (0.5 + 0.5 * math.sin(now * 8.0))))
+            else:
+                colour = QColor(_CONFIRM_COLOUR)
+
+            self._arc(painter, _R_OUTER, 0, 360, self._tint(colour, 40), 3.0)
+            # From the top, draining anticlockwise to nothing.
+            self._arc(painter, _R_OUTER, 90, 360 * fraction, colour, 3.2)
+
+            minutes, seconds = divmod(int(math.ceil(remaining)), 60)
+            text = f"CONFIRM {minutes}:{seconds:02d}"
+
+            font = QFont("Consolas", 8, QFont.Weight.Bold)
+            font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.4)
+            painter.setFont(font)
+            painter.setPen(QPen(colour))
+
+            width = QFontMetrics(font).horizontalAdvance(text)
+            painter.drawText(int(_PANEL_X - 14 - width), _HEIGHT - 22, text)
+            return
+
+        if self._confirm_ended is None:
+            return
+
+        outcome, when, left = self._confirm_ended
+        age = (now - when) / _CONFIRM_FLASH_SECONDS
+
+        if age >= 1.0:
+            self._confirm_ended = None
+            return
+
+        fade = 1.0 - age
+
+        if outcome == "yes":
+            # The whole ring lights green and fades: agreed.
+            self._arc(painter, _R_OUTER, 0, 360, self._tint(_CONFIRM_YES, int(235 * fade)), 3.2 + 2.0 * fade)
+        else:
+            # What was left greys out and fades: nothing was done.
+            self._arc(painter, _R_OUTER, 90, 360 * max(left, 0.08),
+                      self._tint(_CONFIRM_ENDED, int(200 * fade)), 3.2)
 
     def _paint_drop_hint(self, painter, accent):
         """Glow around the reactor while a file is dragged over JARVIS."""

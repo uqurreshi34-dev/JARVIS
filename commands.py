@@ -1587,6 +1587,25 @@ def set_camera_listener(listener):
 _brain_listener = None
 _brain_visible = False
 
+# Told when a question that lapses starts and how it ends, so the HUD can
+# show the time left to answer: (seconds, None) when asked, (None, outcome)
+# when answered or dropped -- 'yes', 'no', 'lapsed' or 'dropped'.
+_confirmation_listener = None
+
+
+def set_confirmation_listener(listener):
+    """Register a callable taking (seconds, outcome) for held questions."""
+    global _confirmation_listener
+    _confirmation_listener = listener
+
+
+def _report_confirmation(seconds=None, outcome=None):
+    if _confirmation_listener:
+        try:
+            _confirmation_listener(seconds, outcome)
+        except Exception as error:
+            print(f"[JARVIS] could not show the confirmation: {error}")
+
 
 def set_brain_listener(listener):
     """Register a callable taking a bool: True shows the mind view, False
@@ -4578,7 +4597,13 @@ def _confirm(
     [lapses_after] seconds, when given, is how long the question stands: a
     yes after that is treated as a new command, not an answer.
     """
-    global _pending, _awaiting
+    global _pending, _awaiting, _set_aside
+
+    # A held question replaced by a new one ends here, before the new one
+    # is shown -- whether it was still pending or set aside by this command.
+    if (_pending and _pending.get("lapses_at")) or _set_aside is not None:
+        _report_confirmation(outcome="dropped")
+        _set_aside = None
 
     _awaiting = None
     _pending = {
@@ -4592,6 +4617,9 @@ def _confirm(
         "failure_response": failure_response,
         "lapses_at": time.monotonic() + lapses_after if lapses_after else None,
     }
+
+    if lapses_after:
+        _report_confirmation(seconds=lapses_after)
 
     return {
         "kind": "query",
@@ -4774,6 +4802,7 @@ def _resolve_pending(text):
 
     if _pending.get("lapses_at") and time.monotonic() > _pending["lapses_at"]:
         _pending = None
+        _report_confirmation(outcome="lapsed")
 
         if answer in _YES or answer in _NO:
             return _query("cancelled", lambda: "That question lapsed, sir, so nothing has been changed.")
@@ -4783,6 +4812,9 @@ def _resolve_pending(text):
     if answer in _YES:
         pending = _pending
         _pending = None
+
+        if pending.get("lapses_at"):
+            _report_confirmation(outcome="yes")
 
         return {
             "kind": "action",
@@ -4797,6 +4829,9 @@ def _resolve_pending(text):
     if answer in _NO:
         pending = _pending
         _pending = None
+
+        if pending.get("lapses_at"):
+            _report_confirmation(outcome="no")
 
         if pending.get("no_action"):
             return pending["no_action"]()
@@ -5051,6 +5086,9 @@ def handle_command(command, *, fast_only=False, probe=False):
             # Not understood at all: the question still stands.
             if result is None and _set_aside is not None and _pending is None:
                 _pending = _set_aside
+            elif _set_aside is not None and _pending is not _set_aside:
+                # A real command took its place: the question is gone.
+                _report_confirmation(outcome="dropped")
 
             _set_aside = None
 

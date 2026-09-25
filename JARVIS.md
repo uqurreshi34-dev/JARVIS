@@ -979,7 +979,10 @@ What a service may do is decided by JARVIS, not by the service:
   issue on github: title '...'. Shall I go ahead?"), and only a yes within
   two minutes runs it; no, silence or another command drops it, but speech
   JARVIS does not understand (a misheard fragment, someone else talking)
-  leaves the question standing. One action per request;
+  leaves the question standing. One action per request. While it stands,
+  the HUD's outer ring drains amber over the two minutes, with the time
+  left written under it, turning red for the last fifteen seconds; yes
+  flashes it green, anything else greys it out;
 - when a service refuses, JARVIS says why from its status code ("GitHub
   says your token isn't allowed to do that"), and the full error goes to
   the journal; a missing `mcp` package is reported at once, with the
