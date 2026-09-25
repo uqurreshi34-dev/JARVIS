@@ -731,6 +731,52 @@ said = mcp_services.run_instant(mcp_services.instant("clip that"))
 check(said == "Clipped, sir." and flashed == ["CLIP SAVED"], f"an instant phrase can flash a word on the HUD ({flashed})")
 mcp_services.set_flash_listener(None)
 
+# "then": after the action, a read-only tool says what it made -- "clip that"
+# saying which file OBS saved.
+write_config({
+    "test": {
+        "command": sys.executable, "args": [SERVER],
+        "env": {"MARKER": "${JARVIS_TEST_MARKER}"},
+        "allowed_actions": ["create_note"], "confirm_actions": False,
+        "instant": {
+            "clip that": {"tool": "create_note", "then": "last_replay",
+                          "say": "Clipped, sir. Saved as {name}."},
+            "clip the lot": {"tool": "create_note", "then": "upper",
+                             "say": "Clipped, sir. Saved as {name}."},
+            "clip it all": {"tool": "create_note", "then": "create_note",
+                            "say": "Clipped, sir. Saved as {name}."},
+        },
+    },
+})
+
+if os.path.exists(MARKER):
+    os.remove(MARKER)
+
+said = mcp_services.run_instant(mcp_services.instant("clip that"))
+check(said == "Clipped, sir. Saved as Replay 26 September at 00:01.",
+      f"'then' names the file the action made, its date and time said as a person would ({said!r})")
+said = mcp_services.run_instant(mcp_services.instant("clip that"))
+check(said == "Clipped, sir. Saved as Replay 26 September at 00:02.",
+      f"and it is the new file each time, not the one before ({said!r})")
+
+real_wait = mcp_services.THEN_SECONDS
+mcp_services.THEN_SECONDS = 1.0
+said = mcp_services.run_instant(mcp_services.instant("clip the lot"))
+check(said == "Clipped, sir.", f"when nothing names a file, the sentence needing one is left out ({said!r})")
+before = len(open(MARKER).read().splitlines())
+said = mcp_services.run_instant(mcp_services.instant("clip it all"))
+check(said == "Clipped, sir." and len(open(MARKER).read().splitlines()) == before + 1,
+      "and 'then' may only be a read-only tool: an action named there is never run")
+mcp_services.THEN_SECONDS = real_wait
+
+names = [mcp_services._file_in(text) for text in (
+    "Last replay buffer save file: C:\\Users\\you\\Videos\\Replay_2026-09-26_00-33-12.mkv",
+    "Last replay buffer save file: /home/you/Videos/my clip.mp4",
+    "Last replay buffer save file: undefined")]
+check(names[0] == {"file": "Replay_2026-09-26_00-33-12.mkv", "name": "Replay 26 September at 00:33", "folder": "Videos"}
+      and names[1]["name"] == "my clip" and names[2] is None,
+      "a file is found in Windows or other paths, and 'undefined' is no file")
+
 # ---- a service that was down, tried again ---------------------------------------------
 
 write_config({"test": {"command": "definitely-not-a-real-program-xyz", "args": []}})

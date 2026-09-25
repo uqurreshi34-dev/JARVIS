@@ -176,6 +176,24 @@ ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
 check("arduino/jarvis_sensor/jarvis_secrets.h" in ignored and "arduino/jarvis_sensor/jarvis_config.h" in ignored,
       "the header files are kept out of git")
 
+# The sketch: a bare board reports no phantom movement, and the C3 Super
+# Mini gets pins of its own, clear of the ones that decide how it starts.
+import re  # noqa: E402
+
+sketch = (ROOT / "arduino" / "jarvis_sensor" / "jarvis_sensor.ino").read_text(encoding="utf-8")
+check("pinMode(PIR_PIN, INPUT_PULLDOWN)" in sketch, "the PIR pin is held low, so an unconnected one reads no movement")
+
+c3 = sketch[sketch.index("#if defined(CONFIG_IDF_TARGET_ESP32C3)"):sketch.index("#else")]
+c3_pins = {int(n) for n in re.findall(r"#define (?:DHT|PIR)_PIN (\d+)", c3)}
+check(len(c3_pins) == 2 and not c3_pins & {2, 8, 9} and c3_pins <= set(range(0, 11)) | {20, 21},
+      f"the C3 Super Mini uses pins it has, clear of GPIO 2, 8 and 9 ({sorted(c3_pins)})")
+check("WiFi.setTxPower(WIFI_POWER_8_5dBm)" in sketch and sketch.index("WiFi.setTxPower") > sketch.rindex(
+    "#if defined(CONFIG_IDF_TARGET_ESP32C3)"), "and a lower transmit power, only on the C3, so it can join the wifi")
+check(sketch.index('#include "jarvis_secrets.h"') < sketch.index("#ifndef DHT_PIN"),
+      "a pin may be changed in jarvis_secrets.h, which is read first")
+called = [line for line in sketch.splitlines() if "setInsecure(" in line.split("//")[0]]
+check(not called and "secure.setCACert(JARVIS_CA)" in sketch, "the board checks JARVIS's certificate, never setInsecure")
+
 # Leave a config beside the stand-in headers for a compile check, when asked.
 if os.environ.get("WRITE_CONFIG_TO"):
     Path(os.environ["WRITE_CONFIG_TO"], "jarvis_config.h").write_text(header, encoding="ascii")

@@ -395,6 +395,23 @@ changing at all.
 Close it when you are not watching. The feeds are free and shared, and
 the radar keeps asking them for as long as it is open.
 
+## The sensors
+
+Boards on the wifi (see JARVIS.md) report to a panel on top of the HUD,
+and can be asked aloud. **Free**: no model call.
+
+| Say | Does |
+|---|---|
+| what's the temperature in the room | that board's last temperature |
+| how humid is it in the kitchen | its humidity |
+| is anyone in the room | whether it has seen movement lately |
+| is it cold in here | every room's temperature |
+| how are the sensors | everything, a sentence per room |
+
+A room is whatever the board is called (SENSOR_NAME), so a new board can
+be asked about as soon as it reports. "What's the temperature outside"
+names no board, so it is still the weather.
+
 ## Is he there
 
 | Say | Does |
@@ -641,7 +658,7 @@ in the same `mcpServers` format Claude Desktop and Cursor use. Keys go in
 | investigate … / look into … | Agent Mode, which can also use connected services |
 | name the service and ask for a change, e.g. open a github issue on JARVIS titled HUD flicker | reads back exactly what it would do and asks; yes runs it |
 | start recording / stop recording | OBS, instantly: **free**, no model call |
-| start the replay buffer, then clip that | OBS keeps the last 30 seconds, then saves them, and CLIP SAVED flashes: **free** |
+| start the replay buffer, then clip that | OBS keeps the last 30 seconds, then saves them, says which file, and CLIP SAVED flashes: **free** |
 | pause the recording | OBS, at once, no question |
 | switch to the (scene name) scene / mute the mic | OBS |
 

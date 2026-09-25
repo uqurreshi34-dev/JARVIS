@@ -999,6 +999,14 @@ OBS itself, so it is right whoever pressed the button, and goes out when
 OBS closes. A status answered in words rather than JSON is matched with
 `active_text` ("is active", never mistaken within "is inactive"). An
 instant phrase can carry a `flash` word: "clip that" flashes CLIP SAVED.
+It can also name a read-only tool as `then`, asked once before and again
+after the action until its answer changes, and `say` can use what it
+names: `{name}`, `{file}` and `{folder}` of the file the action made. "clip
+that" with `"then": "obs-get-last-replay-buffer-replay"` and `"say":
+"Clipped, sir. Saved as {name}."` says "Saved as Replay 26 September at
+00:33" -- a date and time in a file name are said as a person would. If no
+file is named within five seconds, the sentence that needed one is left
+out, and only a read-only tool may be `then`.
 
 Services connect at start-up, in the background and side by side, rather
 than on the first request that needs one; the start-up check's SERVICES
@@ -1156,6 +1164,20 @@ strictly by default and refuse a certificate without them ("Missing
 Authority Key Identifier"); older ones are replaced when JARVIS starts, and
 the tools check strictly on every Python so the answer never depends on
 which one runs them.
+
+Asked aloud, the sensors answer on the fast path, with no model call:
+"what's the temperature in the room", "is anyone in the kitchen", "how
+humid is it in here", "how are the sensors". Rooms are the boards' own
+names, so a question counts only when it names one (or says "in here")
+and starts as a question; "what's the temperature outside" is still the
+weather. One sentence per room, from each board's last report, saying so
+when a sensor has gone quiet.
+
+The same sketch builds for the WROOM-32 and the C3 Super Mini, choosing
+pins for the board (the C3 keeps clear of GPIO 2, 8 and 9, which decide
+how it starts) and lowering the C3's transmit power, without which many
+Super Minis never join a network. The PIR pin is held low, so a board
+with no PIR wired yet reports no phantom movement.
 
 The esp32 board package must be 3.1 or later: older TLS libraries cannot
 check an IP address named in a certificate. Reserve the PC's address in

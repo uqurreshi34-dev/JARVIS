@@ -61,6 +61,22 @@ def replay_status() -> str:
     return f"Replay buffer is {'active' if live else 'inactive'}"
 
 
+@app.tool(annotations=READ_ONLY)
+def last_replay() -> str:
+    """Names the last file saved, as OBS names its replays: one per line in MARKER."""
+    marker = os.environ.get("MARKER")
+    count = 0
+
+    if marker and os.path.exists(marker):
+        with open(marker, encoding="utf-8") as handle:
+            count = len(handle.read().splitlines())
+
+    if not count:
+        return "Last replay buffer save file: undefined"
+
+    return f"Last replay buffer save file: C:/Users/you/Videos/Replay 2026-09-26 00-{count:02d}-12.mp4"
+
+
 @app.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True))
 def delete_everything() -> str:
     """Deletes everything."""

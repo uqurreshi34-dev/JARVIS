@@ -72,6 +72,7 @@ import re
 import threading
 import time
 from difflib import SequenceMatcher
+from pathlib import PureWindowsPath
 
 from actions import files, journal, safety
 
@@ -644,7 +645,7 @@ def instant(text):
 
         for phrase, target in table.items():
             arguments = {}
-            flash = None
+            flash = then = None
 
             if isinstance(target, str):
                 tool, say = target, None
@@ -652,13 +653,14 @@ def instant(text):
                 tool, say = target.get("tool"), target.get("say")
                 arguments = target.get("arguments") if isinstance(target.get("arguments"), dict) else {}
                 flash = target.get("flash")
+                then = target.get("then") if isinstance(target.get("then"), str) else None
             else:
                 continue
 
             score = _phrase_score(said, _plain(phrase)) if tool else None
 
             if score is not None:
-                scored.append((score, server, str(tool), say, phrase, arguments, flash))
+                scored.append((score, server, str(tool), say, phrase, arguments, flash, then))
 
     if not scored:
         return None
@@ -673,7 +675,7 @@ def instant(text):
             return None
 
     return {"server": best[1], "tool": best[2], "say": best[3], "phrase": best[4],
-            "arguments": best[5], "flash": best[6]}
+            "arguments": best[5], "flash": best[6], "then": best[7]}
 
 
 def run_instant(match):
@@ -693,12 +695,26 @@ def run_instant(match):
               f"{match['tool']!r}, which is not an allowed action that runs without confirmation")
         return f"That isn't set to run straight away on {spoken}, sir."
 
+    # "then": a read-only tool asked afterwards for what the action made --
+    # OBS's last replay file, so "clip that" can say which file it saved.
+    # Asked once beforehand as well, so the answer is known to be new.
+    follow = match.get("then")
+
+    if follow and _agent_name(match["server"], follow) not in _tools:
+        print(f"[JARVIS] {match['server']}: instant phrase {match['phrase']!r} asks {follow!r} "
+              "afterwards, which is not one of its read-only tools; ignored")
+        follow = None
+
+    before = _quiet_call(server, follow) if follow else None
+
     proposal = {"name": name, "server": match["server"], "tool": match["tool"],
                 "arguments": dict(match.get("arguments") or {})}
     said = execute(proposal)
 
     if said is None:
         return failure_message(proposal)
+
+    made = _made_file(server, follow, before) if follow else None
 
     # A word for the HUD to flash, if the phrase has one ("CLIP SAVED").
     if isinstance(match.get("flash"), str) and match["flash"].strip() and _flash_listener:
@@ -707,7 +723,99 @@ def run_instant(match):
         except Exception as error:
             print(f"[JARVIS] could not flash on the HUD: {error}")
 
-    return match.get("say") or said
+    return _filled(match.get("say"), made) or said
+
+
+# How long to wait for what an action made to show up: OBS writes a replay
+# file after saying it will, taking a second or two for a long buffer.
+THEN_SECONDS = 5.0
+THEN_STEP = 0.25
+
+# A file path in a tool's words: "Last replay buffer save file:
+# C:/Users/you/Videos/Replay 2026-09-26 00-33-12.mp4".
+_FILE_PATH = re.compile(r"(?:[A-Za-z]:)?(?:[\\/][^\\/\r\n\"<>|?*]+)+")
+
+_PLACEHOLDER = re.compile(r"\{(\w+)\}")
+
+
+# A date and time written into a file name, as OBS names its replays
+# ("Replay 2026-09-26 00-33-12"): read aloud as digits and dashes it is a
+# mouthful, so {name} says it the way a person would.
+_STAMP = re.compile(r"(\d{4})-(\d{2})-(\d{2})[ _T]?(?:(\d{2})-(\d{2})(?:-(\d{2}))?)?")
+_MONTHS = ("January", "February", "March", "April", "May", "June", "July",
+           "August", "September", "October", "November", "December")
+
+
+def _spoken_name(stem):
+    def say(match):
+        year, month, day, hour, minute, second = match.groups()
+
+        if not 1 <= int(month) <= 12:
+            return match.group(0)
+
+        words = f"{int(day)} {_MONTHS[int(month) - 1]}"
+
+        if hour is not None:
+            words += f" at {hour}:{minute}"
+
+        return words
+
+    return " ".join(_STAMP.sub(say, stem.replace("_", " ")).split())
+
+
+def _file_in(text):
+    """The last file path in [text], as (file, name, folder), or None."""
+    for candidate in reversed(_FILE_PATH.findall(text or "")):
+        path = PureWindowsPath(candidate.strip())
+
+        if path.suffix and path.stem:
+            return {
+                "file": safety.clean(path.name, 120),
+                "name": safety.clean(_spoken_name(path.stem), 120),
+                "folder": safety.clean(path.parent.name, 80),
+            }
+
+    return None
+
+
+def _made_file(server, tool, before):
+    """What [tool] names once it differs from [before]: the file just made, or None."""
+    deadline = time.monotonic() + THEN_SECONDS
+
+    while time.monotonic() < deadline:
+        text = _quiet_call(server, tool)
+
+        if text and text != before:
+            found = _file_in(text)
+
+            if found:
+                return found
+
+        time.sleep(THEN_STEP)
+
+    return None
+
+
+def _filled(say, made):
+    """[say] with {name}, {file} and {folder} filled in from [made].
+
+    A sentence whose blanks cannot be filled is left out, so "Clipped, sir.
+    Saved as {name}." still says "Clipped, sir." when OBS never said which
+    file it wrote.
+    """
+    if not isinstance(say, str) or not say.strip():
+        return None
+
+    values = made or {}
+    kept = []
+
+    for sentence in re.split(r"(?<=[.!?])\s+", say.strip()):
+        wanted = _PLACEHOLDER.findall(sentence)
+
+        if all(values.get(key) for key in wanted):
+            kept.append(_PLACEHOLDER.sub(lambda m: values[m.group(1)], sentence))
+
+    return " ".join(kept) or None
 
 
 # ---- live status: what a service is doing, watched quietly -------------------

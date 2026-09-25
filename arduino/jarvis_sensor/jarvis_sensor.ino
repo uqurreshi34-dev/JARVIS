@@ -1,4 +1,4 @@
-// JARVIS room sensor: an ESP32 (WROOM-32) with a DHT22 and a PIR.
+// JARVIS room sensor: an ESP32 (WROOM-32, or C3 Super Mini) with a DHT22 and a PIR.
 //
 // It reports to JARVIS over HTTPS, checking JARVIS's certificate against
 // JARVIS's own certificate authority (setCACert) -- never setInsecure(),
@@ -14,16 +14,30 @@
 // Before uploading:
 //   1. python tools/esp32_setup.py        (writes jarvis_config.h)
 //   2. put your wifi in jarvis_secrets.h
-//   3. Arduino IDE: board "ESP32 Dev Module", esp32 board package 3.1 or later,
-//      and the library "DHT sensor library" by Adafruit (Library Manager).
+//   3. Arduino IDE: esp32 board package 3.1 or later, and the library
+//      "DHT sensor library" by Adafruit (Library Manager). Board:
+//        WROOM-32 DevKit   "ESP32 Dev Module"
+//        C3 Super Mini     "ESP32C3 Dev Module", with Tools > USB CDC On Boot
+//                          set to Enabled, or the Serial Monitor stays blank
+//      Give each board its own SENSOR_NAME in jarvis_secrets.h before uploading.
 //
-// Wiring (WROOM-32 DevKit):
+// The pins are picked for the board it is built for (below), and either
+// can be changed by defining DHT_PIN or PIR_PIN in jarvis_secrets.h.
+//
+// Wiring, WROOM-32 DevKit:
 //   DHT22   + to 3V3,  - to GND,  out to GPIO 4   (a bare DHT22 needs a
 //                                                   10k resistor from out to 3V3;
 //                                                   a module has one on board)
 //   PIR     VCC to VIN (5V),  GND to GND,  OUT to GPIO 27
-//           (its output is 3.3V, safe for the ESP32; it needs a minute to
-//            settle after power-up before it reports reliably)
+//
+// Wiring, C3 Super Mini (GPIO 2, 8 and 9 are avoided: they decide how the
+// board starts, and 8 drives the on-board LED):
+//   DHT22   + to 3V3,  - to GND,  out to GPIO 4
+//   PIR     VCC to 5V, GND to GND,  OUT to GPIO 3
+//
+// The PIR's output is 3.3V, safe for either board. It needs a minute to
+// settle after power-up before it reports reliably. With no PIR connected
+// yet, the pin is held low, so a bare board reports no phantom movement.
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -34,8 +48,23 @@
 #include "jarvis_config.h"
 #include "jarvis_secrets.h"
 
-static const int DHT_PIN = 4;
-static const int PIR_PIN = 27;
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+  #define JARVIS_BOARD "C3 Super Mini"
+  #ifndef DHT_PIN
+    #define DHT_PIN 4
+  #endif
+  #ifndef PIR_PIN
+    #define PIR_PIN 3
+  #endif
+#else
+  #define JARVIS_BOARD "WROOM-32"
+  #ifndef DHT_PIN
+    #define DHT_PIN 4
+  #endif
+  #ifndef PIR_PIN
+    #define PIR_PIN 27
+  #endif
+#endif
 
 static const unsigned long READING_EVERY_MS = 30UL * 1000UL;
 static const unsigned long MOTION_GAP_MS = 5UL * 1000UL;
@@ -124,6 +153,13 @@ bool joinWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+  // Many C3 Super Minis cannot join a network at full transmit power (the
+  // tiny antenna and its matching are to blame), and simply never connect.
+  // A lower power is the well-known cure, and in one room costs nothing.
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
+#endif
+
   unsigned long started = millis();
 
   while (WiFi.status() != WL_CONNECTED && millis() - started < WIFI_RETRY_MS) {
@@ -144,8 +180,17 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
-  pinMode(PIR_PIN, INPUT);
+  // Held low when nothing drives it: an unconnected pin floats and reads
+  // noise as movement. The PIR's own output overrides the weak pull-down.
+  pinMode(PIR_PIN, INPUT_PULLDOWN);
   dht.begin();
+
+  Serial.print("[jarvis] ");
+  Serial.print(JARVIS_BOARD);
+  Serial.print(": DHT22 on GPIO ");
+  Serial.print(DHT_PIN);
+  Serial.print(", PIR on GPIO ");
+  Serial.println(PIR_PIN);
 
   // JARVIS's own authority: the board accepts JARVIS and nothing else.
   secure.setCACert(JARVIS_CA);

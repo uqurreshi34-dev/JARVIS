@@ -65,6 +65,7 @@ from actions import (
     patterns,
     safety,
     screen_control,
+    sensors,
     social,
     tasks,
     project_setup,
@@ -3734,6 +3735,13 @@ def _fast_path(command):
     if aircraft.wanted(text):
         return _blank_result("aircraft_overhead")
 
+    # What the boards on the wifi last said: "what's the temperature in the
+    # room", "is anyone in the kitchen". Rooms are the boards' own names, so
+    # it only claims a question naming one of them (or "in here"), and
+    # "what's the temperature outside" goes on to the weather.
+    if sensors.question(command):
+        return _blank_result("sensor_question")
+
     # Costs nothing and answers instantly, which is the whole point: being
     # asked whether you are there is not a question worth a model request.
     if _PRESENCE.match(text):
@@ -5683,6 +5691,12 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "presence_check":
         return _query(intent, lambda: phrases.pick("presence"))
+
+    if intent == "sensor_question":
+        # Asked again here rather than carried through the result, which
+        # has a fixed set of fields; the boards may have reported since.
+        return _query(intent, lambda: sensors.answer(sensors.question(command))
+                      or "No sensors have reported yet, sir.")
 
     if intent in _SOCIAL_REPLIES:
         return _query(intent, lambda: social.reply(_SOCIAL_REPLIES[intent]))

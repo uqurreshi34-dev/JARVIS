@@ -20,6 +20,7 @@ motion in a room that was empty, a temperature that has actually
 moved. Everything else is recorded and swallowed.
 """
 
+import re
 import threading
 import time
 
@@ -215,3 +216,184 @@ def report(payload):
         return "Welcome back, sir." if fresh else None
 
     return None
+
+
+# ---- asked aloud: "what's the temperature in the room" ---------------------
+
+# What a question can be about, and the words that ask for it. Rooms are
+# not listed anywhere: they are whatever the boards have called
+# themselves, so a new board is askable the moment it reports.
+_ASKING = {
+    "temperature": ("temperature", "temp", "warm", "warmer", "hot", "cold", "colder",
+                    "chilly", "degrees", "heat"),
+    "humidity": ("humidity", "humid", "damp", "muggy", "moisture"),
+    "presence": ("anyone", "anybody", "someone", "somebody", "occupied", "empty",
+                 "movement", "motion", "moving"),
+    "everything": ("sensor", "sensors", "readings", "reading"),
+}
+
+# How a question to the sensors starts, so a command that merely mentions a
+# sensor ("remind me to check the sensor wiring") is left alone.
+_QUESTION_STARTS = ("what", "whats", "how", "hows", "is", "are", "any", "anyone", "anybody",
+                    "tell", "read", "give", "check", "who")
+
+# Words that mean "the rooms the sensors are in" without naming one.
+_INDOORS = ("in here", "inside", "indoors", "in the house", "at home", "the house")
+
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _words(text):
+    return _WORD.findall((text or "").casefold().replace("'", ""))
+
+
+def _has_phrase(words, phrase):
+    wanted = phrase.split()
+    return any(words[i:i + len(wanted)] == wanted for i in range(len(words) - len(wanted) + 1))
+
+
+def question(text):
+    """What a spoken question asks of the sensors, or None if it is not one.
+
+    Returns (what, names): what is "temperature", "humidity", "presence" or
+    "everything"; names are the boards meant, every board when none was
+    named. Needs something to ask about and somewhere to ask it -- a board
+    by name, or "in here" -- so "what's the temperature outside" and "is
+    anyone there" go on to the usual routing. Mentioning the sensors
+    themselves ("how are the sensors") is enough on its own.
+    """
+    words = _words(text)
+
+    # Spoken politeness in front of the question.
+    while words and words[0] in ("jarvis", "hey", "ok", "okay", "so", "and", "please"):
+        words = words[1:]
+
+    if not words or words[0] not in _QUESTION_STARTS:
+        return None
+
+    with _lock:
+        names = list(_sensors)
+
+    asked = [what for what, cues in _ASKING.items() if any(word in cues for word in words)]
+
+    if not asked:
+        return None
+
+    named = [name for name in names if _has_phrase(words, " ".join(_words(name)))]
+    indoors = any(_has_phrase(words, phrase) for phrase in _INDOORS)
+    about_sensors = "everything" in asked
+
+    if not (named or indoors or about_sensors):
+        return None
+
+    # The most particular thing asked wins: "is anyone in the room" is
+    # about presence even though "room" could be a board's reading too.
+    for what in ("presence", "humidity", "temperature", "everything"):
+        if what in asked:
+            return what, named or names
+
+    return None
+
+
+def _ago(seconds):
+    minutes = int(seconds // 60)
+
+    if minutes < 1:
+        return "just now"
+
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+
+    hours = minutes // 60
+    return f"{hours} hour{'s' if hours != 1 else ''} ago"
+
+
+def _place(name):
+    """'the kitchen' -- how a room is named mid-sentence."""
+    return f"the {name}" if not name.startswith(("the ", "my ")) else name
+
+
+def _presence_words(name, board):
+    moved = board["moved_ago"]
+
+    if moved is None:
+        return "no movement seen yet"
+
+    if present(name):
+        return f"someone there, movement {_ago(moved)}"
+
+    return f"empty, no movement for {_ago(moved).replace(' ago', '')}"
+
+
+def answer(asked):
+    """A spoken answer to question()'s (what, names), from what the boards last said.
+
+    One sentence per room, so asking after several reads as a list rather
+    than one breathless run-on.
+    """
+    if not asked:
+        return None
+
+    what, names = asked
+    boards = known()
+
+    if not boards:
+        return "No sensors have reported yet, sir."
+
+    sentences = []
+
+    for name in sorted(names):
+        board = boards.get(name)
+
+        if board is None:
+            continue
+
+        readings = board["readings"]
+        place = _place(name)
+        parts = []
+
+        if what in ("temperature", "everything") and "temperature" in readings:
+            parts.append(f"{readings['temperature']:.1f} degrees")
+
+        if what in ("humidity", "everything") and "humidity" in readings:
+            parts.append(f"{readings['humidity']:.0f} percent humidity")
+
+        if what == "humidity" and parts:
+            # "Humidity in the kitchen is 46 percent", not "the kitchen is 46 percent humidity".
+            parts = []
+            humidity_sentence = f"humidity in {place} is {readings['humidity']:.0f} percent"
+        else:
+            humidity_sentence = None
+
+        if what == "presence" or (what == "everything" and not parts):
+            words = _presence_words(name, board)
+
+            if words.startswith("someone"):
+                sentence = f"someone is in {place}, movement {_ago(board['moved_ago'])}"
+            elif words.startswith("empty"):
+                sentence = f"{place} looks {words}"
+            else:
+                sentence = f"no movement seen in {place} yet"
+        elif humidity_sentence:
+            sentence = humidity_sentence
+        elif parts:
+            sentence = f"{place} is " + " with ".join(parts)
+
+            if what == "everything":
+                sentence += f"; {_presence_words(name, board)}"
+        else:
+            continue
+
+        if board["seen_ago"] > ABSENT_SECONDS:
+            sentence += f", though its sensor last reported {_ago(board['seen_ago'])}"
+
+        sentences.append(sentence[0].upper() + sentence[1:] + ".")
+
+    if not sentences:
+        spoken = " or ".join(_place(name) for name in sorted(names)) or "any room"
+        kind = {"temperature": "a temperature", "humidity": "a humidity reading"}.get(what, "a reading")
+        return f"I don't have {kind} from {spoken} yet, sir."
+
+    # "sir" once, at the end of the first sentence, as he would say it.
+    sentences[0] = sentences[0][:-1] + ", sir."
+    return " ".join(sentences)
