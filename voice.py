@@ -287,15 +287,31 @@ def _is_wake_token(token):
     return ratio >= WAKE_SKELETON_RATIO
 
 
+# How far into an utterance the wake word may come and still be him being
+# addressed ("Jarvis, ...", "hey Jarvis, ...", "OK so Jarvis ..."). Further in,
+# it is part of what is being said: "open a github issue on jarvis called
+# mark2" used to be cut at "jarvis" and heard as "called mark2".
+_ADDRESS_WINDOW = 3
+
+
 def _split_wake(text):
-    """Return (addressed, command) after removing the wake word."""
+    """Return (addressed, command) after removing the wake word.
+
+    Addressed means the wake word opens the utterance, within its first few
+    words. Further in, it is a name being used, not him being called.
+    """
     tokens = text.split()
 
-    for index, token in enumerate(tokens):
+    for index, token in enumerate(tokens[:_ADDRESS_WINDOW]):
         if _is_wake_token(token):
             return True, " ".join(tokens[index + 1:]).strip()
 
     return False, ""
+
+
+def _mentions_wake(text):
+    """True if the wake word is anywhere in the utterance, addressed or not."""
+    return any(_is_wake_token(token) for token in text.split())
 
 
 def _strip_wake(text):
@@ -538,7 +554,9 @@ def listen():
 
             addressed, remainder = _split_wake(text)
 
-            if wake_pending and not addressed:
+            # The grammar hearing "jarvis" is explained by a mention inside
+            # the sentence, which is not him being called.
+            if wake_pending and not addressed and not _mentions_wake(text):
                 remainder = _strip_wake(text)
                 addressed = True
                 print(f'[wake] grammar matched on "{text}"')

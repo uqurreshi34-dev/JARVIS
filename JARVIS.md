@@ -1087,6 +1087,10 @@ speech.py       says the reply
 hud.py          shows the state
 ```
 
+The wake word calls him only in the first few words of what is said
+("Jarvis, ...", "hey Jarvis, ..."). Further in it is a name being used, so
+"open a github issue on jarvis called mark2" reaches commands.py whole.
+
 For desktop voice, the microphone belongs to `voice.py`. For phone voice, the
 phone browser owns the microphone and sends a WAV recording to `phone.py`.
 
