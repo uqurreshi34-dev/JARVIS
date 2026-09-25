@@ -224,12 +224,16 @@ else:
 
 # ---- a folder like yours: one Villa report among many football reports ---------
 
-VILLA = """# Aston Villa Football Club vs Birmingham City Football Club
-## Executive summary
-This report was commissioned as a head-to-head comparison of Aston Villa Football Club and Birmingham City Football Club. *Prepared for filing under: Football*.
-Aston Villa are the more successful club, with seven league titles and the 1982 European Cup, while Birmingham City's major honour is the League Cup, won in 1963 and 2011.
+VILLA = """# Aston Villa FC vs. Birmingham City FC - Comparative Briefing
+*Prepared for filing under: Football*
+---
+## Executive Summary
+This report was commissioned as a head-to-head comparison of Aston Villa Football Club and Birmingham City Football Club, Birmingham's two long-established senior men's clubs.
+**Aston Villa are the more successful club**, with seven league titles and the 1982 European Cup, while Birmingham City's major honour is the League Cup, won in 1963 and 2011.
+---
 ## Aston Villa
-Villa Park holds around 42,000 spectators and the club returned to European football in 2024 under Unai Emery.
+**What the evidence supports**
+- Villa Park holds around 42,000 spectators and the club returned to European football in 2024 under Unai Emery.
 ## Birmingham City
 Birmingham City play at St Andrew's and were promoted back to the Championship in 2025 after one season in League One.
 ## Sources

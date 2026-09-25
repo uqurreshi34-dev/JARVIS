@@ -363,7 +363,10 @@ _ABOUT_ITSELF = (
     "This report was written at the user's request and describes how it was "
     "prepared and where it is filed."
 )
-_ABOUT_ITSELF_LIMIT = 0.20
+_ABOUT_ITSELF_LIMIT = 0.45
+
+# A sentence this close to the request a report answered restates it.
+_RESTATED_LIMIT = 0.80
 
 # Read out when a report is named in full: this much of its summary.
 _OVERVIEW_CHARS = 500
@@ -510,6 +513,18 @@ def answer(said, topic=None, mode=None, subject=None, today=None):
 
     found = search(topic, subject)
 
+    # A passage that is nothing but the report describing itself is not an
+    # answer; the next passage is. Only the leading ones need checking.
+    readable = []
+
+    for score, path, heading, passage in found[:40]:
+        findings = _findings(passage, path)
+
+        if findings:
+            readable.append((score, path, heading, findings))
+
+    found = readable + found[40:]
+
     if not found:
         where = f"your {_yours(subject)} report" if subject else "your reports"
         return f"I can't find anything about {about} in {where}, sir."
@@ -543,16 +558,10 @@ def answer(said, topic=None, mode=None, subject=None, today=None):
         if path != best_path or score < best_score - _CLOSE:
             continue
 
-        findings = _findings(passage, path)
-
-        if findings:
-            chosen.append(findings)
+        chosen.append(passage)
 
         if len(chosen) == _SPOKEN_LIMIT:
             break
-
-    if not chosen:
-        chosen = [_findings(found[0][3], found[0][1]) or found[0][3]]
 
     others = len([path for path in related if path != best_path])
     also = ""
@@ -573,65 +582,100 @@ def _sentences(text):
     return [part.strip() for part in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"(])", str(text or "")) if part.strip()]
 
 
+# Headings of the sections where a report introduces itself.
+_INTRODUCTION = "Executive summary, introduction or overview"
+_INTRODUCTION_LIMIT = 0.5
+
+
 def _opening(path):
-    """The passages of a report's first section, where it may describe itself."""
+    """The passages where a report may describe itself.
+
+    Its first section, and any summary or introduction section: real
+    research reports put "Prepared for filing under ..." under the title and
+    "This report was commissioned ..." at the top of the Executive Summary.
+    """
     parts = _read(path)
 
     if not parts:
         return set()
 
     first = parts[0][0]
-    opening = set()
+    opening = {passage for heading, passage in parts if heading == first}
+    headings = list(dict.fromkeys(heading for heading, _passage in parts if heading))
 
-    for heading, passage in parts:
-        if heading != first:
-            break
+    try:
+        from actions import semantic_memory
 
-        opening.add(passage)
+        closeness = semantic_memory.similarities(_INTRODUCTION, headings) if headings else None
+    except Exception:
+        closeness = None
+
+    if closeness:
+        introductions = {
+            heading for heading, score in zip(headings, closeness)
+            if score >= _INTRODUCTION_LIMIT
+        }
+        opening |= {passage for heading, passage in parts if heading in introductions}
 
     return opening
+
+
+def _request_for(path):
+    """The request a report answered, rebuilt from its name.
+
+    "Pakistan vs India" becomes "Research Pakistan, compare it with India,
+    and write a report." -- the sentence a report restates when it opens by
+    describing itself.
+    """
+    subjects = [part.strip() for part in re.split(r"\s+(?:vs\.?|versus)\s+", describe_report(path)[0]) if part.strip()]
+
+    if not subjects:
+        return None
+
+    request = f"Research {subjects[0]}"
+
+    if len(subjects) > 1:
+        request += ", compare it with " + " and ".join(subjects[1:])
+
+    return request + ", and write a report."
 
 
 def _findings(passage, path=None):
     """[passage] without sentences about the report itself.
 
-    Only a report's opening section is checked: that is where research
-    reports describe themselves ("This report was commissioned to ...",
-    "Prepared for filing under ..."), and checking only there keeps real
-    findings elsewhere, however hedged, from being mistaken for them. Each
-    sentence is scored as written and with the report's own subject words
-    taken out, since names like "Aston Villa Football Club" pull a sentence
-    towards content; measured, sentences about the report scored 0.22 or
-    more and findings in opening sections 0.02 or less.
+    Only a report's opening and summary sections are checked, which is where
+    research reports describe themselves. Two kinds of sentence are left out,
+    both recognised by meaning: one that restates the request the report
+    answered ("This report was commissioned to research Pakistan, compare it
+    with India ..."), and one that plainly describes the report ("The report
+    has been prepared and is presented below"). Measured on real reports:
+    restatements scored 0.85 or more against the rebuilt request and the
+    closest real finding 0.74; plain descriptions 0.62 against the
+    description of one, findings 0.43 or less.
     """
     sentences = _sentences(passage)
 
     if not sentences or path is None or passage not in _opening(path):
         return " ".join(sentences)
 
-    label_words = set(re.findall(r"[a-z0-9]+", describe_report(path)[0].casefold()))
-
-    def without_subject(sentence):
-        kept = [
-            word for word in sentence.split()
-            if re.sub(r"[^a-z0-9]", "", word.casefold().replace("'s", "")) not in label_words
-        ]
-        return " ".join(kept) or sentence
+    request = _request_for(path)
 
     try:
         from actions import semantic_memory
 
-        plain = semantic_memory.similarities(_ABOUT_ITSELF, sentences)
-        stripped = semantic_memory.similarities(_ABOUT_ITSELF, [without_subject(one) for one in sentences])
+        itself = semantic_memory.similarities(_ABOUT_ITSELF, sentences)
+        restated = semantic_memory.similarities(request, sentences) if request else None
     except Exception:
-        plain = stripped = None
+        itself = restated = None
 
-    if plain is None or stripped is None:
+    if itself is None:
         return " ".join(sentences)
 
+    restated = restated or [0.0] * len(sentences)
+
     return " ".join(
-        sentence for sentence, first, second in zip(sentences, plain, stripped)
-        if max(first, second) < _ABOUT_ITSELF_LIMIT
+        sentence for sentence, about, again in zip(sentences, itself, restated)
+        if about < _ABOUT_ITSELF_LIMIT and again < _RESTATED_LIMIT
     )
 
 

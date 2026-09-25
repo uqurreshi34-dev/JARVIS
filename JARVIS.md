@@ -841,9 +841,12 @@ or less; the minimum is 0.32, plus up to 0.25 for the share of the
 topic's words a passage contains (one word of four counts a quarter).
 Another report "mentions it too" only when its best passage is within 0.12
 of the best, so shared words like "football" cannot inflate it. A report's
-opening section is read without sentences about the report itself ("This
-report was commissioned to ..."), recognised by meaning against one
-description, with the report's subject words removed first. A question that
+opening and summary sections are read without sentences about the report
+itself, recognised by meaning: one that restates the request, rebuilt from
+the report's name ("Research Pakistan, compare it with India"; 0.80 or
+more), or one that plainly describes the report (0.45 or more against one
+description). Measured on real reports, with a clear gap to real findings.
+A passage that is only such sentences is skipped for the next. A question that
 names a report, rather than a subject inside it, reads that report's
 summary: it must cover the words that set the report apart from your other
 reports, decided from their names. Markdown emphasis is stripped, so no
