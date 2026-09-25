@@ -4,7 +4,8 @@ Checked:
 
 - nothing is drawn until services are listed;
 - listed but not yet connected, each name is shown dim;
-- connected, it is lit; busy, it pulses brighter;
+- connected, it is lit; busy, it pulses brighter, for at least a second
+  even when the request itself took milliseconds;
 - waiting on a yes it turns amber, and answering sets it back;
 - done flashes green and refused flashes red, each settling to connected;
 - unavailable stays red;
@@ -120,6 +121,15 @@ check(connected > configured + 30, f"connected, it is lit brighter than when onl
 
 widget.service_activity.emit("github", "busy")
 check(peak(frame()) >= connected - 5, "busy is at least as bright as connected")
+
+# The filesystem answers in milliseconds: busy and idle arrive between two
+# frames. The pulse is held long enough to be seen.
+widget.service_activity.emit("github", "busy")
+widget.service_activity.emit("github", "idle")
+now = time.monotonic()
+check(widget._shown_state("github", now) == "busy", "a request too quick to see still pulses")
+check(widget._shown_state("github", now + hud._SERVICE_BUSY_HOLD + 0.05) == "idle",
+      f"for about {hud._SERVICE_BUSY_HOLD:.0f} second, then settles")
 
 widget.service_activity.emit("github", "held")
 check(is_amber(hue(frame())), f"waiting on a yes, the service turns amber {hue(frame())}")

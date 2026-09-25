@@ -109,6 +109,11 @@ _CONFIRM_FLASH_SECONDS = 0.8
 # actions/mcp_services.py reports; the flashes settle back to connected.
 _SERVICES_Y = _HEIGHT - 26
 _SERVICE_FLASH = {"done": 1.6, "refused": 2.2}
+
+# However quick a request is, it shows for at least this long. A local
+# service such as the filesystem answers in milliseconds, between two frames,
+# and its busy and idle both arrived before anything was drawn.
+_SERVICE_BUSY_HOLD = 1.0
 _SERVICE_AMBER = QColor(255, 196, 80)
 _SERVICE_GREEN = QColor(95, 255, 160)
 _SERVICE_RED = QColor(255, 88, 88)
@@ -181,6 +186,7 @@ class Hud(QWidget):
         self._boot = None               # the start-up sequence while it plays
 
         self._services = {}             # name -> [state, since], in mcp.json order
+        self._busy_until = {}           # name -> when a request's pulse may end
 
         self._target = 0.0
         self._level = 0.0
@@ -308,7 +314,12 @@ class Hud(QWidget):
         self.update()
 
     def _on_service_activity(self, name, state):
-        self._services[str(name)] = [str(state), time.monotonic()]
+        now = time.monotonic()
+        self._services[str(name)] = [str(state), now]
+
+        if state == "busy":
+            self._busy_until[str(name)] = now + _SERVICE_BUSY_HOLD
+
         self.update()
 
     def _on_boot(self, items):
@@ -525,6 +536,20 @@ class Hud(QWidget):
 
     # ---- the connected-services strip ------------------------------------------
 
+    def _shown_state(self, name, now):
+        """What one service looks like at this moment."""
+        state, since = self._services[name]
+
+        # A flash settles back to connected on its own.
+        if state in _SERVICE_FLASH and now - since > _SERVICE_FLASH[state]:
+            state = self._services[name][0] = "connected"
+
+        # A request that finished too fast to see still shows its pulse.
+        if state in ("idle", "connected") and now < self._busy_until.get(name, 0.0):
+            return "busy"
+
+        return state
+
     def _paint_services(self, painter, accent):
         """Each configured service, lit by what it is really doing."""
         if not self._services:
@@ -543,12 +568,7 @@ class Hud(QWidget):
         names = list(self._services)
 
         for index, name in enumerate(names):
-            state, since = self._services[name]
-            age = now - since
-
-            # A flash settles back to connected on its own.
-            if state in _SERVICE_FLASH and age > _SERVICE_FLASH[state]:
-                state = self._services[name][0] = "connected"
+            state = self._shown_state(name, now)
 
             label = name.replace("_", " ").upper()
             width = 8 + metrics.horizontalAdvance(label)

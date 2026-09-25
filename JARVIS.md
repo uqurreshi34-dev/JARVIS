@@ -998,7 +998,8 @@ What a service may do is decided by JARVIS, not by the service:
 The HUD's services strip, under the telemetry, names each service in
 `mcp.json` and shows what it is really doing, reported by
 `mcp_services` as it happens: dim and hollow until it first connects, lit
-once connected, pulsing while a request runs, amber while an action waits
+once connected, pulsing while a request runs (for at least a second, so a
+local service answering in milliseconds is still seen), amber while an action waits
 for your yes, a green flash when one goes through, red when one is refused
 or the service cannot be reached. More than fit are counted ("+2").
 

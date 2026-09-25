@@ -1,0 +1,87 @@
+diff --git a/JARVIS.md b/JARVIS.md
+index 805207b..89a92de 100644
+--- a/JARVIS.md
++++ b/JARVIS.md
+@@ -1000,3 +1000,4 @@ The HUD's services strip, under the telemetry, names each service in
+ `mcp_services` as it happens: dim and hollow until it first connects, lit
+-once connected, pulsing while a request runs, amber while an action waits
++once connected, pulsing while a request runs (for at least a second, so a
++local service answering in milliseconds is still seen), amber while an action waits
+ for your yes, a green flash when one goes through, red when one is refused
+diff --git a/hud.py b/hud.py
+index 75f8692..07b7159 100644
+--- a/hud.py
++++ b/hud.py
+@@ -111,2 +111,7 @@ _SERVICES_Y = _HEIGHT - 26
+ _SERVICE_FLASH = {"done": 1.6, "refused": 2.2}
++
++# However quick a request is, it shows for at least this long. A local
++# service such as the filesystem answers in milliseconds, between two frames,
++# and its busy and idle both arrived before anything was drawn.
++_SERVICE_BUSY_HOLD = 1.0
+ _SERVICE_AMBER = QColor(255, 196, 80)
+@@ -183,3 +188,4 @@ class Hud(QWidget):
+         self._services = {}             # name -> [state, since], in mcp.json order
++        self._busy_until = {}           # name -> when a request's pulse may end
+ 
+         self._target = 0.0
+@@ -310,3 +316,8 @@ class Hud(QWidget):
+     def _on_service_activity(self, name, state):
+-        self._services[str(name)] = [str(state), time.monotonic()]
++        now = time.monotonic()
++        self._services[str(name)] = [str(state), now]
++
++        if state == "busy":
++            self._busy_until[str(name)] = now + _SERVICE_BUSY_HOLD
++
+         self.update()
+@@ -527,2 +538,16 @@ class Hud(QWidget):
+ 
++    def _shown_state(self, name, now):
++        """What one service looks like at this moment."""
++        state, since = self._services[name]
++
++        # A flash settles back to connected on its own.
++        if state in _SERVICE_FLASH and now - since > _SERVICE_FLASH[state]:
++            state = self._services[name][0] = "connected"
++
++        # A request that finished too fast to see still shows its pulse.
++        if state in ("idle", "connected") and now < self._busy_until.get(name, 0.0):
++            return "busy"
++
++        return state
++
+     def _paint_services(self, painter, accent):
+@@ -545,9 +570,4 @@ class Hud(QWidget):
+         for index, name in enumerate(names):
+-            state, since = self._services[name]
+-            age = now - since
+-
+-            # A flash settles back to connected on its own.
+-            if state in _SERVICE_FLASH and age > _SERVICE_FLASH[state]:
+-                state = self._services[name][0] = "connected"
++            state = self._shown_state(name, now)
+ 
+             label = name.replace("_", " ").upper()
+diff --git a/tools/test_services_strip.py b/tools/test_services_strip.py
+index c54aafe..8c2998c 100644
+--- a/tools/test_services_strip.py
++++ b/tools/test_services_strip.py
+@@ -6,3 +6,4 @@ Checked:
+ - listed but not yet connected, each name is shown dim;
+-- connected, it is lit; busy, it pulses brighter;
++- connected, it is lit; busy, it pulses brighter, for at least a second
++  even when the request itself took milliseconds;
+ - waiting on a yes it turns amber, and answering sets it back;
+@@ -123,2 +124,11 @@ check(peak(frame()) >= connected - 5, "busy is at least as bright as connected")
+ 
++# The filesystem answers in milliseconds: busy and idle arrive between two
++# frames. The pulse is held long enough to be seen.
++widget.service_activity.emit("github", "busy")
++widget.service_activity.emit("github", "idle")
++now = time.monotonic()
++check(widget._shown_state("github", now) == "busy", "a request too quick to see still pulses")
++check(widget._shown_state("github", now + hud._SERVICE_BUSY_HOLD + 0.05) == "idle",
++      f"for about {hud._SERVICE_BUSY_HOLD:.0f} second, then settles")
++
+ widget.service_activity.emit("github", "held")
