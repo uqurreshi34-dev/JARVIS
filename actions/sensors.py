@@ -51,6 +51,17 @@ _lock = threading.Lock()
 #          "readings": {...}}
 _sensors = {}
 
+# Told of every report, with known() as it stands after it -- the HUD's
+# sensor panel. Called on the web server's thread; whatever listens hands
+# it to its own thread, as the panel does with a Qt signal.
+_listener = None
+
+
+def set_listener(callback):
+    """Have [callback] called with known() after every report."""
+    global _listener
+    _listener = callback
+
 
 def _now():
     return time.monotonic()
@@ -77,6 +88,8 @@ def known():
         return {
             name: {
                 "seen_ago": now - state["seen"],
+                "moved_ago": None if state["moved"] is None else now - state["moved"],
+                "read_ago": None if state.get("read") is None else now - state["read"],
                 "readings": dict(state["readings"]),
             }
             for name, state in _sensors.items()
@@ -131,7 +144,7 @@ def report(payload):
 
         if state is None:
             state = {"seen": None, "moved": None, "greeted": None,
-                     "readings": {}}
+                     "read": None, "readings": {}}
             _sensors[name] = state
 
         # How long it had been quiet BEFORE this report, which is what
@@ -145,8 +158,9 @@ def report(payload):
         for field in ("temperature", "humidity"):
             value = payload.get(field)
 
-            if isinstance(value, (int, float)):
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
                 state["readings"][field] = float(value)
+                state["read"] = now
 
         if event == "motion":
             was_present = bool(
@@ -170,6 +184,13 @@ def report(payload):
 
     # Said outside the lock. Building a sentence is cheap, but nothing
     # that might be handed to another thread happens while holding it.
+    if _listener is not None:
+        try:
+            _listener(known())
+        except Exception as error:
+            # A display failing must not stop the announcement.
+            print(f"[JARVIS] sensor display failed: {error}", flush=True)
+
     if event == "online":
         if first_time or returning:
             return f"{_spoken(name)} sensor online, sir."

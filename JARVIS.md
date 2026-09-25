@@ -1127,7 +1127,7 @@ several checks that fall inside its due window.
 ### Reminders — `actions/reminders.py`
 Spoken timers that announce themselves when due.
 
-### Sensors - `actions/sensors.py`, `tools/esp32_setup.py`, `arduino/jarvis_sensor/`
+### Sensors - `actions/sensors.py`, `sensor_panel.py`, `tools/esp32_setup.py`, `arduino/jarvis_sensor/`
 Small boards on the wifi (an ESP32 with a DHT22 and a PIR) post what they
 feel to `/sensor` on the phone server, with the phone's token in the
 `X-Jarvis-Token` header. `actions/sensors.py` decides what is worth
@@ -1146,6 +1146,19 @@ The esp32 board package must be 3.1 or later: older TLS libraries cannot
 check an IP address named in a certificate. Reserve the PC's address in
 the router; if JARVIS ever makes new certificates, run the tool again and
 upload the sketch again.
+
+What the boards feel is shown in `sensor_panel.py`, docked on top of the
+HUD at the same width (below it, if the HUD is dragged to the top of the
+screen). It slides up out of the HUD when a board first reports, with a
+row per board -- temperature coloured by how it feels, its trend, humidity
+and whether anyone is present -- three rows at most, the rest counted. A
+board that misses readings dims; with every board silent for two minutes
+the panel slides away. A click folds it to its title strip. No beam: it
+is part of the HUD, not projected from it.
+
+`python tools/sensor_simulator.py [names]` pretends to be boards, posting
+exactly as the sketch does (HTTPS, JARVIS's own authority, the token), so
+the panel and the announcements can be tried without hardware.
 
 ---
 

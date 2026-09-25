@@ -14,6 +14,7 @@ from speech import set_speaking_listener, stop_speaking as stop_speech
 from news_panel import NewsPanel
 from quran_panel import QuranPanel
 from radar_panel import RadarPanel
+from sensor_panel import SensorPanel
 from hud import IDLE, LISTENING, RECITING, SPEAKING, THINKING, Hud
 from commands import (
     handle_command,
@@ -801,6 +802,14 @@ def main():
             brain_beam.hidden.emit()
 
     set_brain_listener(brain_update)
+
+    # The sensors, docked on top of the HUD rather than beamed beside it.
+    # sensors.py tells it of every report from the web server's thread;
+    # the signal carries that onto this one.
+    sensor_panel = SensorPanel()
+    sensor_panel.set_anchor(hud)
+    sensors.set_listener(sensor_panel.updated.emit)
+    hud.shutdown.connect(sensor_panel.hide_requested.emit)
 
     def on_files_dropped(paths):
         def load():

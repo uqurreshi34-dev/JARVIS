@@ -183,6 +183,9 @@ class Hud(QWidget):
     services_listed = pyqtSignal(list)
     service_activity = pyqtSignal(str, str)
 
+    # The HUD has been dragged: panels docked to it follow.
+    moved = pyqtSignal()
+
     def __init__(self):
         super().__init__()
 
@@ -532,6 +535,10 @@ class Hud(QWidget):
     @staticmethod
     def _distance_from_centre(pos):
         return math.hypot(pos.x() - _CENTRE.x(), pos.y() - _CENTRE.y())
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self.moved.emit()
 
     def closeEvent(self, event):
         self.closed.emit()
