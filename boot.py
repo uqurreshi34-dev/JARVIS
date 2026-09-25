@@ -112,6 +112,20 @@ def _services():
     return (f"SERVICES ({count})", READY if count else NONE)
 
 
+def services_line(connected, configured):
+    """The SERVICES line once connecting has finished: the truth, counted."""
+    if not configured:
+        return (f"SERVICES ({configured})", NONE)
+
+    if connected == configured:
+        return (f"SERVICES ({configured})", ONLINE)
+
+    if connected:
+        return (f"SERVICES ({connected}/{configured})", READY)
+
+    return (f"SERVICES (0/{configured})", OFFLINE)
+
+
 def _phone():
     from phone import phone_server
 

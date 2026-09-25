@@ -984,6 +984,16 @@ asking; anything else, or anything not matched, takes the ordinary route.
 The services strip shows every service while all are idle, and only the
 working ones while any is ("OBS +2").
 
+A service entry's `context` is the user's own note about it, given to the
+model with the request whenever that service's tools are on offer: "My
+GitHub account is ...; 'jarvis' means the repository ...". Without it every
+GitHub request began by looking both up. It rides with the request, not in
+the system prompt, so the system prompt stays the same and can be cached.
+
+Services connect at start-up, in the background and side by side, rather
+than on the first request that needs one; the start-up check's SERVICES
+line is updated to what really connected ("SERVICES (2/3)" with OBS closed).
+
 The tools join Agent Mode. A command naming a configured service goes to
 Agent Mode directly, skipping the command interpreter, and ordinary Agent
 Mode investigations can use the tools too. Code tasks and fix passes do not.

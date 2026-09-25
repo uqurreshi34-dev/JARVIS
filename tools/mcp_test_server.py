@@ -109,4 +109,10 @@ def readme_blob() -> EmbeddedResource:
 
 
 if __name__ == "__main__":
+    # A service that is slow to start, so the test can see services
+    # connect side by side rather than one after another.
+    if os.environ.get("SLOW_START"):
+        import time
+        time.sleep(float(os.environ["SLOW_START"]))
+
     app.run()

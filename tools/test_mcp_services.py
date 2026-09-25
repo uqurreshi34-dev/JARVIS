@@ -572,6 +572,74 @@ else:
     finally:
         _commands_for_instant.run_agent = real_agent
 
+# ---- the user's own note about a service ------------------------------------------------
+
+write_config({
+    "test": {
+        "command": sys.executable,
+        "args": [SERVER],
+        "context": "My account is avidcoder; 'the repo' means avidcoder/JARVIS.",
+    },
+    "quiet": {"command": sys.executable, "args": [SERVER]},
+})
+
+offered = [t["name"] for t in mcp_services.tools()]
+note = mcp_services.context_for(offered)
+check("avidcoder/JARVIS" in note and "- test:" in note, "a service's context note is given with its tools")
+check("- quiet:" not in note, "a service with no note adds nothing")
+check(mcp_services.context_for(["list_jarvis_files"]) == "", "no service tools, no note")
+
+try:
+    agent
+except NameError:
+    print("SKIP the note reaching the model (agent could not be imported)")
+else:
+    class _Listening:
+        kind = "anthropic"
+        name = "listening"
+
+        def __init__(self):
+            self.seen = None
+
+        def agent_turn(self, messages, tools, **kwargs):
+            self.seen = messages[0]["content"]
+            block = _types.SimpleNamespace(type="text", text="Nothing to add.")
+            return _types.SimpleNamespace(stop_reason="end_turn", content=[block])
+
+    listening = _Listening()
+    agent._run_with_provider(listening, "what is in the repo", False, False, False)
+    check(listening.seen and "avidcoder/JARVIS" in listening.seen and listening.seen.index("avidcoder") < listening.seen.index("User request:"),
+          "the note reaches the model with the request, ahead of it")
+    check("avidcoder" not in agent._AGENT_SYSTEM_PROMPT, "and the system prompt stays the same, so it can be cached")
+
+# ---- connecting: side by side, and in the background ---------------------------------------
+
+import time as _time_for_connect
+
+write_config({
+    "slow_one": {"command": sys.executable, "args": [SERVER], "env": {"SLOW_START": "2"}},
+    "slow_two": {"command": sys.executable, "args": [SERVER], "env": {"SLOW_START": "2"}},
+})
+
+started = _time_for_connect.monotonic()
+mcp_services.tools()
+took = _time_for_connect.monotonic() - started
+check(mcp_services.summary() == (2, 2), "both services connect")
+check(took < 3.5, f"side by side, not one after the other ({took:.1f}s for two services that take 2s each)")
+
+write_config({"test": {"command": sys.executable, "args": [SERVER]}, "gone": {"command": "definitely-not-a-real-program-xyz"}})
+finished = []
+started = _time_for_connect.monotonic()
+mcp_services.connect_in_background(finished.append)
+check(_time_for_connect.monotonic() - started < 0.2, "connecting in the background returns at once")
+
+for _ in range(200):
+    if finished:
+        break
+    _time_for_connect.sleep(0.05)
+
+check(finished == [(1, 2)], f"and reports what connected when it is done ({finished})")
+
 # ---- a service that was down, tried again ---------------------------------------------
 
 write_config({"test": {"command": "definitely-not-a-real-program-xyz", "args": []}})

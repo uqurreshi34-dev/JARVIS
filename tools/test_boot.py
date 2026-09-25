@@ -188,8 +188,21 @@ widget.boot_requested.emit([(label, boot.ONLINE) for label, _ in sample])
 check(count(frame_at(boot.DURATION - 0.2), is_green, (hud._PANEL_X, 30, hud._PANEL_RIGHT, 52)) > 10,
       "all up, it says ALL SYSTEMS ONLINE in green")
 
+# The SERVICES line, once connecting in the background has finished.
+check(boot.services_line(3, 3) == ("SERVICES (3)", boot.ONLINE), "all services connected: ONLINE")
+check(boot.services_line(2, 3) == ("SERVICES (2/3)", boot.READY), "some connected (OBS closed, say): counted, READY")
+check(boot.services_line(0, 2) == ("SERVICES (0/2)", boot.OFFLINE), "none connected: OFFLINE")
+check(boot.services_line(0, 0)[1] == boot.NONE, "none set up: NONE")
+
+widget.boot_requested.emit([("VOICE", boot.ONLINE), ("SERVICES (3)", boot.READY)])
+widget.boot_updated.emit("SERVICES", "SERVICES (0/3)", boot.OFFLINE)
+check(widget._boot["items"][1] == ("SERVICES (0/3)", boot.OFFLINE) and widget._boot["summary"] == "1 SYSTEM OFFLINE",
+      "the line and the summary follow what really connected")
+
 frame_at(boot.DURATION + 0.1)
 check(widget._boot is None, "then the HUD returns to its ordinary face")
+widget.boot_updated.emit("SERVICES", "SERVICES (3)", boot.ONLINE)
+check(widget._boot is None, "an update after the sequence has ended is ignored: the strip shows it")
 
 widget.close()
 

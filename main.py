@@ -524,6 +524,13 @@ class Assistant:
         # nothing waits for it. After the phone link, so that line is true.
         self._start_boot()
 
+        # Connected services come up now, in the background, rather than on
+        # the first request that needs one; the check's SERVICES line then
+        # says what really connected.
+        mcp_services.connect_in_background(
+            lambda counts: self._hud.boot_updated.emit("SERVICES", *boot.services_line(*counts))
+        )
+
         self._say(_greeting())
 
         # Anything noticed while JARVIS was closed is mentioned now, rather

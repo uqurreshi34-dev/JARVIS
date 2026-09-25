@@ -162,6 +162,9 @@ class Hud(QWidget):
     # The start-up systems check: [(label, status)], see boot.py.
     boot_requested = pyqtSignal(list)
 
+    # A line of the check learned later: (label prefix, new label, status).
+    boot_updated = pyqtSignal(str, str, str)
+
     # Connected services: the configured names, then (name, state) as they work.
     services_listed = pyqtSignal(list)
     service_activity = pyqtSignal(str, str)
@@ -225,6 +228,7 @@ class Hud(QWidget):
         self.speaking_changed.connect(self._on_speaking)
         self.confirmation_changed.connect(self._on_confirmation)
         self.boot_requested.connect(self._on_boot)
+        self.boot_updated.connect(self._on_boot_updated)
         self.services_listed.connect(self._on_services_listed)
         self.service_activity.connect(self._on_service_activity)
 
@@ -325,6 +329,21 @@ class Hud(QWidget):
             self._busy_until[str(name)] = now + _SERVICE_BUSY_HOLD
 
         self.update()
+
+    def _on_boot_updated(self, prefix, label, status):
+        # Only while the sequence is still on screen; afterwards the strip
+        # says the same thing.
+        if self._boot is None:
+            return
+
+        items = self._boot["items"]
+
+        for index, (old_label, _status) in enumerate(items):
+            if old_label.startswith(prefix):
+                items[index] = (label, status)
+                self._boot["summary"] = boot.summary(items)
+                self.update()
+                return
 
     def _on_boot(self, items):
         self._boot = {

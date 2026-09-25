@@ -36,6 +36,10 @@ What a server may do is decided here, not by the server:
   soon as the model calls them, with no question: for a service whose
   actions are routine, such as starting a recording. Only what
   allowed_actions names, and never what the server marks destructive.
+- An entry's "context" is the user's own note about the service ("my
+  GitHub account is ...; 'jarvis' means the repo ..."), given to the model
+  whenever that service's tools are offered, so it need not spend tool
+  calls finding out what never changes.
 - An entry's "instant" table maps phrases to tools, so "start recording"
   runs obs-start-record at once, with no model call. The phrases are the
   user's own, in mcp.json; only actions the service already lets run
@@ -335,7 +339,17 @@ def _convert(server, entry, listed):
 
 # ---- the background loop ---------------------------------------------------
 
+# Services now connect in parallel, so two threads can ask for the loop at
+# once; without this each could start one of its own.
+_loop_lock = threading.Lock()
+
+
 def _ensure_loop():
+    with _loop_lock:
+        return _start_loop()
+
+
+def _start_loop():
     global _loop
 
     if _loop is not None:
@@ -475,8 +489,28 @@ def tools(include_actions=False):
         if not _loaded:
             _loaded = True
 
-            for name, entry in _read_config().items():
-                _register(_connect(name, entry))
+            # All at once: one slow service should not keep the others
+            # waiting, and connecting is mostly waiting.
+            entries = list(_read_config().items())
+            connected = [None] * len(entries)
+
+            def connect(index, name, entry):
+                connected[index] = _connect(name, entry)
+
+            workers = [
+                threading.Thread(target=connect, args=(index, name, entry), daemon=True)
+                for index, (name, entry) in enumerate(entries)
+            ]
+
+            for worker in workers:
+                worker.start()
+
+            for worker in workers:
+                worker.join()
+
+            for server in connected:
+                if server is not None:
+                    _register(server)
 
         _retry_failed()
 
@@ -657,6 +691,64 @@ def run_instant(match):
         return failure_message(proposal)
 
     return match.get("say") or said
+
+
+# The most of a service's own note given to the model.
+CONTEXT_CHARS = 600
+
+
+def context_for(tool_names):
+    """The user's notes about the services these tools belong to, or ""."""
+    servers = []
+
+    for name in tool_names:
+        target = _tools.get(name) or _actions.get(name)
+
+        if target and target[0] not in servers:
+            servers.append(target[0])
+
+    config = _read_config()
+    lines = []
+
+    for server in servers:
+        note = (config.get(server) or {}).get("context")
+
+        if isinstance(note, str) and note.strip():
+            lines.append(f"- {server}: {safety.clean(note, CONTEXT_CHARS)}")
+
+    if not lines:
+        return ""
+
+    return (
+        "What the user has told JARVIS about these connected services, in their own "
+        "settings; rely on it rather than looking it up:\n" + "\n".join(lines)
+    )
+
+
+def connect_in_background(done=None):
+    """Connect every service now, off the caller's thread, so the first
+    request does not wait for it. [done] is called with status() after."""
+    def work():
+        try:
+            tools()
+        except Exception as error:
+            print(f"[JARVIS] connecting services failed: {error}")
+
+        if done:
+            try:
+                done(summary())
+            except Exception as error:
+                print(f"[JARVIS] could not report connected services: {error}")
+
+    threading.Thread(target=work, name="mcp-connect", daemon=True).start()
+
+
+def summary():
+    """(connected, configured) counts, for the start-up check."""
+    configured = len(_read_config())
+    connected = sum(1 for server in _servers.values() if server.client)
+
+    return connected, configured
 
 
 def owns(tool_name):

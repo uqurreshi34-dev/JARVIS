@@ -754,10 +754,16 @@ def _run_with_provider(provider, task, report, fix, code_task, actions=False):
         )
         max_tokens = 1800
 
+    # The user's own notes about the services on offer (their GitHub
+    # account, which repo "jarvis" means) ride with the request rather than
+    # the system prompt, which stays the same so it can be cached.
+    notes = mcp_services.context_for([_definition_name(tool) for tool in tool_defs])
+    preamble = f"{user_prompt}\n\n{notes}" if notes else user_prompt
+
     messages = [
         {
             "role": "user",
-            "content": f"{user_prompt}\n\nUser request:\n{task}",
+            "content": f"{preamble}\n\nUser request:\n{task}",
         }
     ]
 
