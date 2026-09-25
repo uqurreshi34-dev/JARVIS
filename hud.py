@@ -17,6 +17,8 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import QWidget
 
+import boot
+
 
 IDLE = "idle"
 LISTENING = "listening"
@@ -140,6 +142,9 @@ class Hud(QWidget):
     # (seconds, "") when a held question is asked; (0, outcome) when it ends.
     confirmation_changed = pyqtSignal(float, str)
 
+    # The start-up systems check: [(label, status)], see boot.py.
+    boot_requested = pyqtSignal(list)
+
     def __init__(self):
         super().__init__()
 
@@ -160,6 +165,8 @@ class Hud(QWidget):
         self._confirm_until = None      # monotonic deadline of a held question
         self._confirm_total = 0.0
         self._confirm_ended = None      # (outcome, when, fraction left)
+
+        self._boot = None               # the start-up sequence while it plays
 
         self._target = 0.0
         self._level = 0.0
@@ -193,6 +200,7 @@ class Hud(QWidget):
         self.level_changed.connect(self._on_level)
         self.speaking_changed.connect(self._on_speaking)
         self.confirmation_changed.connect(self._on_confirmation)
+        self.boot_requested.connect(self._on_boot)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -273,6 +281,14 @@ class Hud(QWidget):
 
     def _on_speaking(self, active):
         self._speaking = bool(active)
+        self.update()
+
+    def _on_boot(self, items):
+        self._boot = {
+            "started": time.monotonic(),
+            "items": list(items),
+            "summary": boot.summary(items),
+        }
         self.update()
 
     def _on_confirmation(self, seconds, outcome):
@@ -422,6 +438,14 @@ class Hud(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
+        if self._boot is not None:
+            if time.monotonic() - self._boot["started"] < boot.DURATION:
+                self._paint_boot(painter)
+                painter.end()
+                return
+
+            self._boot = None
+
         accent = _PALETTE[self._state]
         energy = self._energy()
 
@@ -461,6 +485,167 @@ class Hud(QWidget):
         painter.setBrush(red)
         painter.drawRect(_STOP_RECT.adjusted(8, 8, -8, -8))
 
+        painter.restore()
+
+    # ---- the start-up sequence ------------------------------------------------
+
+    def _paint_boot(self, painter):
+        """The HUD assembling itself while the systems check runs.
+
+        Panel, then ticks lit round the dial, then rings growing into place
+        and spinning down to their resting speed, then the core igniting,
+        while the check types itself out on the right. Timings come from
+        boot.py, which the sound shares.
+        """
+        elapsed = time.monotonic() - self._boot["started"]
+        accent = _PALETTE[IDLE]
+        green = QColor(95, 255, 160)
+
+        def ease(value):
+            value = max(0.0, min(1.0, value))
+            return 1 - (1 - value) ** 3
+
+        # The panel fades in.
+        painter.setOpacity(ease(elapsed / 0.5))
+        self._paint_panel(painter, accent)
+        painter.setOpacity(1.0)
+
+        # Ticks light one after another round the dial, the newest brightest.
+        lit = int(72 * ease((elapsed - 0.2) / 1.4))
+
+        painter.save()
+        painter.translate(_CENTRE)
+
+        for index in range(lit):
+            major = index % 6 == 0
+            fresh = index >= lit - 4
+            alpha = 255 if fresh else (175 if major else 85)
+
+            painter.save()
+            painter.rotate(index * 5.0 - 90.0)
+            painter.setPen(QPen(self._tint(accent, alpha), 1.6 if major else 1.0))
+            painter.drawLine(QPointF(_R_TICKS, 0.0), QPointF(_R_TICKS + (10.0 if major else 5.0), 0.0))
+            painter.restore()
+
+        painter.restore()
+
+        # Rings grow into place, spinning fast and settling.
+        grow = ease((elapsed - 0.6) / 1.6)
+        spin = 900.0 * grow
+
+        if grow > 0:
+            for radius in (_R_OUTER, _R_RING2):
+                self._arc(painter, radius, 90, -360 * grow, self._tint(accent, 45), 1.2)
+
+            for offset in (0, 120, 240):
+                self._arc(painter, _R_RING1, -spin + offset, 84 * grow, self._tint(accent, 205), 2.6)
+
+            for index in range(12):
+                self._arc(painter, _R_RING2, spin * 0.7 + index * 30, 14 * grow, self._tint(accent, 130), 2.0)
+
+            for offset in (0, 180):
+                self._arc(painter, _R_RING3, -spin * 1.6 + offset, 60 * grow, self._tint(accent, 190), 3.0)
+
+        # The core: a spark that grows, then ignites with a flash that settles.
+        if elapsed < boot.IGNITION:
+            energy = 0.25 * ease((elapsed - 1.2) / (boot.IGNITION - 1.2))
+        else:
+            energy = 0.3 + 0.7 * math.exp(-(elapsed - boot.IGNITION) / 0.35)
+
+            # A shockwave ring leaving the core at ignition.
+            wave = ease((elapsed - boot.IGNITION) / 0.7)
+            radius = _R_CORE + (_R_OUTER + 14 - _R_CORE) * wave
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(self._tint(QColor(240, 252, 255), int(220 * (1 - wave))), 2.0 + 3.0 * (1 - wave)))
+            painter.drawEllipse(_CENTRE, radius, radius)
+
+        if elapsed > 1.2:
+            self._paint_core(painter, accent, energy)
+
+        # The check, typed out down the right-hand column.
+        left = _PANEL_X
+        right = _PANEL_RIGHT
+
+        title_font = QFont("Consolas", 11, QFont.Weight.Bold)
+        title_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2.2)
+        painter.setFont(title_font)
+
+        if elapsed < boot.IGNITION:
+            # A blinking cursor keeps the title alive while it works.
+            cursor = "_" if int(elapsed * 4) % 2 == 0 else " "
+            painter.setPen(QPen(accent))
+            painter.drawText(left, 48, "INITIALISING" + cursor)
+        else:
+            done = self._boot["summary"]
+
+            # Shrunk until it fits the column, whatever the summary says.
+            size = 11
+            while size > 7 and QFontMetrics(title_font).horizontalAdvance(done) > right - left:
+                size -= 1
+                title_font.setPointSize(size)
+                title_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2.2 * size / 11)
+
+            painter.setFont(title_font)
+            painter.setPen(QPen(green if done.startswith("ALL") else QColor(255, 196, 80)))
+            painter.drawText(left, 48, done)
+
+        painter.setPen(QPen(self._tint(accent, 70), 1.0))
+        painter.drawLine(left, 60, right, 60)
+
+        line_font = QFont("Consolas", 8)
+        line_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.2)
+        painter.setFont(line_font)
+        metrics = QFontMetrics(line_font)
+
+        for index, (label, status) in enumerate(self._boot["items"]):
+            shown = elapsed - boot.line_time(index)
+
+            if shown < 0:
+                break
+
+            y = 82 + index * 17
+
+            # The label types in, a few characters a frame.
+            typed = label[: max(1, int(len(label) * min(1.0, shown / 0.16)))]
+            painter.setPen(QPen(self._tint(accent, 220)))
+            painter.drawText(left, y, typed)
+
+            if shown < 0.18:
+                continue
+
+            word = status.upper()
+            colour = {
+                boot.ONLINE: green,
+                boot.READY: QColor(255, 196, 80),
+                boot.NONE: QColor(150, 165, 180),
+            }.get(status, QColor(255, 88, 88))
+
+            # Leader dots from the label to the status.
+            word_x = right - metrics.horizontalAdvance(word)
+            dots_from = left + metrics.horizontalAdvance(label) + 6
+            painter.setPen(QPen(self._tint(accent, 70)))
+            dots = "." * max(0, int((word_x - 6 - dots_from) / max(1, metrics.horizontalAdvance("."))))
+            painter.drawText(int(dots_from), y, dots)
+
+            # The status flashes in bright, then settles.
+            flash = max(0.0, 1.0 - (shown - 0.18) / 0.25)
+            painter.setPen(QPen(QColor(
+                min(255, colour.red() + int(120 * flash)),
+                min(255, colour.green() + int(120 * flash)),
+                min(255, colour.blue() + int(120 * flash)),
+            )))
+            painter.drawText(int(word_x), y, word)
+
+        # A fast scan line sweeps the panel while it assembles.
+        sweep = (elapsed / 0.9) % 1.0
+        body = QRectF(self.rect().adjusted(6, 6, -6, -6))
+        clip = QPainterPath()
+        clip.addRoundedRect(body, 20, 20)
+        painter.save()
+        painter.setClipPath(clip)
+        painter.setPen(QPen(self._tint(accent, 70), 1.0))
+        y = body.top() + body.height() * sweep
+        painter.drawLine(QPointF(body.left(), y), QPointF(body.right(), y))
         painter.restore()
 
     def _paint_countdown(self, painter):

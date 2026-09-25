@@ -1076,6 +1076,21 @@ Spoken timers that announce themselves when due.
 
 ---
 
+### Start-up: `boot.py`
+Each start plays a systems check on the HUD while he greets you; nothing
+waits for it. The panel fades in, the ticks light round the dial, the rings
+grow into place and spin down, and the core ignites, while the check types
+itself out: voice, speech, language models, memory, connected services and
+the phone link, each read from the real system at start-up. One that did
+not come up says OFFLINE in red and is counted in the closing line; a
+service list that is simply empty says NONE and is not.
+
+The sound is synthesised with numpy at start-up, on its own thread: a
+sub-bass swell, a rising power-up whine, a chirp as each system reports (a
+low blip for one that is down) and an ignition chord. No recording is used.
+`BOOT_SEQUENCE=off` skips it, `BOOT_SOUND=off` keeps it silent, and
+`BOOT_VOLUME` (0 to 1, default 0.45) sets the level.
+
 ## How a command travels
 
 ```

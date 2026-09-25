@@ -63,6 +63,7 @@ import phrases
 from actions.markets import market_monitor
 from actions.patterns import pattern_monitor
 from phone import phone_server
+import boot
 from beam import Beam
 from brain_panel import BrainPanel
 from camera_panel import CameraPanel
@@ -142,6 +143,39 @@ class Assistant:
 
     def stop(self):
         self._stop.set()
+
+    def _start_boot(self):
+        """Show the start-up systems check and play its sound, without waiting."""
+        if not boot.enabled():
+            return
+
+        try:
+            items = boot.checks()
+        except Exception as error:
+            print(f"[JARVIS] systems check unavailable: {error}")
+            return
+
+        started = time.monotonic()
+        self._hud.boot_requested.emit(items)
+
+        if not boot.sound_enabled():
+            return
+
+        def play():
+            try:
+                audio = boot.sound(items)
+            except Exception as error:
+                print(f"[JARVIS] boot sound unavailable: {error}")
+                return
+
+            # Made while the HUD had already begun: start from where the
+            # picture has got to, so each chirp still lands on its line.
+            skip = int((time.monotonic() - started) * boot.SAMPLE_RATE)
+
+            if skip < len(audio):
+                boot.play(audio[skip:])
+
+        threading.Thread(target=play, name="boot-sound", daemon=True).start()
 
     def stop_speaking(self):
         """HUD stop button: silence him and send him to standby."""
@@ -484,6 +518,10 @@ class Assistant:
         phone_server.set_look_handler(look_at_phone_picture)
         phone_server.set_sensor_handler(self._on_sensor)
         phone_server.start()
+
+        # The systems check runs on the HUD while he greets you, not before:
+        # nothing waits for it. After the phone link, so that line is true.
+        self._start_boot()
 
         self._say(_greeting())
 

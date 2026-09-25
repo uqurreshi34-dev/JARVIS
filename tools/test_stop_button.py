@@ -298,6 +298,7 @@ class FakeHud:
     def __init__(self):
         for name in (
             "state_changed", "heard_changed", "reply_changed", "shutdown",
+            "boot_requested",
         ):
             setattr(self, name, MagicMock())
 
