@@ -58,6 +58,10 @@ def authority(label):
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - timedelta(minutes=1)).not_valid_after(now + timedelta(days=30))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(x509.KeyUsage(digital_signature=True, key_encipherment=False, key_cert_sign=True,
+                                     key_agreement=False, content_commitment=False, data_encipherment=False,
+                                     crl_sign=True, encipher_only=False, decipher_only=False), critical=True)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
         .sign(key, hashes.SHA256())
     )
     return key, certificate
@@ -74,6 +78,8 @@ def server_for(ca_key, ca, addresses):
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - timedelta(minutes=1)).not_valid_after(now + timedelta(days=30))
         .add_extension(x509.SubjectAlternativeName(names), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
         .sign(ca_key, hashes.SHA256())
     )
 

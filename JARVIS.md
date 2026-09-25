@@ -1150,6 +1150,13 @@ the issued one. The setup tool connects to the running JARVIS as the board
 will and says whether the board would accept it, rather than trusting the
 files alone.
 
+JARVIS's certificates carry the key identifiers RFC 5280 asks for (which
+authority signed it, and whose key is whose). Python 3.13 and later check
+strictly by default and refuse a certificate without them ("Missing
+Authority Key Identifier"); older ones are replaced when JARVIS starts, and
+the tools check strictly on every Python so the answer never depends on
+which one runs them.
+
 The esp32 board package must be 3.1 or later: older TLS libraries cannot
 check an IP address named in a certificate. Reserve the PC's address in
 the router; if JARVIS ever makes new certificates, run the tool again and

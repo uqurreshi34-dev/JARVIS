@@ -196,6 +196,35 @@ def _certificate_covers(path, addresses):
     return all(address in covered for address in addresses)
 
 
+def _certificate_complete(cert_path, ca_path):
+    """Whether the pair carries the key identifiers strict checkers insist on.
+
+    Python 3.13 and later check certificates strictly by default, and
+    refuse a server certificate that does not say which authority key
+    signed it. Certificates made before JARVIS added these are replaced.
+    """
+    try:
+        from cryptography import x509
+
+        with open(cert_path, "rb") as handle:
+            certificate = x509.load_pem_x509_certificate(handle.read())
+
+        with open(ca_path, "rb") as handle:
+            raw = handle.read()
+
+        authority = (x509.load_pem_x509_certificate(raw) if raw.lstrip().startswith(b"-----")
+                     else x509.load_der_x509_certificate(raw))
+
+        certificate.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier)
+        authority.extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
+        usage = authority.extensions.get_extension_for_class(x509.KeyUsage).value
+
+        return bool(usage.key_cert_sign)
+
+    except Exception:
+        return False
+
+
 def tailscale_address():
     """This machine's Tailscale address, or None.
 
@@ -264,7 +293,10 @@ def ensure_certificate():
         and os.path.exists(KEY_FILE)
         and os.path.exists(CA_FILE)
     ):
-        if _certificate_covers(CERT_FILE, certificate_addresses()):
+        covers = _certificate_covers(CERT_FILE, certificate_addresses())
+        complete = _certificate_complete(CERT_FILE, CA_FILE)
+
+        if covers and complete:
             return True
 
         # An address JARVIS can now be reached on that the existing
@@ -272,14 +304,31 @@ def ensure_certificate():
         # after it was first generated, typically. Regenerated rather
         # than left to warn, since a browser warning is the difference
         # between the phone working and not.
-        print(
-            "[JARVIS] the certificate does not cover every address; "
-            "regenerating it."
-        )
-        print(
-            "[JARVIS] you will need to install the new "
-            f"{os.path.basename(CA_FILE)} on your phone."
-        )
+        #
+        # Or one made before JARVIS gave its certificates the key
+        # identifiers RFC 5280 asks for, which strict checkers refuse.
+        if not covers:
+            print(
+                "[JARVIS] the certificate does not cover every address; "
+                "regenerating it."
+            )
+        else:
+            print(
+                "[JARVIS] the certificate predates the key identifiers "
+                "strict checkers require; regenerating it."
+            )
+
+        if os.getenv(CERT_ENV):
+            print(
+                f"[JARVIS] the phone uses {CERT_ENV}, so nothing changes there; "
+                "run python tools/esp32_setup.py again for sensor boards."
+            )
+        else:
+            print(
+                "[JARVIS] you will need to install the new "
+                f"{os.path.basename(CA_FILE)} on your phone, and run "
+                "python tools/esp32_setup.py again for sensor boards."
+            )
 
         for path in (CERT_FILE, KEY_FILE, CA_FILE):
             try:
@@ -366,6 +415,27 @@ def ensure_certificate():
                 ),
                 critical=True,
             )
+            # What RFC 5280 asks of an authority, and what strict checkers
+            # (Python 3.13 and later, by default) insist on: it may sign
+            # certificates, and it says which key is its own.
+            .add_extension(
+                x509.KeyUsage(
+                    digital_signature=True,
+                    key_encipherment=False,
+                    key_cert_sign=True,
+                    key_agreement=False,
+                    content_commitment=False,
+                    data_encipherment=False,
+                    crl_sign=True,
+                    encipher_only=False,
+                    decipher_only=False,
+                ),
+                critical=True,
+            )
+            .add_extension(
+                x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
+                critical=False,
+            )
             .sign(ca_key, hashes.SHA256())
         )
 
@@ -419,6 +489,17 @@ def ensure_certificate():
                 x509.ExtendedKeyUsage([
                     x509.oid.ExtendedKeyUsageOID.SERVER_AUTH,
                 ]),
+                critical=False,
+            )
+            # Which authority signed it, and its own key: without the
+            # first, strict checkers refuse it ("Missing Authority Key
+            # Identifier").
+            .add_extension(
+                x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+                critical=False,
+            )
+            .add_extension(
+                x509.SubjectKeyIdentifier.from_public_key(server_key.public_key()),
                 critical=False,
             )
             .sign(ca_key, hashes.SHA256())

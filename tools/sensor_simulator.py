@@ -65,9 +65,13 @@ def connection(ca_path):
         raw = handle.read()
 
     if raw.lstrip().startswith(b"-----"):
-        return ssl.create_default_context(cadata=raw.decode("ascii"))
+        context = ssl.create_default_context(cadata=raw.decode("ascii"))
+    else:
+        context = ssl.create_default_context(cadata=raw)
 
-    return ssl.create_default_context(cadata=raw)
+    # Strict on every Python, as 3.13 and later are by default.
+    context.verify_flags |= ssl.VERIFY_X509_STRICT
+    return context
 
 
 def post(url, token, context, payload):

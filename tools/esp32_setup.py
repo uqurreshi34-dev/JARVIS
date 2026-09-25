@@ -180,6 +180,10 @@ def live_check(host, port, ca, timeout=3.0):
 
     context = ssl.create_default_context(cadata=ca.public_bytes(serialization.Encoding.DER))
 
+    # Strict on every Python, not only 3.13 and later where it is the
+    # default, so the answer is the same whichever one runs this.
+    context.verify_flags |= ssl.VERIFY_X509_STRICT
+
     try:
         with socket.create_connection((host, int(port)), timeout=timeout) as raw:
             # By address, as the board connects: no name is sent.
