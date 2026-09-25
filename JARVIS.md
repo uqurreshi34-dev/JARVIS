@@ -1348,6 +1348,18 @@ python main.py
 Say "Jarvis" then an instruction. "Jarvis, quit" shuts down cleanly —
 Ctrl+C skips the cleanup.
 
+**Listening: cloud first, local on the spot** - `transcriber.py`.
+`STT_ENGINE=groq` transcribes with Whisper large-v3-turbo on Groq (free
+plan: 2,000 requests and about eight hours of audio a day), the most
+accurate engine JARVIS has. Local Whisper is loaded in the background at
+start-up, and when a cloud request fails -- network, allowance, timeout
+after six seconds, no retries -- that same utterance is transcribed locally,
+so nothing is said twice. Groq is then rested for 30 seconds, doubling while
+it keeps failing up to ten minutes, or as long as a rate-limited response
+asks; the first success clears it. Without a key, `groq` starts local
+Whisper rather than Vosk. `STT_ENGINE=whisper` stays local and never uses
+the cloud.
+
 Settings live in `.env`: provider keys, `STT_ENGINE`, `WHISPER_MODEL`,
 voice, Graph credentials, weather fallback, `TAVILY_API_KEY` for research.
 

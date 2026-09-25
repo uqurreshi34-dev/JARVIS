@@ -460,16 +460,33 @@ class OpenAIWhisperEngine(SegmentingEngine):
 
 
 class GroqWhisperEngine(SegmentingEngine):
-    """Whisper through Groq's audio API.
+    """Whisper large-v3-turbo on Groq's servers, with local Whisper standing by.
 
-    Nothing is compiled or installed locally, which matters on machines where
-    Windows blocks unsigned native libraries. Audio is billed against a
-    seconds-of-audio quota, separate from the chat token allowance.
+    The most accurate engine JARVIS has, and free within Groq's allowance
+    (2,000 requests and about eight hours of audio a day). Nothing is
+    compiled or installed locally, which matters on machines where Windows
+    blocks unsigned native libraries.
+
+    A cloud engine can fail mid-session: the network drops, the allowance
+    runs out, Groq has a bad minute. Local Whisper is loaded in the
+    background at start-up, so when a request fails the same utterance is
+    transcribed locally on the spot -- nothing has to be said twice -- and
+    Groq is rested for a while before being tried again, longer each time
+    it keeps failing, and as long as it asks when it is rate limiting.
     """
 
     name = "groq-whisper"
 
-    def __init__(self, block_seconds):
+    # A cloud request that has not answered by now is abandoned for the
+    # local model. Groq usually answers in well under a second.
+    CLOUD_TIMEOUT = 6.0
+
+    # How long Groq is left alone after a failure, doubling while it keeps
+    # failing, up to the ceiling. A success clears it.
+    REST_SECONDS = 30.0
+    MAX_REST_SECONDS = 600.0
+
+    def __init__(self, block_seconds, local_factories=None):
         super().__init__(block_seconds)
 
         import io
@@ -486,15 +503,43 @@ class GroqWhisperEngine(SegmentingEngine):
             raise RuntimeError(
                 "GROQ_API_KEY is needed for cloud transcription")
 
+        # No retries: a retry is time the local model could be answering in.
         self._client = OpenAI(
             api_key=api_key,
             base_url="https://api.groq.com/openai/v1",
+            timeout=self.CLOUD_TIMEOUT,
+            max_retries=0,
         )
 
         self._model_name = os.getenv(
             "GROQ_WHISPER_MODEL") or "whisper-large-v3-turbo"
 
-        print(f"[JARVIS] cloud transcription via {self._model_name}")
+        self._rest_until = 0.0
+        self._rest = 0.0
+        self._local = None
+        self._local_ready = threading.Event()
+        self._local_factories = (
+            local_factories if local_factories is not None
+            else (LocalWhisperEngine, OpenAIWhisperEngine)
+        )
+
+        threading.Thread(target=self._load_local, daemon=True).start()
+
+        print(f"[JARVIS] cloud transcription via {self._model_name}, local Whisper standing by")
+
+    def _load_local(self):
+        """Load the local stand-in once, quietly, in the background."""
+        try:
+            for factory in self._local_factories:
+                try:
+                    self._local = factory(self._block_seconds)
+                    return
+                except Exception as error:
+                    print(f"[JARVIS] local stand-in {getattr(factory, 'name', factory)} unavailable: {error}")
+
+            print("[JARVIS] no local Whisper to stand in for the cloud")
+        finally:
+            self._local_ready.set()
 
     def _to_wav(self, audio):
         buffer = self._io.BytesIO()
@@ -512,7 +557,7 @@ class GroqWhisperEngine(SegmentingEngine):
 
         return buffer
 
-    def _transcribe(self, audio):
+    def _cloud(self, audio):
         response = self._client.audio.transcriptions.create(
             file=self._to_wav(audio),
             model=self._model_name,
@@ -523,6 +568,58 @@ class GroqWhisperEngine(SegmentingEngine):
 
         return (response.text or "").strip()
 
+    def _rest_after(self, error):
+        """Leave Groq alone for a while, as long as it asked if it said."""
+        wait = self._retry_after(error)
+
+        if wait is None:
+            self._rest = min(self.MAX_REST_SECONDS, self._rest * 2 if self._rest else self.REST_SECONDS)
+            wait = self._rest
+
+        self._rest_until = time.monotonic() + wait
+
+        print(
+            f"[JARVIS] cloud transcription failed ({type(error).__name__}: {error}); "
+            f"using local Whisper, trying Groq again in {int(wait)}s",
+            flush=True,
+        )
+
+    @staticmethod
+    def _retry_after(error):
+        """Seconds a rate-limited response asked to wait, or None."""
+        response = getattr(error, "response", None)
+        headers = getattr(response, "headers", None) or {}
+
+        try:
+            value = headers.get("retry-after")
+            return max(1.0, float(value)) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _transcribe(self, audio):
+        if time.monotonic() >= self._rest_until:
+            try:
+                text = self._cloud(audio)
+            except Exception as error:
+                self._rest_after(error)
+            else:
+                if self._rest:
+                    print("[JARVIS] cloud transcription is back", flush=True)
+
+                self._rest = 0.0
+                return text
+
+        return self._transcribe_locally(audio)
+
+    def _transcribe_locally(self, audio):
+        # Normally long since loaded; at start-up it may still be loading.
+        self._local_ready.wait(timeout=60)
+
+        if self._local is None:
+            raise RuntimeError("cloud transcription failed and no local Whisper is available")
+
+        return self._local._transcribe(audio)
+
 
 def build_engine(model, block_size):
     """Create the configured engine, falling back when one cannot start.
@@ -530,7 +627,8 @@ def build_engine(model, block_size):
     STT_ENGINE accepts:
       "vosk"    - streaming, instant, least accurate (default)
       "whisper" - local Whisper; tries faster-whisper, then PyTorch
-      "groq"    - Whisper via Groq's API, the only option that uses network
+      "groq"    - Whisper via Groq's API, the only option that uses network;
+                  local Whisper stands in on the spot when a request fails
 
     A local choice never silently falls back to the cloud, since that would
     spend API quota on commands the user expects to be free. It falls back to
@@ -541,7 +639,9 @@ def build_engine(model, block_size):
     if ENGINE in ("whisper", "local", "local-whisper"):
         attempts = [LocalWhisperEngine, OpenAIWhisperEngine]
     elif ENGINE in ("groq", "groq-whisper", "cloud"):
-        attempts = [GroqWhisperEngine]
+        # Without a key or the openai package, local Whisper rather than
+        # Vosk: the user chose accuracy.
+        attempts = [GroqWhisperEngine, LocalWhisperEngine, OpenAIWhisperEngine]
     else:
         attempts = []
 
