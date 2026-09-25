@@ -3,8 +3,10 @@
 It sits on top of the HUD, the same width, and slides up out of it when a
 board first reports -- no beam, because it is part of the HUD rather than
 something projected from it. When every board has gone quiet it slides
-back down and gets out of the way. A click folds it to its title strip
+back down and gets out of the way. A click on its title strip folds it
 (still showing the room's temperature); another click opens it again.
+With more boards than fit, the rows scroll: by wheel or touchpad, by
+dragging them, or with the arrows at the ends of the scroll bar.
 
 One row per board, in a steady order (by name, with boards gone silent
 at the end) so a list long enough to scroll does not reshuffle under the
@@ -49,6 +51,8 @@ _MOTION_PULSE_SECONDS = 4.0
 
 _HISTORY = 60               # temperatures kept per board: half an hour at 30 s
 
+_SCROLL_ZONE = 30           # the strip at the right edge where the arrows are
+_DRAG_START = 6             # pixels a press must move to become a drag
 _SLIDE = 0.2                # share of the remaining distance covered per frame
 _FRAME_MS = 16
 
@@ -144,6 +148,8 @@ class SensorPanel(QWidget):
         self._phase = 0.0
         self._scroll = 0            # the first row showing, when there are more than fit
         self._scroll_px = 0.0       # the same, in pixels, animated toward it
+        self._press = None          # (y, scroll_px) where a press began
+        self._dragging = False      # a press that has become a drag of the rows
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -278,7 +284,9 @@ class SensorPanel(QWidget):
         self._scroll = min(self._scroll, self._max_scroll())
         aim = float(self._scroll * _ROW)
         drift = aim - self._scroll_px
-        self._scroll_px = aim if abs(drift) < 0.6 else self._scroll_px + drift * _SLIDE
+
+        if not self._dragging:
+            self._scroll_px = aim if abs(drift) < 0.6 else self._scroll_px + drift * _SLIDE
 
         if self._reveal <= 0.0 and target <= 0.0:
             self._timer.stop()
@@ -299,10 +307,67 @@ class SensorPanel(QWidget):
 
     # ---------------------------------------------------------- clicks
 
+    # A laptop has no wheel, so everything the wheel does can be done by
+    # hand too: drag the rows up or down, or click the arrows at the ends
+    # of the scroll bar. Folding is a click on the title strip only, so a
+    # click among the rows never shuts the panel by accident.
+
+    def header_rect(self):
+        """Where the title strip is on screen now, however far out the panel is."""
+        if self._below:
+            return QRectF(0, self._reveal - _HEADER, self.width(), _HEADER)
+
+        return QRectF(0, self.height() - self._reveal, self.width(), _HEADER)
+
+    def _on_scroll_bar(self, point):
+        return self._max_scroll() > 0 and point.x() >= self.width() - _SCROLL_ZONE
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press = (event.position().y(), self._scroll_px)
+            self._dragging = False
+
+    def mouseMoveEvent(self, event):
+        if self._press is None or self._folded or not self._max_scroll():
+            return
+
+        start_y, start_px = self._press
+        moved = event.position().y() - start_y
+
+        if not self._dragging and abs(moved) < _DRAG_START:
+            return
+
+        self._dragging = True
+        top = float(self._max_scroll() * _ROW)
+        self._scroll_px = max(0.0, min(top, start_px - moved))
+        self.update()
+
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self._alive():
-            self._folded = not self._folded
-            self._wake()
+        if event.button() != Qt.MouseButton.LeftButton or self._press is None:
+            return
+
+        point = event.position()
+        dragged, self._dragging, self._press = self._dragging, False, None
+
+        if dragged:
+            # Settle on the nearest whole row.
+            self._scroll = int(round(self._scroll_px / _ROW))
+        elif self.header_rect().contains(point):
+            if self._alive():
+                self._folded = not self._folded
+        elif not self._folded and self._on_scroll_bar(point):
+            middle = self.header_rect().bottom() + (self.height() - _HEADER) / 2 if not self._below \
+                else (self._reveal - _HEADER) / 2
+            self.scroll_by(-1 if point.y() < middle else 1)
+            return
+        else:
+            return
+
+        self._wake()
+
+    def scroll_by(self, rows):
+        self._scroll = max(0, min(self._max_scroll(), self._scroll + rows))
+        self._wake()
 
     def _max_scroll(self):
         return max(0, len(self._boards) - _MAX_ROWS)
@@ -316,9 +381,8 @@ class SensorPanel(QWidget):
             return
 
         step = int(round(notches)) or (1 if notches > 0 else -1)
-        self._scroll = max(0, min(self._max_scroll(), self._scroll - step))
         event.accept()
-        self._wake()
+        self.scroll_by(-step)
 
     # ---------------------------------------------------------- drawing
 
@@ -380,7 +444,19 @@ class SensorPanel(QWidget):
         if count <= _MAX_ROWS:
             return
 
-        track = QRectF(self.width() - 16, top + 8, 2.5, height - 16)
+        # Arrows at each end, which can be clicked; the bar between.
+        x = self.width() - 22.0     # clear of the corner brackets
+        first, last = self._scroll_px <= 0.5, self._scroll_px >= self._max_scroll() * _ROW - 0.5
+
+        for tip_y, pointing, spent in ((top + 8, -1, first), (top + height - 12, 1, last)):
+            arrow = QPainterPath()
+            arrow.moveTo(x - 4.5, tip_y - 3 * pointing)
+            arrow.lineTo(x + 4.5, tip_y - 3 * pointing)
+            arrow.lineTo(x, tip_y + 3 * pointing)
+            arrow.closeSubpath()
+            painter.fillPath(arrow, self._tint(self._accent, 70 if spent else 220))
+
+        track = QRectF(x - 1.25, top + 18, 2.5, height - 40)
         share = _MAX_ROWS / count
         travel = (count - _MAX_ROWS) * _ROW
         thumb_height = max(14.0, track.height() * share)

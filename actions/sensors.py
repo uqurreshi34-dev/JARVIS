@@ -40,9 +40,16 @@ ABSENT_SECONDS = 300
 # cost of greeting someone who never left is worse.
 PRESENT_SECONDS = 600
 
-# How long before the same room may be greeted again, so stepping out
-# to the kitchen and back is not an occasion.
+# How long before you may be greeted again, so stepping out to the
+# kitchen and back is not an occasion.
 GREET_AGAIN_SECONDS = 1800
+
+# "Welcome back" is about you coming back, not about which room you are
+# in: walking from the hall to the kitchen with a sensor in each is one
+# person already home, not two arrivals. So the greeting is decided for
+# the whole house -- only when no sensor anywhere has seen movement
+# lately, and at most once per GREET_AGAIN_SECONDS -- never per room.
+_last_greeting = None
 
 
 _lock = threading.Lock()
@@ -107,8 +114,11 @@ def present(name, within=PRESENT_SECONDS):
 
 def reset():
     """Forget everything. For tests, and for a fresh start."""
+    global _last_greeting
+
     with _lock:
         _sensors.clear()
+        _last_greeting = None
 
 
 def report(payload):
@@ -124,6 +134,8 @@ def report(payload):
     Returning None is the normal case and is not a failure -- it means
     the report was recorded and there was nothing new worth saying.
     """
+    global _last_greeting
+
     if not isinstance(payload, dict):
         return None
 
@@ -163,20 +175,22 @@ def report(payload):
                 state["read"] = now
 
         if event == "motion":
-            was_present = bool(
-                state["moved"] and now - state["moved"] < PRESENT_SECONDS
+            # Anyone already about, anywhere the sensors can see?
+            someone_home = any(
+                other["moved"] and now - other["moved"] < PRESENT_SECONDS
+                for other in _sensors.values()
             )
-            greeted = state["greeted"]
 
             state["moved"] = now
 
             fresh = (
-                not was_present
-                and (greeted is None
-                     or now - greeted > GREET_AGAIN_SECONDS)
+                not someone_home
+                and (_last_greeting is None
+                     or now - _last_greeting > GREET_AGAIN_SECONDS)
             )
 
             if fresh:
+                _last_greeting = now
                 state["greeted"] = now
 
         first_time = previous is None

@@ -1169,8 +1169,16 @@ row per board -- temperature coloured by how it feels, its trend, humidity
 and whether anyone is present -- three rows showing, in a steady order by
 name, and the mouse wheel scrolls through any more, with a scroll bar. A
 board that misses readings dims; with every board silent for two minutes
-the panel slides away. A click folds it to its title strip. No beam: it
+the panel slides away. A click on the title strip folds it to that strip;
+a click among the rows never does. On a laptop, with no wheel, the rows
+scroll by dragging them or with the arrows at the ends of the scroll bar
+(a touchpad's two-finger scroll works as a wheel). No beam: it
 is part of the HUD, not projected from it.
+
+"Welcome back, sir" is decided for the whole house, not per room: only
+movement after every sensor has been still for `PRESENT_SECONDS`, and at
+most once every `GREET_AGAIN_SECONDS`. Walking from room to room is one
+person already home, not an arrival in each.
 
 `python tools/sensor_simulator.py [names]` pretends to be boards, posting
 exactly as the sketch does (HTTPS, JARVIS's own authority, the token), so

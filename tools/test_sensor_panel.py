@@ -6,9 +6,12 @@ Drawn off-screen, on a clock the test turns by hand. Checked:
   (part way after a frame, not all at once) and sits on top of it, the
   same width, touching it, and follows it when the HUD is dragged;
 - a HUD dragged to the top of the screen has the panel hang below;
-- a click folds it to its title strip, another opens it;
+- a click on its title strip folds it and another opens it; a click among
+  the rows never does;
 - a row per board in a steady order, three showing, the wheel scrolling
-  through the rest, with a scroll bar;
+  through the rest, and so do dragging the rows and the scroll bar's
+  arrows (a laptop has no wheel);
+- "Welcome back" is said once for the house, not for every room walked into;
 - readings go on the trend line, motion reports do not;
 - a board that misses readings dims, one long silent is offline, and with
   every board silent it slides away; a board coming back opens it again,
@@ -147,15 +150,42 @@ check(panel.presence(board) == "PRESENT", "movement shows as someone present")
 settle()
 check(lit(frame()) > 200, "the panel is drawn")
 
-# Folding.
+# Clicks and drags, as a touchpad or mouse makes them.
+from PyQt6.QtCore import QEvent, QPointF, Qt  # noqa: E402
+from PyQt6.QtGui import QMouseEvent  # noqa: E402
+
+
+def mouse(kind, x, y):
+    point = QPointF(x, y)
+    button = Qt.MouseButton.NoButton if kind == QEvent.Type.MouseMove else Qt.MouseButton.LeftButton
+    held = Qt.MouseButton.NoButton if kind == QEvent.Type.MouseButtonRelease else Qt.MouseButton.LeftButton
+    return QMouseEvent(kind, point, panel.mapToGlobal(point), button, held, Qt.KeyboardModifier.NoModifier)
+
+
+def click(x, y):
+    panel.mousePressEvent(mouse(QEvent.Type.MouseButtonPress, x, y))
+    panel.mouseReleaseEvent(mouse(QEvent.Type.MouseButtonRelease, x, y))
+    settle()
+
+
+def drag(x, from_y, to_y):
+    panel.mousePressEvent(mouse(QEvent.Type.MouseButtonPress, x, from_y))
+    for step in range(1, 11):
+        panel.mouseMoveEvent(mouse(QEvent.Type.MouseMove, x, from_y + (to_y - from_y) * step / 10))
+    panel.mouseReleaseEvent(mouse(QEvent.Type.MouseButtonRelease, x, to_y))
+    settle()
+
+
 panel._folded = False
-panel.mouseReleaseEvent(type("E", (), {"button": lambda self: hud.Qt.MouseButton.LeftButton})())
-settle()
-check(panel._folded and panel._reveal == sensor_panel._HEADER, "a click folds it to its title strip")
+click(200, sensor_panel._HEADER + 40)
+check(not panel._folded, "a click among the rows does not fold it")
+click(200, sensor_panel._HEADER / 2)
+check(panel._folded and panel._reveal == sensor_panel._HEADER, "a click on the title strip folds it")
 check("1 ONLINE" in panel.header_text(), "which says how many boards are online")
-panel.mouseReleaseEvent(type("E", (), {"button": lambda self: hud.Qt.MouseButton.LeftButton})())
-settle()
-check(not panel._folded and panel._reveal == panel.height(), "another click opens it")
+strip = panel.header_rect()
+check(strip.bottom() >= panel.height() - 1, "folded, the strip is where it shows, against the HUD")
+click(200, strip.center().y())
+check(not panel._folded and panel._reveal == panel.height(), "a click on the strip opens it again")
 
 # Rows.
 one_row = panel.height()
@@ -209,8 +239,19 @@ check(panel.height() == sensor_panel._HEADER + 3 * sensor_panel._ROW + sensor_pa
 panel.wheelEvent(Wheel(-20))
 settle()
 check(panel._scroll == 7, "and scroll through the other seven")
+drag(200, 200, 200 + 2 * sensor_panel._ROW)
+check(panel._scroll == 5 and not panel._folded, "dragging the rows down scrolls up, two rows, without folding")
+drag(200, 200, 200 - 1.4 * sensor_panel._ROW)
+check(panel._scroll == 6, "dragging up scrolls down, settling on a whole row")
+arrow_x = panel.width() - 22
+click(arrow_x, sensor_panel._HEADER + 10)
+check(panel._scroll == 5, "the arrow at the top of the scroll bar goes up a row")
+click(arrow_x, panel.height() - sensor_panel._FOOT - 10)
+check(panel._scroll == 6, "the one at the bottom goes down a row")
+panel.wheelEvent(Wheel(-20))
+settle()
 image = frame()
-bar_x = panel.width() - 15
+bar_x = panel.width() - 22
 bar = [image.pixelColor(bar_x, y) for y in range(sensor_panel._HEADER, panel.height() - sensor_panel._FOOT)]
 check(any(c.alpha() > 150 and c.blue() > 120 for c in bar), "with a scroll bar showing where")
 panel.wheelEvent(Wheel(20))
@@ -248,6 +289,27 @@ check(sensor_panel.fitting(options, metrics, 1000) == "SEEN 12s AGO", "with room
 narrow = metrics.horizontalAdvance("SEEN 12s") + 1
 check(sensor_panel.fitting(options, metrics, narrow) == "SEEN 12s", "short of room, the shorter form, not a cut word")
 check(sensor_panel.ago(12) == "12s" and sensor_panel.ago(125) == "2m" and sensor_panel.ago(7300) == "2h", "ages read short")
+
+# "Welcome back" is for coming back, not for walking between rooms.
+sensors.reset()
+for name in ("hall", "kitchen"):
+    sensors.report({"name": name, "event": "online"})
+later(5)
+check(sensors.report({"name": "hall", "event": "motion"}) == "Welcome back, sir.", "movement in an empty house greets you")
+later(5)
+check(sensors.report({"name": "kitchen", "event": "motion"}) is None, "walking on into another room does not, again")
+later(sensors.PRESENT_SECONDS + 5)
+check(sensors.report({"name": "kitchen", "event": "motion"}) is None,
+      "nor does coming back soon after, however long the house was still")
+later(sensors.GREET_AGAIN_SECONDS)
+check(sensors.report({"name": "kitchen", "event": "motion"}) == "Welcome back, sir.",
+      "a long while later, it greets you again")
+
+main_source = (ROOT / "main.py").read_text(encoding="utf-8")
+check("sensors.set_listener(None)" in main_source and "phone_server.set_sensor_handler(None)" in main_source,
+      "shutting down, boards still reporting are heard and ignored")
+sensors.report({"name": "room", "temperature": 21.0, "humidity": 50})
+sensors.report({"name": "room", "event": "motion"})
 
 # sensors.py and its listener.
 known = sensors.known()["room"]

@@ -811,6 +811,14 @@ def main():
     sensors.set_listener(sensor_panel.updated.emit)
     hud.shutdown.connect(sensor_panel.hide_requested.emit)
 
+    # Shutting down, boards still reporting are heard and ignored: nothing
+    # is said, and nothing reaches a HUD that is being taken apart.
+    def sensors_closed():
+        sensors.set_listener(None)
+        phone_server.set_sensor_handler(None)
+
+    hud.shutdown.connect(sensors_closed)
+
     def on_files_dropped(paths):
         def load():
             try:
