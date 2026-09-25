@@ -1197,6 +1197,21 @@ time ("what's lying overhead"), because the log is a record, not a
 reconstruction. Times use the one speech-safe clock in `actions/system.py`
 ("four oh five PM"), which the calendar now shares.
 
+**Retrieval is measured, not guessed** - `tools/rag_eval.py`. A benchmark
+in a sandboxed folder scores every search by meaning: memory, notes and
+reports on whether the right thing comes first and in the top three, and
+whether a question nothing is about finds nothing; the log on the precision
+and recall of its counts; each with its time per search. Scores are kept in
+`tools/rag_baseline.json`, and a run fails when any falls more than 0.02
+below it, so a change to thresholds, the model or the matching is proven
+before it ships. The first baseline recorded its misses honestly: memory
+missed "what coffee do I like" (flat white) and answered "favourite film"
+with the favourite football team; reports missed "halving" against
+"halves"; the log missed "will it rain tomorrow" for the weather.
+`--mine` runs your own questions from `rag-questions.txt` in the JARVIS
+folder through the answers you would hear, and reports what share of each
+saved report's sentences cite a source and how many figures are unverified.
+
 **Pronouns resolve only when explicit and recent.** "copy it to my
 clipboard" works for sixty seconds after naming something. Never for
 removal or clearing, where a wrong guess costs data.
@@ -1336,6 +1351,7 @@ voice, Graph credentials, weather fallback, `TAVILY_API_KEY` for research.
 | `speed_test.py` | where the time in a reply goes |
 | `test_console.py` | typed commands, no microphone |
 | `tools/mine_journal.py` | which intents reach the model, and what was said |
+| `tools/rag_eval.py` | how well memory, notes, the log and reports find things, against a saved baseline; `--mine` for your own questions and your reports' citations |
 | `tools/adsb_probe.py` | which aircraft feeds answer, and how hard they can be pushed |
 | `tools/quran_api_probe.py` | which reciters have verse-by-verse audio |
 

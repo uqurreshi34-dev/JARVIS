@@ -1,0 +1,22 @@
+{
+  "memory": {
+    "first right": 0.917,
+    "in top three": 0.917,
+    "says nothing": 0.667
+  },
+  "notes": {
+    "first right": 1.0,
+    "in top three": 1.0,
+    "says nothing": 1.0
+  },
+  "log": {
+    "precision": 1.0,
+    "recall": 0.954,
+    "says nothing": 1.0
+  },
+  "reports": {
+    "first right": 0.929,
+    "in top three": 0.929,
+    "says nothing": 1.0
+  }
+}

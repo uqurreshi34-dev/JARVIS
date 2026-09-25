@@ -52,6 +52,8 @@ _PROTECTED_NAMES = frozenset({
     "quran-reciter-audio.json",
     # Saved meaning vectors; moving it means encoding everything again.
     "jarvis-vectors.sqlite",
+    # Your own questions for tools/rag_eval.py --mine.
+    "rag-questions.txt",
 })
 
 # Files JARVIS names by date: rotated logs and the monthly token ledger.
