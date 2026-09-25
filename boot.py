@@ -5,12 +5,13 @@ it names at start-up -- the listening engine, the voice, the language models,
 memory, connected services, the phone link -- and one that did not come up
 says OFFLINE in red rather than a reassuring ONLINE.
 
-The sound is synthesised here, in numpy, when JARVIS starts: a sub-bass
-swell, a rising power-up whine, a data chirp as each system reports, and an
-ignition chord with a short reverb tail. No recording is used, so there is
-nothing to license and no asset to ship.
+The sound is synthesised here, in numpy, when JARVIS starts, in the manner
+of a film HUD: tiny data blips while it wakes, a glassy two-note ping as each
+system reports, a rush of air building, and a quick rising run into a bright
+chord over a sub hit at ignition. No recording is used, so there is nothing
+to license and no asset to ship.
 
-The HUD and the sound share the timings below, so each chirp lands as its
+The HUD and the sound share the timings below, so each ping lands as its
 line appears. None of it holds anything up: the greeting is spoken while the
 sequence runs, with the sound kept low enough to sit under his voice.
 
@@ -165,88 +166,110 @@ def _tone(frequency, t):
     return np.sin(phase)
 
 
+# Notes for the digital voice of it, as frequencies: a pentatonic run in A,
+# so any handful of blips played at random still sounds deliberate.
+_SCALE = (880.0, 987.77, 1108.73, 1318.51, 1479.98, 1760.0, 1975.53, 2217.46, 2637.02, 2959.96)
+
+
+def _blip(out, at, frequency, length, gain, pan=0.0, glass=0.0):
+    """One clean electronic blip: a sine, optionally with a glassy FM edge.
+
+    Soft in and quickly out, so it pips rather than clicks.
+    """
+    start = int(at * SAMPLE_RATE)
+    size = int(length * SAMPLE_RATE)
+
+    if start >= len(out) or size <= 0:
+        return
+
+    size = min(size, len(out) - start)
+    t = np.arange(size) / SAMPLE_RATE
+
+    # A touch of frequency modulation at an inharmonic ratio is what makes
+    # a pure tone sound like glass rather than a test signal.
+    modulator = glass * frequency * np.sin(2 * np.pi * frequency * 1.414 * t) * np.exp(-t / (length * 0.4))
+    phase = 2 * np.pi * np.cumsum(frequency + modulator) / SAMPLE_RATE
+    envelope = np.clip(t / 0.002, 0, 1) * np.exp(-t / (length * 0.35))
+
+    tone = gain * np.sin(phase) * envelope
+
+    out[start:start + size, 0] += tone * (1 - max(0.0, pan))
+    out[start:start + size, 1] += tone * (1 + min(0.0, pan))
+
+
 def sound(items=None):
-    """The boot sound as a (samples, 2) float32 array at SAMPLE_RATE."""
+    """The boot sound as a (samples, 2) float32 array at SAMPLE_RATE.
+
+    A heads-up display waking: a stream of tiny data blips while it thinks,
+    a glassy two-note ping as each system reports (a falling pair for one
+    that is down), a rush of air building, then a quick rising run into a
+    bright chord over a sub hit at ignition.
+    """
     items = items if items is not None else []
     count = int(DURATION * SAMPLE_RATE)
     t = np.arange(count) / SAMPLE_RATE
-    rng = np.random.default_rng(7)
+    rng = np.random.default_rng(11)
 
-    # A sub-bass swell: felt as much as heard, climbing towards ignition.
-    swell_freq = 38 + 16 * _smooth(t / IGNITION)
-    swell = _tone(swell_freq, t) * 0.55 * _smooth(t / (IGNITION - 0.3)) * (t < IGNITION + 0.05)
+    out = np.zeros((count, 2))
 
-    # The power-up whine: an exponential sweep with a touch of vibrato and
-    # two harmonics, so it reads as a machine rather than a test tone.
-    start, end = 0.3, IGNITION
-    progress = np.clip((t - start) / (end - start), 0.0, 1.0)
-    whine_freq = 220 * (1760 / 220) ** progress * (1 + 0.004 * np.sin(2 * np.pi * 6 * t))
-    phase = 2 * np.pi * np.cumsum(whine_freq) / SAMPLE_RATE
-    whine = np.sin(phase) + 0.3 * np.sin(2 * phase) + 0.12 * np.sin(3 * phase)
-    whine *= 0.11 * _smooth(progress * 1.4) * ((t >= start) & (t < end)).astype(float)
-    whine *= np.clip((end - t) / 0.06, 0.0, 1.0)
+    # Data chatter: tiny high blips, thickening as it wakes, thinning as
+    # the check takes over.
+    at = 0.05
 
-    # A data chirp as each line of the check reports: rising and bright when
-    # a system is up, a low double blip when one is not.
-    chirps = np.zeros(count)
+    while at < FIRST_LINE + 0.25:
+        density = 0.035 if at < FIRST_LINE else 0.07
+        note = _SCALE[rng.integers(4, len(_SCALE))] * (2 if rng.random() < 0.3 else 1)
+        _blip(out, at, note, 0.022, 0.11, pan=float(rng.uniform(-0.7, 0.7)))
+        at += density * float(rng.uniform(0.6, 1.4))
 
+    # A ping as each system reports: up a fifth when it is up, down when not.
     for index, (_label, status) in enumerate(items):
         at = line_time(index) + 0.18
+        pan = 0.3 if index % 2 else -0.3
 
         if status == OFFLINE:
-            for offset in (0.0, 0.09):
-                blip = _envelope(t, at + offset, 0.004, 0.035)
-                chirps += 0.16 * blip * np.sign(np.sin(2 * np.pi * 330 * t))
+            _blip(out, at, 659.25, 0.07, 0.30, pan=pan)
+            _blip(out, at + 0.075, 440.0, 0.11, 0.30, pan=pan)
         else:
-            glide = 2400 + 900 * np.clip((t - at) / 0.06, 0.0, 1.0)
-            chirps += 0.12 * _envelope(t, at, 0.003, 0.03) * _tone(glide, t)
+            base = _SCALE[5 + index % 3]
+            _blip(out, at, base, 0.045, 0.26, pan=pan, glass=0.8)
+            _blip(out, at + 0.045, base * 1.5, 0.07, 0.24, pan=pan, glass=0.8)
 
-    # Ignition: a detuned, bright A-major chord over a low boom and a burst
-    # of air, all decaying into the tail.
-    # Only the stretch after ignition is computed: sixty partials over the
-    # whole sound cost most of a second at start-up.
-    chord = np.zeros(count)
-    lit = slice(int(IGNITION * SAMPLE_RATE), count)
-    after = t[lit]
-
-    for root in (110.0, 164.81, 220.0, 277.18, 329.63):
-        for detune in (-0.004, 0.0, 0.004):
-            for harmonic in range(1, 5):
-                chord[lit] += np.sin(2 * np.pi * root * (1 + detune) * harmonic * after) / (harmonic * 1.6)
-
-    chord *= 0.028 * _envelope(t, IGNITION, 0.015, 0.55)
-    boom = 0.5 * _envelope(t, IGNITION, 0.008, 0.35) * np.sin(2 * np.pi * 55 * t)
+    # Air building towards ignition: noise, brightening, never a tone.
+    rise_start = IGNITION - 0.9
+    rise = np.clip((t - rise_start) / (IGNITION - rise_start), 0.0, 1.0) * (t < IGNITION)
     air = rng.standard_normal(count)
-    air = np.diff(air, prepend=0.0) * 0.025 * _envelope(t, IGNITION, 0.002, 0.08)
+    bright = np.diff(air, prepend=0.0)
+    air = (1 - rise) * np.convolve(air, np.hanning(24) / 12, mode="same") + rise * bright * 0.5
+    air *= 0.05 * rise ** 2
+    out[:, 0] += air
+    out[:, 1] += np.roll(air, 97)
 
-    # The air stays out of the reverb: smeared across a second it is hiss.
-    tonal = swell + whine + chirps + chord + boom
-    dry = tonal + air
+    # Ignition: a quick run up the scale into a bright, glassy chord.
+    for step, note in enumerate(_SCALE[3:9]):
+        _blip(out, IGNITION - 0.19 + step * 0.03, note * 2, 0.05, 0.12, pan=(step - 2.5) / 4, glass=0.5)
 
-    # A short synthetic room: noise decaying over a second, convolved by FFT.
-    impulse_length = int(1.1 * SAMPLE_RATE)
-    impulse_t = np.arange(impulse_length) / SAMPLE_RATE
-    impulse = rng.standard_normal(impulse_length)
+    for note in (1760.0, 2217.46, 2637.02, 3520.0):
+        _blip(out, IGNITION, note, 0.9, 0.12, glass=0.35)
 
-    # Darkened, as a real room is: white noise as a room turns every sharp
-    # sound into a second of hiss.
-    impulse = np.convolve(impulse, np.hanning(24), mode="same")
-    impulse *= np.exp(-impulse_t / 0.28)
-    impulse[0] = 0.0
-    impulse /= np.sqrt(np.sum(impulse ** 2))
+    # The sub hit underneath, falling in pitch: weight without noise.
+    hit = int(IGNITION * SAMPLE_RATE)
+    tail = np.arange(count - hit) / SAMPLE_RATE
+    frequency = 42 + 40 * np.exp(-tail / 0.04)
+    sub = 0.9 * np.sin(2 * np.pi * np.cumsum(frequency) / SAMPLE_RATE) * np.exp(-tail / 0.22) * np.clip(tail / 0.003, 0, 1)
+    out[hit:, 0] += sub
+    out[hit:, 1] += sub
 
-    size = 1 << int(np.ceil(np.log2(count + impulse_length)))
-    wet = np.fft.irfft(np.fft.rfft(tonal, size) * np.fft.rfft(impulse, size), size)[:count]
+    # A digital echo rather than a room: a few clean taps, softer each time,
+    # crossing sides. No noise, so no hiss.
+    wet = np.zeros_like(out)
 
-    left = dry + 0.32 * wet
+    for delay, gain in ((0.083, 0.30), (0.151, 0.20), (0.233, 0.12), (0.331, 0.07)):
+        shift = int(delay * SAMPLE_RATE)
+        wet[shift:, 0] += gain * out[:-shift, 1]
+        wet[shift:, 1] += gain * out[:-shift, 0]
 
-    # Width: the right channel hears the whine and the tail a moment later.
-    delay = int(0.011 * SAMPLE_RATE)
-    late_whine = np.concatenate([np.zeros(delay), whine[:-delay]])
-    late_wet = np.concatenate([np.zeros(delay), wet[:-delay]])
-    right = dry - whine + late_whine + 0.32 * late_wet
-
-    stereo = np.stack([left, right], axis=1)
+    stereo = out + wet
 
     # Fade the very end so nothing clicks, then set the level.
     fade = int(0.25 * SAMPLE_RATE)

@@ -998,8 +998,7 @@ What a service may do is decided by JARVIS, not by the service:
 The HUD's services strip, under the telemetry, names each service in
 `mcp.json` and shows what it is really doing, reported by
 `mcp_services` as it happens: dim and hollow until it first connects, lit
-once connected, pulsing while a request runs (for at least a second, so a
-local service answering in milliseconds is still seen), amber while an action waits
+once connected, pulsing while a request runs, amber while an action waits
 for your yes, a green flash when one goes through, red when one is refused
 or the service cannot be reached. More than fit are counted ("+2").
 
@@ -1093,9 +1092,12 @@ the phone link, each read from the real system at start-up. One that did
 not come up says OFFLINE in red and is counted in the closing line; a
 service list that is simply empty says NONE and is not.
 
-The sound is synthesised with numpy at start-up, on its own thread: a
-sub-bass swell, a rising power-up whine, a chirp as each system reports (a
-low blip for one that is down) and an ignition chord. No recording is used.
+The sound is synthesised with numpy at start-up, on its own thread, in the
+manner of a film HUD: tiny data blips while it wakes, a glassy two-note ping
+with a digital echo as each system reports (a lower, falling pair for one
+that is down), a rush of air building, and a quick rising run into a bright
+chord over a sub hit at ignition. No recording is used. An earlier rising
+whine read as a siren; the test keeps the check mostly quiet between pings.
 `BOOT_SEQUENCE=off` skips it, `BOOT_SOUND=off` keeps it silent, and
 `BOOT_VOLUME` (0 to 1, default 0.45) sets the level.
 

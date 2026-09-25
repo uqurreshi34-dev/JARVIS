@@ -8,7 +8,9 @@ Checked, with nothing played aloud and the HUD drawn off-screen:
 - the closing line counts what is offline;
 - the sound is stereo, as long as the sequence, never clips, and follows
   BOOT_VOLUME, with silence at 0;
-- a chirp sounds as each line appears, higher for a system that is up;
+- a glassy ping sounds as each line appears, a lower falling pair for a
+  system that is down, and ignition lands with a sub hit;
+- the check is mostly quiet between its pings: nothing like a siren;
 - BOOT_SEQUENCE and BOOT_SOUND switch it off;
 - the HUD types the check out, shows OFFLINE in red and the summary at the
   end, then returns to its ordinary face;
@@ -89,13 +91,33 @@ def band_energy(signal, at, low, high, span=0.05):
 
 
 mono = audio[:, 0]
-first = boot.line_time(0) + 0.18
-check(band_energy(mono, first, 2300, 3400) > 5 * band_energy(mono, first - 0.12, 2300, 3400),
-      "a bright chirp sounds as the first line appears")
+
+third = boot.line_time(2) + 0.18
+check(band_energy(mono, third, 1500, 4000, span=0.1) > 3 * band_energy(mono, third - 0.1, 1500, 4000, span=0.1),
+      "a glassy ping sounds as each system reports")
 
 offline = boot.line_time(5) + 0.18
-check(band_energy(mono, offline, 250, 450) > 3 * band_energy(mono, offline - 0.12, 250, 450),
-      "an offline system gets a low blip instead")
+online = boot.line_time(4) + 0.18
+check(band_energy(mono, offline, 380, 720, span=0.18) > 3 * band_energy(mono, online, 380, 720, span=0.18),
+      "an offline system gets a lower, falling pair instead")
+
+
+def quiet_share(signal, start, end, span=0.01):
+    """How much of a stretch is near-silent, in 10 ms slices."""
+    levels = np.array([
+        float(np.sqrt(np.mean(signal[int(at * boot.SAMPLE_RATE):int((at + span) * boot.SAMPLE_RATE)] ** 2)))
+        for at in np.arange(start, end, span)
+    ])
+    return float(np.mean(levels < 0.15 * levels.max()))
+
+
+# An earlier rising whine read as a siren: a tone that never stops. Digital
+# pings are mostly silence between pips; the whine was never quiet at all.
+quiet = quiet_share(mono, boot.FIRST_LINE + 0.1, boot.IGNITION - 0.6)
+check(quiet > 0.3, f"no siren: the check is mostly quiet between its pings ({quiet:.0%} of the time)")
+
+check(band_energy(mono, boot.IGNITION, 30, 120, span=0.05) > 5 * band_energy(mono, boot.IGNITION - 0.12, 30, 120, span=0.05),
+      "ignition lands with a sub hit")
 
 os.environ["BOOT_VOLUME"] = "0"
 check(float(np.max(np.abs(boot.sound(sample)))) == 0.0, "BOOT_VOLUME=0 is silent")
