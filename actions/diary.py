@@ -567,19 +567,14 @@ def _ordinal(number):
 
 
 def _spoken_clock(moment):
-    hour = moment.hour % 12 or 12
-    minute = moment.minute
+    """The clock time as the voice should say it: "four oh five PM".
 
-    if minute == 0:
-        if moment.hour == 12:
-            return "midday"
+    The one speech-safe clock in system.py. This used to be a copy that
+    wrote "4 05 PM", which the voice read as "four five".
+    """
+    from actions import system
 
-        if moment.hour == 0:
-            return "midnight"
-
-        return f"{hour} {'AM' if moment.hour < 12 else 'PM'}"
-
-    return f"{hour} {minute:02d} {'AM' if moment.hour < 12 else 'PM'}"
+    return system._spoken_clock(moment)
 
 
 def describe(limit=SPOKEN_LIMIT):

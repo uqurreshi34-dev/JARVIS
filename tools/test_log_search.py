@@ -203,17 +203,21 @@ short = [
 write_log(short)
 
 said = log_search.answer("when did I last ask about bitcoin", today=TODAY)
-check(said == "Today at 8 30 AM, sir. You said: how is bitcoin doing.", f"last: {said!r}")
+check(said == "Today at eight thirty AM, sir. You said: how is bitcoin doing.", f"last: {said!r}")
 
 said = log_search.answer("how many times have I asked about bitcoin", today=TODAY)
-check(said == "Twice, sir. Most recently today at 8 30 AM: how is bitcoin doing.", f"count: {said!r}")
+check(said == "Twice, sir. Most recently today at eight thirty AM: how is bitcoin doing.", f"count: {said!r}")
 
 said = log_search.answer("have I asked you about bitcoin before", today=TODAY)
 check(said.startswith("Yes, sir, twice."), f"ever: {said!r}")
 
 said = log_search.answer("what did I ask you about bitcoin", today=TODAY)
-check("how is bitcoin doing, today at 8 30 AM; whats the bitcoin price, yesterday at 9 15 PM" in said,
+check("how is bitcoin doing, today at eight thirty AM; whats the bitcoin price, yesterday at nine fifteen PM" in said,
       f"list: {said!r}")
+
+# Read the way the voice says it: "four oh five PM", never "four five".
+check(log_search._spoken_moment(datetime(2026, 9, 23, 16, 5), TODAY) == "on 23 September at four oh five PM",
+      "a time a few minutes past the hour keeps its 'oh'")
 
 said = log_search.answer("did I ask about chrome yesterday", today=TODAY)
 check(said == "I can't find you asking about chrome yesterday, sir.", f"nothing in the window: {said!r}")
@@ -226,7 +230,7 @@ said = log_search.answer("when did I last ask about my car", today=TODAY)
 check("your car" in said, f"'my' is said back as 'your': {said!r}")
 
 said = log_search.answer("when's the last time I spoke to you regarding bitcoin", topic="bitcoin", today=TODAY)
-check(said.startswith("Today at 8 30 AM"), f"a question worded differently, via the model: {said!r}")
+check(said.startswith("Today at eight thirty AM"), f"a question worded differently, via the model: {said!r}")
 
 said = log_search.answer("how often do I bring up bitcoin", topic="bitcoin", today=TODAY)
 check(said.startswith("Twice"), f"the wording still picks the answer's kind: {said!r}")
@@ -264,6 +268,27 @@ else:
         result = commands._fast_path(said)
         check(bool(result) and result["intent"] == "search_log" and result.get("text") == topic,
               f"fast path: {said!r} searches the log rather than acting")
+
+    # Naming a connected service inside a question about the log must not
+    # send it to that service's tools (it went to GitHub's, slowly and wrongly).
+    import json
+    from actions import mcp_services
+
+    with open(os.path.join(folder, mcp_services.CONFIG_NAME), "w", encoding="utf-8") as handle:
+        json.dump({"mcpServers": {"github": {"url": "https://example.invalid"}}}, handle)
+    mcp_services.close()
+
+    for said in ("how many times have i asked about github", "what did i note about github"):
+        result = commands.handle_command(said)
+        check(bool(result) and result.get("intent") in ("search_log", "read_notes"),
+              f"answered locally, not by the service: {said!r} -> {result and result.get('intent')}")
+
+    result = commands.handle_command("list my github repositories")
+    check(not result or result.get("intent") == "agent_mode",
+          f"a real request for the service still goes to it -> {result and result.get('intent')}")
+
+    os.remove(os.path.join(folder, mcp_services.CONFIG_NAME))
+    mcp_services.close()
 
     result = commands._fast_path("whats the bitcoin price")
     check(not result or result["intent"] != "search_log", "fast path: asking about bitcoin itself is unchanged")

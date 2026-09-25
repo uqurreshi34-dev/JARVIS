@@ -3581,6 +3581,10 @@ _SOCIAL_INTENTS = {
     "praise": "praise",
     "wellbeing": "wellbeing_check",
 }
+# Questions about what JARVIS himself has recorded. A connected service
+# named inside one ("what did I note about github") is only its topic.
+_OWN_RECORDS = frozenset({"search_log", "read_notes", "recall_memory", "read_log", "log_summary"})
+
 _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 
 _PRESENCE = re.compile(
@@ -4975,7 +4979,10 @@ def _handle_command(command, *, fast_only=False, probe=False):
         # that service's tools, in Agent Mode. Checked first, so a local
         # phrase ("read the readme") or the multi-step planner ("open
         # github and read it") cannot take a request meant for the service.
-        service = mcp_services.mentioned(command)
+        # Except a question about JARVIS's own records that merely names
+        # the service: "how many times have I asked about github" is
+        # answered from the log, not by GitHub's tools.
+        service = None if (result and result["intent"] in _OWN_RECORDS) else mcp_services.mentioned(command)
 
         if service:
             print(f"[agent] Agent Mode for connected service {service!r}")

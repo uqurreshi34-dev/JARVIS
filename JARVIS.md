@@ -903,6 +903,10 @@ the user has checked but whose server forgot to mark them.
 The tools join Agent Mode. A command naming a configured service goes to
 Agent Mode directly, skipping the command interpreter, and ordinary Agent
 Mode investigations can use the tools too. Code tasks and fix passes do not.
+The one exception is a question about JARVIS's own records that only has the
+service as its topic, such as "how many times have I asked about github" or
+"what did I note about github", which the fast path answers from the log, notes or
+memory (`_OWN_RECORDS` in commands.py).
 
 What a service may do is decided by JARVIS, not by the service:
 
@@ -1125,6 +1129,10 @@ Each text is encoded once, in batches of 64, and kept in
 and the text; the text itself is not stored. A different model never
 reuses another's vectors. The log is indexed in the background 30 seconds
 after start-up, and notes use the same store.
+Commands are read back exactly as speech recognition heard them at the
+time ("what's lying overhead"), because the log is a record, not a
+reconstruction. Times use the one speech-safe clock in `actions/system.py`
+("four oh five PM"), which the calendar now shares.
 
 **Pronouns resolve only when explicit and recent.** "copy it to my
 clipboard" works for sixty seconds after naming something. Never for

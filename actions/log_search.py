@@ -377,10 +377,10 @@ def search(topic, window=None, today=None):
 # ---- what is said ----------------------------------------------------------
 
 def _spoken_moment(moment, today):
-    from actions import diary
+    from actions import system
 
     day = moment.date()
-    clock = diary._spoken_clock(moment)
+    clock = system._spoken_clock(moment)
 
     if day == today:
         return f"today at {clock}"
