@@ -977,8 +977,13 @@ What a service may do is decided by JARVIS, not by the service:
 - the model cannot run an action: its call is held, JARVIS reads back what
   would be done from the call's real arguments ("To be sure, sir: create
   issue on github: title '...'. Shall I go ahead?"), and only a yes within
-  two minutes runs it; no, silence or another command drops it. One action
-  per request;
+  two minutes runs it; no, silence or another command drops it, but speech
+  JARVIS does not understand (a misheard fragment, someone else talking)
+  leaves the question standing. One action per request;
+- when a service refuses, JARVIS says why from its status code ("GitHub
+  says your token isn't allowed to do that"), and the full error goes to
+  the journal; a missing `mcp` package is reported at once, with the
+  command that installs it;
 - tool names and descriptions are outside text: they are cleaned, and a
   tool whose description reads like an instruction to the model is dropped;
 - results reach the model as quoted data, never instructions;

@@ -340,11 +340,14 @@ def _transport(entry):
 
 async def _hold(server):
     """Open one server and keep it open until asked to close."""
-    from mcp import Client
-
     server._stop = asyncio.Event()
 
     try:
+        # Inside the try: a missing package used to escape the coroutine
+        # before _ready was set, and surfaced 20 seconds later as "did not
+        # answer in time".
+        from mcp import Client
+
         target = _transport(server.entry)
 
         async with Client(target, read_timeout_seconds=CALL_SECONDS) as client:
@@ -366,6 +369,11 @@ async def _hold(server):
 
     except KeyError as missing:
         server.error = f"{missing.args[0]} is not set in the environment or .env"
+    except ModuleNotFoundError as missing:
+        server.error = (
+            f"the {missing.name or 'mcp'} package is not installed in this Python; "
+            "run pip install -r requirements.txt"
+        )
     except Exception as error:
         server.error = str(error) or type(error).__name__
     finally:
@@ -464,8 +472,15 @@ def propose(tool_name, arguments):
 
     return (
         f"Held for the user's spoken confirmation: {describe(_proposal)}. It has not run. "
-        "Do not call it again. Finish with a short answer saying what you propose to do."
+        "Do not call it again. JARVIS reads the action back to the user itself, so do not "
+        "describe it or ask for confirmation. Finish with one short sentence only if the "
+        "user should know something before agreeing, such as a surprise you found; "
+        f"otherwise reply with exactly: {NOTHING_TO_ADD}"
     )
+
+
+# What the model answers after holding an action when it has nothing to add.
+NOTHING_TO_ADD = "NOTHING TO ADD"
 
 
 def take_proposal():
@@ -524,6 +539,7 @@ def execute(proposal):
     server = _servers.get(proposal["server"])
 
     if not server or not server.client:
+        proposal["failure"] = f"{_spoken_server(proposal)} couldn't be reached."
         journal.action(f"mcp_{proposal['tool']}", proposal["server"], False)
         return None
 
@@ -535,6 +551,7 @@ def execute(proposal):
         )
         result = future.result(CALL_SECONDS + 5)
     except Exception as error:
+        proposal["failure"] = f"{_spoken_server(proposal)} couldn't be reached."
         journal.write("mcp action", summary, f"failed: {error}")
         journal.action(f"mcp_{proposal['tool']}", proposal["server"], False)
         return None
@@ -542,6 +559,7 @@ def execute(proposal):
     text = _result_text(result)
 
     if getattr(result, "is_error", False):
+        proposal["failure"] = _refusal(proposal, text)
         journal.write("mcp action", summary, f"refused: {safety.clean(text, 300)}")
         journal.action(f"mcp_{proposal['tool']}", proposal["server"], False)
         return None
@@ -551,6 +569,41 @@ def execute(proposal):
                    spoken=f"{proposal['tool'].replace('_', ' ')} on {proposal['server']}")
 
     return _outcome(proposal, text)
+
+
+def _spoken_server(proposal):
+    return proposal["server"].replace("_", " ").capitalize()
+
+
+# Why a service refused, from the HTTP status its error carries: the status
+# is the standard, service-independent part of an error. Anything else is
+# reported as a plain refusal; the full text is in the journal.
+_REFUSALS = {
+    "401": "didn't accept your key or token; it may have expired",
+    "403": "says your token isn't allowed to do that",
+    "404": "couldn't find that; the name or number may be wrong",
+    "409": "says that clashes with its current state",
+    "410": "says that no longer exists",
+    "422": "rejected the details",
+    "429": "is limiting requests; try again in a minute",
+}
+
+
+def _refusal(proposal, text):
+    """What to say when a service refused an action."""
+    # A status is a 4xx followed by its reason ("403 Forbidden"), never a
+    # number inside a URL such as issues/403/comments.
+    statuses = re.findall(r"(?<![\w/.#-])(4\d\d)(?=\s+[A-Za-z])", str(text or ""))
+    reason = next((_REFUSALS[s] for s in reversed(statuses) if s in _REFUSALS), "refused it")
+
+    return f"{_spoken_server(proposal)} {reason}."
+
+
+def failure_message(proposal):
+    """The spoken line for an action that did not go through."""
+    reason = proposal.get("failure") or f"{_spoken_server(proposal)} refused it or couldn't be reached."
+
+    return f"That didn't go through, sir. {reason}"
 
 
 def _outcome(proposal, text):

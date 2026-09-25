@@ -74,6 +74,12 @@ write_config({
 tools = {tool["name"]: tool for tool in mcp_services.tools()}
 names = set(tools)
 
+if not names:
+    # Nothing below can be checked without the test service; say why once
+    # rather than failing forty times over.
+    print("FAIL the test service did not connect: " + " ".join(mcp_services.status()))
+    sys.exit(1)
+
 check({"mcp_test_upper", "mcp_test_environment", "mcp_test_broken", "mcp_test_injection"} <= names,
       "read-only tools are offered")
 check("mcp_test_listed_as_trusted" in names, "a tool the user lists in trusted_read_only is offered")
@@ -327,8 +333,47 @@ else:
         said = answer["action"]() if answer else None
         check(said == "Done, sir. That's number 42 on test." and os.path.exists(MARKER),
               f"yes runs it, and the result is spoken: {said!r}")
-        check(answer["success_response"](said) == said and "Test refused it" in answer["failure_response"],
-              "the result, or a plain failure, is what is said afterwards")
+        check(answer["success_response"](said) == said, "the result is what is said afterwards")
+
+        # A refusal says why, from the service's own status code.
+        mcp_services.clear_proposal()
+        mcp_services.propose("mcp_test_create_note", {"title": "forbidden"})
+        commands._confirm_service_action(mcp_services.take_proposal(), "")
+        answer = commands._resolve_pending("yes")
+        said = answer["action"]()
+        check(said is None, "a refused action counts as a failure")
+        said = answer["failure_response"]()
+        check(said == "That didn't go through, sir. Test says your token isn't allowed to do that.",
+              f"a permission refusal is said as one: {said!r}")
+
+        # The model has nothing to add: only the read-back is said.
+        def quiet_agent(task, **options):
+            mcp_services.propose("mcp_test_create_note", {"title": "Order a breadboard"})
+            return mcp_services.NOTHING_TO_ADD + "."
+
+        commands.run_agent = quiet_agent
+        asked = commands._run_agent_investigation("add a note on the test service", actions=True)
+        check(asked == "To be sure, sir: create note on test: title 'Order a breadboard'. Shall I go ahead?",
+              f"the action is described once, not twice: {asked!r}")
+
+        # A misheard fragment or someone else talking does not cancel it;
+        # a real command still does.
+        real_interpret = commands._interpreter.interpret
+        commands._interpreter.interpret = lambda *args, **kwargs: None
+
+        try:
+            check(commands.handle_command("i'm a fan of the") is None and commands._pending is not None
+                  and commands._pending["intent"] == "service_action",
+                  "speech JARVIS did not understand leaves the question standing")
+            answer = commands.handle_command("yes")
+            check(answer is not None and answer["intent"] == "service_action",
+                  "so the yes that follows still answers it")
+
+            commands._run_agent_investigation("add a note on the test service", actions=True)
+            commands.handle_command("what time is it")
+            check(commands._pending is None, "a real command in between still drops it")
+        finally:
+            commands._interpreter.interpret = real_interpret
 
         commands._run_agent_investigation("what does the test service say", actions=False)
         check(commands._pending is None or commands._pending.get("intent") != "service_action",
@@ -336,6 +381,17 @@ else:
     finally:
         commands.run_agent = real_run_agent
         mcp_services.clear_proposal()
+
+# ---- why a refusal happened ------------------------------------------------------
+
+sample = {"server": "github", "tool": "add_issue_comment", "arguments": {}}
+check(mcp_services._refusal(sample, "POST https://api.github.com/x: 404 Not Found") ==
+      "Github couldn't find that; the name or number may be wrong.", "a 404 is said as not found")
+check(mcp_services._refusal(sample, "something odd happened") == "Github refused it.",
+      "a refusal with no status is said plainly")
+check(mcp_services._refusal(sample, "POST https://api.github.com/repos/x/issues/403/comments: 404 Not Found") ==
+      "Github couldn't find that; the name or number may be wrong.",
+      "an issue numbered 403 in the address is not mistaken for a permission refusal")
 
 # ---- a service that cannot connect ----------------------------------------
 
@@ -348,6 +404,22 @@ check(mcp_services.tools() == [], "services that cannot start offer nothing and 
 status = " ".join(mcp_services.status())
 check("JARVIS_TEST_NOT_SET is not set" in status, "a missing ${NAME} is reported by name")
 check("no_such_program: unavailable" in status, "a server that will not start is reported unavailable")
+
+# The mcp package missing from this Python: said plainly, and at once.
+write_config({"test": {"command": sys.executable, "args": [SERVER]}})
+saved_mcp = {name: module for name, module in sys.modules.items() if name == "mcp" or name.startswith("mcp.")}
+sys.modules["mcp"] = None
+
+try:
+    import time as _time
+    started = _time.monotonic()
+    check(mcp_services.tools() == [], "without the mcp package, nothing is offered")
+    check(_time.monotonic() - started < 5, "and JARVIS does not wait for a connection that cannot happen")
+    check("pip install -r requirements.txt" in " ".join(mcp_services.status()),
+          "the missing package is reported with how to install it")
+finally:
+    mcp_services.close()
+    sys.modules.update(saved_mcp)
 
 write_config({"off": {"command": sys.executable, "args": [SERVER], "disabled": True}})
 check(mcp_services.configured() == (), "a disabled entry is ignored")

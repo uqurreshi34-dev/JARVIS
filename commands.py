@@ -872,15 +872,18 @@ def _confirm_service_action(proposal, summary):
         no_text="Very good, sir. Nothing has been changed.",
         timeout=None,
         success_response=lambda said: said,
-        failure_response=(
-            f"That didn't go through, sir. {proposal['server'].capitalize()} "
-            "refused it or couldn't be reached."
-        ),
+        # Called after the attempt, so it can say why the service refused.
+        failure_response=lambda: mcp_services.failure_message(proposal),
         lapses_after=_ACTION_CONFIRM_SECONDS,
     )
 
     question = f"To be sure, sir: {mcp_services.describe(proposal)}. Shall I go ahead?"
     lead = (summary or "").strip()
+
+    # The model was told the read-back covers the action; it speaks only to
+    # add something the user should know first.
+    if lead.rstrip(".").strip().upper() == mcp_services.NOTHING_TO_ADD:
+        lead = ""
 
     if lead and lead != agent.LIMIT_MESSAGE:
         return f"{lead} {question}"
@@ -4802,7 +4805,12 @@ def _resolve_pending(text):
 
         return _query("cancelled", lambda: message)
 
-    # Anything else is a new command, so the question lapses.
+    # Anything else is a new command, so the question lapses -- unless it
+    # turns out to be nothing JARVIS understood (see handle_command): a
+    # misheard fragment or someone else talking should not cancel a held
+    # change the user is about to agree to.
+    global _set_aside
+    _set_aside = _pending if _pending.get("lapses_at") else None
     _pending = None
 
     return None
@@ -5021,13 +5029,32 @@ def _compound_request(command):
 _command_lock = threading.RLock()
 
 
+# A held question set aside by an utterance that was not its answer, kept
+# until that utterance proves to be a real command.
+_set_aside = None
+
+
 def handle_command(command, *, fast_only=False, probe=False):
+    global _pending, _set_aside
+
     with _command_lock:
-        return _handle_command(
-            command,
-            fast_only=fast_only,
-            probe=probe,
-        )
+        _set_aside = None
+        result = None
+
+        try:
+            result = _handle_command(
+                command,
+                fast_only=fast_only,
+                probe=probe,
+            )
+        finally:
+            # Not understood at all: the question still stands.
+            if result is None and _set_aside is not None and _pending is None:
+                _pending = _set_aside
+
+            _set_aside = None
+
+        return result
 
 
 def _handle_command(command, *, fast_only=False, probe=False):

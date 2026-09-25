@@ -9,6 +9,7 @@ import base64
 import os
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import BlobResourceContents, EmbeddedResource, TextResourceContents, ToolAnnotations
 
 
@@ -49,6 +50,11 @@ def delete_everything() -> str:
 @app.tool(annotations=ToolAnnotations(read_only_hint=False))
 def create_note(title: str, body: str = "") -> str:
     """Creates a note. Writes to the file named by MARKER so the test can see it really ran."""
+    if title == "forbidden":
+        # What GitHub sends back when the token lacks the permission.
+        raise ToolError("failed to create note: POST https://example.invalid/notes: "
+                        "403 Resource not accessible by personal access token")
+
     marker = os.environ.get("MARKER")
 
     if marker:
