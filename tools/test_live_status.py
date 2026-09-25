@@ -7,7 +7,10 @@ Drawn off-screen and read back. Checked:
   smoothly between reports rather than jumping every couple of seconds;
 - paused says PAUSED; stopped clears it;
 - a flash word (CLIP SAVED) shows, then goes;
-- it keeps clear of the countdown written on the same line.
+- it keeps clear of the countdown written on the same line;
+- with little room -- the countdown showing, or display scaling at 150% --
+  a light shortens ("REC 01:23", then "REC", then the light alone) rather
+  than disappearing.
 
     python tools/test_live_status.py
 """
@@ -67,13 +70,6 @@ def ink(image, area=AREA):
     return tuple(sum(getattr(c, part)() for c in top_share) / len(top_share) for part in ("red", "green", "blue"))
 
 
-def live_width(text):
-    """How wide the HUD draws a live label, measured as it does: fonts differ by machine."""
-    font = QFont("Consolas", 8, QFont.Weight.Bold)
-    font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.2)
-    return QFontMetrics(font).horizontalAdvance(text)
-
-
 def is_red(rgb):
     return rgb is not None and rgb[0] > 120 and rgb[0] > 1.8 * rgb[1] and rgb[0] > 1.8 * rgb[2]
 
@@ -111,10 +107,21 @@ widget.live_status.emit("obs:REC", "REC", True, False, 83.0, "red")
 widget.live_status.emit("obs:REPLAY", "REPLAY", True, False, -1.0, "amber")
 widget.live_flash.emit("CLIP SAVED")
 image = frame()
-rec_end = int(28 + 11 + live_width("REC 01:23")) + 2
-check(is_green(ink(image, (rec_end, hud._LIVE_Y - 11, hud._PANEL_X - 10, hud._LIVE_Y + 3))) and
-      is_red(ink(image, (20, hud._LIVE_Y - 11, rec_end, hud._LIVE_Y + 3))),
-      "with REC and REPLAY both on, CLIP SAVED still shows, beside REC")
+
+
+def first_x(image, test):
+    """The leftmost column on the live line holding a pixel that passes [test]."""
+    for x in range(20, hud._PANEL_X - 10):
+        for y in range(hud._LIVE_Y - 11, hud._LIVE_Y + 3):
+            if test(image.pixelColor(x, y)):
+                return x
+    return None
+
+
+red_x = first_x(image, lambda c: c.red() > 150 and c.red() > 1.8 * c.green() and c.red() > 1.8 * c.blue())
+green_x = first_x(image, lambda c: c.green() > 150 and c.green() > 1.25 * c.red() and c.green() > 1.1 * c.blue())
+check(red_x is not None and green_x is not None and red_x < green_x,
+      f"with REC and REPLAY both on, CLIP SAVED still shows, beside REC (red at {red_x}, green at {green_x})")
 widget.live_status.emit("obs:REC", "REC", False, False, -1.0, "red")
 widget.live_status.emit("obs:REPLAY", "REPLAY", False, False, -1.0, "amber")
 widget._flash = ("CLIP SAVED", time.monotonic() - hud._FLASH_SECONDS - 0.1)

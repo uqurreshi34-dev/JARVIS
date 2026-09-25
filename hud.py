@@ -641,28 +641,31 @@ class Hud(QWidget):
             words, countdown_font = self._countdown_text(self._confirm_until - now)
             limit = _PANEL_X - 14 - QFontMetrics(countdown_font).horizontalAdvance(words) - 10
 
-        # A flash is news and a steady light is not: while one shows, it takes
-        # the place of any light that no longer fits beside it.
+        # The line is short, and shorter still with the countdown on it or
+        # display scaling on (at 150% the words are half as wide again). So
+        # each light takes the longest form that fits -- "REC 01:23", then
+        # "REC", then the light alone -- and none is dropped for another. A
+        # flash, being news, is kept room for first.
+        dot = 9
+        available = limit - x
+
         if flash:
-            reserve = metrics.horizontalAdvance(flash[0]) + 12
-            kept, used = [], x
+            available -= metrics.horizontalAdvance(flash[0]) + 12
 
-            for item in items:
-                width = 12 + metrics.horizontalAdvance(self._live_text(item, now)) + 12
-
-                if used + width + reserve <= limit:
-                    kept.append(item)
-                    used += width
-
-            items = kept
+        chosen = []
 
         for item in items:
-            text = self._live_text(item, now)
-            width = 12 + metrics.horizontalAdvance(text)
+            forms = [self._live_text(item, now), item["label"], ""]
 
-            if x + width > limit:
-                break
+            for text in forms:
+                width = dot + (2 + metrics.horizontalAdvance(text) if text else 0)
 
+                if width <= available:
+                    chosen.append((item, text))
+                    available -= width + 12
+                    break
+
+        for item, text in chosen:
             colour = _LIVE_COLOURS.get(item["colour"], accent)
             beat = 0.5 + 0.5 * math.sin(now * 5.0)
             alpha = 255 if item["paused"] else int(140 + 115 * beat)
@@ -672,8 +675,12 @@ class Hud(QWidget):
             painter.drawEllipse(QPointF(x + 3.5, _LIVE_Y - 3.5), 3.5, 3.5)
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
-            painter.setPen(QPen(self._tint(colour, 235)))
-            painter.drawText(int(x + 11), _LIVE_Y, text)
+            width = dot
+
+            if text:
+                painter.setPen(QPen(self._tint(colour, 235)))
+                painter.drawText(int(x + dot + 2), _LIVE_Y, text)
+                width += 2 + metrics.horizontalAdvance(text)
 
             x += width + 12
 
