@@ -163,8 +163,13 @@ def _action(
     detail=None,
     timeout=None,
     success_response=None,
+    failure_response=None,
 ):
-    """A command that does something; JARVIS confirms when it succeeds."""
+    """A command that does something; JARVIS confirms when it succeeds.
+
+    [failure_response], when given, is what he says if it fails -- a string,
+    or a function returning one (or None for the usual reply).
+    """
     return {
         "kind": "action",
         "intent": intent,
@@ -172,6 +177,7 @@ def _action(
         "action": _record(intent, action, detail),
         "timeout": timeout,
         "success_response": success_response,
+        "failure_response": failure_response,
     }
 
 
@@ -5056,6 +5062,7 @@ def _handle_command(command, *, fast_only=False, probe=False):
                 lambda: research.run(command),
                 timeout=None,
                 success_response=_research_success_response,
+                failure_response=research.failure_message,
             ))
 
         compound = _compound_request(command)

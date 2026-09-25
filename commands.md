@@ -575,6 +575,12 @@ combined with a save request is enough.
 | research NVIDIA, compare it with AMD and save it | same |
 | research Lamborghini, compare it with Ferrari, write the report and save it | same |
 
+For much better sources, add a free Tavily key to `.env` in the JARVIS
+repo folder: `TAVILY_API_KEY=tvly-...` (tavily.com, 1,000 searches a month,
+no card). Without it, Bing is used. Either way, pages that are not about
+what was searched are left out, and if nothing on-topic is found he says
+so instead of writing an empty report.
+
 Research uses the normal JARVIS provider chain: Claude first, then Groq, then
 Gemini if failover is needed.
 

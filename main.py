@@ -274,7 +274,18 @@ class Assistant:
         elif result["intent"] in ("open_application", "open_website", "open_project"):
             self._say(phrases.pick("cannot_open"))
         else:
-            self._say(phrases.pick("failed"))
+            # An action may say why it failed ("no reliable sources"),
+            # which is worth more than "that didn't work".
+            failure = result.get("failure_response")
+
+            if callable(failure):
+                try:
+                    failure = failure()
+                except Exception as error:
+                    print(f"[JARVIS] failure message error: {error}")
+                    failure = None
+
+            self._say(failure or phrases.pick("failed"))
 
     def _run_query(self, result):
         """Commands that find something out: the action returns what to say."""

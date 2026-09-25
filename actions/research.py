@@ -1,5 +1,6 @@
 """Provider-agnostic web research and report generation for JARVIS."""
 
+import os
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -26,6 +27,36 @@ _REPORT_EVIDENCE_CHARS = 2800
 _REFINE_EVIDENCE_CHARS = 1000
 _SEARCH_TIMEOUT = 20
 _SOURCE_TIMEOUT = 20
+
+# Candidates looked at for each search, of which the most relevant
+# _MAX_SOURCES_PER_QUERY are kept.
+_CANDIDATES_PER_QUERY = 4
+
+# A page is used only when its best passage is about what was searched.
+# Measured with the local model: on-topic pages scored 0.67 to 0.87, home
+# pages and dictionary pages 0.29 or less, and name collisions (Aston
+# University for "Aston Villa", the city of Birmingham for "Birmingham
+# City FC") 0.44 to 0.51 -- which the margin below the best page for the
+# same search removes. Only the opening of each page is scored: enough to
+# tell what it is about, and quick.
+_RELEVANCE_FLOOR = 0.40
+_RELEVANCE_MARGIN = 0.12
+_RELEVANCE_PASSAGES = 40
+
+# Tavily: a search API made for this, with an adult-content filter and the
+# page text returned with each result. Used when TAVILY_API_KEY is set;
+# otherwise, or once its monthly limit is reached, Bing's RSS feed is used.
+_TAVILY_URL = "https://api.tavily.com/search"
+_tavily_resting = False
+
+# Why the last run wrote no report, for JARVIS to say instead of "that
+# didn't work". None when there is nothing more specific to say.
+_last_failure = None
+
+
+def failure_message():
+    """What to say about the last run that wrote no report, or None."""
+    return _last_failure
 
 _RESEARCH_WORDS = (
     "research",
@@ -244,10 +275,83 @@ def _plan_queries(request):
     return subjects[:4], queries[:_MAX_QUERIES]
 
 
+def _search(query):
+    """Search results for [query]: Tavily when it is set up, Bing otherwise."""
+    results = _tavily_search(query)
+
+    if results is None:
+        results = _bing_search(query)
+
+    return results
+
+
+def _tavily_search(query):
+    """Tavily results, or None when Tavily is not set up or not available."""
+    global _tavily_resting
+
+    key = (os.getenv("TAVILY_API_KEY") or "").strip()
+
+    if not key or _tavily_resting:
+        return None
+
+    try:
+        response = requests.post(
+            _TAVILY_URL,
+            timeout=_SEARCH_TIMEOUT + 10,
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "query": str(query or "").strip(),
+                "search_depth": "basic",
+                "max_results": _CANDIDATES_PER_QUERY + 1,
+                "include_raw_content": "text",
+                "safe_search": True,
+            },
+        )
+    except requests.RequestException as error:
+        print(f"[JARVIS] Tavily search failed, using Bing: {error}")
+        return None
+
+    if response.status_code in (401, 429, 432, 433):
+        # A bad key or a spent allowance will not recover mid-session.
+        _tavily_resting = True
+        print(f"[JARVIS] Tavily unavailable ({response.status_code}), using Bing for now")
+        return None
+
+    if response.status_code != 200:
+        print(f"[JARVIS] Tavily search failed ({response.status_code}), using Bing")
+        return None
+
+    try:
+        items = response.json().get("results") or []
+    except ValueError:
+        print("[JARVIS] Tavily returned invalid JSON, using Bing")
+        return None
+
+    results = []
+
+    for item in items:
+        title = str(item.get("title") or "").strip()
+        link = str(item.get("url") or "").strip()
+
+        if not title or not link:
+            continue
+
+        results.append({
+            "title": title,
+            "url": link,
+            "snippet": " ".join(str(item.get("content") or "").split()),
+            "query": query,
+            "text": str(item.get("raw_content") or "").strip(),
+        })
+
+    return results
+
+
 def _bing_search(query):
     """Return structured search results without scraping a search-page DOM."""
+    # adlt=strict is Bing's own adult-content filter.
     url = (
-        "https://www.bing.com/search?format=rss&q="
+        "https://www.bing.com/search?format=rss&adlt=strict&q="
         f"{quote_plus(str(query or '').strip())}"
     )
 
@@ -295,33 +399,97 @@ def _bing_search(query):
     return results
 
 
-def _search_queries(queries):
-    """Gather a balanced pool of unique results across all planned searches."""
-    results = []
-    seen_urls = set()
+def _gather(queries, seen=None):
+    """Sources for [queries]: searched, read, and only those on topic kept."""
+    seen = set() if seen is None else seen
+    sources = []
 
     for query in queries:
         print(f"[JARVIS] research search: {query}", flush=True)
 
-        query_count = 0
+        read = []
 
-        for result in _bing_search(query):
+        for result in _search(query):
             url = result["url"]
 
-            if url in seen_urls:
+            if url in seen:
                 continue
 
-            seen_urls.add(url)
-            results.append(result)
-            query_count += 1
+            seen.add(url)
+            source = _from_result(result)
 
-            if len(results) >= _MAX_INITIAL_SOURCES:
-                return results
+            if source:
+                read.append(source)
 
-            if query_count >= _MAX_SOURCES_PER_QUERY:
+            if len(read) >= _CANDIDATES_PER_QUERY:
                 break
 
-    return results
+        sources.extend(_relevant(query, read)[:_MAX_SOURCES_PER_QUERY])
+
+        if len(sources) >= _MAX_INITIAL_SOURCES:
+            break
+
+    return sources[:_MAX_INITIAL_SOURCES]
+
+
+def _from_result(result):
+    """A source from a search result, using its text when the search sent it."""
+    text = str(result.get("text") or "").strip()
+
+    if len(text) >= 200:
+        return {
+            "title": result.get("title", ""),
+            "url": result["url"],
+            "text": text[:_MAX_SOURCE_CHARS],
+            "query": result.get("query", ""),
+        }
+
+    return _read_source(result)
+
+
+def _relevant(query, sources):
+    """The sources that are about [query], most relevant first.
+
+    Search engines return pages that only share a name with what was asked
+    (Aston University for "Aston Villa") or nothing to do with it at all
+    (a news home page, a dictionary). Each page is judged by its best
+    passage, with the local model: it must reach _RELEVANCE_FLOOR and be
+    within _RELEVANCE_MARGIN of the best page for the same search. Without
+    the model, every page is kept, as before.
+    """
+    if not sources:
+        return []
+
+    from actions import semantic_memory
+
+    scores = []
+
+    for source in sources:
+        passages = evidence.passages(f"{source.get('title', '')}. {source['text']}")[:_RELEVANCE_PASSAGES]
+
+        try:
+            similarity = semantic_memory.similarities(query, passages) if passages else None
+        except Exception as error:
+            print(f"[JARVIS] research relevance check failed, keeping sources: {error}")
+            return list(sources)
+
+        if similarity is None:
+            return list(sources)
+
+        scores.append(max(similarity) if similarity else 0.0)
+
+    best = max(scores)
+    ranked = sorted(zip(scores, range(len(sources))), reverse=True)
+    kept = [
+        sources[index] for score, index in ranked
+        if score >= _RELEVANCE_FLOOR and score >= best - _RELEVANCE_MARGIN
+    ]
+    dropped = [sources[index]["url"] for score, index in ranked if sources[index] not in kept]
+
+    if dropped:
+        print(f"[JARVIS] research left out {len(dropped)} off-topic source(s): {', '.join(dropped)}", flush=True)
+
+    return kept
 
 
 def _read_source(result):
@@ -385,19 +553,6 @@ def _read_source(result):
     except requests.RequestException as error:
         print(f"[JARVIS] direct source fetch failed: {error}")
         return None
-
-
-def _read_sources(results):
-    """Read the most useful candidate pages and discard empty ones."""
-    sources = []
-
-    for result in results:
-        source = _read_source(result)
-
-        if source:
-            sources.append(source)
-
-    return sources
 
 
 def _focus(request, subjects, source):
@@ -536,31 +691,30 @@ def _safe_filename_part(text):
 
 def run(request):
     """Research a request and save a source-backed report in JARVIS's folder."""
+    global _last_failure
+
+    _last_failure = None
     planned = _plan_queries(request)
 
     if not planned:
         return None
 
     subjects, queries = planned
-    candidates = _search_queries(queries)
-    sources = _read_sources(candidates)
+    seen = set()
+    sources = _gather(queries, seen)
 
     if not sources:
-        print("[JARVIS] research found no readable sources")
+        print("[JARVIS] research found no readable, on-topic sources")
+        _last_failure = (
+            "I couldn't find reliable sources on that, sir, so I haven't "
+            "written a report. It may be worth wording it differently."
+        )
         return None
 
     followups = _refine_queries(request, subjects, sources)
 
     if followups:
-        followup_candidates = _search_queries(followups)
-        followup_sources = _read_sources(followup_candidates)
-
-        seen = {source["url"] for source in sources}
-
-        for source in followup_sources:
-            if source["url"] not in seen:
-                sources.append(source)
-                seen.add(source["url"])
+        sources.extend(_gather(followups, seen))
 
     report = _report(request, subjects, sources)
 

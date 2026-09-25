@@ -827,6 +827,20 @@ post-Tripo segmented models.
 JARVIS can research arbitrary subjects, compare them, synthesise the findings
 and create a source-backed report.
 
+**Sources must be about what was searched.** Searches go to Tavily when
+`TAVILY_API_KEY` is set in `.env` (free plan: 1,000 searches a month, no
+card; a report uses up to seven), with its adult-content filter on and each
+page's text returned with the results, so pages are not fetched twice.
+Without a key, or once the allowance is spent or the key refused, Bing's
+RSS feed is used with its strict adult filter. Either way, every page is
+checked locally before the writer sees it: its best passage (from its
+opening forty) must score 0.40 against the search and be within 0.12 of
+the best page for that search. Measured: on-topic pages 0.67 to 0.87, home
+and dictionary pages 0.29 or less, name collisions 0.44 to 0.51. Known
+limit: a name collision that is the only result for its search can pass.
+A run left with no on-topic sources writes no report rather than a report
+about the absence of sources. The writer is told to begin with findings.
+
 **Saved reports answer questions** - `actions/report_search.py`.
 "What did my report say about deep sleep?", "what does my ESP32 report say
 about batteries?", "which reports mention insurance?" read the matching
@@ -1296,7 +1310,7 @@ Say "Jarvis" then an instruction. "Jarvis, quit" shuts down cleanly —
 Ctrl+C skips the cleanup.
 
 Settings live in `.env`: provider keys, `STT_ENGINE`, `WHISPER_MODEL`,
-voice, Graph credentials, weather fallback.
+voice, Graph credentials, weather fallback, `TAVILY_API_KEY` for research.
 
 ### Diagnostics
 
