@@ -97,8 +97,9 @@ def post(url, token, context, payload):
         reason = error.reason
 
         if isinstance(reason, ssl.SSLCertVerificationError):
-            raise SystemExit(f"JARVIS's certificate was not accepted ({reason.verify_message}). "
-                             "Start JARVIS once so it renews it, then try again.")
+            raise SystemExit(f"JARVIS's certificate was not accepted ({reason.verify_message}), as a board "
+                             "would not accept it. Restart JARVIS, then run python tools/esp32_setup.py, "
+                             "which checks it live.")
 
         raise SystemExit(f"Could not reach JARVIS at {url} ({reason}). Is JARVIS running?")
 

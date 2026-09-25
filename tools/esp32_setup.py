@@ -166,6 +166,36 @@ def secrets_header(token):
     )
 
 
+def live_check(host, port, ca, timeout=3.0):
+    """Connect to the running JARVIS as the board will, and say how it went.
+
+    Returns ("accepted", None), ("refused", reason) or ("absent", reason).
+    The files alone cannot settle it: what counts is the certificate JARVIS
+    actually serves to a caller connecting by address, which is only known
+    by asking it.
+    """
+    import socket
+    import ssl
+    from cryptography.hazmat.primitives import serialization
+
+    context = ssl.create_default_context(cadata=ca.public_bytes(serialization.Encoding.DER))
+
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout) as raw:
+            # By address, as the board connects: no name is sent.
+            with context.wrap_socket(raw, server_hostname=host):
+                return "accepted", None
+
+    except ssl.SSLCertVerificationError as error:
+        return "refused", error.verify_message
+
+    except ssl.SSLError as error:
+        return "refused", str(error)
+
+    except OSError as error:
+        return "absent", str(error)
+
+
 def local_address():
     """This PC's address on the local network, as phone.py finds it."""
     import socket
@@ -224,6 +254,20 @@ def main():
         print(f"Wrote {SECRETS_H.relative_to(ROOT)}: add your wifi name and password to it.")
     else:
         print(f"Kept {SECRETS_H.relative_to(ROOT)} as it is.")
+
+    # The files are right; now whether JARVIS really serves the board
+    # something it will accept.
+    outcome, reason = live_check(host, port, ca)
+
+    if outcome == "accepted":
+        print("Checked live: JARVIS answered with a certificate the board will accept.")
+    elif outcome == "refused":
+        print()
+        print(f"Not ready: JARVIS answered, but with a certificate the board would refuse ({reason}).")
+        print("Restart JARVIS so it serves the board its own certificate, then run this again.")
+        return 1
+    else:
+        print("JARVIS is not running, so it could not be checked live. Start it and run this again to be sure.")
 
     print()
     print(f"In the Arduino IDE, the esp32 board package must be {MINIMUM_BOARD_PACKAGE} or later")

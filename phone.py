@@ -21,6 +21,7 @@ import json
 import os
 import secrets
 import socket
+import ssl
 import subprocess
 import threading
 import time
@@ -31,6 +32,7 @@ from flask import Flask, jsonify, request
 from werkzeug.serving import make_server
 from pywebpush import webpush, WebPushException
 
+import phone_tls
 import transcriber
 from actions import location, askfiles
 from voice import FILLERS, set_phone_active
@@ -1215,11 +1217,24 @@ class PhoneServer:
 
         cert, key, supplied = self._certificate_pair()
 
-        if not supplied and not ensure_certificate():
+        # JARVIS's own pair is kept up to date even when a supplied one is
+        # served: sensor boards connect by address and check against
+        # JARVIS's own authority, which a certificate issued for a name
+        # cannot satisfy. phone_tls gives it to callers that name no host.
+        local_ready = ensure_certificate()
+
+        if not supplied and not local_ready:
             print(
                 "[JARVIS] phone server not started because HTTPS "
                 "certificate setup failed."
             )
+            return
+
+        try:
+            context = phone_tls.serving_context(
+                cert, key, (CERT_FILE, KEY_FILE) if supplied and local_ready else None)
+        except (OSError, ssl.SSLError) as error:
+            print(f"[JARVIS] phone server not started: its certificate could not be loaded ({error})")
             return
 
         try:
@@ -1230,7 +1245,7 @@ class PhoneServer:
                 self.port,
                 self._app,
                 threaded=True,
-                ssl_context=(cert, key),
+                ssl_context=context,
             )
         except OSError as error:
             print(

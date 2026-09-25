@@ -33,7 +33,7 @@ if str(ROOT) not in sys.path:
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint  # noqa: E402
+from PyQt6.QtCore import QPoint, qInstallMessageHandler  # noqa: E402
 from PyQt6.QtGui import QFont, QFontMetrics, QImage  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
@@ -43,6 +43,16 @@ from actions import sensors  # noqa: E402
 
 
 failures = 0
+
+
+def quiet(mode, context, message):
+    # Drawn off-screen, Qt notes each window call it has no screen for
+    # ("This plugin does not support raise()"). Harmless, and not ours.
+    if "This plugin does not support" not in message:
+        print(message)
+
+
+qInstallMessageHandler(quiet)
 
 
 def check(condition, message):

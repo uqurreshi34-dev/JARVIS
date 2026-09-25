@@ -1142,6 +1142,14 @@ serves and that it names this PC's address, then writes
 once, `jarvis_secrets.h` (wifi and token; the wifi is filled in by hand).
 Both are kept out of git and the token is never printed.
 
+With `JARVIS_CERT` set (the Tailscale certificate, issued for a name),
+JARVIS still serves boards its own certificate on the same port:
+`phone_tls.py` gives a caller that names no host -- a board connecting by
+address -- the local certificate, and one that names the Tailscale host
+the issued one. The setup tool connects to the running JARVIS as the board
+will and says whether the board would accept it, rather than trusting the
+files alone.
+
 The esp32 board package must be 3.1 or later: older TLS libraries cannot
 check an IP address named in a certificate. Reserve the PC's address in
 the router; if JARVIS ever makes new certificates, run the tool again and
