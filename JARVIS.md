@@ -1026,6 +1026,15 @@ voice amplitude, microphone level), never a timer animating on its own;
 idle time gets the same slow ambient breath the HUD's own core already
 uses, rather than a fake pulse invented for this view.
 
+The globe turns, slowly at rest and fast while thinking, inside two
+gyroscope rings that each carry a comet. While he speaks or listens, a
+voice halo round it traces the last couple of seconds of sound, mirrored
+down both sides from the top, and a change of state fades from one colour
+to the next. What never moves (the dark backing, glow and dial) is drawn
+once per state; what moves is batched by depth, and only the front half
+of the globe is smoothed. A frame costs about 2 to 3.5 ms, drawn 20 times
+a second and only while the view is open.
+
 Toggled by voice or by clicking the reactor core directly. Both paths
 converge on the same function, so the two can never disagree about
 whether it's currently showing.

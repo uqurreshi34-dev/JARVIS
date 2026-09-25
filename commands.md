@@ -880,7 +880,7 @@ That's also a useful tell — if a prompt appears, a real commit happened.
 
 | Say | Does |
 |---|---|
-| show me your mind | the sphere, pulsing with activity |
+| show me your mind | the turning globe, pulsing with activity, with a voice halo while he speaks |
 | hide your mind | closes it |
 
 Clicking the reactor core in the HUD does the same.
