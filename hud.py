@@ -635,8 +635,11 @@ class Hud(QWidget):
         # Clear of the countdown, which is written right-aligned on this line.
         limit = _PANEL_X - 12
 
+        # Measured, not assumed: fonts are wider on some machines than others,
+        # and a fixed allowance let REC run into the countdown on Windows.
         if self._confirm_until is not None:
-            limit = _PANEL_X - 14 - 90
+            words, countdown_font = self._countdown_text(self._confirm_until - now)
+            limit = _PANEL_X - 14 - QFontMetrics(countdown_font).horizontalAdvance(words) - 10
 
         # A flash is news and a steady light is not: while one shows, it takes
         # the place of any light that no longer fits beside it.
@@ -936,6 +939,15 @@ class Hud(QWidget):
         painter.drawLine(QPointF(body.left(), y), QPointF(body.right(), y))
         painter.restore()
 
+    @staticmethod
+    def _countdown_text(remaining):
+        """The countdown's words and font, shared with anything laid out beside it."""
+        minutes, seconds = divmod(int(math.ceil(max(0.0, remaining))), 60)
+        font = QFont("Consolas", 8, QFont.Weight.Bold)
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.4)
+
+        return f"CONFIRM {minutes}:{seconds:02d}", font
+
     def _paint_countdown(self, painter):
         """Time left to answer a held question, draining round the outer ring."""
         now = time.monotonic()
@@ -960,11 +972,7 @@ class Hud(QWidget):
             # From the top, draining anticlockwise to nothing.
             self._arc(painter, _R_OUTER, 90, 360 * fraction, colour, 3.2)
 
-            minutes, seconds = divmod(int(math.ceil(remaining)), 60)
-            text = f"CONFIRM {minutes}:{seconds:02d}"
-
-            font = QFont("Consolas", 8, QFont.Weight.Bold)
-            font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.4)
+            text, font = self._countdown_text(remaining)
             painter.setFont(font)
             painter.setPen(QPen(colour))
 

@@ -26,7 +26,7 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint  # noqa: E402
-from PyQt6.QtGui import QImage  # noqa: E402
+from PyQt6.QtGui import QFont, QFontMetrics, QImage  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 import hud  # noqa: E402
@@ -67,6 +67,13 @@ def ink(image, area=AREA):
     return tuple(sum(getattr(c, part)() for c in top_share) / len(top_share) for part in ("red", "green", "blue"))
 
 
+def live_width(text):
+    """How wide the HUD draws a live label, measured as it does: fonts differ by machine."""
+    font = QFont("Consolas", 8, QFont.Weight.Bold)
+    font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.2)
+    return QFontMetrics(font).horizontalAdvance(text)
+
+
 def is_red(rgb):
     return rgb is not None and rgb[0] > 120 and rgb[0] > 1.8 * rgb[1] and rgb[0] > 1.8 * rgb[2]
 
@@ -104,8 +111,9 @@ widget.live_status.emit("obs:REC", "REC", True, False, 83.0, "red")
 widget.live_status.emit("obs:REPLAY", "REPLAY", True, False, -1.0, "amber")
 widget.live_flash.emit("CLIP SAVED")
 image = frame()
-check(is_green(ink(image, (110, hud._LIVE_Y - 11, hud._PANEL_X - 10, hud._LIVE_Y + 3))) and
-      is_red(ink(image, (20, hud._LIVE_Y - 11, 110, hud._LIVE_Y + 3))),
+rec_end = int(28 + 11 + live_width("REC 01:23")) + 2
+check(is_green(ink(image, (rec_end, hud._LIVE_Y - 11, hud._PANEL_X - 10, hud._LIVE_Y + 3))) and
+      is_red(ink(image, (20, hud._LIVE_Y - 11, rec_end, hud._LIVE_Y + 3))),
       "with REC and REPLAY both on, CLIP SAVED still shows, beside REC")
 widget.live_status.emit("obs:REC", "REC", False, False, -1.0, "red")
 widget.live_status.emit("obs:REPLAY", "REPLAY", False, False, -1.0, "amber")
@@ -117,12 +125,14 @@ widget.live_status.emit("obs:REC", "REC", True, False, 83.0, "red")
 widget.live_status.emit("obs:REPLAY", "REPLAY", True, False, -1.0, "amber")
 widget.confirmation_changed.emit(120.0, "")
 image = frame()
-countdown_left = hud._PANEL_X - 14 - 90
-right_of_limit = (countdown_left, hud._LIVE_Y - 11, hud._PANEL_X - 10, hud._LIVE_Y + 3)
-reds = [image.pixelColor(x, y) for x in range(right_of_limit[0], right_of_limit[2]) for y in range(right_of_limit[1], right_of_limit[3])]
-check(is_red(ink(image, (20, hud._LIVE_Y - 11, countdown_left, hud._LIVE_Y + 3))) and
-      not any(c.red() > 200 and c.green() < 110 for c in reds),
-      "with a countdown on the same line, REC stays clear of it")
+words, countdown_font = widget._countdown_text(widget._confirm_until - time.monotonic())
+countdown_left = int(hud._PANEL_X - 14 - QFontMetrics(countdown_font).horizontalAdvance(words))
+countdown_area = (countdown_left - 4, hud._LIVE_Y - 11, hud._PANEL_X - 10, hud._LIVE_Y + 3)
+reds = [image.pixelColor(x, y) for x in range(countdown_area[0], countdown_area[2]) for y in range(countdown_area[1], countdown_area[3])]
+check(is_red(ink(image, (20, hud._LIVE_Y - 11, countdown_left - 4, hud._LIVE_Y + 3))),
+      "with a countdown on the same line, REC still shows")
+check(not any(c.red() > 150 and c.red() > 1.8 * c.green() and c.red() > 1.8 * c.blue() for c in reds),
+      "and stays clear of the countdown, measured as drawn")
 
 widget.close()
 sys.exit(1 if failures else 0)
