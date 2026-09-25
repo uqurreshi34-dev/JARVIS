@@ -641,7 +641,7 @@ in the same `mcpServers` format Claude Desktop and Cursor use. Keys go in
 | investigate … / look into … | Agent Mode, which can also use connected services |
 | name the service and ask for a change, e.g. open a github issue on JARVIS titled HUD flicker | reads back exactly what it would do and asks; yes runs it |
 | start recording / stop recording | OBS, instantly: **free**, no model call |
-| start the replay buffer, then clip that | OBS keeps the last 30 seconds, then saves them: **free** |
+| start the replay buffer, then clip that | OBS keeps the last 30 seconds, then saves them, and CLIP SAVED flashes: **free** |
 | pause the recording | OBS, at once, no question |
 | switch to the (scene name) scene / mute the mic | OBS |
 

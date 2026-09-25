@@ -990,6 +990,16 @@ GitHub account is ...; 'jarvis' means the repository ...". Without it every
 GitHub request began by looking both up. It rides with the request, not in
 the system prompt, so the system prompt stays the same and can be cached.
 
+A service entry's `live` list names read-only status tools to watch. Every
+two seconds JARVIS asks them quietly (no journal line, no pulse on the
+strip) and the HUD shows what is live, bottom left: OBS's `REC 01:23` in
+red, pulsing, with a clock that runs on smoothly between answers, `PAUSED`
+when paused, and `REPLAY` in amber while the replay buffer runs. It follows
+OBS itself, so it is right whoever pressed the button, and goes out when
+OBS closes. A status answered in words rather than JSON is matched with
+`active_text` ("is active", never mistaken within "is inactive"). An
+instant phrase can carry a `flash` word: "clip that" flashes CLIP SAVED.
+
 Services connect at start-up, in the background and side by side, rather
 than on the first request that needs one; the start-up check's SERVICES
 line is updated to what really connected ("SERVICES (2/3)" with OBS closed).

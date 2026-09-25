@@ -640,6 +640,97 @@ for _ in range(200):
 
 check(finished == [(1, 2)], f"and reports what connected when it is done ({finished})")
 
+# ---- live status, watched quietly (OBS's REC light) --------------------------------------
+
+STATUS = os.path.join(folder, "record-status.json")
+os.environ["JARVIS_TEST_STATUS"] = STATUS
+
+if os.path.exists(MARKER):
+    os.remove(MARKER)
+
+write_config({
+    "test": {
+        "command": sys.executable,
+        "args": [SERVER],
+        "env": {"STATUS": "${JARVIS_TEST_STATUS}", "MARKER": "${JARVIS_TEST_MARKER}"},
+        "allowed_actions": ["create_note"],
+        "confirm_actions": False,
+        "live": [
+            {"tool": "record_status", "active": "outputActive", "paused": "outputPaused",
+             "time": "outputTimecode", "label": "REC", "colour": "red"},
+            {"tool": "create_note", "label": "SNEAKY"},
+            {"tool": "replay_status", "active_text": "is active", "label": "REPLAY", "colour": "amber"},
+        ],
+        "instant": {"clip that": {"tool": "create_note", "say": "Clipped, sir.", "flash": "clip saved"}},
+    },
+})
+
+import contextlib as _contextlib
+import io as _io
+
+printed = _io.StringIO()
+
+with _contextlib.redirect_stdout(printed):
+    mcp_services.tools()
+
+check("action(s) that run at once" in printed.getvalue() and "spoken confirmation" not in printed.getvalue(),
+      "a service whose actions run at once says so when it connects, not 'with spoken confirmation'")
+
+with open(STATUS, "w", encoding="utf-8") as handle:
+    json.dump({"outputActive": True, "outputPaused": False, "outputTimecode": "00:01:23.456"}, handle)
+
+from actions import journal as _journal
+log_path = _journal._path()
+check(os.path.exists(log_path), "the journal is being written, so its silence below means something")
+log_before = os.path.getsize(log_path) if os.path.exists(log_path) else 0
+activity.clear()
+
+live = {key: rest for key, *rest in mcp_services.poll_live()}
+check(live.get("test:REC", [None, False])[1] is True and abs(live["test:REC"][3] - 83.456) < 0.01,
+      f"a recording in progress is reported live, with its time ({live.get('test:REC')})")
+check(activity == [] and (os.path.getsize(log_path) if os.path.exists(log_path) else 0) == log_before,
+      "asked quietly: no pulse on the strip, no line in the journal")
+check(live.get("test:SNEAKY", [None, True])[1] is False and not os.path.exists(MARKER),
+      "a tool that changes something is never run as a status check")
+
+with open(STATUS, "w", encoding="utf-8") as handle:
+    json.dump({"outputActive": True, "outputPaused": True, "outputTimecode": "00:02:00.000"}, handle)
+check(mcp_services.poll_live()[0][3] is True, "paused is reported as paused")
+
+replay = {key: rest for key, *rest in mcp_services.poll_live()}["test:REPLAY"]
+check(replay[1] is False, "a status answered in words: 'is inactive' is not taken for 'is active'")
+open(STATUS + ".replay", "w").close()
+replay = {key: rest for key, *rest in mcp_services.poll_live()}["test:REPLAY"]
+check(replay[1] is True, "and 'is active' is live")
+os.remove(STATUS + ".replay")
+
+with open(STATUS, "w", encoding="utf-8") as handle:
+    json.dump({"outputActive": False}, handle)
+check(mcp_services.poll_live()[0][2] is False, "stopped is reported as not live")
+
+mcp_services.close()
+write_config({"test": {"command": "definitely-not-a-real-program-xyz",
+                       "live": [{"tool": "record_status", "label": "REC"}]}})
+mcp_services.tools()
+check(mcp_services.poll_live()[0][2] is False, "a service that is not running is not live (OBS closed)")
+
+check(mcp_services._seconds(83456) == 83.456 and mcp_services._seconds("01:00:05.5") == 3605.5,
+      "time is read from milliseconds or a timecode")
+
+# A flash word from an instant phrase.
+write_config({
+    "test": {
+        "command": sys.executable, "args": [SERVER],
+        "allowed_actions": ["create_note"], "confirm_actions": False,
+        "instant": {"clip that": {"tool": "create_note", "say": "Clipped, sir.", "flash": "clip saved"}},
+    },
+})
+flashed = []
+mcp_services.set_flash_listener(flashed.append)
+said = mcp_services.run_instant(mcp_services.instant("clip that"))
+check(said == "Clipped, sir." and flashed == ["CLIP SAVED"], f"an instant phrase can flash a word on the HUD ({flashed})")
+mcp_services.set_flash_listener(None)
+
 # ---- a service that was down, tried again ---------------------------------------------
 
 write_config({"test": {"command": "definitely-not-a-real-program-xyz", "args": []}})

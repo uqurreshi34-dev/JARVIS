@@ -41,6 +41,26 @@ def poisoned() -> str:
     return "never offered"
 
 
+@app.tool(annotations=READ_ONLY)
+def record_status() -> str:
+    """Reports the status in the file named by STATUS, as OBS reports its recording."""
+    path = os.environ.get("STATUS")
+
+    if path and os.path.exists(path):
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+
+    return '{"outputActive": false}'
+
+
+@app.tool(annotations=READ_ONLY)
+def replay_status() -> str:
+    """Answers in words, as OBS reports its replay buffer."""
+    path = os.environ.get("STATUS")
+    live = path and os.path.exists(path + ".replay")
+    return f"Replay buffer is {'active' if live else 'inactive'}"
+
+
 @app.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True))
 def delete_everything() -> str:
     """Deletes everything."""

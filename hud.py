@@ -122,6 +122,15 @@ _SERVICE_AMBER = QColor(255, 196, 80)
 _SERVICE_GREEN = QColor(95, 255, 160)
 _SERVICE_RED = QColor(255, 88, 88)
 
+# Live status from connected services (OBS recording, say), bottom left.
+_LIVE_Y = _HEIGHT - 22
+_LIVE_COLOURS = {
+    "red": QColor(255, 70, 70),
+    "amber": QColor(255, 196, 80),
+    "green": QColor(95, 255, 160),
+}
+_FLASH_SECONDS = 2.2
+
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
@@ -165,6 +174,11 @@ class Hud(QWidget):
     # A line of the check learned later: (label prefix, new label, status).
     boot_updated = pyqtSignal(str, str, str)
 
+    # A watched status: (key, label, active, paused, seconds or -1, colour),
+    # and a word to flash ("CLIP SAVED").
+    live_status = pyqtSignal(str, str, bool, bool, float, str)
+    live_flash = pyqtSignal(str)
+
     # Connected services: the configured names, then (name, state) as they work.
     services_listed = pyqtSignal(list)
     service_activity = pyqtSignal(str, str)
@@ -194,6 +208,9 @@ class Hud(QWidget):
 
         self._services = {}             # name -> [state, since], in mcp.json order
         self._busy_until = {}           # name -> when a request's pulse may end
+
+        self._live = {}                 # key -> what a service reports as live
+        self._flash = None              # (word, when) flashed after an instant action
 
         self._target = 0.0
         self._level = 0.0
@@ -229,6 +246,8 @@ class Hud(QWidget):
         self.confirmation_changed.connect(self._on_confirmation)
         self.boot_requested.connect(self._on_boot)
         self.boot_updated.connect(self._on_boot_updated)
+        self.live_status.connect(self._on_live_status)
+        self.live_flash.connect(self._on_live_flash)
         self.services_listed.connect(self._on_services_listed)
         self.service_activity.connect(self._on_service_activity)
 
@@ -328,6 +347,21 @@ class Hud(QWidget):
         if state == "busy":
             self._busy_until[str(name)] = now + _SERVICE_BUSY_HOLD
 
+        self.update()
+
+    def _on_live_status(self, key, label, active, paused, seconds, colour):
+        self._live[str(key)] = {
+            "label": str(label),
+            "active": bool(active),
+            "paused": bool(paused),
+            "seconds": float(seconds),
+            "at": time.monotonic(),
+            "colour": str(colour),
+        }
+        self.update()
+
+    def _on_live_flash(self, word):
+        self._flash = (str(word), time.monotonic())
         self.update()
 
     def _on_boot_updated(self, prefix, label, status):
@@ -523,6 +557,7 @@ class Hud(QWidget):
         self._paint_rings(painter, accent, energy)
         self._paint_countdown(painter)
         self._paint_services(painter, accent)
+        self._paint_live(painter, accent)
         self._paint_reticle(painter, accent)
         self._paint_core(painter, accent, energy)
         self._paint_text(painter, accent)
@@ -556,6 +591,93 @@ class Hud(QWidget):
         painter.drawRect(_STOP_RECT.adjusted(8, 8, -8, -8))
 
         painter.restore()
+
+    # ---- live status: REC and the like --------------------------------------------
+
+    def _live_text(self, item, now):
+        """"REC 01:23", "REC PAUSED" or just the label."""
+        if item["paused"]:
+            return f"{item['label']} PAUSED"
+
+        if item["seconds"] < 0:
+            return item["label"]
+
+        # Counted on between reports, so the clock runs smoothly.
+        total = int(item["seconds"] + (now - item["at"]))
+        hours, rest = divmod(total, 3600)
+        minutes, seconds = divmod(rest, 60)
+        clock = f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
+
+        return f"{item['label']} {clock}"
+
+    def _paint_live(self, painter, accent):
+        """What connected services report as live, bottom left: REC 01:23."""
+        now = time.monotonic()
+        items = [item for item in self._live.values() if item["active"]]
+        flash = self._flash if self._flash and now - self._flash[1] < _FLASH_SECONDS else None
+
+        if not items and not flash:
+            return
+
+        font = QFont("Consolas", 8, QFont.Weight.Bold)
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.2)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+
+        # After the document count, if it is showing.
+        x = 28.0
+
+        if self._documents_count > 0:
+            documents = QFont("Consolas", 8, QFont.Weight.Bold)
+            documents.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.4)
+            x += QFontMetrics(documents).horizontalAdvance(f"DOCUMENTS {self._documents_count} / 8") + 14
+
+        # Clear of the countdown, which is written right-aligned on this line.
+        limit = _PANEL_X - 12
+
+        if self._confirm_until is not None:
+            limit = _PANEL_X - 14 - 90
+
+        # A flash is news and a steady light is not: while one shows, it takes
+        # the place of any light that no longer fits beside it.
+        if flash:
+            reserve = metrics.horizontalAdvance(flash[0]) + 12
+            kept, used = [], x
+
+            for item in items:
+                width = 12 + metrics.horizontalAdvance(self._live_text(item, now)) + 12
+
+                if used + width + reserve <= limit:
+                    kept.append(item)
+                    used += width
+
+            items = kept
+
+        for item in items:
+            text = self._live_text(item, now)
+            width = 12 + metrics.horizontalAdvance(text)
+
+            if x + width > limit:
+                break
+
+            colour = _LIVE_COLOURS.get(item["colour"], accent)
+            beat = 0.5 + 0.5 * math.sin(now * 5.0)
+            alpha = 255 if item["paused"] else int(140 + 115 * beat)
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self._tint(colour, alpha))
+            painter.drawEllipse(QPointF(x + 3.5, _LIVE_Y - 3.5), 3.5, 3.5)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+            painter.setPen(QPen(self._tint(colour, 235)))
+            painter.drawText(int(x + 11), _LIVE_Y, text)
+
+            x += width + 12
+
+        if flash and x + metrics.horizontalAdvance(flash[0]) <= limit:
+            fade = 1.0 - (now - flash[1]) / _FLASH_SECONDS
+            painter.setPen(QPen(self._tint(_LIVE_COLOURS["green"], int(255 * min(1.0, fade * 1.6)))))
+            painter.drawText(int(x), _LIVE_Y, flash[0])
 
     # ---- the connected-services strip ------------------------------------------
 

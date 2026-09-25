@@ -898,6 +898,15 @@ def main():
         lambda name, state: hud.service_activity.emit(str(name), str(state))
     )
 
+    # What services report as live (OBS recording, say), watched quietly.
+    mcp_services.set_flash_listener(lambda word: hud.live_flash.emit(str(word)))
+    mcp_services.start_live(
+        lambda key, label, active, paused, seconds, colour: hud.live_status.emit(
+            str(key), str(label), bool(active), bool(paused), float(seconds), str(colour)
+        )
+    )
+    hud.shutdown.connect(mcp_services.stop_live)
+
     # Microphone levels drive the waveform when JARVIS is not talking.
     set_level_listener(hud.level_changed.emit)
 

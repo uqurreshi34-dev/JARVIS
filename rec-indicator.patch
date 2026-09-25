@@ -1,0 +1,635 @@
+diff --git a/JARVIS.md b/JARVIS.md
+index 62191c7..83f24e5 100644
+--- a/JARVIS.md
++++ b/JARVIS.md
+@@ -992,2 +992,12 @@ the system prompt, so the system prompt stays the same and can be cached.
+ 
++A service entry's `live` list names read-only status tools to watch. Every
++two seconds JARVIS asks them quietly (no journal line, no pulse on the
++strip) and the HUD shows what is live, bottom left: OBS's `REC 01:23` in
++red, pulsing, with a clock that runs on smoothly between answers, `PAUSED`
++when paused, and `REPLAY` in amber while the replay buffer runs. It follows
++OBS itself, so it is right whoever pressed the button, and goes out when
++OBS closes. A status answered in words rather than JSON is matched with
++`active_text` ("is active", never mistaken within "is inactive"). An
++instant phrase can carry a `flash` word: "clip that" flashes CLIP SAVED.
++
+ Services connect at start-up, in the background and side by side, rather
+diff --git a/actions/mcp_services.py b/actions/mcp_services.py
+index 5164450..bcf6372 100644
+--- a/actions/mcp_services.py
++++ b/actions/mcp_services.py
+@@ -46,2 +46,6 @@ What a server may do is decided here, not by the server:
+   without asking can be instant, so the table cannot widen what it may do.
++- An entry's "live" list names read-only status tools to watch, such as
++  OBS's record status; JARVIS asks every couple of seconds, quietly (no
++  journal line, no pulse on the strip), and tells the HUD what is live,
++  so its REC light follows OBS itself, whoever pressed the button.
+ - A service that could not be reached is tried again on a later request,
+@@ -470,4 +474,7 @@ def _connect(name, entry):
+     if server.actions:
+-        offered += f", {len(server.actions)} action(s) with spoken confirmation"
++        if entry.get("confirm_actions") is False:
++            offered += f", {len(server.actions)} action(s) that run at once"
++        else:
++            offered += f", {len(server.actions)} action(s) with spoken confirmation"
+ 
+     print(f"[JARVIS] connected service {name!r}: {offered}")
+@@ -639,3 +646,4 @@ def instant(text):
+             arguments = {}
++            flash = None
+ 
+             if isinstance(target, str):
+@@ -645,2 +653,3 @@ def instant(text):
+                 arguments = target.get("arguments") if isinstance(target.get("arguments"), dict) else {}
++                flash = target.get("flash")
+             else:
+@@ -651,4 +660,4 @@ def instant(text):
+             if score is not None:
+-                scored.append((score, server, str(tool), say, phrase, arguments))
++                scored.append((score, server, str(tool), say, phrase, arguments, flash))
+ 
+     if not scored:
+@@ -665,5 +674,6 @@ def instant(text):
+ 
+-    return {"server": best[1], "tool": best[2], "say": best[3], "phrase": best[4], "arguments": best[5]}
++    return {"server": best[1], "tool": best[2], "say": best[3], "phrase": best[4],
++            "arguments": best[5], "flash": best[6]}
+ 
+ 
+ def run_instant(match):
+@@ -692,2 +702,9 @@ def run_instant(match):
+ 
++    # A word for the HUD to flash, if the phrase has one ("CLIP SAVED").
++    if isinstance(match.get("flash"), str) and match["flash"].strip() and _flash_listener:
++        try:
++            _flash_listener(safety.clean(match["flash"], 24).upper())
++        except Exception as error:
++            print(f"[JARVIS] could not flash on the HUD: {error}")
++
+     return match.get("say") or said
+@@ -695,2 +712,133 @@ def run_instant(match):
+ 
++# ---- live status: what a service is doing, watched quietly -------------------
++
++LIVE_SECONDS = 2.0
++
++_live_listener = None
++_flash_listener = None
++_live_thread = None
++_live_stop = threading.Event()
++
++
++def set_flash_listener(listener):
++    """Register a callable taking a short word to flash on the HUD."""
++    global _flash_listener
++    _flash_listener = listener
++
++
++def _quiet_call(server, tool, arguments=None):
++    """A status question: no journal line, no pulse on the strip. Text or None."""
++    if not server or not server.client:
++        return None
++
++    try:
++        future = asyncio.run_coroutine_threadsafe(server.client.call_tool(tool, arguments or {}), _loop)
++        result = future.result(CALL_SECONDS)
++    except Exception:
++        return None
++
++    if getattr(result, "is_error", False):
++        return None
++
++    return _result_text(result)
++
++
++def _seconds(value):
++    """Seconds from a number of milliseconds or a timecode such as 00:01:23.456."""
++    if isinstance(value, (int, float)):
++        return float(value) / 1000.0
++
++    if isinstance(value, str) and ":" in value:
++        try:
++            total = 0.0
++            for part in value.split(":"):
++                total = total * 60 + float(part)
++            return total
++        except ValueError:
++            return None
++
++    return None
++
++
++def _live_items(entry):
++    items = entry.get("live")
++    return [item for item in items if isinstance(item, dict) and item.get("tool")] if isinstance(items, list) else []
++
++
++def poll_live():
++    """Ask every watched status once. Returns [(key, label, active, paused, seconds, colour)]."""
++    config = _read_config()
++    found = []
++
++    for name, entry in config.items():
++        server = _servers.get(name)
++
++        for item in _live_items(entry):
++            label = str(item.get("label") or item["tool"]).upper()[:12]
++            key = f"{name}:{label}"
++            colour = str(item.get("colour") or "accent")
++
++            # Only a tool JARVIS already treats as read-only may be watched.
++            if _agent_name(name, item["tool"]) not in _tools:
++                found.append((key, label, False, False, -1.0, colour))
++                continue
++
++            text = _quiet_call(server, item["tool"])
++
++            try:
++                data = json.loads(text) if text else {}
++            except ValueError:
++                data = {}
++
++            data = data if isinstance(data, dict) else {}
++
++            # Some status tools answer in words ("Replay buffer is active"),
++            # not JSON: "active_text" is then the words that mean live.
++            if item.get("active_text"):
++                words = re.escape(_plain(item["active_text"]))
++                active = bool(re.search(rf"\b{words}\b", _plain(text)))
++            else:
++                active = bool(data.get(item.get("active", "outputActive")))
++            paused = bool(data.get(item["paused"])) if item.get("paused") else False
++            seconds = _seconds(data.get(item["time"])) if item.get("time") else None
++
++            found.append((key, label, active, paused, -1.0 if seconds is None else seconds, colour))
++
++    return found
++
++
++def start_live(listener):
++    """Watch every service's "live" statuses in the background, telling [listener]."""
++    global _live_listener, _live_thread
++
++    _live_listener = listener
++
++    if _live_thread and _live_thread.is_alive():
++        return
++
++    if not any(_live_items(entry) for entry in _read_config().values()):
++        return
++
++    _live_stop.clear()
++
++    def watch():
++        while not _live_stop.wait(LIVE_SECONDS):
++            try:
++                # Also gives a service that was down its retry, on schedule.
++                tools()
++
++                for status in poll_live():
++                    if _live_listener:
++                        _live_listener(*status)
++            except Exception as error:
++                print(f"[JARVIS] live status unavailable: {error}")
++
++    _live_thread = threading.Thread(target=watch, name="mcp-live", daemon=True)
++    _live_thread.start()
++
++
++def stop_live():
++    _live_stop.set()
++
++
+ # The most of a service's own note given to the model.
+diff --git a/commands.md b/commands.md
+index 67ccf3f..8041d99 100644
+--- a/commands.md
++++ b/commands.md
+@@ -643,3 +643,3 @@ in the same `mcpServers` format Claude Desktop and Cursor use. Keys go in
+ | start recording / stop recording | OBS, instantly: **free**, no model call |
+-| start the replay buffer, then clip that | OBS keeps the last 30 seconds, then saves them: **free** |
++| start the replay buffer, then clip that | OBS keeps the last 30 seconds, then saves them, and CLIP SAVED flashes: **free** |
+ | pause the recording | OBS, at once, no question |
+diff --git a/hud.py b/hud.py
+index 1b11177..b068734 100644
+--- a/hud.py
++++ b/hud.py
+@@ -124,2 +124,11 @@ _SERVICE_RED = QColor(255, 88, 88)
+ 
++# Live status from connected services (OBS recording, say), bottom left.
++_LIVE_Y = _HEIGHT - 22
++_LIVE_COLOURS = {
++    "red": QColor(255, 70, 70),
++    "amber": QColor(255, 196, 80),
++    "green": QColor(95, 255, 160),
++}
++_FLASH_SECONDS = 2.2
++
+ _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+@@ -167,2 +176,7 @@ class Hud(QWidget):
+ 
++    # A watched status: (key, label, active, paused, seconds or -1, colour),
++    # and a word to flash ("CLIP SAVED").
++    live_status = pyqtSignal(str, str, bool, bool, float, str)
++    live_flash = pyqtSignal(str)
++
+     # Connected services: the configured names, then (name, state) as they work.
+@@ -197,2 +211,5 @@ class Hud(QWidget):
+ 
++        self._live = {}                 # key -> what a service reports as live
++        self._flash = None              # (word, when) flashed after an instant action
++
+         self._target = 0.0
+@@ -231,2 +248,4 @@ class Hud(QWidget):
+         self.boot_updated.connect(self._on_boot_updated)
++        self.live_status.connect(self._on_live_status)
++        self.live_flash.connect(self._on_live_flash)
+         self.services_listed.connect(self._on_services_listed)
+@@ -332,2 +351,17 @@ class Hud(QWidget):
+ 
++    def _on_live_status(self, key, label, active, paused, seconds, colour):
++        self._live[str(key)] = {
++            "label": str(label),
++            "active": bool(active),
++            "paused": bool(paused),
++            "seconds": float(seconds),
++            "at": time.monotonic(),
++            "colour": str(colour),
++        }
++        self.update()
++
++    def _on_live_flash(self, word):
++        self._flash = (str(word), time.monotonic())
++        self.update()
++
+     def _on_boot_updated(self, prefix, label, status):
+@@ -525,2 +559,3 @@ class Hud(QWidget):
+         self._paint_services(painter, accent)
++        self._paint_live(painter, accent)
+         self._paint_reticle(painter, accent)
+@@ -559,2 +594,89 @@ class Hud(QWidget):
+ 
++    # ---- live status: REC and the like --------------------------------------------
++
++    def _live_text(self, item, now):
++        """"REC 01:23", "REC PAUSED" or just the label."""
++        if item["paused"]:
++            return f"{item['label']} PAUSED"
++
++        if item["seconds"] < 0:
++            return item["label"]
++
++        # Counted on between reports, so the clock runs smoothly.
++        total = int(item["seconds"] + (now - item["at"]))
++        hours, rest = divmod(total, 3600)
++        minutes, seconds = divmod(rest, 60)
++        clock = f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
++
++        return f"{item['label']} {clock}"
++
++    def _paint_live(self, painter, accent):
++        """What connected services report as live, bottom left: REC 01:23."""
++        now = time.monotonic()
++        items = [item for item in self._live.values() if item["active"]]
++        flash = self._flash if self._flash and now - self._flash[1] < _FLASH_SECONDS else None
++
++        if not items and not flash:
++            return
++
++        font = QFont("Consolas", 8, QFont.Weight.Bold)
++        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.2)
++        painter.setFont(font)
++        metrics = QFontMetrics(font)
++
++        # After the document count, if it is showing.
++        x = 28.0
++
++        if self._documents_count > 0:
++            documents = QFont("Consolas", 8, QFont.Weight.Bold)
++            documents.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.4)
++            x += QFontMetrics(documents).horizontalAdvance(f"DOCUMENTS {self._documents_count} / 8") + 14
++
++        # Clear of the countdown, which is written right-aligned on this line.
++        limit = _PANEL_X - 12
++
++        if self._confirm_until is not None:
++            limit = _PANEL_X - 14 - 90
++
++        # A flash is news and a steady light is not: while one shows, it takes
++        # the place of any light that no longer fits beside it.
++        if flash:
++            reserve = metrics.horizontalAdvance(flash[0]) + 12
++            kept, used = [], x
++
++            for item in items:
++                width = 12 + metrics.horizontalAdvance(self._live_text(item, now)) + 12
++
++                if used + width + reserve <= limit:
++                    kept.append(item)
++                    used += width
++
++            items = kept
++
++        for item in items:
++            text = self._live_text(item, now)
++            width = 12 + metrics.horizontalAdvance(text)
++
++            if x + width > limit:
++                break
++
++            colour = _LIVE_COLOURS.get(item["colour"], accent)
++            beat = 0.5 + 0.5 * math.sin(now * 5.0)
++            alpha = 255 if item["paused"] else int(140 + 115 * beat)
++
++            painter.setPen(Qt.PenStyle.NoPen)
++            painter.setBrush(self._tint(colour, alpha))
++            painter.drawEllipse(QPointF(x + 3.5, _LIVE_Y - 3.5), 3.5, 3.5)
++            painter.setBrush(Qt.BrushStyle.NoBrush)
++
++            painter.setPen(QPen(self._tint(colour, 235)))
++            painter.drawText(int(x + 11), _LIVE_Y, text)
++
++            x += width + 12
++
++        if flash and x + metrics.horizontalAdvance(flash[0]) <= limit:
++            fade = 1.0 - (now - flash[1]) / _FLASH_SECONDS
++            painter.setPen(QPen(self._tint(_LIVE_COLOURS["green"], int(255 * min(1.0, fade * 1.6)))))
++            painter.drawText(int(x), _LIVE_Y, flash[0])
++
+     # ---- the connected-services strip ------------------------------------------
+diff --git a/main.py b/main.py
+index ff7d133..fa57a27 100644
+--- a/main.py
++++ b/main.py
+@@ -900,2 +900,11 @@ def main():
+ 
++    # What services report as live (OBS recording, say), watched quietly.
++    mcp_services.set_flash_listener(lambda word: hud.live_flash.emit(str(word)))
++    mcp_services.start_live(
++        lambda key, label, active, paused, seconds, colour: hud.live_status.emit(
++            str(key), str(label), bool(active), bool(paused), float(seconds), str(colour)
++        )
++    )
++    hud.shutdown.connect(mcp_services.stop_live)
++
+     # Microphone levels drive the waveform when JARVIS is not talking.
+diff --git a/tools/mcp_test_server.py b/tools/mcp_test_server.py
+index f444e0d..3fd2bce 100644
+--- a/tools/mcp_test_server.py
++++ b/tools/mcp_test_server.py
+@@ -43,2 +43,22 @@ def poisoned() -> str:
+ 
++@app.tool(annotations=READ_ONLY)
++def record_status() -> str:
++    """Reports the status in the file named by STATUS, as OBS reports its recording."""
++    path = os.environ.get("STATUS")
++
++    if path and os.path.exists(path):
++        with open(path, encoding="utf-8") as handle:
++            return handle.read()
++
++    return '{"outputActive": false}'
++
++
++@app.tool(annotations=READ_ONLY)
++def replay_status() -> str:
++    """Answers in words, as OBS reports its replay buffer."""
++    path = os.environ.get("STATUS")
++    live = path and os.path.exists(path + ".replay")
++    return f"Replay buffer is {'active' if live else 'inactive'}"
++
++
+ @app.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True))
+diff --git a/tools/test_live_status.py b/tools/test_live_status.py
+new file mode 100644
+index 0000000..26cd952
+--- /dev/null
++++ b/tools/test_live_status.py
+@@ -0,0 +1,128 @@
++"""The HUD's live status, bottom left: OBS's REC light and the like.
++
++Drawn off-screen and read back. Checked:
++
++- nothing is drawn while nothing is live;
++- recording, a red light and the time are shown, and the clock runs on
++  smoothly between reports rather than jumping every couple of seconds;
++- paused says PAUSED; stopped clears it;
++- a flash word (CLIP SAVED) shows, then goes;
++- it keeps clear of the countdown written on the same line.
++
++    python tools/test_live_status.py
++"""
++
++import os
++import sys
++import time
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[1]
++
++if str(ROOT) not in sys.path:
++    sys.path.insert(0, str(ROOT))
++
++os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
++
++from PyQt6.QtCore import QPoint  # noqa: E402
++from PyQt6.QtGui import QImage  # noqa: E402
++from PyQt6.QtWidgets import QApplication  # noqa: E402
++
++import hud  # noqa: E402
++
++
++failures = 0
++
++
++def check(condition, message):
++    global failures
++    print(("PASS " if condition else "FAIL ") + message)
++    failures += not condition
++
++
++app = QApplication.instance() or QApplication([])
++widget = hud.Hud()
++
++AREA = (20, hud._LIVE_Y - 11, hud._PANEL_X - 10, hud._LIVE_Y + 3)
++
++
++def frame():
++    app.processEvents()
++    image = QImage(widget.size(), QImage.Format.Format_ARGB32)
++    image.fill(0)
++    widget.render(image, QPoint(0, 0))
++    return image
++
++
++def ink(image, area=AREA):
++    """The average colour of the area's brightest pixels, by hue."""
++    left, top, right, bottom = area
++    lit = [image.pixelColor(x, y) for x in range(left, right) for y in range(top, bottom)]
++    lit = [c for c in lit if max(c.red(), c.green(), c.blue()) > 60]
++    lit.sort(key=lambda c: max(c.red(), c.green(), c.blue()), reverse=True)
++    top_share = lit[:max(1, len(lit) // 5)] if lit else []
++    if not top_share:
++        return None
++    return tuple(sum(getattr(c, part)() for c in top_share) / len(top_share) for part in ("red", "green", "blue"))
++
++
++def is_red(rgb):
++    return rgb is not None and rgb[0] > 120 and rgb[0] > 1.8 * rgb[1] and rgb[0] > 1.8 * rgb[2]
++
++
++def is_green(rgb):
++    return rgb is not None and rgb[1] > 120 and rgb[1] > 1.25 * rgb[0]
++
++
++check(ink(frame()) is None or not is_red(ink(frame())), "nothing live, nothing drawn")
++
++widget.live_status.emit("obs:REC", "REC", True, False, 83.0, "red")
++check(is_red(ink(frame())), "recording: a red light and its time")
++
++item = widget._live["obs:REC"]
++now = time.monotonic()
++check(widget._live_text(item, now) == "REC 01:23", f"the time is shown as minutes and seconds ({widget._live_text(item, now)!r})")
++check(widget._live_text(item, now + 5) == "REC 01:28", "and runs on between reports, rather than jumping")
++
++widget.live_status.emit("obs:REC", "REC", True, False, 3725.0, "red")
++check(widget._live_text(widget._live["obs:REC"], time.monotonic()) == "REC 1:02:05", "past an hour, hours are shown")
++
++widget.live_status.emit("obs:REC", "REC", True, True, 120.0, "red")
++paused = widget._live["obs:REC"]
++check(widget._live_text(paused, time.monotonic() + 30) == "REC PAUSED", "paused says so, and the clock stops")
++
++widget.live_status.emit("obs:REC", "REC", False, False, -1.0, "red")
++check(ink(frame()) is None or not is_red(ink(frame())), "stopped, the light goes out")
++
++widget.live_flash.emit("CLIP SAVED")
++check(is_green(ink(frame())), "a flash word shows in green")
++
++# The usual case: clipping while recording with the replay buffer on. The
++# flash must show, even though three do not fit on the line.
++widget.live_status.emit("obs:REC", "REC", True, False, 83.0, "red")
++widget.live_status.emit("obs:REPLAY", "REPLAY", True, False, -1.0, "amber")
++widget.live_flash.emit("CLIP SAVED")
++image = frame()
++check(is_green(ink(image, (110, hud._LIVE_Y - 11, hud._PANEL_X - 10, hud._LIVE_Y + 3))) and
++      is_red(ink(image, (20, hud._LIVE_Y - 11, 110, hud._LIVE_Y + 3))),
++      "with REC and REPLAY both on, CLIP SAVED still shows, beside REC")
++widget.live_status.emit("obs:REC", "REC", False, False, -1.0, "red")
++widget.live_status.emit("obs:REPLAY", "REPLAY", False, False, -1.0, "amber")
++widget._flash = ("CLIP SAVED", time.monotonic() - hud._FLASH_SECONDS - 0.1)
++check(ink(frame()) is None or not is_green(ink(frame())), "then goes")
++
++# With the countdown showing, the live light keeps to the left of it.
++widget.live_status.emit("obs:REC", "REC", True, False, 83.0, "red")
++widget.live_status.emit("obs:REPLAY", "REPLAY", True, False, -1.0, "amber")
++widget.confirmation_changed.emit(120.0, "")
++image = frame()
++countdown_left = hud._PANEL_X - 14 - 90
++right_of_limit = (countdown_left, hud._LIVE_Y - 11, hud._PANEL_X - 10, hud._LIVE_Y + 3)
++reds = [image.pixelColor(x, y) for x in range(right_of_limit[0], right_of_limit[2]) for y in range(right_of_limit[1], right_of_limit[3])]
++check(is_red(ink(image, (20, hud._LIVE_Y - 11, countdown_left, hud._LIVE_Y + 3))) and
++      not any(c.red() > 200 and c.green() < 110 for c in reds),
++      "with a countdown on the same line, REC stays clear of it")
++
++widget.close()
++sys.exit(1 if failures else 0)
+diff --git a/tools/test_mcp_services.py b/tools/test_mcp_services.py
+index 06b5292..31293d6 100644
+--- a/tools/test_mcp_services.py
++++ b/tools/test_mcp_services.py
+@@ -642,2 +642,93 @@ check(finished == [(1, 2)], f"and reports what connected when it is done ({finis
+ 
++# ---- live status, watched quietly (OBS's REC light) --------------------------------------
++
++STATUS = os.path.join(folder, "record-status.json")
++os.environ["JARVIS_TEST_STATUS"] = STATUS
++
++if os.path.exists(MARKER):
++    os.remove(MARKER)
++
++write_config({
++    "test": {
++        "command": sys.executable,
++        "args": [SERVER],
++        "env": {"STATUS": "${JARVIS_TEST_STATUS}", "MARKER": "${JARVIS_TEST_MARKER}"},
++        "allowed_actions": ["create_note"],
++        "confirm_actions": False,
++        "live": [
++            {"tool": "record_status", "active": "outputActive", "paused": "outputPaused",
++             "time": "outputTimecode", "label": "REC", "colour": "red"},
++            {"tool": "create_note", "label": "SNEAKY"},
++            {"tool": "replay_status", "active_text": "is active", "label": "REPLAY", "colour": "amber"},
++        ],
++        "instant": {"clip that": {"tool": "create_note", "say": "Clipped, sir.", "flash": "clip saved"}},
++    },
++})
++
++import contextlib as _contextlib
++import io as _io
++
++printed = _io.StringIO()
++
++with _contextlib.redirect_stdout(printed):
++    mcp_services.tools()
++
++check("action(s) that run at once" in printed.getvalue() and "spoken confirmation" not in printed.getvalue(),
++      "a service whose actions run at once says so when it connects, not 'with spoken confirmation'")
++
++with open(STATUS, "w", encoding="utf-8") as handle:
++    json.dump({"outputActive": True, "outputPaused": False, "outputTimecode": "00:01:23.456"}, handle)
++
++from actions import journal as _journal
++log_path = _journal._path()
++check(os.path.exists(log_path), "the journal is being written, so its silence below means something")
++log_before = os.path.getsize(log_path) if os.path.exists(log_path) else 0
++activity.clear()
++
++live = {key: rest for key, *rest in mcp_services.poll_live()}
++check(live.get("test:REC", [None, False])[1] is True and abs(live["test:REC"][3] - 83.456) < 0.01,
++      f"a recording in progress is reported live, with its time ({live.get('test:REC')})")
++check(activity == [] and (os.path.getsize(log_path) if os.path.exists(log_path) else 0) == log_before,
++      "asked quietly: no pulse on the strip, no line in the journal")
++check(live.get("test:SNEAKY", [None, True])[1] is False and not os.path.exists(MARKER),
++      "a tool that changes something is never run as a status check")
++
++with open(STATUS, "w", encoding="utf-8") as handle:
++    json.dump({"outputActive": True, "outputPaused": True, "outputTimecode": "00:02:00.000"}, handle)
++check(mcp_services.poll_live()[0][3] is True, "paused is reported as paused")
++
++replay = {key: rest for key, *rest in mcp_services.poll_live()}["test:REPLAY"]
++check(replay[1] is False, "a status answered in words: 'is inactive' is not taken for 'is active'")
++open(STATUS + ".replay", "w").close()
++replay = {key: rest for key, *rest in mcp_services.poll_live()}["test:REPLAY"]
++check(replay[1] is True, "and 'is active' is live")
++os.remove(STATUS + ".replay")
++
++with open(STATUS, "w", encoding="utf-8") as handle:
++    json.dump({"outputActive": False}, handle)
++check(mcp_services.poll_live()[0][2] is False, "stopped is reported as not live")
++
++mcp_services.close()
++write_config({"test": {"command": "definitely-not-a-real-program-xyz",
++                       "live": [{"tool": "record_status", "label": "REC"}]}})
++mcp_services.tools()
++check(mcp_services.poll_live()[0][2] is False, "a service that is not running is not live (OBS closed)")
++
++check(mcp_services._seconds(83456) == 83.456 and mcp_services._seconds("01:00:05.5") == 3605.5,
++      "time is read from milliseconds or a timecode")
++
++# A flash word from an instant phrase.
++write_config({
++    "test": {
++        "command": sys.executable, "args": [SERVER],
++        "allowed_actions": ["create_note"], "confirm_actions": False,
++        "instant": {"clip that": {"tool": "create_note", "say": "Clipped, sir.", "flash": "clip saved"}},
++    },
++})
++flashed = []
++mcp_services.set_flash_listener(flashed.append)
++said = mcp_services.run_instant(mcp_services.instant("clip that"))
++check(said == "Clipped, sir." and flashed == ["CLIP SAVED"], f"an instant phrase can flash a word on the HUD ({flashed})")
++mcp_services.set_flash_listener(None)
++
+ # ---- a service that was down, tried again ---------------------------------------------

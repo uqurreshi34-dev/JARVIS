@@ -44,6 +44,10 @@ What a server may do is decided here, not by the server:
   runs obs-start-record at once, with no model call. The phrases are the
   user's own, in mcp.json; only actions the service already lets run
   without asking can be instant, so the table cannot widen what it may do.
+- An entry's "live" list names read-only status tools to watch, such as
+  OBS's record status; JARVIS asks every couple of seconds, quietly (no
+  journal line, no pulse on the strip), and tells the HUD what is live,
+  so its REC light follows OBS itself, whoever pressed the button.
 - A service that could not be reached is tried again on a later request,
   after a minute at first and up to ten, so one opened after JARVIS
   starts -- OBS, say -- is picked up without a restart.
@@ -468,7 +472,10 @@ def _connect(name, entry):
     offered = f"{len(server.tools)} read-only tools"
 
     if server.actions:
-        offered += f", {len(server.actions)} action(s) with spoken confirmation"
+        if entry.get("confirm_actions") is False:
+            offered += f", {len(server.actions)} action(s) that run at once"
+        else:
+            offered += f", {len(server.actions)} action(s) with spoken confirmation"
 
     print(f"[JARVIS] connected service {name!r}: {offered}")
     journal.write("mcp", f"connect {name}", offered)
@@ -637,19 +644,21 @@ def instant(text):
 
         for phrase, target in table.items():
             arguments = {}
+            flash = None
 
             if isinstance(target, str):
                 tool, say = target, None
             elif isinstance(target, dict):
                 tool, say = target.get("tool"), target.get("say")
                 arguments = target.get("arguments") if isinstance(target.get("arguments"), dict) else {}
+                flash = target.get("flash")
             else:
                 continue
 
             score = _phrase_score(said, _plain(phrase)) if tool else None
 
             if score is not None:
-                scored.append((score, server, str(tool), say, phrase, arguments))
+                scored.append((score, server, str(tool), say, phrase, arguments, flash))
 
     if not scored:
         return None
@@ -663,7 +672,8 @@ def instant(text):
         if (other[1], other[2]) != (best[1], best[2]) and other[0] == best[0]:
             return None
 
-    return {"server": best[1], "tool": best[2], "say": best[3], "phrase": best[4], "arguments": best[5]}
+    return {"server": best[1], "tool": best[2], "say": best[3], "phrase": best[4],
+            "arguments": best[5], "flash": best[6]}
 
 
 def run_instant(match):
@@ -690,7 +700,145 @@ def run_instant(match):
     if said is None:
         return failure_message(proposal)
 
+    # A word for the HUD to flash, if the phrase has one ("CLIP SAVED").
+    if isinstance(match.get("flash"), str) and match["flash"].strip() and _flash_listener:
+        try:
+            _flash_listener(safety.clean(match["flash"], 24).upper())
+        except Exception as error:
+            print(f"[JARVIS] could not flash on the HUD: {error}")
+
     return match.get("say") or said
+
+
+# ---- live status: what a service is doing, watched quietly -------------------
+
+LIVE_SECONDS = 2.0
+
+_live_listener = None
+_flash_listener = None
+_live_thread = None
+_live_stop = threading.Event()
+
+
+def set_flash_listener(listener):
+    """Register a callable taking a short word to flash on the HUD."""
+    global _flash_listener
+    _flash_listener = listener
+
+
+def _quiet_call(server, tool, arguments=None):
+    """A status question: no journal line, no pulse on the strip. Text or None."""
+    if not server or not server.client:
+        return None
+
+    try:
+        future = asyncio.run_coroutine_threadsafe(server.client.call_tool(tool, arguments or {}), _loop)
+        result = future.result(CALL_SECONDS)
+    except Exception:
+        return None
+
+    if getattr(result, "is_error", False):
+        return None
+
+    return _result_text(result)
+
+
+def _seconds(value):
+    """Seconds from a number of milliseconds or a timecode such as 00:01:23.456."""
+    if isinstance(value, (int, float)):
+        return float(value) / 1000.0
+
+    if isinstance(value, str) and ":" in value:
+        try:
+            total = 0.0
+            for part in value.split(":"):
+                total = total * 60 + float(part)
+            return total
+        except ValueError:
+            return None
+
+    return None
+
+
+def _live_items(entry):
+    items = entry.get("live")
+    return [item for item in items if isinstance(item, dict) and item.get("tool")] if isinstance(items, list) else []
+
+
+def poll_live():
+    """Ask every watched status once. Returns [(key, label, active, paused, seconds, colour)]."""
+    config = _read_config()
+    found = []
+
+    for name, entry in config.items():
+        server = _servers.get(name)
+
+        for item in _live_items(entry):
+            label = str(item.get("label") or item["tool"]).upper()[:12]
+            key = f"{name}:{label}"
+            colour = str(item.get("colour") or "accent")
+
+            # Only a tool JARVIS already treats as read-only may be watched.
+            if _agent_name(name, item["tool"]) not in _tools:
+                found.append((key, label, False, False, -1.0, colour))
+                continue
+
+            text = _quiet_call(server, item["tool"])
+
+            try:
+                data = json.loads(text) if text else {}
+            except ValueError:
+                data = {}
+
+            data = data if isinstance(data, dict) else {}
+
+            # Some status tools answer in words ("Replay buffer is active"),
+            # not JSON: "active_text" is then the words that mean live.
+            if item.get("active_text"):
+                words = re.escape(_plain(item["active_text"]))
+                active = bool(re.search(rf"\b{words}\b", _plain(text)))
+            else:
+                active = bool(data.get(item.get("active", "outputActive")))
+            paused = bool(data.get(item["paused"])) if item.get("paused") else False
+            seconds = _seconds(data.get(item["time"])) if item.get("time") else None
+
+            found.append((key, label, active, paused, -1.0 if seconds is None else seconds, colour))
+
+    return found
+
+
+def start_live(listener):
+    """Watch every service's "live" statuses in the background, telling [listener]."""
+    global _live_listener, _live_thread
+
+    _live_listener = listener
+
+    if _live_thread and _live_thread.is_alive():
+        return
+
+    if not any(_live_items(entry) for entry in _read_config().values()):
+        return
+
+    _live_stop.clear()
+
+    def watch():
+        while not _live_stop.wait(LIVE_SECONDS):
+            try:
+                # Also gives a service that was down its retry, on schedule.
+                tools()
+
+                for status in poll_live():
+                    if _live_listener:
+                        _live_listener(*status)
+            except Exception as error:
+                print(f"[JARVIS] live status unavailable: {error}")
+
+    _live_thread = threading.Thread(target=watch, name="mcp-live", daemon=True)
+    _live_thread.start()
+
+
+def stop_live():
+    _live_stop.set()
 
 
 # The most of a service's own note given to the model.
