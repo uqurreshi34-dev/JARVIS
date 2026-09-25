@@ -139,6 +139,7 @@ class Hud(QWidget):
         self._sweep = 0.0
         self._drag_offset = None
         self._press_pos = None
+        self._press_on_stop = False
         self._drag_hover = False
         self._speaking = False
 
@@ -344,6 +345,13 @@ class Hud(QWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self._press_pos = event.position()
+
+            # Whether the stop button was showing is decided at the press.
+            # "Speaking" reaches the HUD as a queued signal from the speech
+            # thread; with the mind view animating, the queue is busier, and
+            # a press made while he spoke could be released after the HUD
+            # had caught up with a pause, and be ignored.
+            self._press_on_stop = self._speaking and _STOP_HIT.contains(self._press_pos)
             self._drag_offset = (
                 event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             )
@@ -359,11 +367,7 @@ class Hud(QWidget):
         ):
             moved = (event.position() - self._press_pos).manhattanLength()
 
-            if (
-                moved < 6
-                and self._speaking
-                and _STOP_HIT.contains(self._press_pos)
-            ):
+            if moved < 6 and self._press_on_stop:
                 self.stop_clicked.emit()
 
             elif moved < 6 and self._distance_from_centre(self._press_pos) <= _R_RING3:
@@ -371,6 +375,7 @@ class Hud(QWidget):
 
         self._drag_offset = None
         self._press_pos = None
+        self._press_on_stop = False
 
     @staticmethod
     def _distance_from_centre(pos):

@@ -512,6 +512,30 @@ def _check_hud(failures):
     if len(stops) != 1:
         failures.append("dragging from the button stopped speech")
 
+    # Pressed while he spoke, released after the HUD heard he had paused:
+    # the press decides. With the mind view open the queue that carries
+    # 'speaking' runs later, and this press used to be dropped.
+    widget.move(start)
+    widget.speaking_changed.emit(True)
+    app.processEvents()
+    QTest.mousePress(widget, Qt.MouseButton.LeftButton, pos=centre)
+    widget.speaking_changed.emit(False)
+    app.processEvents()
+    QTest.mouseRelease(widget, Qt.MouseButton.LeftButton, pos=centre)
+
+    if len(stops) != 2:
+        failures.append("a press made while speaking was lost when the pause arrived before the release")
+
+    # And a press while he was silent still does nothing, even if he
+    # starts speaking before the release.
+    QTest.mousePress(widget, Qt.MouseButton.LeftButton, pos=centre)
+    widget.speaking_changed.emit(True)
+    app.processEvents()
+    QTest.mouseRelease(widget, Qt.MouseButton.LeftButton, pos=centre)
+
+    if len(stops) != 2:
+        failures.append("a press on the hidden button stopped speech once it appeared")
+
     # Clear of the reactor's outer ring.
     corner = hud._STOP_HIT.bottomRight()
     distance = ((corner.x() - hud._CENTRE.x()) ** 2

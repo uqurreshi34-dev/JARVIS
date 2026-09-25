@@ -145,6 +145,10 @@ class Assistant:
     def stop_speaking(self):
         """HUD stop button: silence him and send him to standby."""
         if not stop_speech():
+            # Said, so a press that seemed to do nothing can be told apart
+            # from one that never arrived.
+            print("[JARVIS] stop pressed between utterances; nothing was playing", flush=True)
+
             # Silence is not nothing to stop. A recitation fetching its
             # next verse is quiet but still running, and a page left up
             # after the last verse is still on screen; stop means enough,
