@@ -46,6 +46,24 @@ def delete_everything() -> str:
     return "deleted"
 
 
+@app.tool(annotations=ToolAnnotations(read_only_hint=False))
+def create_note(title: str, body: str = "") -> str:
+    """Creates a note. Writes to the file named by MARKER so the test can see it really ran."""
+    marker = os.environ.get("MARKER")
+
+    if marker:
+        with open(marker, "a", encoding="utf-8") as handle:
+            handle.write(f"{title}|{body}\n")
+
+    return '{"number": 42, "html_url": "https://example.invalid/notes/42", "title": "%s"}' % title
+
+
+@app.tool(annotations=ToolAnnotations(read_only_hint=False))
+def rename_everything(prefix: str) -> str:
+    """Changes something, but the test's mcp.json never allows it."""
+    return "renamed"
+
+
 @app.tool()
 def unmarked() -> str:
     """Says nothing about whether it writes."""

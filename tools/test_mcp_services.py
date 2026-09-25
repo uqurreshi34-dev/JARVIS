@@ -13,7 +13,11 @@ model call. Checked:
 - a missing variable or a server that will not start costs a line, not a crash;
 - a command naming a service is recognised, by name or alias;
 - Agent Mode offers the tools to ordinary investigations and dispatches
-  their calls, but not to code tasks or fix passes.
+  their calls, but not to code tasks or fix passes;
+- a tool that changes something is offered only if allowed_actions names
+  it, never if the service marks it destructive, and only when asked for;
+  the model's call is held, read back from its real arguments, and runs
+  only when confirmed -- one per request.
 
     python tools/test_mcp_services.py
 """
@@ -197,6 +201,141 @@ else:
     agent._run_with_provider(endless, "what is in my folder", False, False, True)
     check(endless.turns == agent._AGENT_MAX_TURNS,
           f"a code task keeps the ordinary {agent._AGENT_MAX_TURNS}-round limit")
+
+# ---- actions: held, read back, run only on a spoken yes ----------------------
+
+check(not any(mcp_services.is_action(name) for name in names) and "mcp_test_create_note" not in
+      {t["name"] for t in mcp_services.tools(include_actions=True)},
+      "without allowed_actions, no action is offered even when actions are asked for")
+
+MARKER = os.path.join(folder, "action-ran.txt")
+os.environ["JARVIS_TEST_MARKER"] = MARKER
+
+write_config({
+    "test": {
+        "command": sys.executable,
+        "args": [SERVER],
+        "env": {"MARKER": "${JARVIS_TEST_MARKER}"},
+        "allowed_actions": ["create_note", "delete_everything", "no_such_tool"],
+    },
+})
+
+plain = {t["name"] for t in mcp_services.tools()}
+offered = {t["name"]: t for t in mcp_services.tools(include_actions=True)}
+
+check("mcp_test_create_note" not in plain, "an allowed action is not offered to ordinary investigations")
+check("mcp_test_create_note" in offered, "an allowed action is offered when the command names the service")
+check(offered.get("mcp_test_create_note", {}).get("description", "").startswith("ACTION"),
+      "an action's description tells the model it changes something and is confirmed aloud")
+check("mcp_test_delete_everything" not in offered, "a tool the service marks destructive is never offered, even if allowed")
+check("mcp_test_rename_everything" not in offered, "a writing tool not in allowed_actions is never offered")
+check(isinstance(mcp_services.call("mcp_test_create_note", {"title": "x"}), dict),
+      "an action cannot be run through the read-only call path")
+check(not os.path.exists(MARKER), "and nothing ran")
+
+mcp_services.clear_proposal()
+held = mcp_services.propose("mcp_test_create_note", {"title": "Buy resistors", "body": "10k for the DHT22"})
+check(isinstance(held, str) and "has not run" in held, "an action the model asks for is held, not run")
+check(not os.path.exists(MARKER), "a held action has not touched the service")
+check(isinstance(mcp_services.propose("mcp_test_create_note", {"title": "Second"}), dict),
+      "only one action is held per request")
+
+proposal = mcp_services.take_proposal()
+check(proposal is not None and proposal["arguments"]["title"] == "Buy resistors",
+      "the held action is the first one, with its real arguments")
+check(mcp_services.take_proposal() is None, "taking the held action removes it")
+
+said = mcp_services.describe(proposal)
+check(said == "create note on test: title 'Buy resistors'; body '10k for the DHT22'",
+      f"it is read back from the real arguments: {said!r}")
+
+long_body = " ".join(["word"] * 40)
+said = mcp_services.describe({"server": "test", "tool": "create_note", "arguments": {"title": "t", "body": long_body}})
+check("of 40 words, beginning" in said, f"a long value is summarised, not read in full: {said!r}")
+
+said = mcp_services.execute(proposal)
+check(said == "Done, sir. That's number 42 on test.", f"a confirmed action runs and says what it made: {said!r}")
+
+with open(MARKER, encoding="utf-8") as handle:
+    check(handle.read() == "Buy resistors|10k for the DHT22\n", "the service really received exactly those arguments")
+
+try:
+    agent
+except NameError:
+    print("SKIP Agent Mode action wiring (agent could not be imported)")
+else:
+    check("mcp_test_create_note" in {t["name"] for t in agent._tool_definitions(provider, include_actions=True)},
+          "Agent Mode offers the action when asked to")
+    check("mcp_test_create_note" not in {t["name"] for t in agent._tool_definitions(provider)},
+          "Agent Mode leaves actions out by default")
+    check("mcp_test_create_note" not in {
+              t["name"] for t in agent._tool_definitions(provider, include_actions=True, allow_code_fix=True)},
+          "fix passes never get actions")
+
+    os.remove(MARKER)
+    mcp_services.clear_proposal()
+    result = agent._execute_tool_call("mcp_test_create_note", {"title": "From the model"})
+    check("has not run" in str(result) and not os.path.exists(MARKER),
+          "an action the model calls in Agent Mode is held, not run")
+    mcp_services.clear_proposal()
+
+    endless = _Endless("mcp_test_create_note")
+    agent._run_with_provider(endless, "add a note on the test service", False, False, False, actions=True)
+    check(not os.path.exists(MARKER) and mcp_services.take_proposal() is not None,
+          "a model that keeps calling the action still runs nothing, and one action is held")
+
+# The spoken yes/no, where commands.py can be imported (it can on Windows).
+try:
+    import commands
+except Exception as error:
+    print(f"SKIP spoken confirmation (could not import commands: {error})")
+else:
+    real_run_agent = commands.run_agent
+
+    def fake_agent(task, **options):
+        if options.get("actions"):
+            mcp_services.propose("mcp_test_create_note", {"title": "Order a breadboard"})
+        return "I'll add that note."
+
+    commands.run_agent = fake_agent
+
+    try:
+        if os.path.exists(MARKER):
+            os.remove(MARKER)
+
+        asked = commands._run_agent_investigation("add a note on the test service", actions=True)
+        check(asked == "I'll add that note. To be sure, sir: create note on test: title 'Order a breadboard'. Shall I go ahead?",
+              f"JARVIS reads back what would run and asks: {asked!r}")
+        check(not os.path.exists(MARKER), "nothing has run while JARVIS waits for the answer")
+
+        answer = commands._resolve_pending("no")
+        check(answer is not None and "Nothing has been changed" in str(answer["action"]()) and not os.path.exists(MARKER),
+              "no drops the action")
+
+        commands._run_agent_investigation("add a note on the test service", actions=True)
+        commands._pending["lapses_at"] -= commands._ACTION_CONFIRM_SECONDS + 1
+        answer = commands._resolve_pending("yes")
+        check(answer is not None and "lapsed" in str(answer["action"]()) and not os.path.exists(MARKER),
+              "a yes after the question has lapsed runs nothing, and says so")
+
+        commands._run_agent_investigation("add a note on the test service", actions=True)
+        check(commands._resolve_pending("what time is it") is None and commands._pending is None,
+              "another command instead of an answer drops the action")
+
+        commands._run_agent_investigation("add a note on the test service", actions=True)
+        answer = commands._resolve_pending("yes")
+        said = answer["action"]() if answer else None
+        check(said == "Done, sir. That's number 42 on test." and os.path.exists(MARKER),
+              f"yes runs it, and the result is spoken: {said!r}")
+        check(answer["success_response"](said) == said and "Test refused it" in answer["failure_response"],
+              "the result, or a plain failure, is what is said afterwards")
+
+        commands._run_agent_investigation("what does the test service say", actions=False)
+        check(commands._pending is None or commands._pending.get("intent") != "service_action",
+              "without actions, nothing is held or asked")
+    finally:
+        commands.run_agent = real_run_agent
+        mcp_services.clear_proposal()
 
 # ---- a service that cannot connect ----------------------------------------
 

@@ -639,9 +639,12 @@ in the same `mcpServers` format Claude Desktop and Cursor use. Keys go in
 |---|---|
 | name the service in the request, e.g. what's in my github issues | JARVIS uses that service's tools to answer |
 | investigate … / look into … | Agent Mode, which can also use connected services |
+| name the service and ask for a change, e.g. open a github issue on JARVIS titled HUD flicker | reads back exactly what it would do and asks; yes runs it |
 
-Uses a model request. JARVIS only uses tools a service marks as read-only,
-so asking cannot change anything in the service.
+Uses a model request. Asking only reads: JARVIS uses tools a service marks
+as read-only. A change happens only for a tool you list in that service's
+`allowed_actions` in `mcp.json`, never one the service marks destructive,
+and only after you say yes to the read-back within two minutes.
 
 ## Memory
 

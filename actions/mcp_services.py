@@ -22,12 +22,16 @@ environment or JARVIS's .env, so keys never have to be written into it.
 
 What a server may do is decided here, not by the server:
 
-- Only tools the server marks read-only are offered. Anything else --
-  including a tool that says nothing either way -- is left out, because
-  Agent Mode is read-only and a service's word that a tool is harmless is
-  the most that can be checked. A server entry can name tools in
-  "trusted_read_only" when its author forgot the mark and the user has
-  checked them.
+- Only tools the server marks read-only are offered freely. Anything else
+  -- including a tool that says nothing either way -- is left out, because
+  a service's word that a tool is harmless is the most that can be
+  checked. A server entry can name tools in "trusted_read_only" when its
+  author forgot the mark and the user has checked them.
+- A tool that changes something is offered only when its entry names it
+  in "allowed_actions", only for a command that names the service, never
+  when the server marks it destructive, and never run by the model: the
+  call is held, JARVIS reads back exactly what would be done, and only a
+  spoken yes runs it. One action per request, and each one is journalled.
 - A tool's name and description are the server's words, and they reach
   the model, so they are treated like any outside text: cleaned, and a
   tool whose description reads like an instruction to the model is
@@ -68,6 +72,8 @@ _lock = threading.Lock()
 _loop = None
 _servers = {}     # server name -> _Server
 _tools = {}       # agent tool name -> (server name, tool name)
+_actions = {}     # agent tool name -> (server name, tool name), for actions
+_proposal = None  # the one action held for a spoken yes, or None
 _loaded = False
 
 
@@ -76,7 +82,8 @@ class _Server:
         self.name = name
         self.entry = entry
         self.client = None
-        self.tools = []       # agent tool dicts
+        self.tools = []       # agent tool dicts, read-only
+        self.actions = []     # agent tool dicts that change something
         self.error = None
         self._stop = None
         self._ready = None
@@ -215,11 +222,34 @@ def _describe(server, tool):
     return f"From the connected service '{server}': {cleaned or tool.name}"
 
 
+def _destructive(tool):
+    annotations = getattr(tool, "annotations", None)
+    return bool(annotations and getattr(annotations, "destructive_hint", None) is True)
+
+
+def _schema(tool):
+    schema = getattr(tool, "input_schema", None) or {"type": "object", "properties": {}}
+
+    if not isinstance(schema, dict):
+        schema = json.loads(json.dumps(schema, default=lambda o: getattr(o, "__dict__", str(o))))
+
+    return schema
+
+
 def _convert(server, entry, listed):
+    """(read-only tools, actions) a server may offer, as agent tool dicts."""
     kept = []
+    actions = []
+    allowed = set(entry.get("allowed_actions") or ())
 
     for tool in listed:
-        if not _read_only(tool, entry):
+        read_only = _read_only(tool, entry)
+
+        if not read_only and tool.name not in allowed:
+            continue
+
+        if not read_only and _destructive(tool):
+            print(f"[JARVIS] {server}: not offering {tool.name!r}; the service marks it destructive")
             continue
 
         description = _describe(server, tool)
@@ -227,19 +257,25 @@ def _convert(server, entry, listed):
         if description is None:
             continue
 
-        schema = getattr(tool, "input_schema", None) or {"type": "object", "properties": {}}
+        if not read_only:
+            description = (
+                "ACTION, changes something: JARVIS holds this call and asks the "
+                "user to confirm it aloud before it runs. " + description
+            )
 
-        if not isinstance(schema, dict):
-            schema = json.loads(json.dumps(schema, default=lambda o: getattr(o, "__dict__", str(o))))
-
-        kept.append({
+        (kept if read_only else actions).append({
             "name": _agent_name(server, tool.name),
             "description": description,
-            "input_schema": schema,
+            "input_schema": _schema(tool),
             "mcp": (server, tool.name),
         })
 
-    return kept
+    unknown = allowed - {tool.name for tool in listed}
+
+    if unknown:
+        print(f"[JARVIS] {server}: allowed_actions names tools it does not have: {', '.join(sorted(unknown))}")
+
+    return kept, actions
 
 
 # ---- the background loop ---------------------------------------------------
@@ -323,7 +359,7 @@ async def _hold(server):
                     break
 
             server.client = client
-            server.tools = _convert(server.name, server.entry, listed)
+            server.tools, server.actions = _convert(server.name, server.entry, listed)
             server._ready.set()
 
             await server._stop.wait()
@@ -351,14 +387,23 @@ def _connect(name, entry):
         journal.write("mcp", f"connect {name}", f"unavailable: {server.error}")
         return server
 
-    print(f"[JARVIS] connected service {name!r}: {len(server.tools)} read-only tools")
-    journal.write("mcp", f"connect {name}", f"{len(server.tools)} read-only tools")
+    offered = f"{len(server.tools)} read-only tools"
+
+    if server.actions:
+        offered += f", {len(server.actions)} action(s) with spoken confirmation"
+
+    print(f"[JARVIS] connected service {name!r}: {offered}")
+    journal.write("mcp", f"connect {name}", offered)
 
     return server
 
 
-def tools():
-    """Agent tool definitions from every connected service. Connects on first use."""
+def tools(include_actions=False):
+    """Agent tool definitions from every connected service. Connects on first use.
+
+    Actions are included only when asked for: a command that names the
+    service, never an ordinary investigation.
+    """
     global _loaded
 
     with _lock:
@@ -372,11 +417,160 @@ def tools():
                 for tool in server.tools:
                     _tools[tool["name"]] = tool["mcp"]
 
-        return [tool for server in _servers.values() if server.client for tool in server.tools]
+                for tool in server.actions:
+                    _actions[tool["name"]] = tool["mcp"]
+
+        offered = [tool for server in _servers.values() if server.client for tool in server.tools]
+
+        if include_actions:
+            offered += [tool for server in _servers.values() if server.client for tool in server.actions]
+
+        return offered
 
 
 def owns(tool_name):
-    return tool_name in _tools
+    return tool_name in _tools or tool_name in _actions
+
+
+def is_action(tool_name):
+    return tool_name in _actions
+
+
+# ---- actions: held, read back, run only on a spoken yes ---------------------
+
+def clear_proposal():
+    global _proposal
+
+    with _lock:
+        _proposal = None
+
+
+def propose(tool_name, arguments):
+    """Hold an action the model asked for, instead of running it."""
+    global _proposal
+
+    target = _actions.get(tool_name)
+
+    if not target:
+        return {"error": f"Unknown connected-service action: {tool_name}"}
+
+    with _lock:
+        if _proposal is not None:
+            return {"error": "One action per request, and one is already held for the user to confirm."}
+
+        _proposal = {"name": tool_name, "server": target[0], "tool": target[1], "arguments": dict(arguments or {})}
+
+    journal.write("mcp", f"held {target[0]}.{target[1]}", "awaiting a spoken yes")
+
+    return (
+        f"Held for the user's spoken confirmation: {describe(_proposal)}. It has not run. "
+        "Do not call it again. Finish with a short answer saying what you propose to do."
+    )
+
+
+def take_proposal():
+    """The held action, removed, or None."""
+    global _proposal
+
+    with _lock:
+        proposal, _proposal = _proposal, None
+
+    return proposal
+
+
+def _spoken_value(name, value):
+    label = name.replace("_", " ")
+
+    if isinstance(value, bool):
+        return f"{label} {'yes' if value else 'no'}"
+
+    if isinstance(value, (int, float)):
+        return f"{label} {value}"
+
+    if isinstance(value, (list, tuple)):
+        items = [str(item) for item in value]
+        shown = ", ".join(items[:5]) + (f" and {len(items) - 5} more" if len(items) > 5 else "")
+        return f"{label} {shown}"
+
+    if isinstance(value, dict):
+        return f"{label} with {len(value)} field(s)"
+
+    text = " ".join(str(value).split())
+    words = text.split()
+
+    # Short values are read in full: they are what is being agreed to.
+    if len(text) <= 80:
+        return f"{label} '{text}'"
+
+    return f"{label} of {len(words)} words, beginning '{' '.join(words[:12])}'"
+
+
+def describe(proposal):
+    """Exactly what an action would do, from its real arguments, for reading back."""
+    tool = proposal["tool"].replace("_", " ")
+    details = [
+        _spoken_value(name, value)
+        for name, value in proposal["arguments"].items()
+        if value not in (None, "", [], {})
+    ]
+
+    said = f"{tool} on {proposal['server']}"
+
+    return f"{said}: {'; '.join(details)}" if details else said
+
+
+def execute(proposal):
+    """Run an action the user said yes to. Returns what to say, or None on failure."""
+    server = _servers.get(proposal["server"])
+
+    if not server or not server.client:
+        journal.action(f"mcp_{proposal['tool']}", proposal["server"], False)
+        return None
+
+    summary = f"{proposal['server']}.{proposal['tool']} {json.dumps(proposal['arguments'], ensure_ascii=False)[:200]}"
+
+    try:
+        future = asyncio.run_coroutine_threadsafe(
+            server.client.call_tool(proposal["tool"], proposal["arguments"]), _loop
+        )
+        result = future.result(CALL_SECONDS + 5)
+    except Exception as error:
+        journal.write("mcp action", summary, f"failed: {error}")
+        journal.action(f"mcp_{proposal['tool']}", proposal["server"], False)
+        return None
+
+    text = _result_text(result)
+
+    if getattr(result, "is_error", False):
+        journal.write("mcp action", summary, f"refused: {safety.clean(text, 300)}")
+        journal.action(f"mcp_{proposal['tool']}", proposal["server"], False)
+        return None
+
+    journal.write("mcp action", summary, "done")
+    journal.action(f"mcp_{proposal['tool']}", proposal["server"], True,
+                   spoken=f"{proposal['tool'].replace('_', ' ')} on {proposal['server']}")
+
+    return _outcome(proposal, text)
+
+
+def _outcome(proposal, text):
+    """A short spoken result: what was made and where, when the service says."""
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        data = None
+
+    if isinstance(data, dict):
+        number = data.get("number")
+        link = data.get("html_url") or data.get("url")
+
+        if number is not None:
+            return f"Done, sir. That's number {number} on {proposal['server']}."
+
+        if link:
+            return f"Done, sir. It's on {proposal['server']} now."
+
+    return "Done, sir."
 
 
 def _resource_text(resource):
@@ -474,7 +668,10 @@ def close():
 
         _servers.clear()
         _tools.clear()
+        _actions.clear()
         _loaded = False
+
+    clear_proposal()
 
 
 def status():

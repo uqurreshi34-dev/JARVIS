@@ -857,8 +857,45 @@ def _is_directory_investigation(task):
     return any(word in text for word in directory_words)
 
 
-def _run_agent_investigation(task):
-    """Run Agent Mode, then ask for the appropriate next action."""
+# A change to a connected service must be agreed to while it is fresh: a
+# yes minutes later is more likely meant for something else.
+_ACTION_CONFIRM_SECONDS = 120
+
+
+def _confirm_service_action(proposal, summary):
+    """Ask aloud before a connected service changes anything."""
+    _confirm(
+        "service_action",
+        "",
+        lambda: mcp_services.execute(proposal),
+        yes_text="Going ahead, sir.",
+        no_text="Very good, sir. Nothing has been changed.",
+        timeout=None,
+        success_response=lambda said: said,
+        failure_response=(
+            f"That didn't go through, sir. {proposal['server'].capitalize()} "
+            "refused it or couldn't be reached."
+        ),
+        lapses_after=_ACTION_CONFIRM_SECONDS,
+    )
+
+    question = f"To be sure, sir: {mcp_services.describe(proposal)}. Shall I go ahead?"
+    lead = (summary or "").strip()
+
+    if lead and lead != agent.LIMIT_MESSAGE:
+        return f"{lead} {question}"
+
+    return question
+
+
+def _run_agent_investigation(task, actions=False):
+    """Run Agent Mode, then ask for the appropriate next action.
+
+    [actions] is for a request naming a connected service: anything that
+    would change something is held, not run, and JARVIS reads back exactly
+    what would be done -- from the real arguments, not the model's account
+    of them -- so that only a spoken yes runs it.
+    """
     global _awaiting
 
     is_code = _is_code_investigation(task)
@@ -866,7 +903,13 @@ def _run_agent_investigation(task):
     summary = run_agent(
         task,
         code_task=is_code,
+        actions=actions and not is_code,
     )
+
+    proposal = mcp_services.take_proposal() if actions else None
+
+    if proposal is not None:
+        return _confirm_service_action(proposal, summary)
 
     if not summary:
         return None
@@ -4524,8 +4567,14 @@ def _confirm(
     no_action=None,
     timeout=None,
     success_response=None,
+    failure_response=None,
+    lapses_after=None,
 ):
-    """Ask before doing something, and remember what to do if approved."""
+    """Ask before doing something, and remember what to do if approved.
+
+    [lapses_after] seconds, when given, is how long the question stands: a
+    yes after that is treated as a new command, not an answer.
+    """
     global _pending, _awaiting
 
     _awaiting = None
@@ -4537,6 +4586,8 @@ def _confirm(
         "no_action": no_action,
         "timeout": timeout,
         "success_response": success_response,
+        "failure_response": failure_response,
+        "lapses_at": time.monotonic() + lapses_after if lapses_after else None,
     }
 
     return {
@@ -4718,6 +4769,14 @@ def _resolve_pending(text):
 
     answer = _normalise(text)
 
+    if _pending.get("lapses_at") and time.monotonic() > _pending["lapses_at"]:
+        _pending = None
+
+        if answer in _YES or answer in _NO:
+            return _query("cancelled", lambda: "That question lapsed, sir, so nothing has been changed.")
+
+        return None
+
     if answer in _YES:
         pending = _pending
         _pending = None
@@ -4729,6 +4788,7 @@ def _resolve_pending(text):
             "action": pending["action"],
             "timeout": pending.get("timeout"),
             "success_response": pending.get("success_response"),
+            "failure_response": pending.get("failure_response"),
         }
 
     if answer in _NO:
@@ -5027,7 +5087,7 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
             return routed(_query(
                 "agent_mode",
-                lambda: _run_agent_investigation(task),
+                lambda: _run_agent_investigation(task, actions=True),
                 detail=task,
             ))
 

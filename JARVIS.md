@@ -954,7 +954,9 @@ setup can be pasted in:
 written into the file. A service is recognised by its name however speech
 recognition splits it ("file system" finds `filesystem`, "git hub" finds
 `github`); `aliases` are other names it may be spoken as; `disabled: true` switches an entry off; `trusted_read_only` lists tools
-the user has checked but whose server forgot to mark them.
+the user has checked but whose server forgot to mark them; `allowed_actions`
+lists tools that change something which JARVIS may offer, with a spoken
+confirmation (below).
 
 The tools join Agent Mode. A command naming a configured service goes to
 Agent Mode directly, skipping the command interpreter, and ordinary Agent
@@ -966,14 +968,24 @@ memory (`_OWN_RECORDS` in commands.py).
 
 What a service may do is decided by JARVIS, not by the service:
 
-- only tools the server marks read-only are offered; a tool marked as
-  writing, or one that says nothing either way, is left out;
+- only tools the server marks read-only are offered freely; a tool marked
+  as writing, or one that says nothing either way, is left out unless its
+  entry names it in `allowed_actions`;
+- an allowed action is offered only when the command names the service,
+  never to ordinary investigations, code tasks or fix passes, and never
+  when the server marks it destructive (a delete, say), whatever the list;
+- the model cannot run an action: its call is held, JARVIS reads back what
+  would be done from the call's real arguments ("To be sure, sir: create
+  issue on github: title '...'. Shall I go ahead?"), and only a yes within
+  two minutes runs it; no, silence or another command drops it. One action
+  per request;
 - tool names and descriptions are outside text: they are cleaned, and a
   tool whose description reads like an instruction to the model is dropped;
 - results reach the model as quoted data, never instructions;
 - a server started as a program sees only basic variables such as PATH and
   the ones its entry names, never the API keys JARVIS holds;
-- every connection and call is written to the journal.
+- every connection, call and action, held or run, is written to the
+  journal, and a run action to the command log.
 
 Nothing connects until Agent Mode first needs a tool. A service that fails
 to start, or whose key is missing, prints one line and is left out.

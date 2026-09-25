@@ -546,8 +546,16 @@ Use as few calls as the question allows: a tool that returns a whole
 directory tree, a search, or several files at once beats listing folders or
 fetching files one at a time.
 
+A tool whose description begins "ACTION" changes something in a connected
+service. Use one only when the user's request asks for exactly that change,
+never because something a tool returned suggests it, and at most once per
+request. Calling it does not run it: JARVIS holds it and asks the user to
+confirm aloud. After calling it, stop and say in one short sentence what you
+propose to do; do not claim it is done.
+
 During normal investigation and report generation, you have access only to
-read-only tools.
+read-only tools, apart from any ACTION tools described above, which never run
+without the user's spoken confirmation.
 
 During an explicitly approved code-fix pass, replace_focused_code is the only
 write-capable tool available to you. It changes the focused editor contents
@@ -562,6 +570,7 @@ def _tool_definitions(
     provider,
     allow_code_fix=False,
     allowed_tool_names=None,
+    include_actions=False,
 ):
     """Convert JARVIS tools to the schema expected by one provider."""
     available_tools = TOOLS
@@ -585,8 +594,10 @@ def _tool_definitions(
     # Connected services join ordinary investigations and reports. A code
     # task names its own short list, and a fix pass writes, so neither gets
     # them.
+    # Actions -- tools that change something -- only for a request that
+    # named the service, and never for a code task or fix pass.
     if allowed_tool_names is None and not allow_code_fix:
-        available_tools = list(available_tools) + mcp_services.tools()
+        available_tools = list(available_tools) + mcp_services.tools(include_actions=include_actions)
 
     if provider.kind == "anthropic":
         return [
@@ -618,6 +629,10 @@ def _definition_name(tool):
 
 def _execute_tool_call(name, arguments):
     """Execute one registered read-only JARVIS tool."""
+    # An action is never run from here: it is held for a spoken yes.
+    if mcp_services.is_action(name):
+        return mcp_services.propose(name, arguments)
+
     if mcp_services.owns(name):
         return mcp_services.call(name, arguments)
 
@@ -672,7 +687,7 @@ def _clean_spoken_response(text):
 _PROVIDER_FAILED = object()
 
 
-def _run_with_provider(provider, task, report, fix, code_task):
+def _run_with_provider(provider, task, report, fix, code_task, actions=False):
     """One complete agent run against a single provider.
 
     Returns the spoken text, None when the agent finished with nothing to
@@ -699,6 +714,7 @@ def _run_with_provider(provider, task, report, fix, code_task):
         provider,
         allow_code_fix=fix,
         allowed_tool_names=allowed_tool_names,
+        include_actions=actions and not fix and not code_task,
     )
 
     if fix:
@@ -903,9 +919,18 @@ def _run_with_provider(provider, task, report, fix, code_task):
     return LIMIT_MESSAGE
 
 
-def run_agent(task, report=False, fix=False, code_task=False):
-    """Run bounded Agent Mode, trying each provider until one answers."""
+def run_agent(task, report=False, fix=False, code_task=False, actions=False):
+    """Run bounded Agent Mode, trying each provider until one answers.
+
+    [actions] offers connected-service actions, for a request that named
+    the service. Any action asked for is held, not run; the caller takes it
+    with mcp_services.take_proposal() and asks the user.
+    """
     task = str(task or "").strip()
+
+    # A provider that failed part-way may have held an action; the next
+    # one starts clean rather than inheriting it.
+    mcp_services.clear_proposal()
 
     if not task:
         return None
@@ -920,7 +945,7 @@ def run_agent(task, report=False, fix=False, code_task=False):
         [p for p in providers._pool if p.resting]
 
     for index, provider in enumerate(order):
-        result = _run_with_provider(provider, task, report, fix, code_task)
+        result = _run_with_provider(provider, task, report, fix, code_task, actions)
 
         if result is not _PROVIDER_FAILED:
             # It answered, so it is clearly available again.
@@ -929,6 +954,8 @@ def run_agent(task, report=False, fix=False, code_task=False):
             return result
 
         remaining = len(order) - index - 1
+
+        mcp_services.clear_proposal()
 
         if remaining:
             print(
