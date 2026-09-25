@@ -603,6 +603,21 @@ overwritten; a new unique filename is used beside previous reports.
 Destination folders are direct children of the JARVIS folder. JARVIS cannot
 use the feature to escape the JARVIS root.
 
+
+### Asking what your reports say
+
+| Say | Does |
+|---|---|
+| what did my report say about deep sleep | reads the passage, and says which report |
+| what does my ESP32 report say about batteries | searches that report only |
+| search my reports for energy use | same as asking what they say |
+| which reports mention insurance | names each report, with its date |
+
+Free and local: the passage is found by meaning and read as written, with
+no model call. Reports in the JARVIS folder and any folder inside it are
+searched, including Reports. Asking about a report never starts a new
+research run; "research X and write a report" still does.
+
 ## Connected services
 
 Services that speak MCP (GitHub, Notion, a database, Home Assistant and many

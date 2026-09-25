@@ -61,6 +61,7 @@ from actions import (
     research,
     log_search,
     notes,
+    report_search,
     patterns,
     safety,
     screen_control,
@@ -3583,7 +3584,9 @@ _SOCIAL_INTENTS = {
 }
 # Questions about what JARVIS himself has recorded. A connected service
 # named inside one ("what did I note about github") is only its topic.
-_OWN_RECORDS = frozenset({"search_log", "read_notes", "recall_memory", "read_log", "log_summary"})
+_OWN_RECORDS = frozenset({
+    "search_log", "search_reports", "read_notes", "recall_memory", "read_log", "log_summary",
+})
 
 _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 
@@ -3621,6 +3624,11 @@ def _fast_path(command):
 
     if asked:
         return _blank_result("search_log", text=_original_case(command, asked[1]))
+
+    about = report_search.question(command)
+
+    if about:
+        return _blank_result("search_reports", text=_original_case(command, about[1]))
 
     # Before the phrase table too, so "read my notes about the boiler" is
     # not taken as plain "read my notes".
@@ -4992,16 +5000,20 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
         return taken
 
-    if not fast_only:
+    # A question about JARVIS's own records, once recognised, is answered
+    # from them: none of the routes below may take it. "What did my research
+    # report say about deep sleep" must not start a new research run.
+    own_records = bool(result) and result["intent"] in _OWN_RECORDS
+
+    if not fast_only and not own_records:
 
         # A command that names a connected service (mcp.json) is work for
         # that service's tools, in Agent Mode. Checked first, so a local
         # phrase ("read the readme") or the multi-step planner ("open
         # github and read it") cannot take a request meant for the service.
-        # Except a question about JARVIS's own records that merely names
-        # the service: "how many times have I asked about github" is
-        # answered from the log, not by GitHub's tools.
-        service = None if (result and result["intent"] in _OWN_RECORDS) else mcp_services.mentioned(command)
+        # Questions about JARVIS's own records never get here, so "how many
+        # times have I asked about github" is answered from the log.
+        service = mcp_services.mentioned(command)
 
         if service:
             print(f"[agent] Agent Mode for connected service {service!r}")
@@ -5395,6 +5407,11 @@ def _handle_command(command, *, fast_only=False, probe=False):
         topic = verbatim_text or text
 
         return _query(intent, lambda: log_search.answer(command, topic=topic))
+
+    if intent == "search_reports":
+        topic = verbatim_text or text
+
+        return _query(intent, lambda: report_search.answer(command, topic=topic))
 
     if intent == "open_default_project":
         default = memory.default_project()

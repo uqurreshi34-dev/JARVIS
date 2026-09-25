@@ -334,6 +334,10 @@ activity log.
 Use search_log when the user asks about their own past requests on a
 topic, such as "when did I last ask about bitcoin" or "have I asked you
 about the weather before": put only the topic in "text".
+Use search_reports when the user asks what their saved reports say about a
+topic, such as "what did my research report say about deep sleep" or
+"which reports mention insurance": put only the topic in "text". Never
+use a research request for this; it reads reports already written.
 
 Use look when the user wants JARVIS to see something through the camera,
 such as "what am I holding" or "what do you see". Put their question in
@@ -562,6 +566,7 @@ _SCHEMA = {
                 "read_log",
                 "log_summary",
                 "search_log",
+                "search_reports",
                 "look",
                 "stop_looking",
                 "save_picture",

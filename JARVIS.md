@@ -36,7 +36,7 @@ This prevents speech intended for the phone from being heard or acted on by
 the desktop listener. When the phone interaction finishes, the desktop
 microphone is restored.
 
-**128 language-model intents. 520 spoken phrases resolve locally with no API call.**
+**129 language-model intents. 520 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -826,6 +826,20 @@ post-Tripo segmented models.
 
 JARVIS can research arbitrary subjects, compare them, synthesise the findings
 and create a source-backed report.
+
+**Saved reports answer questions** - `actions/report_search.py`.
+"What did my report say about deep sleep?", "what does my ESP32 report say
+about batteries?", "which reports mention insurance?" read the matching
+passage aloud, saying which report and when, with no model call. Word files
+with "report" in the name are read from the JARVIS folder and one level of
+subfolders. Reports are split by their own sections, headings found as
+Markdown marks, bold lines or short title-like lines; a passage never runs
+across a heading and is encoded with its heading, tables are read row by row
+with their column names, and the Sources list is left out. Measured on
+research reports: true passages scored 0.34 to 0.82, unrelated topics 0.20
+or less; the minimum is 0.32, with 0.25 added for a shared word. A question
+about JARVIS's own records is never taken by the routes that run after the
+fast path, so asking about a research report cannot start a research run.
 
 Research is provider-agnostic and uses the normal JARVIS provider chain:
 Claude first, then Groq, then Gemini when failover is required. The research
