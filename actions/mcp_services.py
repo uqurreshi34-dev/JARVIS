@@ -139,6 +139,36 @@ def _read_config():
     }
 
 
+# ---- what the HUD is told ----------------------------------------------------
+
+# Told what each service is doing as it happens, for the HUD's services strip:
+# (server, state), where state is one of the words below. Only real events
+# are reported; nothing here animates on its own.
+CONNECTED = "connected"
+UNAVAILABLE = "unavailable"
+BUSY = "busy"
+IDLE = "idle"
+HELD = "held"
+DONE = "done"
+REFUSED = "refused"
+
+_activity_listener = None
+
+
+def set_activity_listener(listener):
+    """Register a callable taking (server name, state)."""
+    global _activity_listener
+    _activity_listener = listener
+
+
+def _report(server, state):
+    if _activity_listener:
+        try:
+            _activity_listener(server, state)
+        except Exception as error:
+            print(f"[JARVIS] could not show service activity: {error}")
+
+
 def configured():
     """Names of the servers in mcp.json, whether or not they are connected."""
     return tuple(_read_config())
@@ -393,6 +423,7 @@ def _connect(name, entry):
     if server.error or server.client is None:
         print(f"[JARVIS] connected service {name!r} unavailable: {server.error}")
         journal.write("mcp", f"connect {name}", f"unavailable: {server.error}")
+        _report(name, UNAVAILABLE)
         return server
 
     offered = f"{len(server.tools)} read-only tools"
@@ -402,6 +433,7 @@ def _connect(name, entry):
 
     print(f"[JARVIS] connected service {name!r}: {offered}")
     journal.write("mcp", f"connect {name}", offered)
+    _report(name, CONNECTED)
 
     return server
 
@@ -469,6 +501,7 @@ def propose(tool_name, arguments):
         _proposal = {"name": tool_name, "server": target[0], "tool": target[1], "arguments": dict(arguments or {})}
 
     journal.write("mcp", f"held {target[0]}.{target[1]}", "awaiting a spoken yes")
+    _report(target[0], HELD)
 
     return (
         f"Held for the user's spoken confirmation: {describe(_proposal)}. It has not run. "
@@ -541,9 +574,12 @@ def execute(proposal):
     if not server or not server.client:
         proposal["failure"] = f"{_spoken_server(proposal)} couldn't be reached."
         journal.action(f"mcp_{proposal['tool']}", proposal["server"], False)
+        _report(proposal["server"], REFUSED)
         return None
 
     summary = f"{proposal['server']}.{proposal['tool']} {json.dumps(proposal['arguments'], ensure_ascii=False)[:200]}"
+
+    _report(proposal["server"], BUSY)
 
     try:
         future = asyncio.run_coroutine_threadsafe(
@@ -554,6 +590,7 @@ def execute(proposal):
         proposal["failure"] = f"{_spoken_server(proposal)} couldn't be reached."
         journal.write("mcp action", summary, f"failed: {error}")
         journal.action(f"mcp_{proposal['tool']}", proposal["server"], False)
+        _report(proposal["server"], REFUSED)
         return None
 
     text = _result_text(result)
@@ -562,11 +599,13 @@ def execute(proposal):
         proposal["failure"] = _refusal(proposal, text)
         journal.write("mcp action", summary, f"refused: {safety.clean(text, 300)}")
         journal.action(f"mcp_{proposal['tool']}", proposal["server"], False)
+        _report(proposal["server"], REFUSED)
         return None
 
     journal.write("mcp action", summary, "done")
     journal.action(f"mcp_{proposal['tool']}", proposal["server"], True,
                    spoken=f"{proposal['tool'].replace('_', ' ')} on {proposal['server']}")
+    _report(proposal["server"], DONE)
 
     return _outcome(proposal, text)
 
@@ -690,6 +729,8 @@ def call(tool_name, arguments):
 
     summary = f"{server_name}.{tool} {json.dumps(arguments or {}, ensure_ascii=False)[:200]}"
 
+    _report(server_name, BUSY)
+
     try:
         future = asyncio.run_coroutine_threadsafe(
             server.client.call_tool(tool, arguments or {}), _loop
@@ -697,7 +738,10 @@ def call(tool_name, arguments):
         result = future.result(CALL_SECONDS + 5)
     except Exception as error:
         journal.write("mcp", summary, f"failed: {error}")
+        _report(server_name, IDLE)
         return {"error": f"The connected service '{server_name}' failed: {error}"}
+
+    _report(server_name, IDLE)
 
     text = _result_text(result)
 

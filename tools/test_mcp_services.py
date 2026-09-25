@@ -71,6 +71,10 @@ write_config({
     },
 })
 
+# What the HUD's services strip is told, as it happens.
+activity = []
+mcp_services.set_activity_listener(lambda name, state: activity.append((name, state)))
+
 tools = {tool["name"]: tool for tool in mcp_services.tools()}
 names = set(tools)
 
@@ -91,7 +95,12 @@ check(all(t["description"].startswith("From the connected service 'test'") for t
 check(tools["mcp_test_upper"]["input_schema"].get("properties", {}).get("text") is not None,
       "the tool's input schema is passed through")
 
+check(("test", mcp_services.CONNECTED) in activity, "the strip is told when a service connects")
+
+activity.clear()
 result = mcp_services.call("mcp_test_upper", {"text": "jarvis"})
+check(activity == [("test", mcp_services.BUSY), ("test", mcp_services.IDLE)],
+      f"a call lights the service while it runs, then settles ({activity})")
 check(isinstance(result, str) and "JARVIS" in result and "not instructions" in result,
       "a call returns its result as quoted data")
 
@@ -240,7 +249,9 @@ check(isinstance(mcp_services.call("mcp_test_create_note", {"title": "x"}), dict
 check(not os.path.exists(MARKER), "and nothing ran")
 
 mcp_services.clear_proposal()
+activity.clear()
 held = mcp_services.propose("mcp_test_create_note", {"title": "Buy resistors", "body": "10k for the DHT22"})
+check(activity == [("test", mcp_services.HELD)], "a held action shows the service waiting on you")
 check(isinstance(held, str) and "has not run" in held, "an action the model asks for is held, not run")
 check(not os.path.exists(MARKER), "a held action has not touched the service")
 check(isinstance(mcp_services.propose("mcp_test_create_note", {"title": "Second"}), dict),
@@ -259,7 +270,10 @@ long_body = " ".join(["word"] * 40)
 said = mcp_services.describe({"server": "test", "tool": "create_note", "arguments": {"title": "t", "body": long_body}})
 check("of 40 words, beginning" in said, f"a long value is summarised, not read in full: {said!r}")
 
+activity.clear()
 said = mcp_services.execute(proposal)
+check(activity == [("test", mcp_services.BUSY), ("test", mcp_services.DONE)],
+      f"a confirmed action runs, then flashes done ({activity})")
 check(said == "Done, sir. That's number 42 on test.", f"a confirmed action runs and says what it made: {said!r}")
 
 with open(MARKER, encoding="utf-8") as handle:
@@ -344,8 +358,10 @@ else:
         mcp_services.propose("mcp_test_create_note", {"title": "forbidden"})
         commands._confirm_service_action(mcp_services.take_proposal(), "")
         answer = commands._resolve_pending("yes")
+        activity.clear()
         said = answer["action"]()
         check(said is None, "a refused action counts as a failure")
+        check(activity[-1:] == [("test", mcp_services.REFUSED)], "and the strip shows the refusal")
         said = answer["failure_response"]()
         check(said == "That didn't go through, sir. Test says your token isn't allowed to do that.",
               f"a permission refusal is said as one: {said!r}")
@@ -444,7 +460,10 @@ write_config({
     "no_such_program": {"command": "definitely-not-a-real-program-xyz", "args": []},
 })
 
+activity.clear()
 check(mcp_services.tools() == [], "services that cannot start offer nothing and raise nothing")
+check({("missing_key", mcp_services.UNAVAILABLE), ("no_such_program", mcp_services.UNAVAILABLE)} <= set(activity),
+      "and the strip shows each as unavailable")
 status = " ".join(mcp_services.status())
 check("JARVIS_TEST_NOT_SET is not set" in status, "a missing ${NAME} is reported by name")
 check("no_such_program: unavailable" in status, "a server that will not start is reported unavailable")
@@ -468,5 +487,6 @@ finally:
 write_config({"off": {"command": sys.executable, "args": [SERVER], "disabled": True}})
 check(mcp_services.configured() == (), "a disabled entry is ignored")
 
+mcp_services.set_activity_listener(None)
 mcp_services.close()
 sys.exit(1 if failures else 0)

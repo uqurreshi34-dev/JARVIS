@@ -995,6 +995,13 @@ What a service may do is decided by JARVIS, not by the service:
 - every connection, call and action, held or run, is written to the
   journal, and a run action to the command log.
 
+The HUD's services strip, under the telemetry, names each service in
+`mcp.json` and shows what it is really doing, reported by
+`mcp_services` as it happens: dim and hollow until it first connects, lit
+once connected, pulsing while a request runs, amber while an action waits
+for your yes, a green flash when one goes through, red when one is refused
+or the service cannot be reached. More than fit are counted ("+2").
+
 Nothing connects until Agent Mode first needs a tool. A service that fails
 to start, or whose key is missing, prints one line and is left out.
 

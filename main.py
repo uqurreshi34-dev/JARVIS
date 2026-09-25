@@ -63,6 +63,7 @@ import phrases
 from actions.markets import market_monitor
 from actions.patterns import pattern_monitor
 from phone import phone_server
+from actions import mcp_services
 import boot
 from beam import Beam
 from brain_panel import BrainPanel
@@ -878,6 +879,16 @@ def main():
     set_speaking_listener(hud.speaking_changed.emit)
     set_confirmation_listener(
         lambda seconds, outcome: hud.confirmation_changed.emit(float(seconds or 0.0), outcome or "")
+    )
+
+    # The services strip: what mcp.json lists, lit by what each really does.
+    try:
+        hud.services_listed.emit(list(mcp_services.configured()))
+    except Exception as error:
+        print(f"[JARVIS] could not list connected services: {error}")
+
+    mcp_services.set_activity_listener(
+        lambda name, state: hud.service_activity.emit(str(name), str(state))
     )
 
     # Microphone levels drive the waveform when JARVIS is not talking.

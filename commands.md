@@ -645,7 +645,8 @@ Uses a model request. Asking only reads: JARVIS uses tools a service marks
 as read-only. A change happens only for a tool you list in that service's
 `allowed_actions` in `mcp.json`, never one the service marks destructive,
 and only after you say yes to the read-back within two minutes. The HUD's
-outer ring counts those two minutes down.
+outer ring counts those two minutes down, and the strip under the HUD's
+telemetry shows each service lighting up as it is used.
 
 ## Memory
 

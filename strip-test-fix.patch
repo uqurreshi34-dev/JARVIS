@@ -1,0 +1,127 @@
+diff --git a/tools/test_services_strip.py b/tools/test_services_strip.py
+index 53e6dc0..c54aafe 100644
+--- a/tools/test_services_strip.py
++++ b/tools/test_services_strip.py
+@@ -67,40 +67,61 @@ def bright(colour):
+ 
+-def amber(colour):
+-    # By hue, not brightness: the amber pulses, and its dim point is still amber.
+-    r, g, b = colour.red(), colour.green(), colour.blue()
+-    return r > 130 and 0.62 * r < g < 0.9 * r and b < 0.6 * r
++def strongest(image, area=STRIP, share=0.2):
++    """The strip's brightest pixels: the ink itself, not its anti-aliased edge.
++
++    Judging the ink's colour, rather than counting pixels over a threshold,
++    holds on any font: Windows draws small Consolas thin, and a count that
++    passes with a heavier font can fail there.
++    """
++    left, top, right, bottom = area
++    lit = [image.pixelColor(x, y) for x in range(left, right) for y in range(top, bottom)]
++    lit = [c for c in lit if c.alpha() > 0 and max(c.red(), c.green(), c.blue()) > 40]
++    lit.sort(key=lambda c: max(c.red(), c.green(), c.blue()), reverse=True)
++    return lit[:max(1, int(len(lit) * share))] if lit else []
++
++
++def peak(image):
++    """How bright the strip's ink is at its brightest."""
++    top = strongest(image)
++    return sum(max(c.red(), c.green(), c.blue()) for c in top) / len(top) if top else 0.0
++
++
++def hue(image, area=STRIP):
++    """The average colour of the strip's brightest ink, as (r, g, b)."""
++    top = strongest(image, area)
++    if not top:
++        return (0.0, 0.0, 0.0)
++    return tuple(sum(getattr(c, part)() for c in top) / len(top) for part in ("red", "green", "blue"))
+ 
+ 
+-def green(colour):
+-    return colour.green() > 200 and colour.red() < 170 and colour.blue() < 200
++def is_amber(rgb):
++    r, g, b = rgb
++    return r > 100 and 0.6 * r < g < 0.92 * r and b < 0.62 * r
+ 
+ 
+-def red(colour):
+-    return colour.red() > 200 and colour.green() < 130 and colour.blue() < 130
++def is_green(rgb):
++    r, g, b = rgb
++    return g > 100 and g > 1.25 * r and g > 1.1 * b
+ 
+ 
+-def text_level(image):
+-    """The summed brightness of the strip: how lit it is."""
+-    left, top, right, bottom = STRIP
+-    return sum(max(image.pixelColor(x, y).red(), image.pixelColor(x, y).green(), image.pixelColor(x, y).blue())
+-               for x in range(left, right) for y in range(top, bottom))
++def is_red(rgb):
++    r, g, b = rgb
++    return r > 100 and r > 1.8 * g and r > 1.8 * b
+ 
+ 
+-empty = text_level(frame())
++empty = peak(frame())
+ 
+-widget.services_listed.emit(["filesystem", "github"])
+-configured = text_level(frame())
+-check(configured > empty, "listed services are drawn")
++widget.services_listed.emit(["github"])
++configured = peak(frame())
++check(configured > empty, "a listed service is drawn")
+ 
+ widget.service_activity.emit("github", "connected")
+-widget.service_activity.emit("filesystem", "connected")
+-connected = text_level(frame())
+-check(connected > configured * 1.3, "connected, they are lit more than when only listed")
++connected = peak(frame())
++check(connected > configured + 30, f"connected, it is lit brighter than when only listed ({configured:.0f} -> {connected:.0f})")
+ 
+ widget.service_activity.emit("github", "busy")
+-check(text_level(frame()) >= connected, "busy is at least as bright as connected")
++check(peak(frame()) >= connected - 5, "busy is at least as bright as connected")
+ 
+ widget.service_activity.emit("github", "held")
+-check(pixels(frame(), amber) > 10, "waiting on a yes, the service turns amber")
++check(is_amber(hue(frame())), f"waiting on a yes, the service turns amber {hue(frame())}")
+ 
+ widget.confirmation_changed.emit(120.0, "")
+@@ -107,3 +128,3 @@ widget.confirmation_changed.emit(120.0, "")
+ widget.confirmation_changed.emit(0.0, "no")
+-check(pixels(frame(), amber) == 0 and widget._services["github"][0] == "connected",
++check(not is_amber(hue(frame())) and widget._services["github"][0] == "connected",
+       "answering the question sets it back to connected")
+@@ -111,4 +132,4 @@ check(pixels(frame(), amber) == 0 and widget._services["github"][0] == "connecte
+ widget.service_activity.emit("github", "done")
+-check(pixels(frame(), green) > 10, "an action that went through flashes green")
++check(is_green(hue(frame())), f"an action that went through flashes green {hue(frame())}")
+ 
+ widget._services["github"][1] = time.monotonic() - hud._SERVICE_FLASH["done"] - 0.1
+@@ -118,3 +139,4 @@ check(widget._services["github"][0] == "connected", "then settles to connected")
+ widget.service_activity.emit("github", "refused")
+-check(pixels(frame(), red) > 10, "a refusal flashes red")
++refused = hue(frame())
++check(is_red(refused), f"a refusal flashes red {refused}")
+ widget._services["github"][1] = time.monotonic() - hud._SERVICE_FLASH["refused"] - 0.1
+@@ -123,13 +145,14 @@ check(widget._services["github"][0] == "connected", "and settles too")
+ 
+-widget.service_activity.emit("filesystem", "unavailable")
+-widget._services["filesystem"][1] = time.monotonic() - 60
+-# Dimmer than a fresh refusal, so the two can be told apart, but red.
+-check(pixels(frame(), lambda c: c.red() > 140 and c.red() > 2 * c.green() and c.red() > 2 * c.blue()) > 5,
+-      "a service that could not connect stays red, dimmer than a refusal")
++widget.service_activity.emit("github", "unavailable")
++widget._services["github"][1] = time.monotonic() - 60
++unavailable = hue(frame())
++check(is_red(unavailable) and unavailable[0] < refused[0],
++      f"a service that could not connect stays red, dimmer than a refusal {unavailable}")
+ 
+-widget.services_listed.emit(["obs", "home_assistant", "notion", "spotify", "calendar"])
++widget.services_listed.emit(["filesystem", "obs", "home_assistant", "notion", "spotify", "calendar"])
+ image = frame()
+ corner = (hud._PANEL_RIGHT - 24, hud._SERVICES_Y - 10, hud._WIDTH - 5, hud._SERVICES_Y + 3)
+-check(pixels(image, bright, corner) == 0, "more services than fit never run into the corner bracket")
++check(sum(1 for x in range(corner[0], corner[2]) for y in range(corner[1], corner[3]) if bright(image.pixelColor(x, y))) == 0,
++      "more services than fit never run into the corner bracket")
+ 
+ widget.close()

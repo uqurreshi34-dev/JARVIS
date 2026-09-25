@@ -105,6 +105,14 @@ _CONFIRM_ENDED = QColor(150, 165, 180)
 _CONFIRM_URGENT_SECONDS = 15.0
 _CONFIRM_FLASH_SECONDS = 0.8
 
+# The connected-services strip, under the telemetry. States are the words
+# actions/mcp_services.py reports; the flashes settle back to connected.
+_SERVICES_Y = _HEIGHT - 26
+_SERVICE_FLASH = {"done": 1.6, "refused": 2.2}
+_SERVICE_AMBER = QColor(255, 196, 80)
+_SERVICE_GREEN = QColor(95, 255, 160)
+_SERVICE_RED = QColor(255, 88, 88)
+
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
@@ -145,6 +153,10 @@ class Hud(QWidget):
     # The start-up systems check: [(label, status)], see boot.py.
     boot_requested = pyqtSignal(list)
 
+    # Connected services: the configured names, then (name, state) as they work.
+    services_listed = pyqtSignal(list)
+    service_activity = pyqtSignal(str, str)
+
     def __init__(self):
         super().__init__()
 
@@ -167,6 +179,8 @@ class Hud(QWidget):
         self._confirm_ended = None      # (outcome, when, fraction left)
 
         self._boot = None               # the start-up sequence while it plays
+
+        self._services = {}             # name -> [state, since], in mcp.json order
 
         self._target = 0.0
         self._level = 0.0
@@ -201,6 +215,8 @@ class Hud(QWidget):
         self.speaking_changed.connect(self._on_speaking)
         self.confirmation_changed.connect(self._on_confirmation)
         self.boot_requested.connect(self._on_boot)
+        self.services_listed.connect(self._on_services_listed)
+        self.service_activity.connect(self._on_service_activity)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -283,6 +299,18 @@ class Hud(QWidget):
         self._speaking = bool(active)
         self.update()
 
+    def _on_services_listed(self, names):
+        now = time.monotonic()
+
+        for name in names:
+            self._services.setdefault(str(name), ["configured", now])
+
+        self.update()
+
+    def _on_service_activity(self, name, state):
+        self._services[str(name)] = [str(state), time.monotonic()]
+        self.update()
+
     def _on_boot(self, items):
         self._boot = {
             "started": time.monotonic(),
@@ -302,6 +330,13 @@ class Hud(QWidget):
             left = max(0.0, (self._confirm_until - now) / self._confirm_total)
             self._confirm_ended = (outcome or "dropped", now, left)
             self._confirm_until = None
+
+        # Answered either way, a service is no longer waiting on you. A yes
+        # is followed by its own busy and done from the service itself.
+        if seconds <= 0:
+            for entry in self._services.values():
+                if entry[0] == "held":
+                    entry[0], entry[1] = "connected", now
 
         self.update()
 
@@ -453,6 +488,7 @@ class Hud(QWidget):
         self._paint_ticks(painter, accent)
         self._paint_rings(painter, accent, energy)
         self._paint_countdown(painter)
+        self._paint_services(painter, accent)
         self._paint_reticle(painter, accent)
         self._paint_core(painter, accent, energy)
         self._paint_text(painter, accent)
@@ -486,6 +522,80 @@ class Hud(QWidget):
         painter.drawRect(_STOP_RECT.adjusted(8, 8, -8, -8))
 
         painter.restore()
+
+    # ---- the connected-services strip ------------------------------------------
+
+    def _paint_services(self, painter, accent):
+        """Each configured service, lit by what it is really doing."""
+        if not self._services:
+            return
+
+        now = time.monotonic()
+        font = QFont("Consolas", 7, QFont.Weight.Bold)
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.1)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+
+        # Clear of the bottom-right corner bracket.
+        limit = _PANEL_RIGHT - 26
+        x = float(_PANEL_X)
+        y = _SERVICES_Y
+        names = list(self._services)
+
+        for index, name in enumerate(names):
+            state, since = self._services[name]
+            age = now - since
+
+            # A flash settles back to connected on its own.
+            if state in _SERVICE_FLASH and age > _SERVICE_FLASH[state]:
+                state = self._services[name][0] = "connected"
+
+            label = name.replace("_", " ").upper()
+            width = 8 + metrics.horizontalAdvance(label)
+            left_over = len(names) - index
+
+            # No room for this one and the rest: say how many are not shown.
+            if x + width > limit and left_over > 0:
+                painter.setPen(QPen(self._tint(accent, 150)))
+                painter.drawText(int(x), y, f"+{left_over}")
+                break
+
+            pulse = 0.5 + 0.5 * math.sin(now * 9.0)
+            filled = True
+
+            if state == "configured":
+                colour, text_alpha, filled = accent, 95, False
+            elif state == "busy":
+                colour, text_alpha = accent, int(200 + 55 * pulse)
+            elif state == "held":
+                colour, text_alpha = _SERVICE_AMBER, int(190 + 65 * (0.5 + 0.5 * math.sin(now * 4.0)))
+            elif state == "done":
+                colour, text_alpha = _SERVICE_GREEN, 255
+            elif state in ("refused", "unavailable"):
+                colour, text_alpha = _SERVICE_RED, 230 if state == "refused" else 160
+                filled = state == "refused"
+            else:
+                colour, text_alpha = accent, 190
+
+            # The dot: filled when connected, hollow when not; a ring spreads
+            # from it while a request is under way.
+            centre = QPointF(x + 2.5, y - 3.2)
+
+            if state == "busy":
+                spread = (now * 2.2) % 1.0
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(self._tint(colour, int(200 * (1 - spread))), 1.0))
+                painter.drawEllipse(centre, 2.5 + 5.0 * spread, 2.5 + 5.0 * spread)
+
+            painter.setPen(QPen(self._tint(colour, text_alpha), 1.0))
+            painter.setBrush(self._tint(colour, text_alpha) if filled else Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(centre, 2.3, 2.3)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+            painter.setPen(QPen(self._tint(colour, text_alpha)))
+            painter.drawText(int(x + 8), y, label)
+
+            x += width + 12
 
     # ---- the start-up sequence ------------------------------------------------
 
