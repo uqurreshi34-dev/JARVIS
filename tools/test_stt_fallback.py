@@ -14,6 +14,8 @@ Checked with Groq and local Whisper both faked: no network, no model.
 - rests double while Groq keeps failing, up to a ceiling, and follow the
   wait a rate-limited response asks for;
 - one kind of local Whisper missing is not reported when another stands in;
+- a sentence of up to about 14 seconds is heard whole; only speech that never ends
+  is cut, and the ceiling can be changed in .env;
 - without a local model, a cloud failure loses only that utterance;
 - STT_ENGINE=groq without a key starts local Whisper, not Vosk;
 - STT_ENGINE=whisper never uses the cloud.
@@ -177,6 +179,58 @@ else:
 # The segmenting engine turns that into a lost utterance, not a crash.
 bare._buffer = [np.full(transcriber.SAMPLE_RATE, 0.1, dtype=np.float32)]
 check(bare._finish() is None, "and only that utterance is lost")
+
+# ---- a long sentence said at a natural pace ----------------------------------------------
+
+class Measuring(transcriber.SegmentingEngine):
+    """Reports how many seconds of audio it was handed."""
+
+    def _transcribe(self, audio):
+        return f"{len(audio) / transcriber.SAMPLE_RATE:.1f}"
+
+
+def say(engine, seconds, level=0.1):
+    """Feed speech, then silence; return the heard lengths and the limit warnings."""
+    block_seconds = 0.25
+    block = (np.full(int(transcriber.SAMPLE_RATE * block_seconds), level) * 32767).astype(np.int16).tobytes()
+    quiet = np.zeros(int(transcriber.SAMPLE_RATE * block_seconds), dtype=np.int16).tobytes()
+
+    heard = []
+    printed = io.StringIO()
+
+    with contextlib.redirect_stdout(printed):
+        for _ in range(8):
+            engine.feed(quiet)
+        for _ in range(int(seconds / block_seconds)):
+            result = engine.feed(block)
+            if result:
+                heard.append(float(result.text))
+        for _ in range(12):
+            result = engine.feed(quiet)
+            if result:
+                heard.append(float(result.text))
+
+    return heard, "length limit" in printed.getvalue()
+
+
+heard, limited = say(Measuring(0.25), 9.0)
+check(len(heard) == 1 and heard[0] >= 9.0 and not limited,
+      f"a 9-second sentence is heard whole, in one piece ({heard})")
+
+heard, limited = say(Measuring(0.25), 13.0)
+check(len(heard) == 1 and heard[0] >= 13.0 and not limited, f"so is a 13-second one ({heard})")
+
+heard, limited = say(Measuring(0.25), 20.0)
+check(limited and heard and heard[0] <= transcriber._MAX_UTTERANCE_SECONDS + 1,
+      f"speech that never ends is still cut at {transcriber._MAX_UTTERANCE_SECONDS:.0f}s ({heard})")
+
+os.environ["MAX_UTTERANCE_SECONDS"] = "20"
+check(transcriber._max_utterance_seconds() == 20.0, "MAX_UTTERANCE_SECONDS in .env changes the ceiling")
+os.environ["MAX_UTTERANCE_SECONDS"] = "nonsense"
+check(transcriber._max_utterance_seconds() == 15.0, "a value that is not a number falls back to 15 seconds")
+os.environ["MAX_UTTERANCE_SECONDS"] = "1"
+check(transcriber._max_utterance_seconds() == 5.0, "and it can never be set so low that commands are cut")
+del os.environ["MAX_UTTERANCE_SECONDS"]
 
 # ---- which engine starts ---------------------------------------------------------------
 

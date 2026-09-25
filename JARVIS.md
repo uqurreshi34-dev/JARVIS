@@ -1091,6 +1091,10 @@ The wake word calls him only in the first few words of what is said
 ("Jarvis, ...", "hey Jarvis, ..."). Further in it is a name being used, so
 "open a github issue on jarvis called mark2" reaches commands.py whole.
 
+An utterance ends on the silence after it. A ceiling of 15 seconds
+(`MAX_UTTERANCE_SECONDS` in `.env`) only catches speech whose end is never
+heard, as in a noisy room; at 7 it cut ordinary long sentences short.
+
 For desktop voice, the microphone belongs to `voice.py`. For phone voice, the
 phone browser owns the microphone and sends a WAV recording to `phone.py`.
 

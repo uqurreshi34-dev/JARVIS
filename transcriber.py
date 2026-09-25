@@ -251,9 +251,21 @@ _END_FRACTION = 0.30
 # smoothed. Both trade responsiveness against stability.
 _FLOOR_ALPHA = 0.25
 _LEVEL_ALPHA = 0.45
-# Commands are short. If the end of speech is somehow missed, this caps how
-# long JARVIS can sit recording before giving up and transcribing what it has.
-_MAX_UTTERANCE_SECONDS = 7.0
+# If the end of speech is somehow missed, this caps how long JARVIS can sit
+# recording before giving up and transcribing what it has. It is a safety net,
+# not the pace: an utterance normally ends on the silence after it. At 7
+# seconds it cut off ordinary sentences said at a natural pace ("add a comment
+# to issue 6 in the jarvis repository saying it was completed in the last
+# patch"), so the end was lost or misheard. MAX_UTTERANCE_SECONDS in .env
+# changes it.
+def _max_utterance_seconds():
+    try:
+        return max(5.0, float(os.getenv("MAX_UTTERANCE_SECONDS") or 15.0))
+    except ValueError:
+        return 15.0
+
+
+_MAX_UTTERANCE_SECONDS = _max_utterance_seconds()
 _MIN_UTTERANCE_SECONDS = 0.3
 
 
