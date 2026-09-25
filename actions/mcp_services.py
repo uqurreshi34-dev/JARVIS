@@ -32,6 +32,13 @@ What a server may do is decided here, not by the server:
   when the server marks it destructive, and never run by the model: the
   call is held, JARVIS reads back exactly what would be done, and only a
   spoken yes runs it. One action per request, and each one is journalled.
+- An entry with "confirm_actions": false lets its allowed actions run as
+  soon as the model calls them, with no question: for a service whose
+  actions are routine, such as starting a recording. Only what
+  allowed_actions names, and never what the server marks destructive.
+- A service that could not be reached is tried again on a later request,
+  after a minute at first and up to ten, so one opened after JARVIS
+  starts -- OBS, say -- is picked up without a restart.
 - A tool's name and description are the server's words, and they reach
   the model, so they are treated like any outside text: cleaned, and a
   tool whose description reads like an instruction to the model is
@@ -51,6 +58,7 @@ import json
 import os
 import re
 import threading
+import time
 
 from actions import files, journal, safety
 
@@ -74,6 +82,11 @@ _servers = {}     # server name -> _Server
 _tools = {}       # agent tool name -> (server name, tool name)
 _actions = {}     # agent tool name -> (server name, tool name), for actions
 _proposal = None  # the one action held for a spoken yes, or None
+_immediate = set()  # agent names of actions that run without confirmation
+
+# A service that failed is retried after this, doubling to the ceiling.
+RETRY_SECONDS = 60.0
+MAX_RETRY_SECONDS = 600.0
 _loaded = False
 
 
@@ -87,6 +100,8 @@ class _Server:
         self.error = None
         self._stop = None
         self._ready = None
+        self.retry_at = 0.0   # monotonic time a failed service may be tried again
+        self.backoff = 0.0
 
 
 # ---- configuration --------------------------------------------------------
@@ -287,7 +302,12 @@ def _convert(server, entry, listed):
         if description is None:
             continue
 
-        if not read_only:
+        if not read_only and entry.get("confirm_actions") is False:
+            description = (
+                "ACTION, changes something, and runs as soon as it is called, "
+                "with no confirmation. " + description
+            )
+        elif not read_only:
             description = (
                 "ACTION, changes something: JARVIS holds this call and asks the "
                 "user to confirm it aloud before it runs. " + description
@@ -451,14 +471,9 @@ def tools(include_actions=False):
             _loaded = True
 
             for name, entry in _read_config().items():
-                server = _connect(name, entry)
-                _servers[name] = server
+                _register(_connect(name, entry))
 
-                for tool in server.tools:
-                    _tools[tool["name"]] = tool["mcp"]
-
-                for tool in server.actions:
-                    _actions[tool["name"]] = tool["mcp"]
+        _retry_failed()
 
         offered = [tool for server in _servers.values() if server.client for tool in server.tools]
 
@@ -468,12 +483,67 @@ def tools(include_actions=False):
         return offered
 
 
+def _register(server, previous=None):
+    """Put a server's tools on offer, and schedule a retry if it failed."""
+    _servers[server.name] = server
+
+    if server.client is None:
+        wait = RETRY_SECONDS if previous is None or not previous.backoff else min(previous.backoff * 2, MAX_RETRY_SECONDS)
+        server.backoff = wait
+        server.retry_at = time.monotonic() + wait
+        return
+
+    for tool in server.tools:
+        _tools[tool["name"]] = tool["mcp"]
+
+    for tool in server.actions:
+        _actions[tool["name"]] = tool["mcp"]
+
+        if server.entry.get("confirm_actions") is False:
+            _immediate.add(tool["name"])
+
+
+def _retry_failed():
+    """Try again any service that could not be reached, once its wait is up."""
+    now = time.monotonic()
+
+    for name, server in list(_servers.items()):
+        # Never connected, or connected and since gone (OBS closed, say).
+        if server.client is None and now >= server.retry_at:
+            entry = _read_config().get(name)
+
+            if entry is None:
+                continue
+
+            _register(_connect(name, entry), previous=server)
+
+
 def owns(tool_name):
     return tool_name in _tools or tool_name in _actions
 
 
 def is_action(tool_name):
     return tool_name in _actions
+
+
+def needs_confirmation(tool_name):
+    """False for an action its service lets run without asking."""
+    return tool_name not in _immediate
+
+
+def run_now(tool_name, arguments):
+    """Run an action whose service does not ask first. Returns what the model sees."""
+    target = _actions.get(tool_name)
+
+    if not target or tool_name not in _immediate:
+        return {"error": f"Not an action that runs without confirmation: {tool_name}"}
+
+    proposal = {"name": tool_name, "server": target[0], "tool": target[1], "arguments": dict(arguments or {})}
+
+    if execute(proposal) is None:
+        return {"error": proposal.get("failure") or "The service did not do it."}
+
+    return safety.quote(f"{target[0]}_result", proposal.get("result_text", "Done."), RESULT_CHARS)
 
 
 # ---- actions: held, read back, run only on a spoken yes ---------------------
@@ -602,6 +672,7 @@ def execute(proposal):
         _report(proposal["server"], REFUSED)
         return None
 
+    proposal["result_text"] = text
     journal.write("mcp action", summary, "done")
     journal.action(f"mcp_{proposal['tool']}", proposal["server"], True,
                    spoken=f"{proposal['tool'].replace('_', ' ')} on {proposal['server']}")
@@ -766,6 +837,7 @@ def close():
         _servers.clear()
         _tools.clear()
         _actions.clear()
+        _immediate.clear()
         _loaded = False
 
     clear_proposal()

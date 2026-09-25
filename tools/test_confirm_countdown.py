@@ -67,7 +67,10 @@ def amber(colour):
 
 
 def red(colour):
-    return colour.red() > 200 and colour.green() < 130
+    # By hue, not brightness: the last stretch pulses, and its dim point is
+    # still red. A brightness threshold failed about one run in six.
+    r, g, b = colour.red(), colour.green(), colour.blue()
+    return r > 120 and r > 1.8 * g and r > 1.8 * b
 
 
 def green(colour):

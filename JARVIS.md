@@ -956,7 +956,20 @@ recognition splits it ("file system" finds `filesystem`, "git hub" finds
 `github`); `aliases` are other names it may be spoken as; `disabled: true` switches an entry off; `trusted_read_only` lists tools
 the user has checked but whose server forgot to mark them; `allowed_actions`
 lists tools that change something which JARVIS may offer, with a spoken
-confirmation (below).
+confirmation (below); `confirm_actions: false` lets that service's allowed
+actions run without the question, for routine ones such as starting a
+recording. A service that cannot be reached is tried again on a later
+request, after a minute and then up to ten, so one opened after JARVIS
+starts is picked up without a restart.
+
+OBS is connected this way (obs-mcp 1.1.0, over OBS's own WebSocket, with
+`OBS_WEBSOCKET_PASSWORD` in `.env`). It marks none of its 125 tools
+read-only or destructive, so nothing is assumed: its status questions are
+listed in `trusted_read_only`, and recording, the replay buffer, scene
+switching, muting and the virtual camera in `allowed_actions`, running
+without confirmation. Going live, deleting, and changing settings, stream
+keys or files are left out. "Recording", "clip" and "replay buffer" are
+aliases, so "start recording" and "clip that" reach it without naming OBS.
 
 The tools join Agent Mode. A command naming a configured service goes to
 Agent Mode directly, skipping the command interpreter, and ordinary Agent

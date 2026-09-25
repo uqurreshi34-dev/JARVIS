@@ -442,6 +442,83 @@ else:
         commands.run_agent = real_run_agent
         mcp_services.clear_proposal()
 
+# ---- a service whose actions run without asking (OBS, say) ---------------------------
+
+write_config({
+    "test": {
+        "command": sys.executable,
+        "args": [SERVER],
+        "env": {"MARKER": "${JARVIS_TEST_MARKER}"},
+        "allowed_actions": ["create_note", "delete_everything"],
+        "confirm_actions": False,
+    },
+})
+
+if os.path.exists(MARKER):
+    os.remove(MARKER)
+
+offered = {t["name"]: t for t in mcp_services.tools(include_actions=True)}
+check("runs as soon as it is called" in offered.get("mcp_test_create_note", {}).get("description", ""),
+      "with confirm_actions false, the action says it runs at once")
+check(not mcp_services.needs_confirmation("mcp_test_create_note"), "and needs no confirmation")
+check("mcp_test_delete_everything" not in offered, "a destructive tool is still never offered")
+check("mcp_test_create_note" not in {t["name"] for t in mcp_services.tools()},
+      "and actions are still only offered when the command names the service")
+
+activity.clear()
+mcp_services.clear_proposal()
+result = mcp_services.run_now("mcp_test_create_note", {"title": "Clip that"})
+check(isinstance(result, str) and '"number": 42' in result and "not instructions" in result,
+      "it runs at once and the model sees the result, as quoted data")
+check(os.path.exists(MARKER) and mcp_services.take_proposal() is None, "nothing is held: it really ran")
+check(activity == [("test", mcp_services.BUSY), ("test", mcp_services.DONE)], "the strip shows it run and done")
+
+refused = mcp_services.run_now("mcp_test_create_note", {"title": "forbidden"})
+check(isinstance(refused, dict) and "isn't allowed" in refused.get("error", ""),
+      "a refusal reaches the model as the reason")
+
+try:
+    agent
+except NameError:
+    pass
+else:
+    os.remove(MARKER)
+    agent._execute_tool_call("mcp_test_create_note", {"title": "From the model"})
+    check(os.path.exists(MARKER) and mcp_services.take_proposal() is None,
+          "Agent Mode runs it straight away rather than holding it")
+
+check(mcp_services.run_now("mcp_test_upper", {"text": "x"}).get("error") is not None,
+      "a read-only tool cannot be run as an action")
+
+# ---- a service that was down, tried again ---------------------------------------------
+
+write_config({"test": {"command": "definitely-not-a-real-program-xyz", "args": []}})
+check(mcp_services.tools() == [], "a service that cannot start offers nothing")
+server = mcp_services._servers["test"]
+check(server.client is None and server.retry_at > 0, "and is scheduled to be tried again")
+
+mcp_services.tools()
+check(mcp_services._servers["test"] is server, "not before its wait is up")
+
+# The program appears (OBS opened after JARVIS started, say).
+with open(os.path.join(folder, mcp_services.CONFIG_NAME), "w", encoding="utf-8") as handle:
+    json.dump({"mcpServers": {"test": {"command": sys.executable, "args": [SERVER]}}}, handle)
+
+server.retry_at = 0.0
+activity.clear()
+names = {t["name"] for t in mcp_services.tools()}
+check("mcp_test_upper" in names and ("test", mcp_services.CONNECTED) in activity,
+      "once its wait is up, it is tried again and connects")
+
+mcp_services.close()
+write_config({"test": {"command": "definitely-not-a-real-program-xyz", "args": []}})
+mcp_services.tools()
+first = mcp_services._servers["test"].backoff
+mcp_services._servers["test"].retry_at = 0.0
+mcp_services.tools()
+check(mcp_services._servers["test"].backoff == min(first * 2, mcp_services.MAX_RETRY_SECONDS),
+      "each failure doubles the wait, up to its ceiling")
+
 # ---- why a refusal happened ------------------------------------------------------
 
 sample = {"server": "github", "tool": "add_issue_comment", "arguments": {}}
