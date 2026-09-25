@@ -8,6 +8,8 @@ no network, no cost.
     python tools/rag_eval.py            the benchmark, compared with the saved baseline
     python tools/rag_eval.py --update   the same, then saves these scores as the baseline
     python tools/rag_eval.py --mine     your own questions and reports, read-only
+    python tools/rag_eval.py --compare Xenova/bge-small-en-v1.5
+                                        another embedding model, side by side
 
 The benchmark runs in a sandboxed JARVIS folder on fixed data: notes,
 memories, a 600-command log and reports written the way JARVIS writes
@@ -540,6 +542,160 @@ def _report_citations(report_search):
         print(f"  {label[:48]:48} {str(day):10}  {share:>4} of sentences cited, {unverified} unverified")
 
 
+# ---- comparing embedding models ------------------------------------------------------
+#
+# Each model scores on its own scale, so JARVIS's thresholds -- tuned to the
+# current model -- say nothing about another. Two measures that do not
+# depend on a threshold are used instead:
+#
+#   ranked first  the right item is the most similar one
+#   separation    how often a real match scores above the best match a
+#                 question with no answer finds; 1.0 means some threshold
+#                 separates them perfectly, 0.5 is guessing
+#
+# A model worth switching to wins on both. Switching then means measuring
+# every threshold again, which is what this file is for.
+
+def _encoder(repo, filename, pooling):
+    """A function encoding texts with [repo]'s ONNX model, or None."""
+    import numpy as np
+    import onnxruntime as ort
+    from huggingface_hub import hf_hub_download
+    from tokenizers import Tokenizer
+
+    def fetch(name):
+        try:
+            return hf_hub_download(repo_id=repo, filename=name, local_files_only=True)
+        except Exception:
+            return hf_hub_download(repo_id=repo, filename=name)
+
+    try:
+        tokenizer = Tokenizer.from_file(fetch("tokenizer.json"))
+        session = ort.InferenceSession(fetch(filename), providers=["CPUExecutionProvider"])
+    except Exception as error:
+        print(f"could not load {repo} ({filename}): {error}")
+        return None
+
+    tokenizer.no_padding()
+    tokenizer.enable_truncation(max_length=256)
+    wanted = {model_input.name for model_input in session.get_inputs()}
+
+    def encode(texts):
+        vectors = []
+
+        for start in range(0, len(texts), 32):
+            batch = [tokenizer.encode(text or "") for text in texts[start:start + 32]]
+            width = max(len(item.ids) for item in batch)
+            ids = np.zeros((len(batch), width), dtype=np.int64)
+            mask = np.zeros_like(ids)
+
+            for row, item in enumerate(batch):
+                ids[row, :len(item.ids)] = item.ids
+                mask[row, :len(item.ids)] = item.attention_mask
+
+            inputs = {"input_ids": ids, "attention_mask": mask, "token_type_ids": np.zeros_like(ids)}
+            hidden = session.run(None, {name: value for name, value in inputs.items() if name in wanted})[0]
+
+            if pooling == "cls":
+                pooled = hidden[:, 0]
+            else:
+                weights = mask[..., None].astype(np.float32)
+                pooled = (hidden * weights).sum(axis=1) / np.clip(weights.sum(axis=1), 1e-9, None)
+
+            vectors.append(pooled / np.clip(np.linalg.norm(pooled, axis=1, keepdims=True), 1e-9, None))
+
+        return np.concatenate(vectors)
+
+    return encode
+
+
+def _comparison_sets():
+    """(name, candidates, [(question, right candidate indices)], [questions with no answer])."""
+    from actions import report_search
+
+    memories = MEMORIES
+    memory_right = [
+        (question, [index for index, text in enumerate(memories) if expected in text.casefold()])
+        for question, expected in MEMORY_QUESTIONS.items()
+    ]
+
+    passages = []
+    report_right = []
+
+    for (subfolder, name), text in REPORTS.items():
+        for heading, passage in report_search.sections([(line, None) for line in text.split("\n")]):
+            passages.append((name, heading, f"{heading}: {passage}" if heading else passage))
+
+    for topic, (report, heading) in REPORT_QUESTIONS.items():
+        report_right.append((topic, [
+            index for index, (name, found, _text) in enumerate(passages)
+            if name.startswith(report) and found == heading
+        ]))
+
+    commands = sorted({text for texts in LOG_GROUPS.values() for text in texts})
+    log_right = [
+        (topic, [index for index, text in enumerate(commands) if text in LOG_GROUPS[group]])
+        for topic, group in LOG_QUESTIONS.items()
+    ]
+
+    return [
+        ("memory", memories, memory_right, MEMORY_NOTHING),
+        ("notes", NOTES, [(topic, [index]) for topic, index in NOTE_QUESTIONS.items()], NOTE_NOTHING),
+        ("reports", [text for _name, _heading, text in passages], report_right, REPORT_NOTHING),
+        ("log", commands, log_right, LOG_NOTHING),
+    ]
+
+
+def _ranking_scores(encode, query_prefix=""):
+    scores = {}
+
+    for name, candidates, right, nothing in _comparison_sets():
+        vectors = encode(list(candidates))
+        first = 0
+        true_scores = []
+
+        for question, indices in right:
+            similarity = vectors @ encode([query_prefix + question])[0]
+            order = similarity.argsort()[::-1]
+
+            # For the log several commands are right; all of them should
+            # outrank every wrong one.
+            first += set(order[:len(indices)].tolist()) == set(indices)
+            true_scores.append(min(float(similarity[index]) for index in indices))
+
+        empty = [float((vectors @ encode([query_prefix + question])[0]).max()) for question in nothing]
+        pairs = [(real, fake) for real in true_scores for fake in empty]
+        separation = sum(real > fake for real, fake in pairs) / len(pairs) if pairs else None
+
+        scores[name] = {"ranked first": round(first / len(right), 3), "separation": round(separation, 3)}
+
+    return scores
+
+
+def compare(repo, filename, pooling, query_prefix):
+    from actions import semantic_memory
+
+    current = _encoder(semantic_memory._MODEL_REPO, semantic_memory._MODEL_FILE, "mean")
+    candidate = _encoder(repo, filename, pooling)
+
+    if current is None or candidate is None:
+        return 1
+
+    now = _ranking_scores(current)
+    other = _ranking_scores(candidate, query_prefix)
+
+    print(f"\n{'':10}{'measure':14}{'current':>10}{'candidate':>11}")
+    print(f"{'':24}{semantic_memory._MODEL_REPO.split('/')[-1][:10]:>10}{repo.split('/')[-1][:10]:>11}\n")
+
+    for name in now:
+        for measure in now[name]:
+            before, after = now[name][measure], other[name][measure]
+            mark = "  better" if after > before + TOLERANCE else "  worse" if after < before - TOLERANCE else ""
+            print(f"{name:10}{measure:14}{before:>10.3f}{after:>11.3f}{mark}")
+
+    return 0
+
+
 # ---- the result ----------------------------------------------------------------
 
 def show(suites, baseline):
@@ -575,7 +731,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--update", action="store_true", help="save these scores as the new baseline")
     parser.add_argument("--mine", action="store_true", help="your own questions and reports, read-only")
+    parser.add_argument("--compare", metavar="REPO", help="another ONNX embedding model on Hugging Face")
+    parser.add_argument("--model-file", default="onnx/model_quantized.onnx", help="its ONNX file (default %(default)s)")
+    parser.add_argument("--pooling", choices=("mean", "cls"), default="mean", help="how it pools token vectors")
+    parser.add_argument("--query-prefix", default="", help="text some models expect before a question")
     options = parser.parse_args()
+
+    if options.compare:
+        return compare(options.compare, options.model_file, options.pooling, options.query_prefix)
 
     if options.mine:
         mine()

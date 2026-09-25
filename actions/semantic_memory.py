@@ -422,7 +422,31 @@ def content_words(text, plain_words=frozenset()):
     return {_stem(word) for word in candidates if len(word) >= 3 and word not in plain_words}
 
 
+_stemmer = None
+_stemmer_loaded = False
+
+
 def _stem(word):
+    """[word] reduced to its stem: "halving" and "halves" both become "halv".
+
+    The Snowball English stemmer, pure Python. Without it, only a plural
+    "s" is removed, which is how "halving" once missed "halves".
+    """
+    global _stemmer, _stemmer_loaded
+
+    if not _stemmer_loaded:
+        _stemmer_loaded = True
+
+        try:
+            import snowballstemmer
+
+            _stemmer = snowballstemmer.stemmer("english")
+        except Exception as error:
+            print(f"[JARVIS] word stemming limited (pip install snowballstemmer): {error}")
+
+    if _stemmer is not None:
+        return _stemmer.stemWord(word)
+
     if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
         return word[:-1]
 

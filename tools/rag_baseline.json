@@ -5,8 +5,8 @@
     "says nothing": 0.667
   },
   "notes": {
-    "first right": 1.0,
-    "in top three": 1.0,
+    "first right": 0.966,
+    "in top three": 0.966,
     "says nothing": 1.0
   },
   "log": {
@@ -15,8 +15,8 @@
     "says nothing": 1.0
   },
   "reports": {
-    "first right": 0.929,
-    "in top three": 0.929,
+    "first right": 1.0,
+    "in top three": 1.0,
     "says nothing": 1.0
   }
 }

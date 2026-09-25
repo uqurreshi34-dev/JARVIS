@@ -1211,6 +1211,16 @@ with the favourite football team; reports missed "halving" against
 `--mine` runs your own questions from `rag-questions.txt` in the JARVIS
 folder through the answers you would hear, and reports what share of each
 saved report's sentences cite a source and how many figures are unverified.
+`--compare REPO` scores another ONNX embedding model beside the current one
+on measures no threshold affects -- how often the right item ranks first,
+and how often a real match outscores the best match a question with no
+answer finds -- since each model has its own scale. A model worth moving to
+wins on both, and moving means measuring every threshold again.
+
+Shared-word matching stems words with the Snowball English stemmer
+(`snowballstemmer`, pure Python), so "halving" meets "halves" and
+"shopping" meets "shop"; without it, only a plural "s" is removed. That
+alone took reports from 0.929 to 1.000 on the benchmark.
 
 **Pronouns resolve only when explicit and recent.** "copy it to my
 clipboard" works for sixty seconds after naming something. Never for
