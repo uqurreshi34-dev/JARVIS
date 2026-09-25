@@ -850,7 +850,10 @@ Conference League winners because one website said so. After writing, every
 figure in a cited sentence is checked against the cited source's text
 locally (`research.check_citations`); a figure the source lacks is marked
 "(unverified: this figure is not in the cited source)" in the saved report,
-never silently removed. Source numbers are not read aloud.
+never silently removed. A season ("1962-63") is one claim, supported if the
+source has either year in any form ("1963", "62/63"), and table rows are
+not marked; on the first real report, those two caused most of the false
+alarms. Source numbers are not read aloud.
 
 **Saved reports answer questions** - `actions/report_search.py`.
 "What did my report say about deep sleep?", "what does my ESP32 report say

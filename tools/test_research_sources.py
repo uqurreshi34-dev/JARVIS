@@ -285,6 +285,23 @@ check("founded in 1874 [1] and won the European Cup in 1982 [2]. Revenue" in che
 check("| European Cup | 1982 |" in checked, "lines without citations are left alone")
 check(research.check_citations("Nothing to see [9].", cited_sources)[1] == 0, "a citation to no real source marks nothing")
 
+# The real Villa report flagged ten sentences, mostly false alarms: it wrote
+# seasons as "1962-63" where Transfermarkt writes "62/63", and put notes
+# inside table rows.
+seasons = [{"text": "League Cup winner: 62/63, 10/11. Second tier champions 92/93, 20/21."},
+           {"text": "Won the League Cup in 1963 and 2011."}]
+checked, marked = research.check_citations(
+    "They won the League Cup in 1962-63 and 2010-11 [1]. Second-tier titles came in 1892-93 and 1920-21 [1].\n"
+    "Their League Cups came in 1962-63 and 2010-11 [2].\n"
+    "| League Cups | 1962-63, 2010-11 [1] |\n"
+    "| Holte End seats | 13,472 [1] |",
+    seasons,
+)
+check(marked == 0, f"a season is found however the source writes it, and tables are not marked ({marked}): {checked!r}")
+
+checked, marked = research.check_citations("Birmingham won the League Cup in 1975-76 [1].", seasons)
+check(marked == 1, "a season the source does not have is still marked")
+
 from actions import report_search  # noqa: E402
 
 spoken = report_search._clean("Founded in 1874 [1] and European champions in 1982 [1][2], per [2-3].")

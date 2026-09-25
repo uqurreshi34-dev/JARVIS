@@ -718,6 +718,47 @@ def _plain_number(figure):
     return figure.replace(",", "").rstrip(".")
 
 
+def _figures(text):
+    """The figures in a source, with each year also in its short form.
+
+    Sources write seasons differently: "1962-63", "1962/63", "62/63".
+    A report that writes "1962-63" is supported by a source that writes
+    "62/63", so a four-digit year also counts as its last two digits.
+    """
+    found = set()
+
+    for figure in _FIGURE.findall(text):
+        number = _plain_number(figure)
+        found.add(number)
+
+        if len(number) == 4 and number.isdigit() and number[:2] in ("18", "19", "20"):
+            found.add(number[2:])
+
+    return found
+
+
+# A season, "1962-63" or "2010/11": one claim, supported by either year.
+_SEASON = re.compile(r"(?<![\w.])((?:18|19|20)\d\d)\s*[\u2013/-]\s*(\d\d(?:\d\d)?)(?![\w.])")
+
+
+def _season_forms(match):
+    start = match.group(1)
+    end = match.group(2)
+    end = end if len(end) == 4 else start[:2] + end
+
+    return (start, start[2:], end, end[2:])
+
+
+def _claimed(figure):
+    """What a claimed figure may be found as: a year also as its short form."""
+    number = _plain_number(figure)
+
+    if len(number) == 4 and number.isdigit() and number[:2] in ("18", "19", "20"):
+        return (number, number[2:])
+
+    return (number,)
+
+
 def check_citations(report, sources):
     """The report with sentences whose figures their sources lack marked.
 
@@ -727,15 +768,17 @@ def check_citations(report, sources):
     from the cited source is marked in the report rather than removed, so
     nothing is silently changed. Returns (report, how many were marked).
     """
-    texts = [
-        " ".join(_plain_number(figure) for figure in _FIGURE.findall(str(source.get("text") or "")))
-        for source in sources
-    ]
-    figures_in = [set(text.split()) for text in texts]
+    figures_in = [_figures(str(source.get("text") or "")) for source in sources]
     marked = 0
     lines = []
 
     for line in str(report or "").split("\n"):
+        # Table rows are left as they are: a note would break the table,
+        # and cells are often figures the prose around them already cites.
+        if line.lstrip().startswith("|"):
+            lines.append(line)
+            continue
+
         pieces = re.split(r"(?<=[.!?])(\s+)", line)
         rebuilt = []
 
@@ -751,13 +794,16 @@ def check_citations(report, sources):
             for citation in citations:
                 cited |= _cited(citation.group(1), len(sources))
 
-            claimed = {
-                _plain_number(figure) for figure in _FIGURE.findall(_CITATION.sub(" ", piece))
+            text = _CITATION.sub(" ", piece)
+            claimed = [_season_forms(season) for season in _SEASON.finditer(text)]
+            claimed += [
+                _claimed(figure) for figure in _FIGURE.findall(_SEASON.sub(" ", text))
                 if len(_plain_number(figure)) >= 2
-            }
+            ]
             supported = set().union(*(figures_in[n - 1] for n in cited)) if cited else set()
+            missing = [forms for forms in claimed if not any(form in supported for form in forms)]
 
-            if cited and claimed - supported:
+            if cited and missing:
                 end = len(piece.rstrip())
                 closing = end - 1 if piece.rstrip().endswith((".", "!", "?")) else end
                 piece = piece[:closing] + _UNVERIFIED + piece[closing:]
