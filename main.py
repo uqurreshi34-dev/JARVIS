@@ -51,6 +51,7 @@ from actions import (
     images,
     blender_fidelity,
     folder_guard,
+    log_search,
     quran,
     recitation,
 )
@@ -526,6 +527,10 @@ class Assistant:
         # Warm the cache for stock replies while the greeting plays, so the
         # first "Done, sir." does not wait on a network round trip.
         threading.Thread(target=prewarm, daemon=True).start()
+
+        # Encode the command log for "when did I last ask about ..." in the
+        # background, so the first such question does not wait for it.
+        threading.Thread(target=log_search.index_quietly, daemon=True).start()
 
         while not self._stop.is_set():
             # The HUD state is driven by voice.set_status_listener, which

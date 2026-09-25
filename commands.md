@@ -863,10 +863,20 @@ Clicking the reactor core in the HUD does the same.
 |---|---|
 | what did you do | the last thing he changed |
 | what have you done today | counts for the day |
+| when did I last ask about bitcoin | the latest time, and what you said |
+| have I asked you about the weather before | yes or no, how often, the latest |
+| how many times did I ask about github this week | a count |
+| what did I ask you about the markets | the latest few, as you said them |
 
 Everything that changes anything is written to `jarvis-log.txt`.
 Commands sent from your phone go through the same path, so they're
 logged there too.
+
+Questions about your own history are free and local, and found by
+meaning: "crypto" finds "what's the bitcoin price". Add "today",
+"yesterday", "this week", "last week", "this month" or "last month" to
+narrow it. The first search after a long break may take a moment while
+new commands are encoded; after that it is instant.
 
 ## Reminders
 

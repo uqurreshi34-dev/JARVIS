@@ -331,6 +331,9 @@ Use log_summary when the user asks how much JARVIS has done today or wants
 the log summarised.
 Use read_log when the user asks what JARVIS has been doing or wants the
 activity log.
+Use search_log when the user asks about their own past requests on a
+topic, such as "when did I last ask about bitcoin" or "have I asked you
+about the weather before": put only the topic in "text".
 
 Use look when the user wants JARVIS to see something through the camera,
 such as "what am I holding" or "what do you see". Put their question in
@@ -558,6 +561,7 @@ _SCHEMA = {
                 "open_default_project",
                 "read_log",
                 "log_summary",
+                "search_log",
                 "look",
                 "stop_looking",
                 "save_picture",

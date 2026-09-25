@@ -63,7 +63,7 @@ def stores():
             if (
                 isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
-                and re.fullmatch(r"[\w.\-]+\.(?:txt|json|jsonl)", node.value)
+                and re.fullmatch(r"[\w.\-]+\.(?:txt|json|jsonl|sqlite|db)", node.value)
             ):
                 found.setdefault(node.value, set()).add(path.name)
 

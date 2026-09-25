@@ -50,6 +50,8 @@ _PROTECTED_NAMES = frozenset({
     "quran-surahs.json",
     "quran-reciters.json",
     "quran-reciter-audio.json",
+    # Saved meaning vectors; moving it means encoding everything again.
+    "jarvis-vectors.sqlite",
 })
 
 # Files JARVIS names by date: rotated logs and the monthly token ledger.

@@ -20,6 +20,10 @@ _TOKENIZER_FILE = "tokenizer.json"
 _MAX_LENGTH = 128
 _MIN_SEMANTIC_SCORE = 0.38
 
+# Names the vectors this model makes, so saved ones are never mixed with
+# another model's.
+MODEL_ID = f"{_MODEL_REPO}/{_MODEL_FILE}/{_MAX_LENGTH}"
+
 _lock = threading.Lock()
 _model_session = None
 _tokenizer = None
@@ -400,46 +404,30 @@ def install():
     _installed = True
 
 
-# Vectors for texts outside memory.txt (notes, and next the log and saved
-# reports), kept per text so adding one note encodes one note rather than
-# every note again. Bounded, oldest dropped first, because it only ever
-# saves time and a miss simply encodes again.
-_TEXT_CACHE_LIMIT = 5000
-_text_vectors = {}
-
-
 def similarities(query, texts):
     """Cosine similarity of [query] to each of [texts], or None without the model.
 
     The general form of what relevant_summary does for memories, for any
-    list of short texts. Encodes only texts it has not seen before.
+    list of short texts. Each text's vector comes from the vector store,
+    so it is encoded once and kept across restarts.
     """
+    from actions import vector_store
+
     texts = [str(text or "") for text in texts]
     query = str(query or "").strip()
 
     if not query or not texts:
         return None
 
-    missing = list(dict.fromkeys(text for text in texts if text not in _text_vectors))
+    matrix = vector_store.vectors(texts, _encode, MODEL_ID)
 
-    if missing:
-        vectors = _encode(missing)
-
-        if vectors is None:
-            return None
-
-        for text, vector in zip(missing, vectors):
-            _text_vectors[text] = vector
-
-        while len(_text_vectors) > _TEXT_CACHE_LIMIT:
-            _text_vectors.pop(next(iter(_text_vectors)))
+    if matrix is None:
+        return None
 
     query_vector = _encode([query])
 
     if query_vector is None:
         return None
-
-    matrix = np.stack([_text_vectors[text] for text in texts])
 
     return [float(score) for score in matrix @ query_vector[0]]
 
@@ -450,7 +438,10 @@ def clear_cache():
 
     _document_cache_key = None
     _document_cache_vectors = None
-    _text_vectors.clear()
+
+    from actions import vector_store
+
+    vector_store.close()
 
 
 def prewarm():

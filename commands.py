@@ -59,6 +59,7 @@ from actions import (
     quran,
     recitation,
     research,
+    log_search,
     notes,
     patterns,
     safety,
@@ -3608,6 +3609,22 @@ def _fast_path(command):
     if not text:
         return None
 
+    # Questions about your own history come first. Their shape is narrow
+    # ("when did I last ask about ...", "what did I note about ..."), and
+    # the topic inside them names other skills: "when did I last ask about
+    # planes overhead" must not open the radar.
+    asked = log_search.question(command)
+
+    if asked:
+        return _blank_result("search_log", text=_original_case(command, asked[1]))
+
+    # Before the phrase table too, so "read my notes about the boiler" is
+    # not taken as plain "read my notes".
+    topic = notes.search_topic(text)
+
+    if topic:
+        return _blank_result("read_notes", text=_original_case(command, topic))
+
     # Numbers only and three words required, so this cannot claim an
     # ordinary "play" or "read". Parsed again in the handler rather than
     # carried through the result, which has a fixed set of fields.
@@ -3645,13 +3662,6 @@ def _fast_path(command):
 
     if said:
         return _blank_result(_SOCIAL_INTENTS[said])
-
-    # "What did I note about the boiler?" Before the phrase table, so
-    # "read my notes about the boiler" is not taken as plain "read my notes".
-    topic = notes.search_topic(text)
-
-    if topic:
-        return _blank_result("read_notes", text=_original_case(command, topic))
 
     if text in (
         "restore original",
@@ -5354,6 +5364,11 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "log_summary":
         return _query(intent, journal.summary)
+
+    if intent == "search_log":
+        topic = verbatim_text or text
+
+        return _query(intent, lambda: log_search.answer(command, topic=topic))
 
     if intent == "open_default_project":
         default = memory.default_project()

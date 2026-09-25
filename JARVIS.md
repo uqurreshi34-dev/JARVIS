@@ -36,7 +36,7 @@ This prevents speech intended for the phone from being heard or acted on by
 the desktop listener. When the phone interaction finishes, the desktop
 microphone is restored.
 
-**127 language-model intents. 520 spoken phrases resolve locally with no API call.**
+**128 language-model intents. 520 spoken phrases resolve locally with no API call.**
 
 ---
 
@@ -1107,6 +1107,24 @@ reaching a model.
 every change. Logging happens inside the two result constructors, so a new
 skill is recorded without anyone remembering to add a line. Full logs are
 archived, never discarded.
+
+**The log answers questions about your history** — `actions/log_search.py`.
+"When did I last ask about bitcoin?", "have I asked about the weather
+before?", "how many times this week?", "what did I ask about the
+markets?" are matched by shape, first in the fast path, since their topics
+name other skills ("planes overhead" must not open the radar). The topic
+is matched by meaning with the local model. Short commands score high
+against unrelated topics, so a command counts only when it contains the
+topic's own word or is within 0.12 of the closest command (and above
+0.35) — measured over a 600-command log, that counted every topic exactly.
+Questions about the log are never counted as asking about their topic.
+
+**Meaning vectors are saved, not recomputed** — `actions/vector_store.py`.
+Each text is encoded once, in batches of 64, and kept in
+`jarvis-vectors.sqlite` in the JARVIS folder, keyed by a hash of the model
+and the text; the text itself is not stored. A different model never
+reuses another's vectors. The log is indexed in the background 30 seconds
+after start-up, and notes use the same store.
 
 **Pronouns resolve only when explicit and recent.** "copy it to my
 clipboard" works for sixty seconds after naming something. Never for
