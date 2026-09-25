@@ -13,6 +13,7 @@ Checked with Groq and local Whisper both faked: no network, no model.
   and a success clears the rest;
 - rests double while Groq keeps failing, up to a ceiling, and follow the
   wait a rate-limited response asks for;
+- one kind of local Whisper missing is not reported when another stands in;
 - without a local model, a cloud failure loses only that utterance;
 - STT_ENGINE=groq without a key starts local Whisper, not Vosk;
 - STT_ENGINE=whisper never uses the cloud.
@@ -146,6 +147,20 @@ client.failure = RateLimited(90)
 start = clock["now"]
 groq._transcribe(audio)
 check(groq._rest_until == start + 90, "a rate-limited response's own wait is honoured")
+
+# ---- the first kind missing, the second standing in ----------------------------
+
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+printed = io.StringIO()
+
+with contextlib.redirect_stdout(printed):
+    second = engine(factories=(Unavailable, Local))
+
+check(isinstance(second._local, Local), "when the first kind of local Whisper is missing, the next stands in")
+check("unavailable" not in printed.getvalue() and "no local Whisper" not in printed.getvalue(),
+      "and nothing is printed about the missing one, since the backup works")
 
 # ---- nothing to fall back on ---------------------------------------------------------
 

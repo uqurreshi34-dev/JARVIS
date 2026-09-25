@@ -529,15 +529,19 @@ class GroqWhisperEngine(SegmentingEngine):
 
     def _load_local(self):
         """Load the local stand-in once, quietly, in the background."""
+        # Several kinds are tried in turn, and only one is needed: one that is
+        # not installed is worth mentioning only when none of the others is.
+        missing = []
+
         try:
             for factory in self._local_factories:
                 try:
                     self._local = factory(self._block_seconds)
                     return
                 except Exception as error:
-                    print(f"[JARVIS] local stand-in {getattr(factory, 'name', factory)} unavailable: {error}")
+                    missing.append(f"{getattr(factory, 'name', factory)}: {error}")
 
-            print("[JARVIS] no local Whisper to stand in for the cloud")
+            print("[JARVIS] no local Whisper to stand in for the cloud (" + "; ".join(missing) + ")")
         finally:
             self._local_ready.set()
 
