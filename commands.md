@@ -581,6 +581,9 @@ no card). Without it, Bing is used. Either way, pages that are not about
 what was searched are left out, and if nothing on-topic is found he says
 so instead of writing an empty report.
 
+Reports cite a source number for each claim, say when something rests on a
+single website, and mark any figure that its cited source does not contain.
+
 Research uses the normal JARVIS provider chain: Claude first, then Groq, then
 Gemini if failover is needed.
 

@@ -185,8 +185,12 @@ _PASSAGE_CHARS = 420
 _EMPHASIS = re.compile(r"(?<![\w*])[*_]{1,3}(?=\S)|(?<=\S)[*_]{1,3}(?![\w*])")
 
 
+# Source numbers, [2] or [1][4]: useful in the document, noise aloud.
+_CITATION = re.compile(r"\s*\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
+
+
 def _clean(line):
-    line = _EMPHASIS.sub("", line.replace("`", ""))
+    line = _EMPHASIS.sub("", _CITATION.sub("", line.replace("`", "")))
 
     if "|" in line:
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]

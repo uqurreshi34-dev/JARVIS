@@ -841,6 +841,17 @@ limit: a name collision that is the only result for its search can pass.
 A run left with no on-topic sources writes no report rather than a report
 about the absence of sources. The writer is told to begin with findings.
 
+**Claims are cited and checked.** The writer cites every factual claim with
+its source number ([2], [1][4]), matching the Sources list JARVIS appends,
+and states a notable claim (honour, record, date, figure) as settled only
+when two sources agree or one is authoritative; otherwise it says "according
+to one source". This came from a real report that called Aston Villa 2024
+Conference League winners because one website said so. After writing, every
+figure in a cited sentence is checked against the cited source's text
+locally (`research.check_citations`); a figure the source lacks is marked
+"(unverified: this figure is not in the cited source)" in the saved report,
+never silently removed. Source numbers are not read aloud.
+
 **Saved reports answer questions** - `actions/report_search.py`.
 "What did my report say about deep sleep?", "what does my ESP32 report say
 about batteries?", "which reports mention insurance?" read the matching

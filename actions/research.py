@@ -161,10 +161,21 @@ Requirements:
 - Cover the dimensions that matter to the user's request and the evidence
   available.
 - Use concrete dates, figures, products, and other specifics when supported.
+- Cite every factual claim with the number of the SOURCE it comes from, in
+  square brackets, such as [2] or [1][4]. A claim no source supports does
+  not belong in the report.
+- A single website can be wrong. State a notable claim (an honour, record,
+  date, figure or ranking) as settled only when two sources agree or it
+  comes from an authoritative source such as an official body. When it
+  rests on one ordinary source, say so plainly: "according to one source
+  [3]". When sources disagree, describe the disagreement.
+- The sources may not cover the latest events. Where recency matters, say
+  how current the evidence appears to be rather than implying it is up to
+  date.
 - Distinguish fact from interpretation.
-- When sources disagree, describe the disagreement.
 - Never invent facts, dates, figures, or URLs.
-- End with a Sources section containing the supplied source titles and URLs.
+- Do not write a Sources section; one is added, numbered as the SOURCE
+  blocks are.
 - Do not mention internal tools, providers, prompts, or implementation.
 """
 
@@ -672,6 +683,93 @@ def _report(request, subjects, sources):
     return str(report or "").strip() or None
 
 
+# A citation as the writer is asked to give it: [2], [1][4], [1, 4], [2-3].
+_CITATION = re.compile(r"\[(\d+(?:\s*[,\u2013-]\s*\d+)*)\]")
+
+# Figures that must be in the source a sentence cites: years, amounts,
+# counts, percentages. Single digits are left out; they are too often
+# ordinals, list markers and words written as numbers.
+_FIGURE = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?")
+
+_UNVERIFIED = " (unverified: this figure is not in the cited source)"
+
+
+def _cited(marks, count):
+    """The source numbers a citation names, within 1..count."""
+    numbers = set()
+
+    for part in re.split(r"\s*,\s*", marks):
+        bounds = re.split(r"\s*[\u2013-]\s*", part)
+
+        try:
+            low, high = int(bounds[0]), int(bounds[-1])
+        except ValueError:
+            continue
+
+        if high - low > 20:
+            continue
+
+        numbers.update(n for n in range(low, high + 1) if 1 <= n <= count)
+
+    return numbers
+
+
+def _plain_number(figure):
+    return figure.replace(",", "").rstrip(".")
+
+
+def check_citations(report, sources):
+    """The report with sentences whose figures their sources lack marked.
+
+    Every figure in a sentence that cites sources must appear in at least
+    one of them. The writer is told to cite every claim; this checks the
+    ones with numbers in, where a slip does most harm. A figure missing
+    from the cited source is marked in the report rather than removed, so
+    nothing is silently changed. Returns (report, how many were marked).
+    """
+    texts = [
+        " ".join(_plain_number(figure) for figure in _FIGURE.findall(str(source.get("text") or "")))
+        for source in sources
+    ]
+    figures_in = [set(text.split()) for text in texts]
+    marked = 0
+    lines = []
+
+    for line in str(report or "").split("\n"):
+        pieces = re.split(r"(?<=[.!?])(\s+)", line)
+        rebuilt = []
+
+        for piece in pieces:
+            citations = list(_CITATION.finditer(piece))
+
+            if not citations or piece.isspace():
+                rebuilt.append(piece)
+                continue
+
+            cited = set()
+
+            for citation in citations:
+                cited |= _cited(citation.group(1), len(sources))
+
+            claimed = {
+                _plain_number(figure) for figure in _FIGURE.findall(_CITATION.sub(" ", piece))
+                if len(_plain_number(figure)) >= 2
+            }
+            supported = set().union(*(figures_in[n - 1] for n in cited)) if cited else set()
+
+            if cited and claimed - supported:
+                end = len(piece.rstrip())
+                closing = end - 1 if piece.rstrip().endswith((".", "!", "?")) else end
+                piece = piece[:closing] + _UNVERIFIED + piece[closing:]
+                marked += 1
+
+            rebuilt.append(piece)
+
+        lines.append("".join(rebuilt))
+
+    return "\n".join(lines), marked
+
+
 def _sources_section(sources):
     """Append the exact URLs actually supplied to the report."""
     lines = ["", "Sources", ""]
@@ -720,6 +818,11 @@ def run(request):
 
     if not report:
         return None
+
+    report, marked = check_citations(report, sources)
+
+    if marked:
+        print(f"[JARVIS] research marked {marked} sentence(s) whose figures the cited source lacks", flush=True)
 
     report = report.rstrip() + "\n" + _sources_section(sources)
 

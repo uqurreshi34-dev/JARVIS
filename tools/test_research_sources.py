@@ -14,7 +14,11 @@ every web call faked (no network, no search credits spent):
   (a lone name collision, with no better page beside it, can still pass:
   see the note below);
 - without the local model, pages are kept as before;
-- a research run whose sources are all off-topic writes no report.
+- a research run whose sources are all off-topic writes no report;
+- the writer is told to cite every claim, to say when a notable claim rests
+  on one source, and to leave the Sources list to JARVIS;
+- a figure that the cited source does not contain is marked unverified in
+  the saved report, and source numbers are never read aloud.
 
     python tools/test_research_sources.py
 """
@@ -255,5 +259,68 @@ if model:
     check(not any("research analyst" in one for one in asked), "and the report writer is never asked")
     check(research.failure_message() and "reliable sources" in research.failure_message(),
           f"and JARVIS can say why: {research.failure_message()!r}")
+
+# ---- citations and figures ------------------------------------------------------
+
+rules = research._REPORT_SYSTEM
+check("[2]" in rules and "one source" in rules and "Do not write a Sources section" in rules,
+      "the writer is told to cite claims, flag single-source claims, and leave the Sources list alone")
+
+cited_sources = [
+    {"text": "Aston Villa won the UEFA Europa Conference League in 2024. Founded 1874."},
+    {"text": "Villa Park capacity is 42,640. Revenue in 2024/25 was 378 million pounds. European Cup 1982."},
+]
+draft = (
+    "Villa were founded in 1874 [1] and won the European Cup in 1982 [2]. Revenue reached GBP 378m in 2024/25 [2].\n"
+    "Villa Park holds 45,000 fans [2]. Villa won the League Cup in 1996 [1][2].\n"
+    "| European Cup | 1982 |\n"
+    "According to one source, Villa won the Conference League in 2024 [1]."
+)
+checked, marked = research.check_citations(draft, cited_sources)
+check(marked == 2, f"two sentences with figures their sources lack are marked ({marked})")
+check("45,000 fans [2]" + research._UNVERIFIED + "." in checked, "a wrong capacity is marked where it is claimed")
+check("1996 [1][2]" + research._UNVERIFIED + "." in checked, "a figure neither cited source has is marked")
+check("founded in 1874 [1] and won the European Cup in 1982 [2]. Revenue" in checked,
+      "figures the cited sources contain are left as written")
+check("| European Cup | 1982 |" in checked, "lines without citations are left alone")
+check(research.check_citations("Nothing to see [9].", cited_sources)[1] == 0, "a citation to no real source marks nothing")
+
+from actions import report_search  # noqa: E402
+
+spoken = report_search._clean("Founded in 1874 [1] and European champions in 1982 [1][2], per [2-3].")
+check(spoken == "Founded in 1874 and European champions in 1982, per.", f"source numbers are not read aloud: {spoken!r}")
+
+if model:
+    written = {}
+
+    def cited_chat(messages, **kwargs):
+        if "research planner" in messages[0]["content"]:
+            return '{"subjects": ["Aston Villa"], "queries": ["Aston Villa FC honours history"]}'
+
+        if "gap analyst" in messages[0]["content"]:
+            return '{"queries": []}'
+
+        return "# Aston Villa\n## Summary\nVilla were founded in 1874 [1]. Villa Park holds 45,000 fans [1]."
+
+    real_write = research.files.write
+
+    def keep(name, content, **kwargs):
+        written["content"] = content
+        return "/tmp/report.docx"
+
+    research._chat = cited_chat
+    research.files.write = keep
+    next_post = lambda: Response(200, {"results": [
+        {"title": "Aston Villa F.C.", "url": "https://example.org/villa-run", "content": "", "raw_content": VILLA},
+    ]})
+
+    try:
+        research.run("research Aston Villa and write a report")
+    finally:
+        research.files.write = real_write
+
+    saved = written.get("content", "")
+    check("45,000 fans [1]" + research._UNVERIFIED in saved, "a real run marks the unsupported figure in the saved report")
+    check("founded in 1874 [1]." in saved, "and leaves the supported one as written")
 
 sys.exit(1 if failures else 0)
