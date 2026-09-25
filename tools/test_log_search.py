@@ -235,6 +235,27 @@ check(said.startswith("Today at eight thirty AM"), f"a question worded different
 said = log_search.answer("how often do I bring up bitcoin", topic="bitcoin", today=TODAY)
 check(said.startswith("Twice"), f"the wording still picks the answer's kind: {said!r}")
 
+# ---- names that speech splits ----------------------------------------------------
+
+split = [
+    (datetime(2026, 9, 9, 19, 4), "open github.com", "open_website"),
+    (datetime(2026, 9, 24, 19, 29), "what are my git hub issues", "agent_mode"),
+    (datetime(2026, 9, 24, 19, 31), "use git hub to list my recent commits", "agent_mode"),
+    (datetime(2026, 9, 24, 19, 40), "git status", "git_status"),
+    (datetime(2026, 9, 24, 19, 45), "open ask files project", "open_project"),
+]
+write_log(split)
+
+found = [i[1] for i in log_search.search("github", today=TODAY)]
+check(found == ["open github.com", "what are my git hub issues", "use git hub to list my recent commits"],
+      f"'github' finds commands where speech wrote 'git hub': {found}")
+check("git status" not in found, "but not an unrelated command that only shares 'git'")
+
+found = [i[1] for i in log_search.search("askfiles", today=TODAY)]
+check(found == ["open ask files project"], f"'askfiles' finds 'ask files': {found}")
+
+write_log(short)
+
 # ---- without the model ---------------------------------------------------------
 
 real = semantic_memory.similarities
@@ -286,6 +307,15 @@ else:
     result = commands.handle_command("list my github repositories")
     check(not result or result.get("intent") == "agent_mode",
           f"a real request for the service still goes to it -> {result and result.get('intent')}")
+
+    # Routes that return before the ordinary logging used never to log the
+    # command at all, so service requests were invisible to this search.
+    before = len(log_search.entries())
+    commands.handle_command("list my github repositories")
+    after = log_search.entries()
+    check(len(after) == before + 1 and after[-1][1] == "list my github repositories"
+          and after[-1][2] == "agent_mode",
+          "a request sent to a connected service is logged as a command")
 
     os.remove(os.path.join(folder, mcp_services.CONFIG_NAME))
     mcp_services.close()

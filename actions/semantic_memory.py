@@ -404,6 +404,54 @@ def install():
     _installed = True
 
 
+def content_words(text, plain_words=frozenset()):
+    """Content words of [text], loosely singular, for a shared-word signal.
+
+    Also every run of two or three neighbouring words joined together,
+    because speech recognition splits names: "git hub", "ask files" and
+    "file system" must share a word with "github", "askfiles" and
+    "filesystem". A joined run only ever matches a real word on the other
+    side, so it adds no false matches of its own.
+    """
+    tokens = re.findall(r"[a-z0-9]+", str(text or "").casefold())
+    candidates = list(tokens)
+
+    for size in (2, 3):
+        candidates += ["".join(tokens[start:start + size]) for start in range(len(tokens) - size + 1)]
+
+    return {_stem(word) for word in candidates if len(word) >= 3 and word not in plain_words}
+
+
+def _stem(word):
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+
+    return word
+
+
+def shares_words(topic, texts, plain_words=frozenset()):
+    """For each of [texts], whether it shares a content word with [topic].
+
+    When the topic's words join into a name the texts actually use ("ask
+    files" -> "askfiles"), the topic is that name: its pieces stop counting
+    on their own, so "ask files" does not match "ask cousin about ...".
+    Decided from the texts themselves, not from a list of names.
+    """
+    found = [content_words(text, plain_words) for text in texts]
+    present = set().union(*found) if found else set()
+    wanted = content_words(topic, plain_words)
+    tokens = re.findall(r"[a-z0-9]+", str(topic or "").casefold())
+
+    for size in (3, 2):
+        for start in range(len(tokens) - size + 1):
+            run = tokens[start:start + size]
+
+            if _stem("".join(run)) in present:
+                wanted -= {_stem(piece) for piece in run} - {_stem("".join(run))}
+
+    return [bool(wanted & words) for words in found]
+
+
 def similarities(query, texts):
     """Cosine similarity of [query] to each of [texts], or None without the model.
 

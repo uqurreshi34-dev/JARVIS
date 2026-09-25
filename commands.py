@@ -4907,7 +4907,7 @@ def _compound_request(command):
 
         question += " Shall I proceed, sir?"
 
-        return _confirm(
+        confirming = _confirm(
             "compound_task",
             question,
             execute_plan,
@@ -4916,19 +4916,25 @@ def _compound_request(command):
             timeout=None,
             success_response="Done, sir.",
         )
+        confirming["local_plan"] = local
+
+        return confirming
 
     response = summary
 
     if local and steps:
         response = _compound_response(steps, summary)
 
-    return _action(
+    acting = _action(
         "compound_task",
         response,
         execute_plan,
         timeout=None,
         success_response="Done, sir.",
     )
+    acting["local_plan"] = local
+
+    return acting
 
 
 # Commands arrive from two places now: the voice loop at the desk, and
@@ -4973,6 +4979,19 @@ def _handle_command(command, *, fast_only=False, probe=False):
     if result is not None:
         print(f"[fast] {result['intent']} (no API call)")
 
+    def routed(taken, free=False):
+        """A command taken by one of the routes below, logged like any other.
+
+        These return before the logging further down, so for months a
+        request to a connected service, a research report, a plan or an
+        Agent Mode run never reached jarvis-log.txt as a command, and "how
+        many times have I asked about github" could not count them.
+        """
+        if taken and not probe:
+            journal.command(command, taken.get("intent", "unknown"), free)
+
+        return taken
+
     if not fast_only:
 
         # A command that names a connected service (mcp.json) is work for
@@ -4988,11 +5007,11 @@ def _handle_command(command, *, fast_only=False, probe=False):
             print(f"[agent] Agent Mode for connected service {service!r}")
             task = _normalise(command)
 
-            return _query(
+            return routed(_query(
                 "agent_mode",
                 lambda: _run_agent_investigation(task),
                 detail=task,
-            )
+            ))
 
         if folder_organizer.is_request(command):
             prepared = folder_organizer.prepare(command)
@@ -5000,15 +5019,15 @@ def _handle_command(command, *, fast_only=False, probe=False):
             status = prepared.get("status")
 
             if status != "confirm":
-                return _query(
+                return routed(_query(
                     "organise_folder",
                     lambda: prepared.get(
                         "message",
                         "I couldn't prepare that organisation, sir.",
                     ),
-                )
+                ))
 
-            return _confirm(
+            return routed(_confirm(
                 "organise_folder",
                 prepared["question"],
                 prepared["action"],
@@ -5016,33 +5035,33 @@ def _handle_command(command, *, fast_only=False, probe=False):
                 no_text="Very good, sir. Nothing has been changed.",
                 timeout=None,
                 success_response=prepared["success_response"],
-            )
+            ))
 
         if research.is_report_request(command):
-            return _action(
+            return routed(_action(
                 "research_report",
                 "I'll research that, compare the findings, and prepare the report, sir.",
                 lambda: research.run(command),
                 timeout=None,
                 success_response=_research_success_response,
-            )
+            ))
 
         compound = _compound_request(command)
 
         if compound is not None:
             print("[planner] compound task")
-            return compound
+            return routed(compound, free=bool(compound.get("local_plan")))
 
         agent_task = _agent_task(command)
 
         if agent_task:
             print("[agent] Agent Mode")
 
-            return _query(
+            return routed(_query(
                 "agent_mode",
                 lambda: _run_agent_investigation(agent_task),
                 detail=agent_task,
-            )
+            ))
 
     # The model is the fallback for speech the local path could not resolve.
     # Bound to `result is None` rather than to `fast_only`, which had it

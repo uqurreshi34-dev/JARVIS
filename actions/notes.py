@@ -255,22 +255,6 @@ def search_topic(text):
     return topic
 
 
-def _words(text):
-    """Content words, loosely singular, for the shared-word signal."""
-    found = set()
-
-    for word in re.findall(r"[a-z0-9]+", str(text or "").casefold()):
-        if len(word) < 3 or word in _PLAIN_WORDS:
-            continue
-
-        if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
-            word = word[:-1]
-
-        found.add(word)
-
-    return found
-
-
 def search(topic, limit=_SEARCH_LIMIT):
     """Notes about [topic], best first, as (stamp, text) pairs."""
     topic = " ".join(str(topic or "").split())
@@ -293,11 +277,13 @@ def search(topic, limit=_SEARCH_LIMIT):
         print(f"[JARVIS] searching notes by meaning failed, using words: {error}")
         meaning = None
 
-    wanted = _words(topic)
+    from actions import semantic_memory
+
+    sharing = semantic_memory.shares_words(topic, bodies, _PLAIN_WORDS)
     scored = []
 
     for index, body in enumerate(bodies):
-        shared = bool(wanted & _words(body))
+        shared = sharing[index]
 
         if meaning is None:
             score = 1.0 if shared else 0.0

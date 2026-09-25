@@ -267,28 +267,12 @@ _PLAIN_WORDS = frozenset({
 })
 
 
-def _words(text):
-    found = set()
-
-    for word in re.findall(r"[a-z0-9]+", str(text or "").casefold()):
-        if len(word) < 3 or word in _PLAIN_WORDS:
-            continue
-
-        if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
-            word = word[:-1]
-
-        found.add(word)
-
-    return found
-
-
 def _scores(topic, texts):
     """(meaning, shared word) for each text against [topic].
 
     Meaning is None throughout when the model is unavailable.
     """
     core = " ".join(word for word in topic.casefold().split() if word not in _SMALL_WORDS) or topic
-    wanted = _words(core)
 
     try:
         from actions import semantic_memory
@@ -298,9 +282,13 @@ def _scores(topic, texts):
         print(f"[JARVIS] searching the log by meaning failed, using words: {error}")
         meaning = None
 
+    from actions import semantic_memory
+
+    shared = semantic_memory.shares_words(core, texts, _PLAIN_WORDS)
+
     return [
-        (None if meaning is None else meaning[index], bool(wanted & _words(text)))
-        for index, text in enumerate(texts)
+        (None if meaning is None else meaning[index], shared[index])
+        for index in range(len(texts))
     ]
 
 

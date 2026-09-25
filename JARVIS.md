@@ -1122,6 +1122,13 @@ against unrelated topics, so a command counts only when it contains the
 topic's own word or is within 0.12 of the closest command (and above
 0.35) — measured over a 600-command log, that counted every topic exactly.
 Questions about the log are never counted as asking about their topic.
+Every route logs its command, including the ones that return early:
+connected services, research reports, plans, folder organising and Agent
+Mode. They used not to, which hid every GitHub request from this search.
+Names that speech splits ("git hub", "ask files") share a word with the
+joined name ("github", "askfiles"); when the joined name appears in what is
+being searched, the pieces stop counting alone, so "ask files" does not
+match "ask cousin" (`semantic_memory.shares_words`, used by notes too).
 
 **Meaning vectors are saved, not recomputed** — `actions/vector_store.py`.
 Each text is encoded once, in batches of 64, and kept in

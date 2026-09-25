@@ -169,6 +169,8 @@ semantic_memory.similarities = lambda query, texts: None
 try:
     check(found("my car") == ["renew car insurance before october"], "without the model, a shared word still finds the note")
     check(found("keystores") == ["remember to back up the askfiles keystore"], "without the model, plurals still match")
+    check(found("ask files") == ["remember to back up the askfiles keystore"],
+          "without the model, 'ask files' as speech splits it still finds 'askfiles'")
     check(found("heating") == [], "without the model, meaning alone finds nothing (and says so)")
 finally:
     semantic_memory.similarities = real
