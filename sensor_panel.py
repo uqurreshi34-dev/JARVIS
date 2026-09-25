@@ -6,9 +6,11 @@ something projected from it. When every board has gone quiet it slides
 back down and gets out of the way. A click folds it to its title strip
 (still showing the room's temperature); another click opens it again.
 
-One row per board, most recently heard first:
+One row per board, in a steady order (by name, with boards gone silent
+at the end) so a list long enough to scroll does not reshuffle under the
+mouse; three show at a time and the wheel scrolls through the rest:
 
-    ROOM    21.4 C  (with its last half hour as a line)   48% RH   PRESENT
+    ROOM    21.4 C  (with its last half hour as a line)   48% HUMIDITY   PRESENT
 
 Nothing here fetches anything. actions/sensors.py records each report and
 hands known() to the panel through a signal; the panel keeps a short
@@ -31,7 +33,7 @@ from actions import sensors
 _WIDTH = 460                # the HUD's own width, so the two read as one
 _HEADER = 34                # the title strip: all that shows when folded
 _ROW = 82
-_MAX_ROWS = 3               # three rows is the HUD's own height; more are counted
+_MAX_ROWS = 3               # three rows is the HUD's own height; more scroll
 _FOOT = 12
 _HEADER_INSET = 38          # clear of the corner brackets
 _GAP = -4                   # overlap the HUD's transparent margin, so they touch
@@ -140,6 +142,8 @@ class SensorPanel(QWidget):
         self._below = False         # docked under the HUD, when there is no room above
         self._reveal = 0.0          # pixels showing, animated toward _target()
         self._phase = 0.0
+        self._scroll = 0            # the first row showing, when there are more than fit
+        self._scroll_px = 0.0       # the same, in pixels, animated toward it
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -226,6 +230,7 @@ class SensorPanel(QWidget):
 
     def _on_hide_requested(self):
         self._boards.clear()
+        self._scroll, self._scroll_px = 0, 0.0
         self._reveal = 0.0
         self._timer.stop()
         self.hide()
@@ -270,13 +275,19 @@ class SensorPanel(QWidget):
         else:
             self._reveal += gap * _SLIDE
 
+        self._scroll = min(self._scroll, self._max_scroll())
+        aim = float(self._scroll * _ROW)
+        drift = aim - self._scroll_px
+        self._scroll_px = aim if abs(drift) < 0.6 else self._scroll_px + drift * _SLIDE
+
         if self._reveal <= 0.0 and target <= 0.0:
             self._timer.stop()
+            self._scroll, self._scroll_px = 0, 0.0
             self.hide()
             return
 
         # Still and nothing pulsing: slow down to a few frames a second.
-        still = self._reveal == target
+        still = self._reveal == target and self._scroll_px == aim
         pulsing = any(board["moved"] is not None and _now() - board["moved"] < _MOTION_PULSE_SECONDS
                       for board in self._boards.values())
         interval = _FRAME_MS if not still or pulsing else 500
@@ -293,7 +304,29 @@ class SensorPanel(QWidget):
             self._folded = not self._folded
             self._wake()
 
+    def _max_scroll(self):
+        return max(0, len(self._boards) - _MAX_ROWS)
+
+    def wheelEvent(self, event):
+        """The wheel scrolls a row at a time, when there are more than fit."""
+        notches = event.angleDelta().y() / 120.0
+
+        if not notches or self._folded or not self._max_scroll():
+            event.ignore()
+            return
+
+        step = int(round(notches)) or (1 if notches > 0 else -1)
+        self._scroll = max(0, min(self._max_scroll(), self._scroll - step))
+        event.accept()
+        self._wake()
+
     # ---------------------------------------------------------- drawing
+
+    def _listed(self):
+        """The rows, in a steady order: by name, boards gone silent last."""
+        now = _now()
+        return sorted(self._boards.items(),
+                      key=lambda item: (now - item[1]["seen"] >= _GONE_SECONDS, item[0]))
 
     def _ordered(self):
         now = _now()
@@ -323,12 +356,41 @@ class SensorPanel(QWidget):
         self._paint_header(painter, header_top)
 
         rows_top = _FOOT if self._below else _HEADER
+        rows_height = self.height() - _HEADER - _FOOT
         now = _now()
 
-        for index, (name, board) in enumerate(self._ordered()[:_MAX_ROWS]):
-            self._paint_row(painter, name, board, rows_top + index * _ROW, now)
+        painter.save()
+        painter.setClipRect(QRectF(0, rows_top, self.width(), rows_height), Qt.ClipOperation.IntersectClip)
+
+        for index, (name, board) in enumerate(self._listed()):
+            top = rows_top + index * _ROW - self._scroll_px
+
+            if top + _ROW > rows_top and top < rows_top + rows_height:
+                self._paint_row(painter, name, board, top, now)
+
+        painter.restore()
+        self._paint_scrollbar(painter, rows_top, rows_height)
 
         painter.end()
+
+    def _paint_scrollbar(self, painter, top, height):
+        """A thin bar on the right, only when there is more than fits."""
+        count = len(self._boards)
+
+        if count <= _MAX_ROWS:
+            return
+
+        track = QRectF(self.width() - 16, top + 8, 2.5, height - 16)
+        share = _MAX_ROWS / count
+        travel = (count - _MAX_ROWS) * _ROW
+        thumb_height = max(14.0, track.height() * share)
+        thumb_top = track.top() + (track.height() - thumb_height) * (self._scroll_px / travel)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._tint(self._accent, 45))
+        painter.drawRoundedRect(track, 1.2, 1.2)
+        painter.setBrush(self._tint(self._accent, 200))
+        painter.drawRoundedRect(QRectF(track.left(), thumb_top, track.width(), thumb_height), 1.2, 1.2)
 
     def _tint(self, colour, alpha):
         colour = QColor(colour)
@@ -360,12 +422,7 @@ class SensorPanel(QWidget):
         """SENSORS, how many are live, and the latest room's temperature."""
         now = _now()
         live = [b for b in self._boards.values() if now - b["seen"] < _GONE_SECONDS]
-        words = f"SENSORS  {len(live)} ONLINE"
-
-        if len(self._boards) > _MAX_ROWS:
-            words += f"  +{len(self._boards) - _MAX_ROWS}"
-
-        return words
+        return f"SENSORS  {len(live)} ONLINE"
 
     def _paint_header(self, painter, top):
         font = QFont("Consolas", 9, QFont.Weight.Bold)
@@ -514,7 +571,9 @@ class SensorPanel(QWidget):
         words = f"{humidity:.0f}%" if humidity is not None else "--"
         painter.drawText(QPointF(centre.x() - small_m.horizontalAdvance(words) / 2, centre.y() + small_m.ascent() / 2 - 1), words)
         painter.setPen(self._tint(_DIM, fade))
-        painter.drawText(QPointF(centre.x() - small_m.horizontalAdvance("RH") / 2, top + 68), "RH")
+        # Relative humidity: how much water the air holds, against the most it could.
+        label = fitting(["HUMIDITY", "HUMID", "RH"], small_m, presence_x - humid_x - 4)
+        painter.drawText(QPointF(centre.x() - small_m.horizontalAdvance(label) / 2, top + 68), label)
 
         # --- presence: rings that spread out from the room as someone moves
         where = self.presence(board, now)

@@ -7,7 +7,8 @@ Drawn off-screen, on a clock the test turns by hand. Checked:
   same width, touching it, and follows it when the HUD is dragged;
 - a HUD dragged to the top of the screen has the panel hang below;
 - a click folds it to its title strip, another opens it;
-- a row per board, most recent first, three at most with the rest counted;
+- a row per board in a steady order, three showing, the wheel scrolling
+  through the rest, with a scroll bar;
 - readings go on the trend line, motion reports do not;
 - a board that misses readings dims, one long silent is offline, and with
   every board silent it slides away; a board coming back opens it again,
@@ -168,8 +169,58 @@ settle()
 check(panel.height() == sensor_panel._HEADER + 3 * sensor_panel._ROW + sensor_panel._FOOT,
       "three rows at most, the HUD's own height")
 check(panel.height() <= hud._HEIGHT, "no taller than the HUD")
-check("4 ONLINE" in panel.header_text() and "+1" in panel.header_text(), f"the rest are counted ({panel.header_text()!r})")
-check([name for name, _ in panel._ordered()][0] == "garage", "the most recently heard first")
+check("4 ONLINE" in panel.header_text(), f"all are counted ({panel.header_text()!r})")
+check([name for name, _ in panel._listed()] == ["garage", "hall", "kitchen", "room"],
+      "in a steady order, by name, so a scrolled list does not reshuffle")
+
+
+class Wheel:
+    def __init__(self, notches):
+        self._y = int(notches * 120)
+        self.accepted = None
+
+    def angleDelta(self):
+        return QPoint(0, self._y)
+
+    def accept(self):
+        self.accepted = True
+
+    def ignore(self):
+        self.accepted = False
+
+
+panel.wheelEvent(Wheel(-1))
+settle()
+check(panel._scroll == 1 and panel._scroll_px == sensor_panel._ROW, "the wheel scrolls down a row")
+panel.wheelEvent(Wheel(-5))
+settle()
+check(panel._scroll == panel._max_scroll() == 1, "no further than the last row")
+panel.wheelEvent(Wheel(3))
+settle()
+check(panel._scroll == 0, "and back up to the first")
+
+for index in range(6):
+    later(1)
+    sensors.report({"name": f"board {index}", "temperature": 20.0, "humidity": 50})
+
+settle()
+check(panel.height() == sensor_panel._HEADER + 3 * sensor_panel._ROW + sensor_panel._FOOT,
+      "ten boards still take three rows' room")
+panel.wheelEvent(Wheel(-20))
+settle()
+check(panel._scroll == 7, "and scroll through the other seven")
+image = frame()
+bar_x = panel.width() - 15
+bar = [image.pixelColor(bar_x, y) for y in range(sensor_panel._HEADER, panel.height() - sensor_panel._FOOT)]
+check(any(c.alpha() > 150 and c.blue() > 120 for c in bar), "with a scroll bar showing where")
+panel.wheelEvent(Wheel(20))
+settle()
+for index in range(6):
+    panel._boards.pop(f"board {index}")
+sensors.reset()
+for name in ("room", "kitchen", "hall", "garage"):
+    sensors.report({"name": name, "temperature": 19.5, "humidity": 55})
+settle()
 
 # Going quiet.
 later(80)

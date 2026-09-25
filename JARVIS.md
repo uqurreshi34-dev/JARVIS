@@ -1166,7 +1166,8 @@ What the boards feel is shown in `sensor_panel.py`, docked on top of the
 HUD at the same width (below it, if the HUD is dragged to the top of the
 screen). It slides up out of the HUD when a board first reports, with a
 row per board -- temperature coloured by how it feels, its trend, humidity
-and whether anyone is present -- three rows at most, the rest counted. A
+and whether anyone is present -- three rows showing, in a steady order by
+name, and the mouse wheel scrolls through any more, with a scroll bar. A
 board that misses readings dims; with every board silent for two minutes
 the panel slides away. A click folds it to its title strip. No beam: it
 is part of the HUD, not projected from it.
