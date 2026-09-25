@@ -1127,6 +1127,26 @@ several checks that fall inside its due window.
 ### Reminders — `actions/reminders.py`
 Spoken timers that announce themselves when due.
 
+### Sensors - `actions/sensors.py`, `tools/esp32_setup.py`, `arduino/jarvis_sensor/`
+Small boards on the wifi (an ESP32 with a DHT22 and a PIR) post what they
+feel to `/sensor` on the phone server, with the phone's token in the
+`X-Jarvis-Token` header. `actions/sensors.py` decides what is worth
+saying: only a change -- a board coming back, movement in an empty room.
+
+The board checks JARVIS's certificate against JARVIS's own authority with
+`setCACert()`, never `setInsecure()`, so nothing else on the wifi can
+pretend to be JARVIS. `python tools/esp32_setup.py`, run after JARVIS has
+started once, checks the authority really signed the certificate JARVIS
+serves and that it names this PC's address, then writes
+`arduino/jarvis_sensor/jarvis_config.h` (address, port, authority) and,
+once, `jarvis_secrets.h` (wifi and token; the wifi is filled in by hand).
+Both are kept out of git and the token is never printed.
+
+The esp32 board package must be 3.1 or later: older TLS libraries cannot
+check an IP address named in a certificate. Reserve the PC's address in
+the router; if JARVIS ever makes new certificates, run the tool again and
+upload the sketch again.
+
 ---
 
 ### Start-up: `boot.py`

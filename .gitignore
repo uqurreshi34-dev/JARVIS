@@ -20,3 +20,7 @@ memory.json
 build/
 dist/
 installer/output/
+
+# ESP32 sensor sketch: made by tools/esp32_setup.py, machine-specific or secret
+arduino/jarvis_sensor/jarvis_secrets.h
+arduino/jarvis_sensor/jarvis_config.h
