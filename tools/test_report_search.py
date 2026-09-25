@@ -222,6 +222,70 @@ else:
     said = report_search.answer("what does my tesla report say about range", today=TODAY)
     check(said == "I can't find a report on tesla, sir.", f"a report that does not exist: {said!r}")
 
+# ---- a folder like yours: one Villa report among many football reports ---------
+
+VILLA = """# Aston Villa Football Club vs Birmingham City Football Club
+## Executive summary
+This report was commissioned as a head-to-head comparison of Aston Villa Football Club and Birmingham City Football Club. *Prepared for filing under: Football*.
+Aston Villa are the more successful club, with seven league titles and the 1982 European Cup, while Birmingham City's major honour is the League Cup, won in 1963 and 2011.
+## Aston Villa
+Villa Park holds around 42,000 spectators and the club returned to European football in 2024 under Unai Emery.
+## Birmingham City
+Birmingham City play at St Andrew's and were promoted back to the Championship in 2025 after one season in League One.
+## Sources
+1. Aston Villa official site - https://www.avfc.co.uk"""
+
+PAKISTAN = """# Pakistan vs India
+## Summary
+This report was commissioned to research Pakistan, compare it with India, and file the result under the country folder. The report has been prepared and is presented below for the country folder.
+Pakistan has a population of about 240 million, the fifth largest in the world, and its capital is Islamabad.
+## History
+*Interpretation (not stated by the source):* Several of these sites are conventionally located in territory that is today Pakistan.
+## Sources
+1. Britannica - https://www.britannica.com"""
+
+football = os.path.join(folder, "Football")
+save(football, "Aston Villa Football Club vs Birmingham City Football Club research report 2026-09-16-120000.docx", VILLA)
+for club, fact in (("Manchester United Football Club", "Old Trafford is the largest club ground in England."),
+                   ("Liverpool Football Club", "Anfield has been Liverpool's home since 1892."),
+                   ("Arsenal Football Club", "Arsenal moved to the Emirates Stadium in 2006."),
+                   ("Chelsea Football Club", "Stamford Bridge sits in Fulham, west London."),
+                   ("Leeds United Football Club", "Leeds won the league title in 1992.")):
+    save(football, f"{club} research report 2026-09-10-100000.docx",
+         f"# {club}\n## Summary\nThis football club report covers the club and its history. {fact}\n## Sources\n1. x - https://example.com")
+save(os.path.join(folder, "country"), "Pakistan vs India research report 2026-09-24-150000.docx", PAKISTAN)
+
+if model:
+    said = report_search.answer("what does my report say about aston villa football club", today=TODAY)
+    check("other reports mention it" not in said and "Another report" not in said,
+          f"sharing 'football' and 'club' does not make other reports mention Aston Villa: {said!r}")
+    check("commissioned" not in said and "Prepared for filing" not in said,
+          f"sentences about the report itself are left out: {said!r}")
+    check("*" not in said, "no asterisks are read out")
+    check(said.startswith("From your Aston Villa Football Club vs Birmingham City Football Club report from 16 September, sir: Aston Villa are")
+          and "seven league titles" in said,
+          f"one side of a comparison finds what the report found about it: {said[:160]!r}")
+
+    said = report_search.answer("what does my report say about villa park", today=TODAY)
+    check(said.startswith("From your Aston Villa") and "42,000" in said, f"a topic inside it finds the passage: {said[:140]!r}")
+
+    said = report_search.answer("what does my report say about pakistan", today=TODAY)
+    check("commissioned" not in said and "presented below" not in said and "*" not in said,
+          f"Pakistan: no sentences about the report, no asterisks: {said!r}")
+    check("240 million" in said or "Islamabad" in said or "territory that is today Pakistan" in said,
+          f"Pakistan: what the report found is read: {said!r}")
+
+    said = report_search.answer("what does my report say about aston villa vs birmingham city", today=TODAY)
+    check(said.startswith("In short, from your Aston Villa Football Club vs Birmingham City Football Club report")
+          and "seven league titles" in said and "commissioned" not in said,
+          f"naming a report in full reads its summary of findings: {said!r}")
+
+    said = report_search.answer("which reports mention anfield", today=TODAY)
+    check(said.startswith("One report mentions anfield, sir: Liverpool Football Club"), f"which, among many: {said!r}")
+
+    said = report_search.answer("what did my report say about football clubs", today=TODAY)
+    check(said.startswith("From "), f"a general topic still finds something: {said[:80]!r}")
+
 # ---- without the model -----------------------------------------------------------
 
 real = semantic_memory.similarities

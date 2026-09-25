@@ -837,7 +837,18 @@ Markdown marks, bold lines or short title-like lines; a passage never runs
 across a heading and is encoded with its heading, tables are read row by row
 with their column names, and the Sources list is left out. Measured on
 research reports: true passages scored 0.34 to 0.82, unrelated topics 0.20
-or less; the minimum is 0.32, with 0.25 added for a shared word. A question
+or less; the minimum is 0.32, plus up to 0.25 for the share of the
+topic's words a passage contains (one word of four counts a quarter).
+Another report "mentions it too" only when its best passage is within 0.12
+of the best, so shared words like "football" cannot inflate it. A report's
+opening section is read without sentences about the report itself ("This
+report was commissioned to ..."), recognised by meaning against one
+description, with the report's subject words removed first. A question that
+names a report, rather than a subject inside it, reads that report's
+summary: it must cover the words that set the report apart from your other
+reports, decided from their names. Markdown emphasis is stripped, so no
+asterisk is ever read aloud. The research writer is now told not to
+describe itself. A question
 about JARVIS's own records is never taken by the routes that run after the
 fast path, so asking about a research report cannot start a research run.
 

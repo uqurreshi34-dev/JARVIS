@@ -123,6 +123,8 @@ source material.
 
 Requirements:
 - Start with a clear title and executive summary.
+- Begin with the findings. Never describe the request, the report itself,
+  how it was prepared, or where it will be saved or filed.
 - Give each requested subject its own section.
 - Include a direct comparison section.
 - Cover the dimensions that matter to the user's request and the evidence

@@ -180,8 +180,13 @@ _TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{2,}")
 _PASSAGE_CHARS = 420
 
 
+# Markdown emphasis around words: *this*, **this**, _this_. Stripped so the
+# voice never reads "asterisk". Underscores inside words are left alone.
+_EMPHASIS = re.compile(r"(?<![\w*])[*_]{1,3}(?=\S)|(?<=\S)[*_]{1,3}(?![\w*])")
+
+
 def _clean(line):
-    line = line.replace("**", "").replace("__", "").replace("`", "")
+    line = _EMPHASIS.sub("", line.replace("`", ""))
 
     if "|" in line:
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
@@ -345,6 +350,24 @@ _SHARED_WORD = 0.25
 _CLOSE = 0.08
 _SPOKEN_LIMIT = 2
 
+# Another report "mentions it too" only when its best passage is nearly as
+# close as the best of all. Without this, every football report counted as
+# mentioning Aston Villa, for sharing the word "football".
+_RELATED = 0.12
+
+# Research reports sometimes open with sentences about themselves ("This
+# report was commissioned to ...", "Prepared for filing under: Football").
+# They are recognised by meaning, against one description of such a
+# sentence rather than a list of phrasings; see _findings for how.
+_ABOUT_ITSELF = (
+    "This report was written at the user's request and describes how it was "
+    "prepared and where it is filed."
+)
+_ABOUT_ITSELF_LIMIT = 0.20
+
+# Read out when a report is named in full: this much of its summary.
+_OVERVIEW_CHARS = 500
+
 _PLAIN_WORDS = frozenset({
     "the", "and", "for", "about", "my", "your", "with", "that", "this", "from",
     "what", "did", "have", "any", "all", "our", "are", "was", "were", "has",
@@ -404,14 +427,16 @@ def search(topic, subject=None):
         print(f"[JARVIS] searching reports by meaning failed, using words: {error}")
         meaning = None
 
-    shared = semantic_memory.shares_words(core, texts, _PLAIN_WORDS)
+    # How much of the topic each passage shares, not merely whether it
+    # shares a word: one word of four is weak evidence.
+    shared = semantic_memory.shared_fraction(core, texts, _PLAIN_WORDS)
     scored = []
 
     for index, (path, heading, passage) in enumerate(found):
         if meaning is None:
-            score = 1.0 if shared[index] else 0.0
+            score = shared[index]
         else:
-            score = meaning[index] + (_SHARED_WORD if shared[index] else 0.0)
+            score = meaning[index] + _SHARED_WORD * shared[index]
 
         if score >= _MINIMUM:
             scored.append((score, path, heading, passage))
@@ -475,15 +500,30 @@ def answer(said, topic=None, mode=None, subject=None, today=None):
     if subject and not _chosen_reports(subject):
         return f"I can't find a report on {_yours(subject)}, sir."
 
-    found = search(topic, subject)
     about = _yours(topic)
+
+    if mode == "say" and not subject:
+        named = _named_in_full(topic)
+
+        if named:
+            return _overview(named, today)
+
+    found = search(topic, subject)
 
     if not found:
         where = f"your {_yours(subject)} report" if subject else "your reports"
         return f"I can't find anything about {about} in {where}, sir."
 
+    best_score = found[0][0]
+    best_of = {}
+
+    for score, path, _heading, _passage in found:
+        best_of.setdefault(path, score)
+
+    related = [path for path, score in best_of.items() if score >= best_score - _RELATED]
+
     if mode == "which":
-        order = list(dict.fromkeys(path for _score, path, _heading, _passage in found))
+        order = related
         names = [describe_report(path) for path in order]
         spoken = [
             label + (f", {_spoken_day(day, today)}" if day else "")
@@ -496,13 +536,25 @@ def answer(said, topic=None, mode=None, subject=None, today=None):
         listed = "; ".join(spoken[:-1]) + f"; and {spoken[-1]}"
         return f"{len(spoken)} reports mention {about}, sir: {listed}."
 
-    best_score, best_path = found[0][0], found[0][1]
-    chosen = [
-        passage for score, path, _heading, passage in found
-        if path == best_path and score >= best_score - _CLOSE
-    ][:_SPOKEN_LIMIT]
+    best_path = found[0][1]
+    chosen = []
 
-    others = len({path for _score, path, _heading, _passage in found if path != best_path})
+    for score, path, _heading, passage in found:
+        if path != best_path or score < best_score - _CLOSE:
+            continue
+
+        findings = _findings(passage, path)
+
+        if findings:
+            chosen.append(findings)
+
+        if len(chosen) == _SPOKEN_LIMIT:
+            break
+
+    if not chosen:
+        chosen = [_findings(found[0][3], found[0][1]) or found[0][3]]
+
+    others = len([path for path in related if path != best_path])
     also = ""
 
     if others == 1:
@@ -515,6 +567,155 @@ def answer(said, topic=None, mode=None, subject=None, today=None):
                     for passage in chosen)
 
     return f"From {source}, sir: {body}{also}"
+
+
+def _sentences(text):
+    return [part.strip() for part in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"(])", str(text or "")) if part.strip()]
+
+
+def _opening(path):
+    """The passages of a report's first section, where it may describe itself."""
+    parts = _read(path)
+
+    if not parts:
+        return set()
+
+    first = parts[0][0]
+    opening = set()
+
+    for heading, passage in parts:
+        if heading != first:
+            break
+
+        opening.add(passage)
+
+    return opening
+
+
+def _findings(passage, path=None):
+    """[passage] without sentences about the report itself.
+
+    Only a report's opening section is checked: that is where research
+    reports describe themselves ("This report was commissioned to ...",
+    "Prepared for filing under ..."), and checking only there keeps real
+    findings elsewhere, however hedged, from being mistaken for them. Each
+    sentence is scored as written and with the report's own subject words
+    taken out, since names like "Aston Villa Football Club" pull a sentence
+    towards content; measured, sentences about the report scored 0.22 or
+    more and findings in opening sections 0.02 or less.
+    """
+    sentences = _sentences(passage)
+
+    if not sentences or path is None or passage not in _opening(path):
+        return " ".join(sentences)
+
+    label_words = set(re.findall(r"[a-z0-9]+", describe_report(path)[0].casefold()))
+
+    def without_subject(sentence):
+        kept = [
+            word for word in sentence.split()
+            if re.sub(r"[^a-z0-9]", "", word.casefold().replace("'s", "")) not in label_words
+        ]
+        return " ".join(kept) or sentence
+
+    try:
+        from actions import semantic_memory
+
+        plain = semantic_memory.similarities(_ABOUT_ITSELF, sentences)
+        stripped = semantic_memory.similarities(_ABOUT_ITSELF, [without_subject(one) for one in sentences])
+    except Exception:
+        plain = stripped = None
+
+    if plain is None or stripped is None:
+        return " ".join(sentences)
+
+    return " ".join(
+        sentence for sentence, first, second in zip(sentences, plain, stripped)
+        if max(first, second) < _ABOUT_ITSELF_LIMIT
+    )
+
+
+def _named_in_full(topic):
+    """The newest report the topic names, rather than a subject inside it.
+
+    A report is named when every word of the topic is in its name and the
+    topic covers the words that set this report apart from the others --
+    worked out from the names of the reports you actually have. With six
+    football reports, "football" and "club" set none apart, so "aston villa
+    vs birmingham city" names "Aston Villa Football Club vs Birmingham City
+    Football Club". "Pakistan" covers only half of "Pakistan vs India", so
+    it is a subject inside that report, and is searched for instead.
+    """
+    from actions import semantic_memory
+
+    plain = _PLAIN_WORDS | {"vs", "versus", "compared", "comparison"}
+    paths = report_files()
+    labels = [describe_report(path)[0] for path in paths]
+    words_of = [set(re.findall(r"[a-z0-9]+", label.casefold())) - plain for label in labels]
+    spread = {}
+
+    for words in words_of:
+        for word in words:
+            spread[word] = spread.get(word, 0) + 1
+
+    said = semantic_memory.content_words(topic, plain)
+    matches = []
+
+    for path, label, words in zip(paths, labels, words_of):
+        if semantic_memory.shared_fraction(topic, [label], plain)[0] < 1.0:
+            continue
+
+        distinctive = {word for word in words if spread[word] == 1} or words
+
+        if distinctive and len(distinctive & said) / len(distinctive) > 0.5:
+            matches.append(path)
+
+    if not matches:
+        return None
+
+    return max(matches, key=lambda path: (describe_report(path)[1] or date.min, path))
+
+
+def _overview(path, today):
+    """What a report found, from its summary, for a question naming it in full."""
+    parts = _read(path)
+
+    if not parts:
+        return f"I couldn't read {_named(path, today)}, sir."
+
+    from actions import semantic_memory
+
+    headings = [heading or "" for heading, _passage in parts]
+    closeness = semantic_memory.similarities("Executive summary of the findings", headings)
+    start = 0
+
+    if closeness:
+        best = max(range(len(parts)), key=lambda index: closeness[index])
+
+        if closeness[best] >= 0.5:
+            start = best
+
+    spoken = ""
+
+    for heading, passage in parts[start:]:
+        if spoken and heading != parts[start][0]:
+            break
+
+        findings = _findings(passage, path)
+
+        if findings:
+            spoken = f"{spoken} {findings}".strip()
+
+        if len(spoken) >= _OVERVIEW_CHARS:
+            break
+
+    if not spoken:
+        spoken = _findings(parts[0][1], path) or parts[0][1]
+
+    if not spoken.endswith((".", "!", "?")):
+        spoken += "."
+
+    return f"In short, from {_named(path, today)}, sir: {spoken}"
 
 
 # ---- indexing in the background --------------------------------------------

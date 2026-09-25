@@ -437,19 +437,44 @@ def shares_words(topic, texts, plain_words=frozenset()):
     on their own, so "ask files" does not match "ask cousin about ...".
     Decided from the texts themselves, not from a list of names.
     """
+    return [fraction > 0 for fraction in shared_fraction(topic, texts, plain_words)]
+
+
+def shared_fraction(topic, texts, plain_words=frozenset()):
+    """For each of [texts], the share of [topic]'s words it contains, 0 to 1.
+
+    Sharing one word of four ("football" of "aston villa football club") is
+    weak evidence, sharing all four is strong; a yes/no signal treated them
+    alike. Split names are joined as in shares_words.
+    """
     found = [content_words(text, plain_words) for text in texts]
     present = set().union(*found) if found else set()
-    wanted = content_words(topic, plain_words)
     tokens = re.findall(r"[a-z0-9]+", str(topic or "").casefold())
+    joined = set()
+    consumed = set()
 
     for size in (3, 2):
         for start in range(len(tokens) - size + 1):
-            run = tokens[start:start + size]
+            span = set(range(start, start + size))
 
-            if _stem("".join(run)) in present:
-                wanted -= {_stem(piece) for piece in run} - {_stem("".join(run))}
+            if span & consumed:
+                continue
 
-    return [bool(wanted & words) for words in found]
+            word = _stem("".join(tokens[start:start + size]))
+
+            if word in present:
+                joined.add(word)
+                consumed |= span
+
+    units = joined | {
+        _stem(token) for index, token in enumerate(tokens)
+        if index not in consumed and len(token) >= 3 and token not in plain_words
+    }
+
+    if not units:
+        return [0.0 for _text in texts]
+
+    return [len(units & words) / len(units) for words in found]
 
 
 def similarities(query, texts):

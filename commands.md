@@ -612,6 +612,7 @@ use the feature to escape the JARVIS root.
 | what does my ESP32 report say about batteries | searches that report only |
 | search my reports for energy use | same as asking what they say |
 | which reports mention insurance | names each report, with its date |
+| what does my report say about Aston Villa vs Birmingham City | naming a report reads its summary |
 
 Free and local: the passage is found by meaning and read as written, with
 no model call. Reports in the JARVIS folder and any folder inside it are
