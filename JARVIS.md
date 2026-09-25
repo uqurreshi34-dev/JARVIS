@@ -1216,6 +1216,13 @@ on measures no threshold affects -- how often the right item ranks first,
 and how often a real match outscores the best match a question with no
 answer finds -- since each model has its own scale. A model worth moving to
 wins on both, and moving means measuring every threshold again.
+`--compare gemini` measures Google's `gemini-embedding-001` the same way,
+with `GEMINI_API_KEY`, sending only the benchmark's made-up texts. Each
+comparison also lists the misses that started this -- "what coffee do I
+like" against "what is my favourite film", and others -- as right or wrong
+for each model. Measured so far: gte-small and bge-small rank better but
+squeeze every score into 0.77 to 0.90 and still get coffee wrong; the
+ms-marco cross-encoder gets it wrong too. None was adopted.
 
 Shared-word matching stems words with the Snowball English stemmer
 (`snowballstemmer`, pure Python), so "halving" meets "halves" and

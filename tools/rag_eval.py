@@ -10,6 +10,9 @@ no network, no cost.
     python tools/rag_eval.py --mine     your own questions and reports, read-only
     python tools/rag_eval.py --compare Xenova/bge-small-en-v1.5
                                         another embedding model, side by side
+    python tools/rag_eval.py --compare gemini
+                                        Google's gemini-embedding-001, using GEMINI_API_KEY;
+                                        only the benchmark's made-up texts are sent
 
 The benchmark runs in a sandboxed JARVIS folder on fixed data: notes,
 memories, a 600-command log and reports written the way JARVIS writes
@@ -646,16 +649,26 @@ def _comparison_sets():
     ]
 
 
-def _ranking_scores(encode, query_prefix=""):
+def _ranking_scores(encode, query_prefix="", encode_questions=None):
+    """Threshold-free scores for one model: ranked first, and separation.
+
+    [encode_questions] encodes questions when a model treats them
+    differently from what is searched (Gemini does); otherwise [encode]
+    does both. Each set's questions go in one batch, which for a cloud
+    model means a handful of requests rather than one per question.
+    """
+    ask = encode_questions or (lambda texts: encode([query_prefix + text for text in texts]))
     scores = {}
+    extremes = {}
 
     for name, candidates, right, nothing in _comparison_sets():
         vectors = encode(list(candidates))
+        asked = ask([question for question, _indices in right] + list(nothing))
         first = 0
         true_scores = []
 
-        for question, indices in right:
-            similarity = vectors @ encode([query_prefix + question])[0]
+        for (question, indices), query in zip(right, asked[:len(right)]):
+            similarity = vectors @ query
             order = similarity.argsort()[::-1]
 
             # For the log several commands are right; all of them should
@@ -663,35 +676,133 @@ def _ranking_scores(encode, query_prefix=""):
             first += set(order[:len(indices)].tolist()) == set(indices)
             true_scores.append(min(float(similarity[index]) for index in indices))
 
-        empty = [float((vectors @ encode([query_prefix + question])[0]).max()) for question in nothing]
+        empty = [float((vectors @ query).max()) for query in asked[len(right):]]
         pairs = [(real, fake) for real in true_scores for fake in empty]
         separation = sum(real > fake for real, fake in pairs) / len(pairs) if pairs else None
 
         scores[name] = {"ranked first": round(first / len(right), 3), "separation": round(separation, 3)}
+        extremes[name] = dict(zip([question for question, _ in right], true_scores))
+        extremes[name].update({f"(nothing) {question}": score for question, score in zip(nothing, empty)})
 
-    return scores
+    return scores, extremes
+
+
+# The misses that started this: each should score higher than the question
+# beside it that has no answer.
+_TELLING_PAIRS = (
+    ("memory", "what coffee do I like", "(nothing) what is my favourite film"),
+    ("memory", "what coffee do I like", "(nothing) what is my blood type"),
+    ("notes", "shopping", "(nothing) the weather"),
+    ("notes", "heating", "(nothing) my plans"),
+)
+
+
+def _gemini_encoders():
+    """(encode documents, encode questions) with Gemini embeddings, or None.
+
+    Only the benchmark's own made-up texts are sent; nothing of yours.
+    """
+    import numpy as np
+    import requests
+
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(ROOT / ".env")
+    except ImportError:
+        pass
+
+    key = (os.getenv("GEMINI_API_KEY") or "").strip()
+
+    if not key:
+        print("GEMINI_API_KEY is not set in .env, so Gemini cannot be measured.")
+        return None
+
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
+
+    def embed(texts, task):
+        vectors = []
+
+        for start in range(0, len(texts), 50):
+            body = {"requests": [
+                {
+                    "model": "models/gemini-embedding-001",
+                    "content": {"parts": [{"text": text}]},
+                    "taskType": task,
+                    "outputDimensionality": 768,
+                }
+                for text in texts[start:start + 50]
+            ]}
+
+            for attempt in range(5):
+                response = requests.post(url, json=body, headers={"x-goog-api-key": key}, timeout=60)
+
+                if response.status_code != 429:
+                    break
+
+                wait = 10 * (attempt + 1)
+                print(f"  Gemini asked to slow down; waiting {wait}s")
+                time.sleep(wait)
+
+            if response.status_code != 200:
+                raise RuntimeError(f"Gemini embedding failed ({response.status_code}): {response.text[:200]}")
+
+            vectors += [item["values"] for item in response.json()["embeddings"]]
+
+        matrix = np.asarray(vectors, dtype=np.float32)
+
+        # Shortened Gemini vectors are not unit length; cosine needs them to be.
+        return matrix / np.clip(np.linalg.norm(matrix, axis=1, keepdims=True), 1e-9, None)
+
+    return (lambda texts: embed(texts, "RETRIEVAL_DOCUMENT"), lambda texts: embed(texts, "RETRIEVAL_QUERY"))
 
 
 def compare(repo, filename, pooling, query_prefix):
     from actions import semantic_memory
 
     current = _encoder(semantic_memory._MODEL_REPO, semantic_memory._MODEL_FILE, "mean")
-    candidate = _encoder(repo, filename, pooling)
 
-    if current is None or candidate is None:
-        return 1
+    if repo.casefold() == "gemini":
+        print("Measuring Gemini embeddings on the benchmark's made-up texts only; none of your data is sent.")
+        encoders = _gemini_encoders()
 
-    now = _ranking_scores(current)
-    other = _ranking_scores(candidate, query_prefix)
+        if current is None or encoders is None:
+            return 1
+
+        label = "gemini-emb"
+
+        try:
+            other, other_extremes = _ranking_scores(encoders[0], encode_questions=encoders[1])
+        except Exception as error:
+            print(error)
+            return 1
+    else:
+        candidate = _encoder(repo, filename, pooling)
+
+        if current is None or candidate is None:
+            return 1
+
+        label = repo.split("/")[-1][:10]
+        other, other_extremes = _ranking_scores(candidate, query_prefix)
+
+    now, now_extremes = _ranking_scores(current)
 
     print(f"\n{'':10}{'measure':14}{'current':>10}{'candidate':>11}")
-    print(f"{'':24}{semantic_memory._MODEL_REPO.split('/')[-1][:10]:>10}{repo.split('/')[-1][:10]:>11}\n")
+    print(f"{'':24}{semantic_memory._MODEL_REPO.split('/')[-1][:10]:>10}{label:>11}\n")
 
     for name in now:
         for measure in now[name]:
             before, after = now[name][measure], other[name][measure]
             mark = "  better" if after > before + TOLERANCE else "  worse" if after < before - TOLERANCE else ""
             print(f"{name:10}{measure:14}{before:>10.3f}{after:>11.3f}{mark}")
+
+    print("\nThe misses that started this (the first should score higher):\n")
+
+    for name, real, fake in _TELLING_PAIRS:
+        for model, extremes in (("current", now_extremes), (label, other_extremes)):
+            first, second = extremes[name][real], extremes[name][fake]
+            verdict = "right" if first > second else "WRONG"
+            print(f"  {model:11} {real!r} {first:.2f} vs {fake[10:]!r} {second:.2f}  {verdict}")
 
     return 0
 
@@ -731,7 +842,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--update", action="store_true", help="save these scores as the new baseline")
     parser.add_argument("--mine", action="store_true", help="your own questions and reports, read-only")
-    parser.add_argument("--compare", metavar="REPO", help="another ONNX embedding model on Hugging Face")
+    parser.add_argument("--compare", metavar="REPO", help="another ONNX embedding model on Hugging Face, or gemini")
     parser.add_argument("--model-file", default="onnx/model_quantized.onnx", help="its ONNX file (default %(default)s)")
     parser.add_argument("--pooling", choices=("mean", "cls"), default="mean", help="how it pools token vectors")
     parser.add_argument("--query-prefix", default="", help="text some models expect before a question")
