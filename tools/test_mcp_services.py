@@ -490,6 +490,88 @@ else:
 check(mcp_services.run_now("mcp_test_upper", {"text": "x"}).get("error") is not None,
       "a read-only tool cannot be run as an action")
 
+# ---- instant phrases: no model call ----------------------------------------------------
+
+write_config({
+    "test": {
+        "command": sys.executable,
+        "args": [SERVER],
+        "env": {"MARKER": "${JARVIS_TEST_MARKER}"},
+        "allowed_actions": ["create_note", "rename_everything"],
+        "confirm_actions": False,
+        "instant": {
+            "start recording": {"tool": "create_note", "say": "Recording, sir."},
+            "stop recording": "rename_everything",
+            "start the replay buffer": "create_note",
+            "note the scene": {"tool": "create_note", "arguments": {"title": "Scene two"}},
+            "clip that": {"tool": "listed_as_trusted"},
+        },
+    },
+})
+
+HEARD = {
+    "start recording": "create_note",
+    "Start recording.": "create_note",
+    "start the recording": "create_note",
+    "start a recording": "create_note",
+    "start recordings": "create_note",
+    "stop the recording": "rename_everything",
+    "start replay buffer": "create_note",
+    "clip that": "listed_as_trusted",
+}
+
+for said, tool in HEARD.items():
+    match = mcp_services.instant(said)
+    check(match is not None and match["tool"] == tool, f"instant: {said!r} -> {tool}")
+
+NOT_INSTANT = [
+    "stop the replay buffer",      # was once taken for "start the replay buffer"
+    "restart recording",
+    "start", "stop",
+    "start recording in five seconds",
+    "how long have i been recording",
+    "clip this",
+    "what time is it",
+]
+
+for said in NOT_INSTANT:
+    check(mcp_services.instant(said) is None, f"not instant: {said!r}")
+
+if os.path.exists(MARKER):
+    os.remove(MARKER)
+
+activity.clear()
+said = mcp_services.run_instant(mcp_services.instant("start recording"))
+check(said == "Recording, sir." and os.path.exists(MARKER), f"an instant phrase runs its tool and says its reply ({said!r})")
+check(("test", mcp_services.DONE) in activity, "and the strip shows it done")
+
+os.remove(MARKER)
+mcp_services.run_instant(mcp_services.instant("note the scene"))
+with open(MARKER, encoding="utf-8") as handle:
+    check(handle.read().startswith("Scene two|"), "an instant phrase can carry fixed arguments from mcp.json")
+
+said = mcp_services.run_instant(mcp_services.instant("stop recording"))
+check(said == "Done, sir.", f"with no reply of its own, the ordinary one is said ({said!r})")
+
+said = mcp_services.run_instant(mcp_services.instant("clip that"))
+check("isn't set to run straight away" in said,
+      f"a phrase naming a tool that is not an allowed action does not run it ({said!r})")
+
+try:
+    import commands as _commands_for_instant
+except Exception:
+    print("SKIP instant route in commands (could not import commands)")
+else:
+    real_agent = _commands_for_instant.run_agent
+    _commands_for_instant.run_agent = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("model called"))
+
+    try:
+        result = _commands_for_instant.handle_command("start the recording")
+        check(result is not None and result["intent"] == "service_instant" and result["action"]() == "Recording, sir.",
+              "commands: an instant phrase is run without a model call")
+    finally:
+        _commands_for_instant.run_agent = real_agent
+
 # ---- a service that was down, tried again ---------------------------------------------
 
 write_config({"test": {"command": "definitely-not-a-real-program-xyz", "args": []}})

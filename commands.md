@@ -640,8 +640,9 @@ in the same `mcpServers` format Claude Desktop and Cursor use. Keys go in
 | name the service in the request, e.g. what's in my github issues | JARVIS uses that service's tools to answer |
 | investigate … / look into … | Agent Mode, which can also use connected services |
 | name the service and ask for a change, e.g. open a github issue on JARVIS titled HUD flicker | reads back exactly what it would do and asks; yes runs it |
-| start recording / stop recording / pause the recording | OBS, at once, no question |
-| start the replay buffer, then clip that | OBS saves the last 30 seconds |
+| start recording / stop recording | OBS, instantly: **free**, no model call |
+| start the replay buffer, then clip that | OBS keeps the last 30 seconds, then saves them: **free** |
+| pause the recording | OBS, at once, no question |
 | switch to the (scene name) scene / mute the mic | OBS |
 
 Uses a model request. Asking only reads: JARVIS uses tools a service marks

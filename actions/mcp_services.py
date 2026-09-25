@@ -36,6 +36,10 @@ What a server may do is decided here, not by the server:
   soon as the model calls them, with no question: for a service whose
   actions are routine, such as starting a recording. Only what
   allowed_actions names, and never what the server marks destructive.
+- An entry's "instant" table maps phrases to tools, so "start recording"
+  runs obs-start-record at once, with no model call. The phrases are the
+  user's own, in mcp.json; only actions the service already lets run
+  without asking can be instant, so the table cannot widen what it may do.
 - A service that could not be reached is tried again on a later request,
   after a minute at first and up to ten, so one opened after JARVIS
   starts -- OBS, say -- is picked up without a restart.
@@ -59,6 +63,7 @@ import os
 import re
 import threading
 import time
+from difflib import SequenceMatcher
 
 from actions import files, journal, safety
 
@@ -516,6 +521,142 @@ def _retry_failed():
                 continue
 
             _register(_connect(name, entry), previous=server)
+
+
+# ---- instant phrases: no model call ------------------------------------------
+
+# What was heard is matched to a phrase word by word, not letter by letter:
+# letters let a long shared tail outweigh the one word that matters, and
+# "stop the replay buffer" was taken for "start the replay buffer". A heard
+# word may differ from the phrase's only by a slip of spelling ("buffers");
+# a short word ("the", "a") may be missing or extra; nothing else may.
+_WORD_SLIP = 0.85
+_SHORT_WORD = 3
+_MAX_EDITS = 2
+
+_PLAIN = re.compile(r"[^a-z0-9]+")
+
+
+def _plain(text):
+    return " ".join(_PLAIN.sub(" ", str(text or "").casefold()).split())
+
+
+def _phrase_score(said, phrase):
+    """Share of the phrase's words heard, or None if what was heard is not it."""
+    heard, wanted = said.split(), phrase.split()
+
+    if not heard or not wanted:
+        return None
+
+    edits = 0
+    matched = 0
+
+    for tag, i1, i2, j1, j2 in SequenceMatcher(None, wanted, heard, autojunk=False).get_opcodes():
+        if tag == "equal":
+            matched += i2 - i1
+        elif tag == "replace":
+            if i2 - i1 != j2 - j1:
+                return None
+
+            for want, got in zip(wanted[i1:i2], heard[j1:j2]):
+                if SequenceMatcher(None, want, got).ratio() < _WORD_SLIP:
+                    return None
+
+            edits += i2 - i1
+            matched += i2 - i1
+        else:
+            # A word missing from what was heard, or one extra in it.
+            words = wanted[i1:i2] if tag == "delete" else heard[j1:j2]
+
+            if any(len(word) > _SHORT_WORD for word in words):
+                return None
+
+            edits += len(words)
+
+    if edits > _MAX_EDITS or edits > len(wanted) // 2:
+        return None
+
+    return matched / len(wanted)
+
+
+def instant(text):
+    """The instant phrase in mcp.json that [text] was, or None.
+
+    Returns {"server", "tool", "say", "arguments", "phrase"}. Each server
+    entry may carry "instant": {"start recording": "obs-start-record", ...},
+    or with a reply and fixed arguments of its own: {"clip that": {"tool":
+    "obs-save-replay-buffer", "say": "Clipped, sir."}}, {"show the hud":
+    {"tool": "obs-set-current-scene", "arguments": {"sceneName": "HUD"}}}.
+    """
+    said = _plain(text)
+
+    if not said:
+        return None
+
+    scored = []
+
+    for server, entry in _read_config().items():
+        table = entry.get("instant")
+
+        if not isinstance(table, dict):
+            continue
+
+        for phrase, target in table.items():
+            arguments = {}
+
+            if isinstance(target, str):
+                tool, say = target, None
+            elif isinstance(target, dict):
+                tool, say = target.get("tool"), target.get("say")
+                arguments = target.get("arguments") if isinstance(target.get("arguments"), dict) else {}
+            else:
+                continue
+
+            score = _phrase_score(said, _plain(phrase)) if tool else None
+
+            if score is not None:
+                scored.append((score, server, str(tool), say, phrase, arguments))
+
+    if not scored:
+        return None
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    best = scored[0]
+
+    # Two phrases for different tools both fit: it is not clear which was
+    # meant, so neither runs and the request takes the ordinary route.
+    for other in scored[1:]:
+        if (other[1], other[2]) != (best[1], best[2]) and other[0] == best[0]:
+            return None
+
+    return {"server": best[1], "tool": best[2], "say": best[3], "phrase": best[4], "arguments": best[5]}
+
+
+def run_instant(match):
+    """Run an instant phrase's tool. Returns what to say."""
+    tools(include_actions=True)   # connects on first use
+
+    name = _agent_name(match["server"], match["tool"])
+    server = _servers.get(match["server"])
+    spoken = match["server"].replace("_", " ").capitalize()
+
+    if not server or not server.client:
+        return f"I can't reach {spoken} at the moment, sir."
+
+    if name not in _immediate:
+        # Only what the service already lets run without asking.
+        print(f"[JARVIS] {match['server']}: instant phrase {match['phrase']!r} names "
+              f"{match['tool']!r}, which is not an allowed action that runs without confirmation")
+        return f"That isn't set to run straight away on {spoken}, sir."
+
+    proposal = {"name": name, "server": match["server"], "tool": match["tool"],
+                "arguments": dict(match.get("arguments") or {})}
+    said = execute(proposal)
+
+    if said is None:
+        return failure_message(proposal)
+
+    return match.get("say") or said
 
 
 def owns(tool_name):

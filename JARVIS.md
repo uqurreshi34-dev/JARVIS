@@ -969,7 +969,20 @@ listed in `trusted_read_only`, and recording, the replay buffer, scene
 switching, muting and the virtual camera in `allowed_actions`, running
 without confirmation. Going live, deleting, and changing settings, stream
 keys or files are left out. "Recording", "clip" and "replay buffer" are
-aliases, so "start recording" and "clip that" reach it without naming OBS.
+aliases, so a request about them reaches it without naming OBS.
+
+A service entry's `instant` table maps phrases to tools that run with no
+model call: `"start recording": "obs-start-record"`, or with a reply and
+fixed arguments of its own, `{"tool": ..., "say": "Recording, sir.",
+"arguments": {...}}`. The phrases are the user's, in `mcp.json`, not code.
+What was heard is matched word by word: a short word ("the", "a") may be
+missing or extra and a word may differ by a slip of spelling ("buffers"),
+nothing more, so "stop the replay buffer" can never run "start the replay
+buffer". A phrase only runs a tool the service already lets run without
+asking; anything else, or anything not matched, takes the ordinary route.
+
+The services strip shows every service while all are idle, and only the
+working ones while any is ("OBS +2").
 
 The tools join Agent Mode. A command naming a configured service goes to
 Agent Mode directly, skipping the command interpreter, and ordinary Agent

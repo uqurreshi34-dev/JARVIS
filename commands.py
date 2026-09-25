@@ -5144,6 +5144,19 @@ def _handle_command(command, *, fast_only=False, probe=False):
         # github and read it") cannot take a request meant for the service.
         # Questions about JARVIS's own records never get here, so "how many
         # times have I asked about github" is answered from the log.
+        # A phrase from a service's "instant" table in mcp.json runs its tool
+        # at once, with no model call: "start recording", "clip that".
+        quick = mcp_services.instant(command)
+
+        if quick:
+            print(f"[fast] {quick['server']} {quick['tool']} (instant, no model call)")
+
+            return routed(_query(
+                "service_instant",
+                lambda: mcp_services.run_instant(quick),
+                detail=f"{quick['server']}.{quick['tool']}",
+            ), free=True)
+
         service = mcp_services.mentioned(command)
 
         if service:

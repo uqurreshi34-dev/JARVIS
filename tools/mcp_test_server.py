@@ -48,7 +48,7 @@ def delete_everything() -> str:
 
 
 @app.tool(annotations=ToolAnnotations(read_only_hint=False))
-def create_note(title: str, body: str = "") -> str:
+def create_note(title: str = "Untitled", body: str = "") -> str:
     """Creates a note. Writes to the file named by MARKER so the test can see it really ran."""
     if title == "forbidden":
         # What GitHub sends back when the token lacks the permission.
@@ -65,7 +65,7 @@ def create_note(title: str, body: str = "") -> str:
 
 
 @app.tool(annotations=ToolAnnotations(read_only_hint=False))
-def rename_everything(prefix: str) -> str:
+def rename_everything(prefix: str = "x") -> str:
     """Changes something, but the test's mcp.json never allows it."""
     return "renamed"
 

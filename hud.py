@@ -114,6 +114,10 @@ _SERVICE_FLASH = {"done": 1.6, "refused": 2.2}
 # service such as the filesystem answers in milliseconds, between two frames,
 # and its busy and idle both arrived before anything was drawn.
 _SERVICE_BUSY_HOLD = 1.0
+
+# States in which a service is doing something worth showing. While any is,
+# the strip shows only those, and counts the rest.
+_SERVICE_ACTIVE = ("busy", "held", "done", "refused")
 _SERVICE_AMBER = QColor(255, 196, 80)
 _SERVICE_GREEN = QColor(95, 255, 160)
 _SERVICE_RED = QColor(255, 88, 88)
@@ -536,6 +540,13 @@ class Hud(QWidget):
 
     # ---- the connected-services strip ------------------------------------------
 
+    def _shown_services(self, now):
+        """The services to draw: only the active ones while any is, else all."""
+        names = list(self._services)
+        active = [name for name in names if self._shown_state(name, now) in _SERVICE_ACTIVE]
+
+        return active or names
+
     def _shown_state(self, name, now):
         """What one service looks like at this moment."""
         state, since = self._services[name]
@@ -565,7 +576,8 @@ class Hud(QWidget):
         limit = _PANEL_RIGHT - 26
         x = float(_PANEL_X)
         y = _SERVICES_Y
-        names = list(self._services)
+        names = self._shown_services(now)
+        hidden = len(self._services) - len(names)
 
         for index, name in enumerate(names):
             state = self._shown_state(name, now)
@@ -577,7 +589,7 @@ class Hud(QWidget):
             # No room for this one and the rest: say how many are not shown.
             if x + width > limit and left_over > 0:
                 painter.setPen(QPen(self._tint(accent, 150)))
-                painter.drawText(int(x), y, f"+{left_over}")
+                painter.drawText(int(x), y, f"+{left_over + hidden}")
                 break
 
             pulse = 0.5 + 0.5 * math.sin(now * 9.0)
@@ -616,6 +628,11 @@ class Hud(QWidget):
             painter.drawText(int(x + 8), y, label)
 
             x += width + 12
+        else:
+            # The idle ones, while something else is working.
+            if hidden:
+                painter.setPen(QPen(self._tint(accent, 150)))
+                painter.drawText(int(x), y, f"+{hidden}")
 
     # ---- the start-up sequence ------------------------------------------------
 

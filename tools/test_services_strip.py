@@ -9,6 +9,7 @@ Checked:
 - waiting on a yes it turns amber, and answering sets it back;
 - done flashes green and refused flashes red, each settling to connected;
 - unavailable stays red;
+- while any service works, only the working ones are shown, the rest counted;
 - more services than fit are counted, not drawn over the corner bracket.
 
     python tools/test_services_strip.py
@@ -158,6 +159,22 @@ widget._services["github"][1] = time.monotonic() - 60
 unavailable = hue(frame())
 check(is_red(unavailable) and unavailable[0] < refused[0],
       f"a service that could not connect stays red, dimmer than a refusal {unavailable}")
+
+# While any service is working, only the working ones are shown.
+widget._services.clear()
+widget._busy_until.clear()
+widget.services_listed.emit(["filesystem", "github", "obs"])
+for name in ("filesystem", "github", "obs"):
+    widget.service_activity.emit(name, "connected")
+check(widget._shown_services(time.monotonic()) == ["filesystem", "github", "obs"], "idle, every service is shown")
+widget.service_activity.emit("obs", "busy")
+check(widget._shown_services(time.monotonic()) == ["obs"], "while OBS works, only OBS is shown (and +2 for the rest)")
+widget.service_activity.emit("github", "held")
+check(widget._shown_services(time.monotonic()) == ["github", "obs"], "two at work, both are shown")
+widget.service_activity.emit("github", "connected")
+widget.service_activity.emit("obs", "idle")
+check(widget._shown_services(time.monotonic() + hud._SERVICE_BUSY_HOLD + 0.1) == ["filesystem", "github", "obs"],
+      "once they finish, the strip goes back to every service")
 
 widget.services_listed.emit(["filesystem", "obs", "home_assistant", "notion", "spotify", "calendar"])
 image = frame()
