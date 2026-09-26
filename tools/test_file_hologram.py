@@ -9,7 +9,8 @@ Runs in a sandboxed JARVIS folder. Checked:
 - what is listed: folders by name, then files newest first, numbered; never
   JARVIS's own files, keys, sign-ins or hidden files, nor anything outside
   the JARVIS folder;
-- what is said back: what a card is, its first lines, an empty file, a video
+- what is said back: what a card is, its first lines (without markdown
+  marks), an empty file, a blank Word document, a video
   with no text, a picture shown, a folder's contents, a number out of range;
 - open: a folder steps inside and "go back" comes out; a document opens with
   its own program; a program or script is never run;
@@ -18,6 +19,8 @@ Runs in a sandboxed JARVIS folder. Checked:
   person's order, and go back returns to the page a folder was on;
 - the panel draws the cards and a click names the card under it; the arrows
   show only where there is somewhere to go, and a tap on one turns the page;
+  the SAY: line calls its example folder or file; settled frames do not
+  redraw the cards, so the HUD keeps its pace;
 - through commands: no model call, and "show me my files" is the hologram.
 
     python tools/test_file_hologram.py
@@ -226,6 +229,22 @@ check(fh.answer("go back") == "Back in your JARVIS folder, sir: page two." and s
 for index in range(1, 11):
     shutil.rmtree(os.path.join(folder, f"Archive {index}"))
 
+# A blank Word document is not "empty" (it weighs kilobytes), and markdown
+# marks are not read out as part of a line.
+from docx import Document  # noqa: E402
+
+os.makedirs(os.path.join(folder, "Word"))
+Document().save(os.path.join(folder, "Word", "blank.docx"))
+write("Word/report.md", "# Porsche vs. BMW\n*Prepared for the cars folder*\n**Summary** in brief\n", now - 10)
+fh.show("Word")
+said = fh.preview(2)
+check(said == "Report markdown file begins: Porsche vs. BMW; Prepared for the cars folder; Summary in brief.",
+      f"markdown marks are left out of the first lines ({said!r})")
+said = fh.preview(1)
+check(said == "Number one, blank Word document, has no words in it yet, sir." and shown[-1]["focus"]["note"] == "NO WORDS IN IT YET",
+      f"a blank Word document has no words yet ({said!r})")
+shutil.rmtree(os.path.join(folder, "Word"))
+
 fh.show("")
 fh.page(1)
 fh.preview(12)
@@ -257,6 +276,28 @@ image.fill(0)
 panel.render(image, QPoint(0, 0))
 lit = sum(1 for x in range(0, image.width(), 5) for y in range(0, image.height(), 5) if image.pixelColor(x, y).alpha() > 0)
 check(lit > 2000, f"and is drawn ({lit} lit samples)")
+
+# The SAY: line calls the example what it is, with a number on this page.
+check(files_panel.hints(panel._view)[0].startswith("SAY: WHAT'S FOLDER 3 - SUMMARISE FOLDER 3 - OPEN 3"),
+      f"on folders the hint says folder ({files_panel.hints(panel._view)[0]!r})")
+check(files_panel.hints({"cards": [{"kind": "file", "number": 11}], "pages": 2, "page": 1, "trail": ["JARVIS"]})[0]
+      == "SAY: WHAT'S FILE 11 - SUMMARISE FILE 11 - OPEN 11 - PREVIOUS PAGE - CLOSE FILES", "and file on files, from this page")
+
+# Settled, the cards are drawn once, not every frame: drawing them all
+# through the lean each frame slowed the HUD's reactor.
+composed = []
+real_compose = panel._compose
+panel._compose = lambda now: (composed.append(now), real_compose(now))
+panel._shown_at -= 5
+panel._focus_at -= 5
+panel.render(image, QPoint(0, 0))
+before = len(composed)
+for _ in range(5):
+    panel._tick()
+    panel.render(image, QPoint(0, 0))
+check(len(composed) == before, f"settled frames reuse the drawn cards ({len(composed) - before} redraws in 5 frames)")
+check(panel._timer.interval() == files_panel._STEADY_MS, "and the frame rate drops once nothing is moving")
+panel._compose = real_compose
 
 clicked = []
 panel.card_clicked.connect(clicked.append)

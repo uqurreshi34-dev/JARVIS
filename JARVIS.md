@@ -1300,7 +1300,13 @@ script is refused: a document opens in its own program, a folder opens in
 the hologram. The lean, the cards materialising one by one, the drifting
 scan lines and the slight flicker are drawing only; the text stays legible
 at 150% scaling, and the detail slab covers whichever half the card is not
-in.
+in. The cards are drawn, leaned, into one image only while they change or
+move; each frame copies it and adds the scan lines and the arrows' pulse,
+at half rate once settled. Drawing everything through the lean every frame
+took longer than a frame and slowed the HUD's reactor on the same thread.
+The SAY: hint uses a card on the page as its example, called folder or
+file as it is; a blank Word document says it has no words yet, and
+markdown marks are left out of a file's first lines.
 
 ### Start-up: `boot.py`
 Each start plays a systems check on the HUD while he greets you; nothing

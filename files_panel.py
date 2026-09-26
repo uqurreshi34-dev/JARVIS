@@ -18,8 +18,9 @@ import math
 import random
 import time
 
-from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QImageReader, QPainter, QPainterPath, QPen, QTransform
+from PyQt6.QtCore import QPointF, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import (QColor, QFont, QFontMetrics, QImage, QImageReader, QPainter, QPainterPath, QPen, QRegion,
+                         QTransform)
 from PyQt6.QtWidgets import QWidget
 
 from sensor_panel import fitting, shrunk
@@ -43,7 +44,8 @@ _APPEAR_EACH = 0.055        # seconds between one card materialising and the nex
 _APPEAR_FOR = 0.28          # how long one takes
 _SLAB_RISE = 0.22           # the detail slab rising
 
-_FRAME_MS = 33
+_FRAME_MS = 33             # while cards materialise or the slab moves
+_STEADY_MS = 66            # after: only the scan lines, flicker and arrows move
 
 _ACCENT = QColor(95, 200, 245)
 _BRIGHT = QColor(205, 240, 255)
@@ -55,6 +57,38 @@ _BACKDROP = QColor(6, 14, 22, 214)
 
 def _now():
     return time.monotonic()
+
+
+def hints(view):
+    """The foot's SAY: line for [view], longest first, to fit the room there.
+
+    It names what can be said here: pages only when there are some, going
+    back only inside a folder, and an example that is a card on this page,
+    called what it is: "folder 3" on a page of folders, "file 13" on files.
+    """
+    extra = []
+
+    if view.get("pages", 1) > 1:
+        extra.append("PREVIOUS PAGE" if view.get("page", 0) == view["pages"] - 1 else "NEXT PAGE")
+
+    if len(view.get("trail") or []) > 1:
+        extra.append("GO BACK")
+
+    cards = view.get("cards") or []
+
+    if not cards:
+        return ["SAY: " + " - ".join(extra + ["CLOSE FILES"])]
+
+    example = cards[min(2, len(cards) - 1)]
+    said = f"{'FOLDER' if example['kind'] == 'folder' else 'FILE'} {example['number']}"
+    what, summary, opening = f"WHAT'S {said}", f"SUMMARISE {said}", f"OPEN {example['number']}"
+
+    return [
+        "SAY: " + " - ".join([what, summary, opening] + extra + ["CLOSE FILES"]),
+        "SAY: " + " - ".join([summary, opening] + extra + ["CLOSE FILES"]),
+        "SAY: " + " - ".join([summary] + extra[:1] + ["CLOSE FILES"]),
+        "SAY: " + summary,
+    ]
 
 
 class FilesPanel(QWidget):
@@ -81,6 +115,11 @@ class FilesPanel(QWidget):
         self._press = None
         self._card_rects = {}
         self._nav_rects = {}
+        self._arrows = []
+        self._layer = None          # everything that holds still, drawn once
+        self._layer_dirty = True
+        self._layer_moving = False
+        self._scan_lines = None
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -127,6 +166,7 @@ class FilesPanel(QWidget):
         fresh = first or (before.get("trail"), before.get("page")) != (view.get("trail"), view.get("page"))
 
         self._view = dict(view)
+        self._layer_dirty = True
 
         if fresh:
             self._shown_at = _now()
@@ -176,6 +216,13 @@ class FilesPanel(QWidget):
             target = 0.9
 
         self._flicker += (target - self._flicker) * 0.35
+
+        # Full speed only while something is moving; the HUD shares this thread.
+        wanted = _FRAME_MS if self._moving(_now()) else _STEADY_MS
+
+        if self._timer.interval() != wanted:
+            self._timer.setInterval(wanted)
+
         self.update()
 
     # ---- clicks ---------------------------------------------------------------------
@@ -238,17 +285,64 @@ class FilesPanel(QWidget):
         width = (_WIDTH - 2 * _MARGIN - (_COLUMNS - 1) * _CARD_GAP) / _COLUMNS
         return QRectF(_MARGIN + column * (width + _CARD_GAP), _HEADER + row * (_CARD_H + _CARD_GAP), width, _CARD_H)
 
+    def _moving(self, now):
+        """Cards still materialising, or the detail slab still rising."""
+        cards = len((self._view or {}).get("cards") or [])
+        appearing = now - self._shown_at < cards * _APPEAR_EACH + _APPEAR_FOR
+        rising = bool((self._view or {}).get("focus")) and now - self._focus_at < _SLAB_RISE
+        return appearing or rising
+
     def paintEvent(self, event):
+        """The still layer, leaned, with the moving light on top.
+
+        Drawing every card, glyph and scan line through the lean each frame
+        cost more than a frame and slowed the HUD's reactor, which runs on
+        the same thread. Now the cards are drawn, leaned, into an image
+        only when they change or move; each frame copies that image and adds
+        the scan lines and the arrows' pulse.
+        """
         if not self._view:
             return
 
+        now = _now()
+
+        moving = self._moving(now)
+
+        # Once more after the movement ends, so the last frame is the settled one.
+        if self._layer_dirty or self._layer is None or moving or self._layer_moving:
+            self._compose(now)
+            self._layer_moving = moving
+
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setOpacity(self._flicker)
+
+        # The layer is drawn already leaned, so this is a plain copy.
+        painter.drawImage(QPointF(0, 0), self._layer)
+        self._paint_scanlines(painter)
+
+        painter.setTransform(self._lean())
+
+        for centre, direction, colour in self._arrows:
+            self._paint_arrow(painter, centre, direction, colour)
+
+        painter.end()
+
+    def _compose(self, now):
+        """Draw everything that holds still into the layer image, leaned."""
+        ratio = max(1.0, self.devicePixelRatioF())
+        size = QSize(int(_WIDTH * ratio), int(_HEIGHT * ratio))
+
+        if self._layer is None or self._layer.size() != size:
+            self._layer = QImage(size, QImage.Format.Format_ARGB32_Premultiplied)
+            self._layer.setDevicePixelRatio(ratio)
+
+        self._layer.fill(0)
+        painter = QPainter(self._layer)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         painter.setTransform(self._lean())
-        painter.setOpacity(self._flicker)
 
-        now = _now()
         self._paint_frame(painter)
         self._paint_header(painter)
 
@@ -274,8 +368,8 @@ class FilesPanel(QWidget):
             self._paint_slab(painter, focus, min(1.0, (now - self._focus_at) / _SLAB_RISE), from_top=row >= 3)
 
         self._paint_foot(painter)
-        self._paint_scanlines(painter)
         painter.end()
+        self._layer_dirty = False
 
     def _paint_frame(self, painter):
         body = QRectF(self.rect()).adjusted(5, 5, -5, -5)
@@ -306,12 +400,13 @@ class FilesPanel(QWidget):
         title_m, small_m = QFontMetrics(title), QFontMetrics(small)
         middle = 29
         self._nav_rects = {}
+        self._arrows = []
 
         trail_parts = view.get("trail") or ["JARVIS"]
         left = _MARGIN + 18
 
         if len(trail_parts) > 1:
-            self._nav_rects["back"] = self._paint_arrow(painter, QPointF(left + _ARROW_R - 4, middle), -1, _FOLDER)
+            self._nav_rects["back"] = self._arrow(QPointF(left + _ARROW_R - 4, middle), -1, _FOLDER)
             left += 2 * _ARROW_R + 6
 
         painter.setFont(title)
@@ -327,7 +422,7 @@ class FilesPanel(QWidget):
             next_centre = QPointF(right - _ARROW_R, middle)
 
             if page < pages - 1:
-                self._nav_rects["next"] = self._paint_arrow(painter, next_centre, 1, _ACCENT)
+                self._nav_rects["next"] = self._arrow(next_centre, 1, _ACCENT)
 
             words = f"PAGE {page + 1} OF {pages}"
             words_right = right - 2 * _ARROW_R - 8
@@ -338,7 +433,7 @@ class FilesPanel(QWidget):
             previous_centre = QPointF(words_right - small_m.horizontalAdvance(words) - 8 - _ARROW_R, middle)
 
             if page > 0:
-                self._nav_rects["previous"] = self._paint_arrow(painter, previous_centre, -1, _ACCENT)
+                self._nav_rects["previous"] = self._arrow(previous_centre, -1, _ACCENT)
 
             right = previous_centre.x() - _ARROW_R
 
@@ -353,6 +448,11 @@ class FilesPanel(QWidget):
 
         painter.setPen(QPen(self._tint(_ACCENT, 70), 1.0))
         painter.drawLine(QPointF(_MARGIN, _HEADER - 10), QPointF(_WIDTH - _MARGIN, _HEADER - 10))
+
+    def _arrow(self, centre, direction, colour):
+        """Note an arrow to draw each frame, over the still layer. Returns its rect."""
+        self._arrows.append((centre, direction, colour))
+        return QRectF(centre.x() - _ARROW_R, centre.y() - _ARROW_R, 2 * _ARROW_R, 2 * _ARROW_R)
 
     def _paint_arrow(self, painter, centre, direction, colour):
         """A round arrow button, pulsing softly so it reads as something to press. Returns its rect."""
@@ -390,7 +490,7 @@ class FilesPanel(QWidget):
 
         eased = 1 - (1 - appear) ** 3
         painter.save()
-        painter.setOpacity(self._flicker * eased)
+        painter.setOpacity(eased)
         painter.translate((1 - eased) * 14, 0)
 
         colour = _FOLDER if card["kind"] == "folder" else _ACCENT
@@ -596,34 +696,32 @@ class FilesPanel(QWidget):
         painter.setFont(small)
         painter.setPen(self._tint(_DIM, 200))
 
-        room = _WIDTH - 2 * (_MARGIN + 18)
-        # The hint names what can be said here: pages only when there are
-        # some, going back only inside a folder.
-        view = self._view
-        extra = []
-
-        if view.get("pages", 1) > 1:
-            extra.append("PREVIOUS PAGE" if view.get("page", 0) == view["pages"] - 1 else "NEXT PAGE")
-
-        if len(view.get("trail") or []) > 1:
-            extra.append("GO BACK")
-
-        full = ["WHAT'S FILE 3", "SUMMARISE FILE 3", "OPEN 3"] + extra + ["CLOSE FILES"]
-        hint = fitting([
-            "SAY: " + " - ".join(full),
-            "SAY: " + " - ".join(["SUMMARISE FILE 3", "OPEN 3"] + extra + ["CLOSE FILES"]),
-            "SAY: " + " - ".join(["SUMMARISE FILE 3"] + extra[:1] + ["CLOSE FILES"]),
-            "SAY: SUMMARISE FILE 3",
-        ], small_m, room)
+        hint = fitting(hints(self._view), small_m, _WIDTH - 2 * (_MARGIN + 18))
         painter.drawText(QPointF((_WIDTH - small_m.horizontalAdvance(hint)) / 2, _HEIGHT - 16), hint)
 
     def _paint_scanlines(self, painter):
+        """Faint lines drifting down: one image, drawn a little lower each frame."""
+        top, bottom = _HEADER - 8, _HEIGHT - 10
+
+        if self._scan_lines is None:
+            ratio = max(1.0, self.devicePixelRatioF())
+            lines = QImage(int((_WIDTH - 24) * ratio), int((bottom - top + 6) * ratio), QImage.Format.Format_ARGB32_Premultiplied)
+            lines.setDevicePixelRatio(ratio)
+            lines.fill(0)
+            drawing = QPainter(lines)
+            drawing.setPen(QPen(self._tint(_ACCENT, 11), 1.0))
+            y = 0.5
+
+            while y < bottom - top + 6:
+                drawing.drawLine(QPointF(0, y), QPointF(_WIDTH - 24, y))
+                y += 6
+
+            drawing.end()
+            self._scan_lines = lines
+
+        # Straight lines, clipped to the leaned body: at a lean of a few
+        # degrees the difference is not visible, and a straight copy is cheap.
         painter.save()
-        painter.setPen(QPen(self._tint(_ACCENT, 11), 1.0))
-        y = _HEADER - 8 + self._scan
-
-        while y < _HEIGHT - 10:
-            painter.drawLine(QPointF(12, y), QPointF(_WIDTH - 12, y))
-            y += 6
-
+        painter.setClipRegion(QRegion(self._lean().mapToPolygon(QRect(12, top, _WIDTH - 24, bottom - top))))
+        painter.drawImage(QPointF(12, top - 6 + self._scan), self._scan_lines)
         painter.restore()

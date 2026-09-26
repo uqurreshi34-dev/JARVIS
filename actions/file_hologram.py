@@ -745,6 +745,11 @@ def preview(value):
         return f"Number {spoken_number(value)} is a {kind} of {_spoken_size(item['size'])}, sir; there's no text in it to show."
 
     if not lines:
+        if item["size"]:
+            # A blank Word document still weighs kilobytes: say what is true.
+            _focus(value, detail | {"note": "NO WORDS IN IT YET"})
+            return f"Number {spoken_number(value)}, {name}, has no words in it yet, sir."
+
         _focus(value, detail | {"note": "THIS FILE IS EMPTY"})
         return f"Number {spoken_number(value)}, {name}, is empty, sir."
 
@@ -832,8 +837,18 @@ def _focus(value, detail):
 
 # ---- the first lines of a file ----------------------------------------------------------------
 
+_HEADING = re.compile(r"^\s{0,3}(?:#{1,6}\s+|>\s+)")
+_EMPHASIS = re.compile(r"(?<![\w*_])([*_]{1,2})(?=\S)(.+?)(?<=\S)\1(?![\w*_])")
+
+
+def _plain(line):
+    """A line without its markdown: "# Title" and "*Report*" read as Title and Report."""
+    line = _HEADING.sub("", str(line))
+    return _EMPHASIS.sub(r"\2", line)
+
+
 def _clip(line):
-    line = " ".join(str(line).split())
+    line = " ".join(_plain(line).split())
     return line if len(line) <= PREVIEW_CHARS else line[:PREVIEW_CHARS - 3].rstrip() + "..."
 
 
