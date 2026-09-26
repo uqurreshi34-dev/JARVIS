@@ -16,6 +16,7 @@ from quran_panel import QuranPanel
 from radar_panel import RadarPanel
 from sensor_panel import SensorPanel
 from files_panel import FilesPanel
+from house_panel import HousePanel
 from hud import IDLE, LISTENING, RECITING, SPEAKING, THINKING, Hud
 from commands import (
     handle_command,
@@ -46,6 +47,7 @@ from actions import (
     aircraft,
     places,
     file_hologram,
+    house,
     protocols,
     sensors,
     camera,
@@ -833,6 +835,10 @@ def main():
     files_beam = Beam(files_hologram, hud)
 
     def files_shown(view):
+        # One hologram at a time beside the HUD: the files replace the house.
+        if house.showing():
+            house.close()
+
         files_hologram.show_view.emit(view)
         files_beam.shown.emit()
 
@@ -850,6 +856,32 @@ def main():
     files_hologram.nav_clicked.connect(
         lambda which: threading.Thread(target=file_hologram.navigate, args=(which,), daemon=True).start())
     hud.shutdown.connect(files_hidden)
+
+    # The house hologram: the floor plan in house.json with the boards'
+    # readings on it, beamed out where the files are, and never both at once.
+    house_hologram = HousePanel()
+    house_hologram.set_anchor(hud)
+    house_beam = Beam(house_hologram, hud)
+
+    def house_shown(view):
+        if file_hologram.showing():
+            file_hologram.close()
+
+        house_hologram.show_view.emit(view)
+        house_beam.shown.emit()
+
+    def house_hidden():
+        house_hologram.hide_view.emit()
+        house_beam.hidden.emit()
+
+    house.set_listeners(on_view=house_shown, on_hide=house_hidden)
+    # Each report redraws it while it is up; sensors.py calls this on the
+    # web server's thread and the signal carries the view across.
+    sensors.add_listener(house.refresh)
+    house_hologram.room_clicked.connect(
+        lambda name: threading.Thread(target=house.tapped, args=(name,), daemon=True).start())
+    hud.shutdown.connect(house_hidden)
+    hud.shutdown.connect(lambda: sensors.remove_listener(house.refresh))
 
     def on_files_dropped(paths):
         def load():

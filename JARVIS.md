@@ -1311,6 +1311,42 @@ The SAY: hint uses a card on the page as its example, called folder or
 file as it is; a blank Word document says it has no words yet, and
 markdown marks are left out of a file's first lines.
 
+### The house hologram - `actions/house.py`, `house_panel.py`
+"Show me the house" projects house.json (in the JARVIS folder) as a 3D
+floor plan beside the HUD: floors stacked with faint risers between them,
+walls rising out of each floor as it appears, rooms tinted by
+sensor_panel's temperature colours, a pin standing where each board sits
+(green live, amber after 75 seconds quiet, red past 120, grey before it has
+ever reported), rings across the floor after a movement, a cone out
+through the wall for each camera, and a scan line sweeping the floors. A
+list beside the plan gives every room its readings; tapping a room or its
+row lights it, and a lit room's floor stays bright while the others step
+back.
+
+house.json holds places, each a list of rooms: name, aliases, floor, and
+x, y, w, h in metres from the north-west corner, with boards (by
+SENSOR_NAME, "at" as a share across and down the room), wall features
+(doors are gaps, windows glass) and cameras (a wall, how far along, and
+what they look at). A room with no size is left off rather than guessed.
+Boards report by name, so the same boards carried to another place are
+placed by that place's plan: showing a place makes it the one in use,
+remembered in .jarvis-house.json. The first show writes a starter plan
+(only "my room" is real; the rest are there to be measured and renamed);
+a house.json that exists but cannot be read is said so and never
+replaced. Both files are protected from sorting.
+
+Words: show, close (and "closed"), switch, and a room by its own name or
+alias straight after a verb that asks after a room ("what's happening
+in", "show me", "how's", "zoom in on"), with nothing after it, so "tell me
+about the kitchen sink" and "remind me to clean the kitchen" are left
+alone. Sensor questions stay sensors.py's; with the house up, the room
+they are about is lit. sensors.add_listener lets the house redraw on each
+report beside the sensor panel. It is drawn as the file hologram learnt to
+be: the still plan into one image when the view changes, while it rises,
+or once a second so ages move on; each frame copies it and adds the rings,
+the sweep and the pins' pulse. The files and the house take turns beside
+the HUD.
+
 ### Start-up: `boot.py`
 Each start plays a systems check on the HUD while he greets you; nothing
 waits for it. The panel fades in, the ticks light round the dial, the rings

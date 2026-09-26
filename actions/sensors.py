@@ -71,6 +71,22 @@ def set_listener(callback):
     _listener = callback
 
 
+# Others told of every report too, as the house hologram is, each on its own
+# terms: one failing does not stop the rest.
+_listeners = []
+
+
+def add_listener(callback):
+    """Have [callback] called with known() after every report, beside set_listener's."""
+    if callback not in _listeners:
+        _listeners.append(callback)
+
+
+def remove_listener(callback):
+    if callback in _listeners:
+        _listeners.remove(callback)
+
+
 def _now():
     return time.monotonic()
 
@@ -199,9 +215,9 @@ def report(payload):
 
     # Said outside the lock. Building a sentence is cheap, but nothing
     # that might be handed to another thread happens while holding it.
-    if _listener is not None:
+    for listening in ([_listener] if _listener is not None else []) + list(_listeners):
         try:
-            _listener(known())
+            listening(known())
         except Exception as error:
             # A display failing must not stop the announcement.
             print(f"[JARVIS] sensor display failed: {error}", flush=True)

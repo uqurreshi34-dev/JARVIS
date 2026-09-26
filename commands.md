@@ -459,6 +459,31 @@ A room is whatever the board is called (SENSOR_NAME), so a new board can
 be asked about as soon as it reports. "What's the temperature outside"
 names no board, so it is still the weather.
 
+### Your house, as a hologram
+
+**Free**: no model call. A 3D floor plan beside the HUD, floors stacked,
+each room tinted by its temperature, a pin where each board sits (green
+live, amber quiet, red offline), rings where one has just seen movement,
+and a cone where a camera looks out.
+
+| Say | Does |
+|---|---|
+| show me the house | projects the plan in house.json, with every board's readings on it |
+| show me mum's house | another place in house.json, which then becomes the place in use |
+| what's happening in my room | that room's readings, movement and camera, and lights it |
+| show me the kitchen / how's the landing / zoom in on the hall | the same, for any room |
+| switch the house to mum's house | the boards now belong to that place's rooms |
+| close the house | puts it away (as does "closed the house") |
+
+Rooms are house.json's own names and aliases, so a room is only claimed by
+its name, straight after one of those verbs: "tell me about the kitchen
+sink" is not the kitchen. The first "show me the house" writes a starter
+house.json in the JARVIS folder to edit; sizes are in metres. A board that
+reports but is on no room says so. Tap a room, on the plan or in the list,
+to light it. The file hologram and the house take turns: showing one puts
+the other away. Asking a sensor question ("what's the temperature in the
+room") with the house up lights that room too.
+
 ## Is he there
 
 | Say | Does |

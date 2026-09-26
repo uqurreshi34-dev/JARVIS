@@ -50,6 +50,9 @@ _PROTECTED_NAMES = frozenset({
     # Your protocols, and which are engaged with the tabs each opened.
     "protocols.json",
     ".jarvis-protocols.json",
+    # The house hologram's plan, and which place is in use.
+    "house.json",
+    ".jarvis-house.json",
     # The Outlook sign-in; moving it signs calendar sync out.
     "outlook_token_cache.json",
     # Caches, cheap to lose but fetched again over the network if moved.

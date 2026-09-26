@@ -40,6 +40,7 @@ from actions import (
     diary,
     documents,
     file_hologram,
+    house,
     files,
     folder_guard,
     folder_organizer,
@@ -3733,7 +3734,18 @@ _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 # Commands recognised on the fast path that no later route may take, though
 # they may name a connected service: a protocol runs OBS's own actions
 # itself, and "initiate stream protocol" is not a request for Agent Mode.
-_SETTLED_HERE = frozenset({"protocol", "file_hologram"})
+_SETTLED_HERE = frozenset({"protocol", "file_hologram", "house"})
+
+
+def _sensor_answer(command):
+    """What the boards say, and the room it is about lit on the house hologram if it is up."""
+    asked = sensors.question(command)
+    said = sensors.answer(asked) or "No sensors have reported yet, sir."
+
+    if asked and len(asked[1]) == 1:
+        house.follow(asked[1])
+
+    return said
 
 _PRESENCE = re.compile(
     r"^(?:are\s+you|r\s+u|r\s+you|are\s+u|you)\s+"
@@ -3780,6 +3792,13 @@ def _fast_path(command):
     # named aloud; the numbers are only claimed while it is showing.
     if file_hologram.asked(command):
         return _blank_result("file_hologram")
+
+    # The house hologram: "show me the house", "what's happening in my
+    # room", "close the house". Rooms and places are house.json's own, so a
+    # room is claimed only by its own name, and only after one of the verbs
+    # that ask after a room.
+    if house.asked(command):
+        return _blank_result("house")
 
     # Before the phrase table too, so "read my notes about the boiler" is
     # not taken as plain "read my notes".
@@ -5782,11 +5801,13 @@ def _handle_command(command, *, fast_only=False, probe=False):
     if intent == "file_hologram":
         return _query(intent, lambda: file_hologram.answer(command) or "The files aren't showing, sir.")
 
+    if intent == "house":
+        return _query(intent, lambda: house.answer(command) or "The house isn't showing, sir.")
+
     if intent == "sensor_question":
         # Asked again here rather than carried through the result, which
         # has a fixed set of fields; the boards may have reported since.
-        return _query(intent, lambda: sensors.answer(sensors.question(command))
-                      or "No sensors have reported yet, sir.")
+        return _query(intent, lambda: _sensor_answer(command))
 
     if intent in _SOCIAL_REPLIES:
         return _query(intent, lambda: social.reply(_SOCIAL_REPLIES[intent]))
