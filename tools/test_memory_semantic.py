@@ -35,6 +35,7 @@ os.environ.setdefault("LLM_PROVIDER", "groq")
 
 from actions import memory, semantic_memory  # noqa: E402
 from actions import knowledge  # noqa: E402
+from actions import memory_collection_intelligence  # noqa: E402
 import llm  # noqa: E402
 
 
@@ -67,8 +68,13 @@ def main():
         memory.facts = lambda: list(TEST_FACTS)
         semantic_memory.clear_cache()
 
+        # The collection answers read the real memory files, not the facts
+        # above, so on a machine with memories of its own ("working on:
+        # react, Next.js...") they answered first. This test is about the
+        # facts above alone.
         with patch.object(knowledge, "chat", side_effect=_failing_chat), \
-             patch.object(llm, "chat", side_effect=_failing_chat):
+             patch.object(llm, "chat", side_effect=_failing_chat), \
+             patch.object(memory_collection_intelligence, "_collection_answer", return_value=None):
 
             failures = []
 

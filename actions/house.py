@@ -26,7 +26,9 @@ house.json holds one or more places, so the boards can travel:
       }
     }
 
-Sizes are metres, x east and y south from the north-west corner; "at" on
+Floors count up from 0; "floor_names" (for example {"0": "1st floor"})
+labels them as the house is spoken of. Sizes are metres, x east and y
+south from the north-west corner; "at" on
 a board is where in the room it sits (0 to 1 across, 0 to 1 down), and on
 a wall feature or a camera how far along that wall. Boards report by
 name, so a board carried to another place is placed by that place's
@@ -339,7 +341,26 @@ def render(place_key=None, focus=None):
                       "readings": dict(heard[name]["readings"])} for name in unplaced],
         "focus": focus,
         "floors": sorted({room["floor"] for room in rooms}),
+        "floor_names": _floor_names(place),
     }
+
+
+def _floor_names(place):
+    """{floor: "3RD FLOOR"} from a place's own "floor_names", as its house calls them."""
+    named = place.get("floor_names")
+
+    if not isinstance(named, dict):
+        return {}
+
+    names = {}
+
+    for key, value in named.items():
+        try:
+            names[int(key)] = str(value).strip().upper()
+        except (TypeError, ValueError):
+            continue
+
+    return {floor: name for floor, name in names.items() if name}
 
 
 def _title(key):

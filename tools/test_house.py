@@ -168,6 +168,16 @@ said = house.answer("how's the landing")
 check(house.showing() and shown[-1]["focus"] == "landing" and said == "Landing has no sensor yet, sir.",
       "asking after a room with the house away shows it, focused")
 
+# Floors named as the house is spoken of.
+with open(config_path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+data["places"]["home"]["floor_names"] = {"0": "1st floor", "1": "2nd floor", "bad": "x"}
+with open(config_path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+
+check(house.render("home")["floor_names"] == {0: "1ST FLOOR", 1: "2ND FLOOR"}, "floor names come from the house")
+
 # ---- places ---------------------------------------------------------------------------------------------
 
 with open(config_path, encoding="utf-8") as handle:
@@ -255,6 +265,14 @@ panel.mousePressEvent(mouse(QEvent.Type.MouseButtonPress, middle))
 panel.mouseReleaseEvent(mouse(QEvent.Type.MouseButtonRelease, middle))
 check(tapped == ["kitchen"], f"a tap names the room under it ({tapped})")
 
+panel._view = dict(panel._view, floor_names={})
+check(panel.floor_label(0) == "GROUND" and panel.floor_label(1, long=True) == "FLOOR 1",
+      "floors are GROUND and FLOOR 1 unless the house names them")
+panel._view = dict(panel._view, floor_names={0: "1ST FLOOR"})
+check(panel.floor_label(0) == "1ST FLOOR", "and the house's own name when it does")
+check(house_panel.hints({"rooms": [{"name": "room 4", "boards": [{"name": "x"}]}, {"name": "kitchen", "boards": []}]})[0]
+      == "SAY: WHAT'S HAPPENING IN ROOM 4 - SHOW ME THE KITCHEN - CLOSE THE HOUSE", "'room 4' is said without 'the'")
+panel._view = dict(panel._view, floor_names={})
 hint = house_panel.hints(panel._view)[0]
 check(hint == "SAY: WHAT'S HAPPENING IN MY ROOM - SHOW ME THE LANDING - CLOSE THE HOUSE",
       f"the SAY: line uses this house's rooms ({hint!r})")

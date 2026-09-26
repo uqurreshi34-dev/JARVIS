@@ -20,6 +20,7 @@ Nothing here reads a file or a sensor. actions/house.py sends the view.
 
 import math
 import random
+import re
 import time
 
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
@@ -41,6 +42,8 @@ _LIST_W = 196               # the room list, on the side nearest the HUD
 
 # The view of the plan: turned a little, looked down on, with perspective.
 _YAW = math.radians(-26)
+_YAW_LONG = math.radians(-64)   # a deep house, its length turned across the panel
+_YAW_WIDE = math.radians(-14)
 _ELEVATION = math.radians(44)
 _DISTANCE = 2.9
 _FLOOR_GAP = 1.0            # between stacked floors, as a share of the plan's size
@@ -92,7 +95,9 @@ def hints(view):
     other = next((room["name"] for room in rooms if room["name"] != first), None)
 
     def spoken(name):
-        return name.upper() if name.casefold().startswith(("my ", "the ")) else f"THE {name.upper()}"
+        # "my room", "room 4": said as they are; "kitchen": "the kitchen".
+        bare = name.casefold().startswith(("my ", "the ")) or re.match(r"^room\s+\S+$", name.casefold())
+        return name.upper() if bare else f"THE {name.upper()}"
 
     lines = [f"WHAT'S HAPPENING IN {spoken(first)}"]
 
@@ -150,7 +155,14 @@ class _Projection:
 
         floors = sorted({room["floor"] for room in rooms})
         middle = (len(floors) - 1) / 2
-        self.levels = {floor: (index - middle) * _FLOOR_GAP for index, floor in enumerate(floors)}
+        # More floors, closer together, so a tall house still fills the panel.
+        gap = _FLOOR_GAP * min(1.0, 1.6 / max(1, len(floors) - 1)) if len(floors) > 2 else _FLOOR_GAP
+        self.levels = {floor: (index - middle) * gap for index, floor in enumerate(floors)}
+
+        # A long, narrow house (a terrace) is turned so its length runs
+        # across the panel, where there is the most room for it.
+        width, depth = self.bounds[2] - self.bounds[0], self.bounds[3] - self.bounds[1]
+        self.yaw = _YAW_LONG if depth > width * 1.4 else (_YAW_WIDE if width > depth * 1.4 else _YAW)
 
         # Fit everything that is drawn: the floors, the pins over them, and
         # the cameras' cones reaching out through the walls.
@@ -179,8 +191,8 @@ class _Projection:
         ny = (y - self.centre[1]) / self.span
 
         # Turned about the vertical, then looked down on.
-        tx = nx * math.cos(_YAW) - ny * math.sin(_YAW)
-        ty = nx * math.sin(_YAW) + ny * math.cos(_YAW)
+        tx = nx * math.cos(self.yaw) - ny * math.sin(self.yaw)
+        ty = nx * math.sin(self.yaw) + ny * math.cos(self.yaw)
         down = ty * math.sin(_ELEVATION) - z * math.cos(_ELEVATION)
         depth = _DISTANCE - (ty * math.cos(_ELEVATION) + z * math.sin(_ELEVATION))
         return tx / depth, down / depth, depth
@@ -519,6 +531,18 @@ class HousePanel(QWidget):
 
             painter.restore()
 
+    def floor_label(self, floor, long=False):
+        """The house's own name for a floor, else GROUND and FLOOR 1 upwards."""
+        named = (self._view or {}).get("floor_names") or {}
+
+        if floor in named:
+            return named[floor]
+
+        if floor == 0:
+            return "GROUND FLOOR" if long else "GROUND"
+
+        return f"FLOOR {floor}"
+
     def _paint_risers(self, painter, rooms, floors):
         """Faint uprights at the corners, joining each floor to the one above."""
         if len(floors) < 2:
@@ -552,7 +576,7 @@ class HousePanel(QWidget):
         # Floor number, at the plate's near left corner.
         painter.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
         painter.setPen(_tint(_ACCENT, 150))
-        label = "GROUND" if floor == 0 else f"FLOOR {floor}"
+        label = self.floor_label(floor)
         corners = [plate.at(index) for index in range(4)]
         left = min(corners, key=lambda point: point.x())
         width = painter.fontMetrics().horizontalAdvance(label)
@@ -712,14 +736,24 @@ class HousePanel(QWidget):
             painter.drawEllipse(start, 3.2, 3.2)
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
-            label = (camera["looks"] or "camera").upper()
+            # Named past the tip of the cone, away from the room, so it never
+            # sits on the room's own label.
+            label = f"{camera['looks'].upper()} CAM" if camera["looks"] else "CAMERA"
+            state = "LIVE" if online else "NOT CONNECTED"
             painter.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
             metrics = painter.fontMetrics()
-            painter.setPen(_tint(_GLASS, 220 if online else 140))
-            painter.drawText(QPointF(end.x() - metrics.horizontalAdvance(label) / 2, end.y()), label)
-            state = "CAM ONLINE" if online else "CAM NOT CONNECTED"
-            painter.setPen(_tint(_DIM, 200))
-            painter.drawText(QPointF(end.x() - metrics.horizontalAdvance(state) / 2, end.y() + 11), state)
+            dx, dy = end.x() - start.x(), end.y() - start.y()
+            length = math.hypot(dx, dy) or 1.0
+            anchor = QPointF(end.x() + dx / length * 10, end.y() + dy / length * 10)
+            widest = max(metrics.horizontalAdvance(label), metrics.horizontalAdvance(state))
+            left = anchor.x() - widest if dx < -length * 0.3 else (anchor.x() if dx > length * 0.3 else anchor.x() - widest / 2)
+            top = anchor.y() - (2 * metrics.height() if dy < 0 else 0)
+            left = max(12.0, left)
+
+            painter.setPen(_tint(_GLASS, 230 if online else 150))
+            painter.drawText(QPointF(left, top + metrics.ascent()), label)
+            painter.setPen(_tint(_LIVE if online else _DIM, 210))
+            painter.drawText(QPointF(left, top + metrics.height() + metrics.ascent()), state)
 
     def _paint_label(self, painter, room, lit):
         """The room's name and readings, standing upright over its middle."""
@@ -731,6 +765,15 @@ class HousePanel(QWidget):
 
         name_font = QFont("Consolas", 8, QFont.Weight.Bold)
         name_m = QFontMetrics(name_font)
+
+        # A room too narrow for its name on the plan (a hall, a landing) is
+        # named in the list alone, unless it is the one in focus or has a
+        # board, so names never pile on each other.
+        fits = min(room["w"], room["h"]) >= 1.8 and corners.height() >= 22
+
+        if not (fits or lit or room["boards"]):
+            return
+
         name = fitting([room["name"].upper(), room["name"].upper()[:10]], name_m, room_w)
 
         lines = [(name, name_font, _tint(_BRIGHT if lit else _TEXT, 245 if (lit or room["boards"]) else 150))]
@@ -763,13 +806,19 @@ class HousePanel(QWidget):
         focus = view.get("focus")
         focus_floor = next((room["floor"] for room in view["rooms"] if room["name"] == focus), None)
 
-        # The scan line, crossing each floor from north to south.
-        low_x, low_y, high_x, high_y = projection.bounds
+        # The scan line, crossing each floor from north to south, within
+        # that floor's own rooms (a loft is shorter than the floors below).
         share = (now % _SWEEP_EVERY) / _SWEEP_EVERY
 
         for floor in projection.levels:
             if focus_floor is not None and floor != focus_floor:
                 continue
+
+            on_floor = [room for room in view["rooms"] if room["floor"] == floor]
+            low_x = min(room["x"] for room in on_floor)
+            low_y = min(room["y"] for room in on_floor)
+            high_x = max(room["x"] + room["w"] for room in on_floor)
+            high_y = max(room["y"] + room["h"] for room in on_floor)
 
             for trail, alpha in ((0.0, 120), (0.025, 55), (0.05, 22)):
                 y = low_y + (high_y - low_y) * max(0.0, share - trail)
@@ -912,7 +961,7 @@ class HousePanel(QWidget):
                 if room["cameras"]:
                     details.append(f"{len(room['cameras'])} CAMERA{'S' if len(room['cameras']) != 1 else ''}")
 
-                floor = "GROUND FLOOR" if room["floor"] == 0 else f"FLOOR {room['floor']}"
+                floor = self.floor_label(room["floor"], long=True)
                 details.append(floor)
                 options = [" - ".join(details[:count]) for count in range(len(details), 0, -1)]
                 painter.drawText(QPointF(text_left, rect.top() + 4 + name_m.height() + value_m.height() + small_m.ascent()),

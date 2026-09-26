@@ -1328,6 +1328,10 @@ x, y, w, h in metres from the north-west corner, with boards (by
 SENSOR_NAME, "at" as a share across and down the room), wall features
 (doors are gaps, windows glass) and cameras (a wall, how far along, and
 what they look at). A room with no size is left off rather than guessed.
+"floor_names" labels floors as the house is spoken of ({"0": "1st floor"}),
+else GROUND and FLOOR 1 upwards. A long, narrow house is turned so its
+length runs across the panel, more floors stack closer, and a room too
+narrow for its name (a hall, a landing) is named in the list alone.
 Boards report by name, so the same boards carried to another place are
 placed by that place's plan: showing a place makes it the one in use,
 remembered in .jarvis-house.json. The first show writes a starter plan
