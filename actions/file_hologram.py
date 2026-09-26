@@ -348,13 +348,15 @@ _CLOSE = re.compile(
 _DESCRIBE = ("whats", "what", "which", "tell")
 _PREVIEW_WORDS = ("summarise", "summarize", "summary", "sum", "preview", "read", "about", "in", "inside", "contents")
 _OPEN_WORDS = ("open", "enter", "go", "into")
+# "show me file two": a file shows its first lines, a folder steps inside.
+_SHOW_WORDS = ("show", "display", "view", "see", "look", "pull", "bring", "reveal")
 
 
 def asked(text):
     """What a command asks of the hologram, or None if it is not about it.
 
     ("show", folder), ("close", None); and only while it is showing:
-    ("describe", n), ("preview", n), ("open", n), ("page", +1 or -1), ("turn", n or "first" / "last"),
+    ("describe", n), ("preview", n), ("open", n), ("show_card", n), ("page", +1 or -1), ("turn", n or "first" / "last"),
     ("where", None), ("back", None). Anything with "page" in it is about pages, never a card.
     """
     said = " ".join(_words(text))
@@ -403,6 +405,9 @@ def asked(text):
 
     if any(word in _OPEN_WORDS for word in words):
         return "open", value
+
+    if any(word in _SHOW_WORDS for word in words):
+        return "show_card", value
 
     if any(word in _PREVIEW_WORDS for word in words):
         return "preview", value
@@ -792,6 +797,16 @@ def click(value):
     return show(_join(item["name"])) if item["kind"] == "folder" else preview(value)
 
 
+def show_card(value):
+    """"Show me file two": a file's first lines, or a folder stepped into, as a tap does."""
+    item, count = _item(value)
+
+    if item is None:
+        return _no_such(value, count)
+
+    return click(value)
+
+
 def answer(text):
     """Do what [text] asks of the hologram. Returns what to say, or None."""
     request = asked(text)
@@ -802,7 +817,7 @@ def answer(text):
     kind, value = request
     actions = {"show": show, "close": lambda _value: close(), "page": page, "back": lambda _value: back(),
                "turn": turn, "where": lambda _value: where(),
-               "describe": describe, "preview": preview, "open": open_card}
+               "describe": describe, "preview": preview, "open": open_card, "show_card": show_card}
 
     return actions[kind](value)
 

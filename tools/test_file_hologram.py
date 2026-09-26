@@ -122,6 +122,11 @@ SAID = {
     "read the third file": ("preview", 3),
     "file won": ("preview", 1),
     "four": ("preview", 4),
+    "show me file 2": ("show_card", 2),
+    "show me file two": ("show_card", 2),
+    "let me see file four": ("show_card", 4),
+    "display number three": ("show_card", 3),
+    "show me folder three": ("show_card", 3),
     "open three": ("open", 3),
     "open number two": ("open", 2),
     "open file too": ("open", 2),
@@ -170,6 +175,13 @@ said = fh.preview(6)
 check("there's no text in it to show" in said and "video" in said, f"a video has no text to show ({said!r})")
 said = fh.preview(1)
 check(said.startswith("images holds one item") and "Say open one to step inside." in said, f"a folder's contents ({said!r})")
+check(fh.answer("show me file 4") == "Shopping list begins: Milk, two pints; Eggs; Bread.",
+      "'show me file four' shows a file's first lines")
+check(fh.answer("show me file 12") == "There's no number twelve here, sir; they go up to seven.",
+      "and a number that isn't there says so")
+check(fh.answer("show me folder three") == "The Reports folder, sir: three files." and shown[-1]["trail"] == ["JARVIS", "Reports"],
+      "'show me folder three' steps inside it")
+fh.back()
 check(fh.describe(12) == "There's no number twelve here, sir; they go up to seven.", "a number out of range says so")
 
 # ---- open ------------------------------------------------------------------------------------------
@@ -380,6 +392,8 @@ else:
         result = commands.handle_command("summarise file four")
         check(result["intent"] == "file_hologram" and result["action"]().endswith("begins: Milk, two pints; Eggs; Bread."),
               "and 'summarise file four' reads its first lines")
+        result = commands.handle_command("show me file 2")
+        check(result["intent"] == "file_hologram", f"and 'show me file 2' is the hologram, not read_file ({result['intent']})")
         result = commands.handle_command("close the files")
         check(result["action"]() == "Files closed, sir.", "and closes")
         check(commands._fast_path("what's file three") is None or commands._fast_path("what's file three")["intent"] != "file_hologram",

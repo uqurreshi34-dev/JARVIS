@@ -193,6 +193,7 @@ a file's name.
 | summarise file three | its first three lines, on the hologram and aloud (or "it's empty") |
 | what's in file three / what is file three about | the same |
 | three | the same, while the files are showing |
+| show me file three | the same; for a folder, steps inside it |
 | open three | a folder: step inside it; a file: opens it in its own program |
 | go back | up a folder, back to the page that folder was on |
 | next page / previous page / go to previous page / go back a page | ten at a time; numbers stay with their files |
