@@ -43,6 +43,10 @@ _PROTECTED_NAMES = frozenset({
     "notes.txt",
     # Connected services; moving it silently disconnects them.
     "mcp.json",
+    # What those services' programs print, and the no-console check's
+    # report (tools/check_services_no_console.py).
+    "mcp-servers.log",
+    "mcp-check.txt",
     # The Outlook sign-in; moving it signs calendar sync out.
     "outlook_token_cache.json",
     # Caches, cheap to lose but fetched again over the network if moved.
@@ -60,6 +64,9 @@ _PROTECTED_NAMES = frozenset({
 _PROTECTED_PATTERNS = (
     re.compile(r"^jarvis-log-.+\.txt$", re.IGNORECASE),
     re.compile(r"^usage-\d{4}-\d{2}\.jsonl$", re.IGNORECASE),
+    # Copies of mcp.json kept before an edit ("mcp.json.before-..."). They
+    # hold the same keys and tokens, so they stay where they are too.
+    re.compile(r"^mcp\.json\..+$", re.IGNORECASE),
 )
 
 

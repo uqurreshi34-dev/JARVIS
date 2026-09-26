@@ -1016,6 +1016,12 @@ from `python main.py`. A failure is reported as itself ("FileNotFoundError:
 ... npx"), not as the wrapper "unhandled errors in a TaskGroup".
 `pythonw tools/check_services_no_console.py` connects to each such service
 as the .exe would, with no console, and says how each one fared.
+`mcp-servers.log`, the check's `mcp-check.txt` and copies of `mcp.json`
+(`mcp.json.before-...`) are JARVIS's own files: the folder guard never
+moves them, and the model's file tool never reads `mcp.json`, its copies
+or the Outlook sign-in, which hold keys. For the same reason the filesystem
+service is given the JARVIS folder's Documents, Notes, Reports,
+Spreadsheets and images folders, never the JARVIS folder itself.
 
 Services connect at start-up, in the background and side by side, rather
 than on the first request that needs one; the start-up check's SERVICES
