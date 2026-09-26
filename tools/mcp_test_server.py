@@ -15,6 +15,13 @@ from mcp.types import BlobResourceContents, EmbeddedResource, TextResourceConten
 
 app = MCPServer("jarvis-test")
 
+# A server's own chatter on its error output, as npx and node servers print:
+# JARVIS keeps it in mcp-servers.log rather than handing on a console the
+# installed JARVIS.exe does not have.
+if os.environ.get("CHATTER"):
+    import sys
+    print(os.environ["CHATTER"], file=sys.stderr, flush=True)
+
 READ_ONLY = ToolAnnotations(read_only_hint=True)
 
 

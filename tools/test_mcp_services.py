@@ -848,6 +848,37 @@ finally:
     mcp_services.close()
     sys.modules.update(saved_mcp)
 
+# As the installed JARVIS.exe runs: no console, so no error output at all.
+# A server started as a program must still connect, its chatter kept in
+# mcp-servers.log beside mcp.json.
+write_config({"test": {"command": sys.executable, "args": [SERVER], "env": {"CHATTER": "test server starting"}}})
+saved_streams = sys.stdout, sys.stderr
+server_log = os.path.join(folder, mcp_services.SERVER_LOG_NAME)
+
+try:
+    sys.stdout = sys.stderr = None
+    offered = {tool["name"] for tool in mcp_services.tools()}
+finally:
+    sys.stdout, sys.stderr = saved_streams
+
+check("mcp_test_upper" in offered, "with no console at all (the .exe), a server started as a program still connects")
+mcp_services.close()
+
+with open(server_log, encoding="utf-8") as handle:
+    check("test server starting" in handle.read(), "and what it says on its error output is kept in mcp-servers.log")
+
+wrapped = BaseExceptionGroup("unhandled errors in a TaskGroup", [OSError(6, "The handle is invalid")])
+cause = mcp_services._first_cause(BaseExceptionGroup("outer", [wrapped]))
+check(isinstance(cause, OSError) and "handle is invalid" in str(cause),
+      "a failure inside a task group is reported as itself, not as 'unhandled errors in a TaskGroup'")
+
+write_config({"test": {"command": "definitely-not-a-real-program-xyz"}})
+mcp_services.tools()
+status = " ".join(mcp_services.status())
+check("TaskGroup" not in status and ("FileNotFoundError" in status or "No such file" in status or "cannot find" in status),
+      f"so a program that cannot be found says so ({status[:160]!r})")
+mcp_services.close()
+
 write_config({"off": {"command": sys.executable, "args": [SERVER], "disabled": True}})
 check(mcp_services.configured() == (), "a disabled entry is ignored")
 

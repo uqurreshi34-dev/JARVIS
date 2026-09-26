@@ -79,6 +79,13 @@ from actions import files, journal, safety
 
 CONFIG_NAME = "mcp.json"
 
+# What programs started as servers write to their error output, beside
+# mcp.json. Given a real file rather than JARVIS's own: the installed
+# JARVIS.exe has no console, so there is no error output to hand on, and
+# a server started without one fails before it says a word -- which is
+# why the filesystem service ran from python main.py but not the .exe.
+SERVER_LOG_NAME = "mcp-servers.log"
+
 # A server that has not answered by now is treated as unavailable.
 CONNECT_SECONDS = 20
 CALL_SECONDS = 45
@@ -404,12 +411,38 @@ def _transport(entry):
     env = get_default_environment()
     env.update(entry.get("env") or {})
 
-    return StdioServerParameters(
+    from mcp.client.stdio import stdio_client
+
+    parameters = StdioServerParameters(
         command=entry["command"],
         args=list(entry.get("args") or ()),
         env=env,
         cwd=entry.get("cwd"),
     )
+
+    return stdio_client(parameters, errlog=_server_log())
+
+
+_server_log_file = None
+
+
+def _server_log():
+    """The file servers' error output goes to, opened once and kept open."""
+    global _server_log_file
+
+    if _server_log_file is None or _server_log_file.closed:
+        _server_log_file = open(os.path.join(files.root(), SERVER_LOG_NAME), "a",
+                                encoding="utf-8", errors="replace", buffering=1)
+
+    return _server_log_file
+
+
+def _first_cause(error):
+    """The real error inside a task group's wrapper ("unhandled errors in a TaskGroup")."""
+    while isinstance(error, BaseExceptionGroup) and error.exceptions:
+        error = error.exceptions[0]
+
+    return error
 
 
 async def _hold(server):
@@ -449,7 +482,8 @@ async def _hold(server):
             "run pip install -r requirements.txt"
         )
     except Exception as error:
-        server.error = str(error) or type(error).__name__
+        cause = _first_cause(error)
+        server.error = f"{type(cause).__name__}: {cause}" if str(cause) else type(cause).__name__
     finally:
         server.client = None
         server._ready.set()

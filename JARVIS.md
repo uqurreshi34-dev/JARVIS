@@ -1008,6 +1008,15 @@ that" with `"then": "obs-get-last-replay-buffer-replay"` and `"say":
 file is named within five seconds, the sentence that needed one is left
 out, and only a read-only tool may be `then`.
 
+A service started as a program (the filesystem, OBS) writes its error
+output to `mcp-servers.log` in the JARVIS folder, never to JARVIS's own:
+the installed JARVIS.exe has no console, and a server handed a console
+that is not there failed to start from the .exe while the same one worked
+from `python main.py`. A failure is reported as itself ("FileNotFoundError:
+... npx"), not as the wrapper "unhandled errors in a TaskGroup".
+`pythonw tools/check_services_no_console.py` connects to each such service
+as the .exe would, with no console, and says how each one fared.
+
 Services connect at start-up, in the background and side by side, rather
 than on the first request that needs one; the start-up check's SERVICES
 line is updated to what really connected ("SERVICES (2/3)" with OBS closed).
