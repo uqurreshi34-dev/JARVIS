@@ -218,7 +218,8 @@ class Assistant:
         self._hud.heard_changed.emit(text)
 
     def _reply(self, text):
-        self._hud.reply_changed.emit(text)
+        # A model's **bold** and bullets are for a screen, not the HUD.
+        self._hud.reply_changed.emit(phrases.plain(text))
 
     def _say(self, text):
         # Once stopped, the rest of the turn stays silent, including any
@@ -501,6 +502,8 @@ class Assistant:
         except Exception as error:
             print(f"[JARVIS] phone action error: {error}")
             spoken = phrases.pick("failed")
+
+        spoken = phrases.plain(spoken)
 
         self._reply(spoken)
         self._state(IDLE)

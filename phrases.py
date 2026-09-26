@@ -9,6 +9,7 @@ ones taking a name use a format field rather than being built by hand.
 """
 
 import random
+import re
 import threading
 
 
@@ -331,3 +332,33 @@ def every_fixed_line():
                 lines.append(line)
 
     return tuple(lines)
+
+
+# ---- plain words: what a model writes, as it should be said and shown ------
+
+# Models write for a screen: **bold**, *emphasis*, `code`, headings, bullets.
+# Read aloud, the voice says "asterisk"; shown on the HUD, the marks are
+# clutter. Only paired marks hugging a word are taken, so "5 * 3", a file
+# called my_notes.txt, and a lone underscore or asterisk are left alone.
+_MARKDOWN = (
+    (re.compile(r"\[([^\]\n]+)\]\((?:https?://|mailto:)[^)\s]+\)"), r"\1"),   # [words](link)
+    # **bold** only: "__bold__" is how Python names are written (__init__.py).
+    (re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*"), r"\1"),                         # **bold**
+    (re.compile(r"(?<![\w*])\*(?=[^\s*])([^*\n]+?)(?<=[^\s*])\*(?![\w*])"), r"\1"),  # *emphasis*
+    (re.compile(r"(?<![\w_])_(?=[^\s_])([^_\n]+?)(?<=[^\s_])_(?![\w_])"), r"\1"),     # _emphasis_
+    (re.compile(r"`([^`\n]+)`"), r"\1"),                                           # `code`
+    (re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE), ""),                          # # heading
+    (re.compile(r"^\s{0,3}>\s?", re.MULTILINE), ""),                               # > quote
+    (re.compile(r"^\s*[-*+]\s+", re.MULTILINE), ""),                               # - bullet
+)
+
+
+def plain(text):
+    """[text] without the marks a model uses for formatting."""
+    if not isinstance(text, str) or not text:
+        return text
+
+    for pattern, replacement in _MARKDOWN:
+        text = pattern.sub(replacement, text)
+
+    return text

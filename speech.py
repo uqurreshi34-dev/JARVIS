@@ -294,6 +294,9 @@ class SpeechEngine:
                 pass
 
     def speak(self, text):
+        # Whatever says it, the voice never reads out "asterisk asterisk".
+        text = _plain(text)
+
         print(f"JARVIS: {text}", flush=True)
 
         if not text or not text.strip():
@@ -599,6 +602,8 @@ class SpeechEngine:
         already said is served with no synthesis at all -- and anything
         new is cached for the next time it's said out loud.
         """
+        text = _plain(text)
+
         if not text or not text.strip():
             return None
 
@@ -1035,6 +1040,13 @@ COMMON_PHRASES = (
     "Copied, sir.",
     "Added, sir.",
 )
+
+
+def _plain(text):
+    """Text without a model's formatting marks (phrases.plain), for the voice."""
+    import phrases
+
+    return phrases.plain(text)
 
 
 def speak(text):
