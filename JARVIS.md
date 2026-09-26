@@ -1273,6 +1273,27 @@ window shows, hands the folder over again, which a running Cursor always
 honours. The Start-menu list is read once, with no console window: each
 read runs PowerShell, which flashed one from the .exe.
 
+### The file hologram - `actions/file_hologram.py`, `files_panel.py`
+"Show me my files" projects the JARVIS folder beside the HUD, beamed like
+the other panels, as numbered cards: folders by name, then files newest
+first, ten to a page. Numbers are what you say ("summarise file three",
+"open three"), because speech recognition mangles file names; they are
+claimed only while the hologram shows, so "set a timer for five minutes"
+is never taken for a card. Sound-alikes ("file won") count only straight
+after "file" or "number", and "for" never does, so "what is the file for"
+is not file four.
+
+Free throughout: the listing and a file's first three lines come from the
+disk (text, Word, the first pages of a PDF), a picture is shown, and
+anything else says it has no text. Nothing outside the JARVIS folder is
+reachable, JARVIS's own files (folder_organizer.is_protected) and anything
+holding keys or a sign-in are never listed, and opening a program or
+script is refused: a document opens in its own program, a folder opens in
+the hologram. The lean, the cards materialising one by one, the drifting
+scan lines and the slight flicker are drawing only; the text stays legible
+at 150% scaling, and the detail slab covers whichever half the card is not
+in.
+
 ### Start-up: `boot.py`
 Each start plays a systems check on the HUD while he greets you; nothing
 waits for it. The panel fades in, the ticks light round the dial, the rings

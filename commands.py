@@ -39,6 +39,7 @@ from actions import (
     contacts,
     diary,
     documents,
+    file_hologram,
     files,
     folder_guard,
     folder_organizer,
@@ -396,7 +397,7 @@ _FAST_PHRASES = (
       "dismiss the news", "get rid of the news"), "hide_news"),
     (("how many files do i have", "how many files are there",
       "how many files"), "count_files"),
-    (("list my files", "name my files", "read my files", "show me my files",
+    (("list my files", "name my files", "read my files",
       "read out my files", "what files do i have", "what are my files",
       "what are my files called", "whats in my folder",
       "whats in my jarvis folder", "what is in my jarvis folder"),
@@ -3732,7 +3733,7 @@ _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 # Commands recognised on the fast path that no later route may take, though
 # they may name a connected service: a protocol runs OBS's own actions
 # itself, and "initiate stream protocol" is not a request for Agent Mode.
-_SETTLED_HERE = frozenset({"protocol"})
+_SETTLED_HERE = frozenset({"protocol", "file_hologram"})
 
 _PRESENCE = re.compile(
     r"^(?:are\s+you|r\s+u|r\s+you|are\s+u|you)\s+"
@@ -3773,6 +3774,12 @@ def _fast_path(command):
 
     if about:
         return _blank_result("search_reports", text=_original_case(command, about[1]))
+
+    # The file hologram: "show me my files", then "summarise file three",
+    # "open three", "close the files". Numbered cards, so no file is ever
+    # named aloud; the numbers are only claimed while it is showing.
+    if file_hologram.asked(command):
+        return _blank_result("file_hologram")
 
     # Before the phrase table too, so "read my notes about the boiler" is
     # not taken as plain "read my notes".
@@ -5771,6 +5778,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "protocol":
         return _protocol(command)
+
+    if intent == "file_hologram":
+        return _query(intent, lambda: file_hologram.answer(command) or "The files aren't showing, sir.")
 
     if intent == "sensor_question":
         # Asked again here rather than carried through the result, which

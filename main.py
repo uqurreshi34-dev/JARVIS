@@ -15,6 +15,7 @@ from news_panel import NewsPanel
 from quran_panel import QuranPanel
 from radar_panel import RadarPanel
 from sensor_panel import SensorPanel
+from files_panel import FilesPanel
 from hud import IDLE, LISTENING, RECITING, SPEAKING, THINKING, Hud
 from commands import (
     handle_command,
@@ -44,6 +45,7 @@ from PyQt6.QtWidgets import QApplication
 from actions import (
     aircraft,
     places,
+    file_hologram,
     protocols,
     sensors,
     camera,
@@ -822,6 +824,29 @@ def main():
         phone_server.set_sensor_handler(None)
 
     hud.shutdown.connect(sensors_closed)
+
+    # The file hologram, beamed out beside the HUD like the other panels.
+    # file_hologram decides what to show, from the command thread; the
+    # signals carry it onto this one.
+    files_hologram = FilesPanel()
+    files_hologram.set_anchor(hud)
+    files_beam = Beam(files_hologram, hud)
+
+    def files_shown(view):
+        files_hologram.show_view.emit(view)
+        files_beam.shown.emit()
+
+    def files_hidden():
+        files_hologram.hide_view.emit()
+        files_beam.hidden.emit()
+
+    file_hologram.set_listeners(on_view=files_shown, on_hide=files_hidden)
+
+    # A card clicked opens its folder or shows its first lines, quietly:
+    # off this thread, since a big PDF takes a moment to read.
+    files_hologram.card_clicked.connect(
+        lambda number: threading.Thread(target=file_hologram.click, args=(number,), daemon=True).start())
+    hud.shutdown.connect(files_hidden)
 
     def on_files_dropped(paths):
         def load():

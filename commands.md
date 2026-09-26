@@ -180,6 +180,30 @@ Everything lives in `C:\Users\<you>\JARVIS\`. Nothing outside it is touched.
 Saying **"file"** always works. Leaving it off works when the file already
 exists.
 
+### Your files, as a hologram
+
+**Free**: no model call. Every card has a number, so you never have to say
+a file's name.
+
+| Say | Does |
+|---|---|
+| show me my files | projects your JARVIS folder beside the HUD: folders, then files, newest first |
+| show me my reports files | the same, for a folder inside it |
+| what's file three | what it is: a folder and how many items, or a file's type, size and age |
+| summarise file three | its first three lines, on the hologram and aloud (or "it's empty") |
+| what's in file three / what is file three about | the same |
+| three | the same, while the files are showing |
+| open three | a folder: step inside it; a file: opens it in its own program |
+| go back | up a folder |
+| next page / previous page | ten at a time; numbers stay with their files |
+| close the files | puts it away |
+
+Numbers work as words, digits, "number three" or "the third". A picture is
+shown on the hologram; a video or zip has no text to show and says so.
+JARVIS's own files and anything holding a key are never listed, and a
+program or script is never run from here. Clicking a card does the same as
+saying its number.
+
 ## Folders
 
 | Say | Does |
