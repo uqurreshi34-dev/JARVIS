@@ -81,7 +81,7 @@ SAID = {
     "how's the landing": ("room", ("home", "landing")),
     "zoom in on the hall": ("room", ("home", "hall")),
     "what's going on in the living room": ("room", ("home", "front room")),
-    "tell me about the bathroom": ("room", ("home", "bathroom")),
+    "tell me about the landing": ("room", ("home", "landing")),
     "switch the house to home": ("switch", "home"),
 }
 
@@ -90,7 +90,8 @@ for spoken, meant in SAID.items():
 
 for spoken in ("tell me about the kitchen sink", "what's the temperature in the kitchen", "show me my files",
                "set a timer for five minutes", "open chrome", "how are you", "show me the news",
-               "what's the weather at home", "close it", "remind me to clean the kitchen", "go home"):
+               "what's the weather at home", "close it", "remind me to clean the kitchen", "go home",
+               "tell me about the bathroom"):
     check(house.asked(spoken) is None, f"left alone: {spoken!r} -> {house.asked(spoken)}")
 
 check(not os.path.exists(config_path), "asking what was said writes nothing")
@@ -99,9 +100,12 @@ check(not os.path.exists(config_path), "asking what was said writes nothing")
 
 said = house.show()
 check(os.path.exists(config_path), "the first show writes a starter house.json")
-check(said == "Your house, sir: six rooms over two floors, no sensors online.", f"and says what is there ({said!r})")
+check(said == "Your house, sir: two rooms, a kitchen and a landing over two floors, no sensors online.",
+      f"and says what is there, rooms counted as rooms ({said!r})")
 view = shown[-1]
-check(len(view["rooms"]) == 6 and view["floors"] == [0, 1] and view["title"] == "HOME", "the view has the plan")
+check(len(view["rooms"]) == 5 and view["floors"] == [0, 1] and view["title"] == "HOME", "the view has the plan")
+check(view["counts"] == {"room": 2, "kitchen": 1, "landing": 1}, f"a hall is a passage, not a room ({view['counts']})")
+check(not any("bathroom" in room["name"] for room in view["rooms"]), "and the starter has no bathroom")
 check(view["boards"]["room"]["state"] == "waiting" and view["boards"]["cam"]["camera"],
       "the board and camera it names are waiting to report")
 check(folder_organizer.is_protected("house.json") and folder_organizer.is_protected(".jarvis-house.json"),
@@ -137,8 +141,22 @@ check(shown[-1]["boards"]["room"]["state"] == "live" and shown[-1]["boards"]["ro
 
 sensors.report({"name": "garage", "temperature": 12.0})
 said = house.show()
-check(said.endswith("The garage sensor is not on the plan yet; add it to house.json.")
+check(said.endswith("The garage sensor is not on the plan yet; name it after a room, or add it to house.json.")
       and [item["name"] for item in shown[-1]["unplaced"]] == ["garage"], f"a board not on the plan says so ({said!r})")
+
+# A board named after a room is in it, with nothing added to house.json.
+sensors.report({"name": "kitchen", "temperature": 19.5, "humidity": 55})
+drawn = house.render("home")
+kitchen = next(room for room in drawn["rooms"] if room["name"] == "kitchen")
+check([board["name"] for board in kitchen["boards"]] == ["kitchen"] and drawn["boards"]["kitchen"]["room"] == "kitchen",
+      "a board called kitchen lights the kitchen, found by its name")
+check(house.describe_room("home", "kitchen") == "Kitchen: 19.5 degrees, 55 percent humidity, sir.",
+      f"and the kitchen reads it ({house.describe_room('home', 'kitchen')!r})")
+sensors.report({"name": "hallway", "temperature": 18.0})
+check("hallway" in [item["name"] for item in house.render("home")["unplaced"]],
+      "a passage never takes a board: a hallway board is not on the plan")
+check(house.spoken_spaces({"room": 7, "kitchen": 1, "landing": 1}) == "seven rooms, a kitchen and a landing",
+      "seven rooms, a kitchen and a landing, as it is said")
 
 # ---- rooms ----------------------------------------------------------------------------------------------
 
@@ -147,8 +165,8 @@ check(said == "My room: 21.4 degrees, 48 percent humidity, someone there, moveme
               "the street camera isn't connected yet, sir.", f"a room's readings, movement and camera ({said!r})")
 check(shown[-1]["focus"] == "my room", "and it comes into focus")
 
-said = house.answer("show me the kitchen")
-check(said == "Kitchen has no sensor yet, sir." and shown[-1]["focus"] == "kitchen", f"a room with no sensor ({said!r})")
+said = house.answer("show me the front room")
+check(said == "Front room has no sensor yet, sir." and shown[-1]["focus"] == "front room", f"a room with no sensor ({said!r})")
 
 sensors.report({"name": "cam", "event": "online"})
 check(house.describe_room("home", "my room").endswith("the street camera is online, sir."), "a camera that reports is online")

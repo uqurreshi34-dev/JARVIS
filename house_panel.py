@@ -89,7 +89,7 @@ def _tint(colour, alpha):
 
 def hints(view):
     """The foot's SAY: line, longest first, named from this house's own rooms."""
-    rooms = (view or {}).get("rooms") or []
+    rooms = [room for room in (view or {}).get("rooms") or [] if room.get("kind") != "passage"]
     with_boards = [room["name"] for room in rooms if room["boards"]]
     first = (with_boards or [room["name"] for room in rooms] or ["my room"])[0]
     other = next((room["name"] for room in rooms if room["name"] != first), None)
@@ -451,7 +451,7 @@ class HousePanel(QWidget):
         boards = [board for board in (view.get("boards") or {}).values() if not board["camera"]]
         online = sum(1 for board in boards if board["state"] in ("live", "quiet"))
         floors = len(view.get("floors") or [])
-        rooms = len(view.get("rooms") or [])
+        counts = view.get("counts") or {"room": len(view.get("rooms") or [])}
 
         chip = f"{online} ONLINE" if online else "NO SENSORS ONLINE"
         chip_w = small_m.horizontalAdvance(chip) + 22
@@ -472,10 +472,16 @@ class HousePanel(QWidget):
         painter.setPen(_tint(_TEXT, 235))
         painter.drawText(QPointF(chip_rect.left() + 16, chip_rect.center().y() + small_m.ascent() / 2 - 1), chip)
 
-        words = f"{view.get('title', 'HOME')}  -  {rooms} ROOMS" + (f"  -  {floors} FLOORS" if floors > 1 else "")
+        spaces = [f"{counts.get('room', 0)} ROOM{'S' if counts.get('room', 0) != 1 else ''}"]
+
+        for kind in ("kitchen", "landing"):
+            if counts.get(kind):
+                spaces.append(kind.upper() if counts[kind] == 1 else f"{counts[kind]} {kind.upper()}S")
+
+        words = f"{view.get('title', 'HOME')}  -  {', '.join(spaces)}" + (f"  -  {floors} FLOORS" if floors > 1 else "")
         painter.setPen(_tint(_TEXT, 220))
-        painter.drawText(QPointF(left, 33), fitting([words, view.get("title", "HOME")], small_m,
-                                                   chip_rect.left() - 14 - left))
+        painter.drawText(QPointF(left, 33), fitting([words, f"{view.get('title', 'HOME')}  -  {spaces[0]}",
+                                                    view.get("title", "HOME")], small_m, chip_rect.left() - 14 - left))
 
         painter.setPen(QPen(_tint(_ACCENT, 70), 1.0))
         painter.drawLine(QPointF(_MARGIN, _HEADER - 8), QPointF(_WIDTH - _MARGIN, _HEADER - 8))
@@ -590,6 +596,15 @@ class HousePanel(QWidget):
 
     def _paint_floor(self, painter, room, lit):
         shape = self._room_polygon(room)
+
+        if room.get("kind") == "passage":
+            # A corridor or stairs: there so the plan hangs together, and no more.
+            path = QPainterPath()
+            path.addPolygon(shape)
+            path.closeSubpath()
+            painter.fillPath(path, _tint(_ACCENT, 5))
+            return
+
         self._room_shapes.append((room["floor"], room["name"], shape))
         temperature, _humidity, state, _moved = room_readings(self._view, room)
 
@@ -757,6 +772,9 @@ class HousePanel(QWidget):
 
     def _paint_label(self, painter, room, lit):
         """The room's name and readings, standing upright over its middle."""
+        if room.get("kind") == "passage":
+            return
+
         projection = self._projection
         centre = projection.point(room["x"] + room["w"] / 2, room["y"] + room["h"] / 2, room["floor"])
         corners = self._room_polygon(room).boundingRect()
@@ -858,8 +876,10 @@ class HousePanel(QWidget):
 
     def listed(self):
         """Rooms with sensors first, then the rest, then boards not on the plan."""
-        rooms = self._view.get("rooms") or []
-        ordered = sorted(rooms, key=lambda room: (not room["boards"], -room["floor"], room["name"].casefold()))
+        rooms = [room for room in self._view.get("rooms") or [] if room.get("kind") != "passage"]
+        order = {"room": 0, "kitchen": 1, "landing": 2}
+        ordered = sorted(rooms, key=lambda room: (not room["boards"], -room["floor"], order.get(room.get("kind"), 3),
+                                                  room["name"].casefold()))
         return ordered
 
     def _paint_list(self, painter, now):

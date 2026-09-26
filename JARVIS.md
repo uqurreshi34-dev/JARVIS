@@ -1332,6 +1332,13 @@ what they look at). A room with no size is left off rather than guessed.
 else GROUND and FLOOR 1 upwards. A long, narrow house is turned so its
 length runs across the panel, more floors stack closer, and a room too
 narrow for its name (a hall, a landing) is named in the list alone.
+Spaces have kinds (room, kitchen, landing, passage): the header and the
+spoken count say "seven rooms, a kitchen and a landing", and a passage
+is drawn faintly, never counted, listed, named or given a board. There is
+no bathroom kind, and the starter has none: a bathroom is no place for a
+sensor or a map. A board that reports with a room's name or alias as its
+SENSOR_NAME is placed in that room by name alone; one that matches
+nothing is "not on the plan", with the hint to name it after a room.
 Boards report by name, so the same boards carried to another place are
 placed by that place's plan: showing a place makes it the one in use,
 remembered in .jarvis-house.json. The first show writes a starter plan

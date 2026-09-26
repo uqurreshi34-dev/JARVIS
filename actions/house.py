@@ -33,7 +33,13 @@ a board is where in the room it sits (0 to 1 across, 0 to 1 down), and on
 a wall feature or a camera how far along that wall. Boards report by
 name, so a board carried to another place is placed by that place's
 plan: "show me mum's house" shows it and makes it the place in use,
-remembered in .jarvis-house.json.
+remembered in .jarvis-house.json. A board named after a room (SENSOR_NAME
+"kitchen") is in that room without being listed at all.
+
+Each space has a "kind": "room" (the default), "kitchen", "landing", or
+"passage" for a corridor or stairs, drawn faintly so the plan hangs
+together but never counted, listed or named. There is no bathroom kind:
+a bathroom is left off the plan altogether.
 
 Said while nothing else claims it, and never a model call:
 
@@ -63,7 +69,8 @@ GONE_SECONDS = 120.0
 
 # A plan to begin from, written the first time the house is asked for, so
 # there is something to see and a file to change. Only "my room" is known;
-# the rest are a guess to be measured and renamed.
+# the rest are a guess to be measured and renamed. No bathroom: it is not a
+# place for a sensor or a map, and a house.json never needs one.
 STARTER = {
     "active": "home",
     "places": {
@@ -76,18 +83,16 @@ STARTER = {
                  "features": [{"wall": "north", "at": 0.5, "width": 1.5, "kind": "window"},
                               {"wall": "east", "at": 0.8, "width": 0.9, "kind": "door"}],
                  "cameras": [{"name": "cam", "wall": "north", "at": 0.5, "looks": "street"}]},
-                {"name": "landing", "floor": 1, "x": 3.6, "y": 0, "w": 1.6, "h": 6.8,
+                {"name": "landing", "kind": "landing", "floor": 1, "x": 3.6, "y": 0, "w": 1.6, "h": 6.8,
                  "features": [{"wall": "south", "at": 0.5, "width": 1.0, "kind": "door"}]},
-                {"name": "bathroom", "floor": 1, "x": 0, "y": 3.4, "w": 3.6, "h": 3.4,
-                 "features": [{"wall": "east", "at": 0.3, "width": 0.8, "kind": "door"},
-                              {"wall": "west", "at": 0.5, "width": 0.8, "kind": "window"}]},
                 {"name": "front room", "aliases": ["living room", "lounge"], "floor": 0,
                  "x": 0, "y": 0, "w": 3.6, "h": 4.0,
                  "features": [{"wall": "north", "at": 0.5, "width": 1.8, "kind": "window"},
                               {"wall": "east", "at": 0.6, "width": 0.9, "kind": "door"}]},
-                {"name": "hall", "aliases": ["hallway"], "floor": 0, "x": 3.6, "y": 0, "w": 1.6, "h": 6.8,
+                {"name": "hall", "aliases": ["hallway"], "kind": "passage", "floor": 0,
+                 "x": 3.6, "y": 0, "w": 1.6, "h": 6.8,
                  "features": [{"wall": "north", "at": 0.5, "width": 0.9, "kind": "door"}]},
-                {"name": "kitchen", "floor": 0, "x": 0, "y": 4.0, "w": 3.6, "h": 2.8,
+                {"name": "kitchen", "kind": "kitchen", "floor": 0, "x": 0, "y": 4.0, "w": 3.6, "h": 2.8,
                  "features": [{"wall": "east", "at": 0.4, "width": 0.9, "kind": "door"},
                               {"wall": "south", "at": 0.5, "width": 1.2, "kind": "window"}]},
             ],
@@ -96,6 +101,12 @@ STARTER = {
 }
 
 _WALLS = ("north", "east", "south", "west")
+
+# What a space on the plan is. Rooms, the kitchen and a landing are counted,
+# listed and named; a passage (a corridor, a flight of stairs) is drawn,
+# faintly, so the plan hangs together, and is never counted or listed.
+KINDS = ("room", "kitchen", "landing", "passage")
+_COUNTED = ("room", "kitchen", "landing")
 
 _lock = threading.Lock()
 _view = None                # {"place": key, "focus": room name or None} while showing
@@ -272,7 +283,10 @@ def _rooms(place):
             if isinstance(camera, dict) and _key(camera.get("name")) and camera.get("wall") in _WALLS
         ]
 
+        kind = str(raw.get("kind") or "room").strip().casefold()
+
         rooms.append({
+            "kind": kind if kind in KINDS else "room",
             "name": str(raw["name"]).strip(),
             "aliases": [str(alias) for alias in raw.get("aliases") or [] if _key(alias)],
             "floor": int(_number(raw.get("floor"), 0)),
@@ -330,6 +344,28 @@ def render(place_key=None, focus=None):
                 "readings": dict(report["readings"]) if report else {},
             }
 
+    # A board named after a room ("kitchen", SENSOR_NAME in its sketch) is in
+    # that room, in the middle, with nothing to add to house.json.
+    for name, report in heard.items():
+        if name in placed:
+            continue
+
+        room = _find_room(name, [room for room in rooms if room["kind"] != "passage"])
+
+        if room is None:
+            continue
+
+        room["boards"].append({"name": name, "at": [0.78, 0.28]})
+        placed.add(name)
+        boards[name] = {
+            "room": room["name"],
+            "camera": False,
+            "state": _state(report, report["seen_ago"]),
+            "seen_at": now - report["seen_ago"],
+            "moved_at": now - report["moved_ago"] if report["moved_ago"] is not None else None,
+            "readings": dict(report["readings"]),
+        }
+
     unplaced = sorted(name for name in heard if name not in placed)
 
     return {
@@ -342,7 +378,27 @@ def render(place_key=None, focus=None):
         "focus": focus,
         "floors": sorted({room["floor"] for room in rooms}),
         "floor_names": _floor_names(place),
+        "counts": {kind: sum(1 for room in rooms if room["kind"] == kind) for kind in _COUNTED},
     }
+
+
+def spoken_spaces(counts):
+    """"seven rooms, a kitchen and a landing": what a house has, as it is said."""
+    parts = []
+
+    if counts.get("room"):
+        parts.append(_spoken_count(counts["room"], "room"))
+
+    for kind in ("kitchen", "landing"):
+        if counts.get(kind) == 1:
+            parts.append(f"a {kind}")
+        elif counts.get(kind):
+            parts.append(_spoken_count(counts[kind], kind))
+
+    if not parts:
+        return "no rooms"
+
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
 def _floor_names(place):
@@ -580,20 +636,20 @@ def show(place_key=None, focus=None):
     _publish()
 
     drawn = render(key, focus)
-    rooms = drawn["rooms"]
     boards = [board for board in drawn["boards"].values() if not board["camera"]]
     online = sum(1 for board in boards if board["state"] in ("live", "quiet"))
 
     name = "your house" if key == "home" else _spoken_place(key)
     floors = len(drawn["floors"])
-    said = (f"{_first_up(name)}, sir: {_spoken_count(len(rooms), 'room')}"
+    said = (f"{_first_up(name)}, sir: {spoken_spaces(drawn['counts'])}"
             + (f" over {_spoken_count(floors, 'floor')}" if floors > 1 else "")
             + f", {_spoken_count(online, 'sensor')} online.")
 
     if drawn["unplaced"]:
         names = ", ".join(item["name"] for item in drawn["unplaced"])
         said += f" The {names} sensor{'s are' if len(drawn['unplaced']) > 1 else ' is'} not on the plan yet; " \
-                f"add {'them' if len(drawn['unplaced']) > 1 else 'it'} to {CONFIG_NAME}."
+                f"name {'them' if len(drawn['unplaced']) > 1 else 'it'} after a room, or add " \
+                f"{'them' if len(drawn['unplaced']) > 1 else 'it'} to {CONFIG_NAME}."
 
     return said
 
@@ -742,7 +798,8 @@ def follow(board_names):
 
         key = _view["place"]
 
-    rooms = _rooms(places().get(key) or {})
+    drawn = render(key)
+    rooms = drawn["rooms"] if drawn else []
     wanted = {str(name).casefold() for name in board_names or []}
 
     for room in rooms:

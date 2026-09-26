@@ -479,7 +479,12 @@ Rooms are house.json's own names and aliases, so a room is only claimed by
 its name, straight after one of those verbs: "tell me about the kitchen
 sink" is not the kitchen. The first "show me the house" writes a starter
 house.json in the JARVIS folder to edit; sizes are in metres, and
-"floor_names" names the floors as you do ("1st floor"). A board that
+"floor_names" names the floors as you do ("1st floor"). Each space has a
+kind: a room, the kitchen, a landing, or a passage (a corridor, stairs),
+drawn faintly and never counted or listed; bathrooms are left off
+altogether. A board is placed by its own name: call it after a room
+(SENSOR_NAME "kitchen", or "room 7" for a room with that alias) and it
+lights that room, with nothing added to house.json. A board that
 reports but is on no room says so. Tap a room, on the plan or in the list,
 to light it. The file hologram and the house take turns: showing one puts
 the other away. Asking a sensor question ("what's the temperature in the
