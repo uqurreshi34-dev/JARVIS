@@ -1251,6 +1251,15 @@ running, exactly as its shortcut starts it. What is engaged, and each
 protocol's tab ids, are kept in `.jarvis-protocols.json`, so a clean slate
 still knows after a restart. Both files are JARVIS's own and never moved.
 
+The stream protocol keeps the replay buffer running for "clip that" but
+does not save it at the end: the recording already holds those seconds,
+and saving it too made a second copy of the same video. A Cursor started
+cold can open its start window instead of the project it was given, so
+opening a project watches for the project's window and, if only the start
+window shows, hands the folder over again, which a running Cursor always
+honours. The Start-menu list is read once, with no console window: each
+read runs PowerShell, which flashed one from the .exe.
+
 ### Start-up: `boot.py`
 Each start plays a systems check on the HUD while he greets you; nothing
 waits for it. The panel fades in, the ticks light round the dial, the rings

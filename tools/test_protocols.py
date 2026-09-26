@@ -324,6 +324,77 @@ else:
         commands.run_agent = real_agent
         commands.set_confirmation_listener(None)
 
+# ---- Cursor started cold opens the project, not its start window ----------------------------
+
+try:
+    from actions import projects as cursor_projects
+except Exception as error:   # needs Windows' own modules
+    print(f"SKIP Cursor start window (could not import actions.projects: {error})")
+else:
+    cursor_projects._WATCH_INTERVAL = 0.01
+    cursor_projects._START_WINDOW_SECONDS = 0.05
+    cursor_projects._OPEN_WATCH_SECONDS = 1.0
+
+    def watched(windows_over_time):
+        """Run the watcher against Cursor windows that change as it looks."""
+        launches = []
+        frames = iter(windows_over_time)
+        last = [[]]
+
+        def windows():
+            last[0] = next(frames, last[0])
+            return [(index, title) for index, title in enumerate(last[0])]
+
+        real_windows, real_launch = cursor_projects._cursor_windows, cursor_projects._launch
+        cursor_projects._cursor_windows = windows
+        cursor_projects._launch = lambda executable, path: launches.append(path) or True
+
+        try:
+            opened = cursor_projects._see_it_opens("Cursor.exe", r"C:\Users\you\Projects\JARVIS", "jarvis")
+        finally:
+            cursor_projects._cursor_windows, cursor_projects._launch = real_windows, real_launch
+
+        return opened, launches
+
+    opened, launches = watched([[], [], ["Cursor"], ["Cursor"], ["Cursor"], ["Cursor"], ["Cursor"], ["Cursor"]] + [["Cursor"]] * 20)
+    check(launches == [r"C:\Users\you\Projects\JARVIS"],
+          f"Cursor showing only its start window is handed the folder again, once ({launches})")
+
+    opened, launches = watched([[], ["Cursor"], ["main.py - JARVIS - Cursor"]])
+    check(opened and launches == [], "a project window appearing is left alone")
+
+    opened, launches = watched([[]] * 200)
+    check(launches == [], "a Cursor still starting is not hurried")
+
+# The Start-menu list is read once: each read runs PowerShell, which flashed
+# a console window from the .exe.
+made = []
+
+
+class Counted:
+    def __init__(self):
+        made.append(1)
+
+    def launch(self, name):
+        return True
+
+    def close(self, name):
+        return True
+
+
+real_hands = protocols.Hands
+protocols.Hands._apps = Counted()
+fresh = protocols.Hands()
+fresh.launch_app("OBS Studio")
+fresh.close_app("OBS Studio")
+protocols.Hands().launch_app("OBS Studio")
+check(made == [1], f"the program list is read once, not for every step ({len(made)} reads)")
+protocols.Hands._apps = None
+
+source = (ROOT / "actions" / "applications.py").read_text(encoding="utf-8")
+listing = source[source.index("def _load_applications"):source.index("payload = result.stdout")]
+check("CREATE_NO_WINDOW" in listing, "and PowerShell runs with no console window")
+
 # ---- the files are JARVIS's own -----------------------------------------------------------
 
 from actions import folder_organizer  # noqa: E402

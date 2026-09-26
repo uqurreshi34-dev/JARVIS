@@ -404,7 +404,7 @@ Yours to change, in `protocols.json` in your JARVIS folder.
 |---|---|
 | initiate startup protocol | Sky Sports, BBC News and GitHub in the JARVIS Chrome, and your JARVIS project |
 | initiate stream protocol | starts OBS, unmutes the mic, starts the replay buffer and recording |
-| clean slate protocol | undoes whatever is engaged: closes only the tabs he opened, stops recording, saves the replay, closes OBS, then asks "Shall I close the JARVIS project?" (yes closes it; no, or no answer, leaves it open) |
+| clean slate protocol | undoes whatever is engaged: closes only the tabs he opened, stops recording and the replay buffer, closes OBS, then asks "Shall I close the JARVIS project?" (yes closes it; no, or no answer, leaves it open) |
 | clear the stream protocol | undoes just that one |
 
 "Start up protocol" and "clean slate" alone work too. A step that fails is

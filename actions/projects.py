@@ -3,6 +3,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -302,18 +303,68 @@ class ProjectManager:
             print("[JARVIS] could not locate the Cursor executable")
             return None
 
-        try:
-            subprocess.Popen(
-                [executable, project.path],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-        except OSError as error:
-            print(f"[JARVIS] failed to launch Cursor: {error}")
+        if not _launch(executable, project.path):
             return None
 
+        # Cursor started from nothing can open its start window rather than
+        # the folder it was given. Watched from the side, so this returns at
+        # once: if that happens, the folder is handed over again, which a
+        # running Cursor always honours.
+        threading.Thread(
+            target=_see_it_opens,
+            args=(executable, project.path, project.name.casefold()),
+            daemon=True,
+        ).start()
+
         return project
+
+
+# How long a Cursor started cold gets to show the project, and how long its
+# start window may stand alone before the folder is handed over again.
+_OPEN_WATCH_SECONDS = 45.0
+_START_WINDOW_SECONDS = 4.0
+_WATCH_INTERVAL = 1.0
+
+
+def _launch(executable, path):
+    try:
+        subprocess.Popen(
+            [executable, path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError as error:
+        print(f"[JARVIS] failed to launch Cursor: {error}")
+        return False
+
+    return True
+
+
+def _see_it_opens(executable, path, needle):
+    """Hand the folder over once more if Cursor shows only its start window."""
+    started = time.monotonic()
+    alone_since = None
+
+    while time.monotonic() - started < _OPEN_WATCH_SECONDS:
+        time.sleep(_WATCH_INTERVAL)
+
+        titles = [title.casefold() for _, title in _cursor_windows()]
+
+        if any(needle in title for title in titles):
+            return True
+
+        if not titles:
+            continue    # still starting
+
+        alone_since = alone_since or time.monotonic()
+
+        if time.monotonic() - alone_since >= _START_WINDOW_SECONDS:
+            print("[JARVIS] Cursor opened without the project; handing it the folder again")
+            _launch(executable, path)
+            return False
+
+    return False
 
 
 def _cursor_windows():

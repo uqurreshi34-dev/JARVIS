@@ -90,6 +90,9 @@ class ApplicationManager:
             capture_output=True,
             text=True,
             check=True,
+            # No console window flashing up: the installed JARVIS.exe has
+            # none of its own, so PowerShell would open one each time.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
 
         payload = result.stdout.strip()

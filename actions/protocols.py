@@ -219,7 +219,25 @@ class Hands:
 
     Kept apart so the tests can watch what a protocol does without a
     Chrome, a Cursor or an OBS; imported late, since they need Windows.
+    The program and project lists are read once and kept: reading the
+    Start menu runs PowerShell, which is slow, and each new read flashed a
+    console window from the .exe.
     """
+
+    _apps = None
+    _projects = None
+
+    def _applications(self):
+        if Hands._apps is None:
+            from actions.applications import ApplicationManager
+            Hands._apps = ApplicationManager()
+        return Hands._apps
+
+    def _project_manager(self):
+        if Hands._projects is None:
+            from actions.projects import ProjectManager
+            Hands._projects = ProjectManager()
+        return Hands._projects
 
     def open_tabs(self, urls):
         from actions import chrome_tabs
@@ -230,20 +248,16 @@ class Hands:
         return chrome_tabs.close_tabs(ids)
 
     def open_project(self, name):
-        from actions.projects import ProjectManager
-        return ProjectManager().open(name) is not None
+        return self._project_manager().open(name) is not None
 
     def close_project(self, name):
-        from actions.projects import ProjectManager
-        return ProjectManager().close(name) is not None
+        return self._project_manager().close(name) is not None
 
     def launch_app(self, name):
-        from actions.applications import ApplicationManager
-        return bool(ApplicationManager().launch(name))
+        return bool(self._applications().launch(name))
 
     def close_app(self, name):
-        from actions.applications import ApplicationManager
-        return bool(ApplicationManager().close(name))
+        return bool(self._applications().close(name))
 
     def wait_service(self, name, seconds):
         from actions import mcp_services
