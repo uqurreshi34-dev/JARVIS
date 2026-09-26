@@ -125,8 +125,14 @@ class Pretend:
         self.done.append(("close_app", name))
         return True
 
+    reachable = True
+
     def wait_service(self, name, seconds):
         self.done.append(("wait", name))
+        return self.reachable
+
+    def wait_until(self, service, tool, key, equals, text, seconds):
+        self.done.append(("wait_until", tool, key, equals, text))
         return True
 
     open_now = True     # whether what a protocol opened is still on screen
@@ -219,7 +225,7 @@ hands.done.clear()
 plan = protocols.plan()
 check([record["name"] for record in plan.records] == ["stream", "startup"], "a clean slate clears the latest first")
 said = protocols.clear(plan)
-check(hands.done == [("act", "obs-stop-record", None),
+check(hands.done == [("wait", "obs"), ("act", "obs-stop-record", None),
                      ("act", "obs-save-replay-buffer", "obs-get-last-replay-buffer-replay"),
                      ("act", "obs-stop-replay-buffer", None), ("close_app", "OBS Studio"),
                      ("close_tabs", ("tab104", "tab105", "tab106"))],
@@ -247,6 +253,33 @@ check(said == "All clear, sir." and protocols.engaged() == ["startup"] and not a
       f"clearing one protocol leaves the other engaged, its tabs untouched ({said!r})")
 protocols.clear(protocols.plan("startup"))
 check(protocols.plan() is None, "with nothing engaged, there is nothing to clear")
+
+# ---- when OBS cannot be reached -----------------------------------------------------------
+
+# Its connection left over from an OBS that closed: said once, not once a step.
+hands.reachable = False
+hands.done.clear()
+said = protocols.engage("stream")
+check(said == "Stream protocol engaged, sir. One step didn't go through: OBS never connected, so its steps were skipped.",
+      f"OBS unreachable at the start is said once, and its steps are skipped ({said!r})")
+check(not any(step[0] == "act" for step in hands.done), "none of its actions are sent to a dead connection")
+
+hands.done.clear()
+said = protocols.clear(protocols.plan("stream"))
+check(said == "All clear, sir. One step didn't go through: I couldn't reach OBS, so I left it as it was.",
+      f"clearing, OBS unreachable is said once ({said!r})")
+check(("close_app", "OBS Studio") in hands.done and not any(step[0] == "act" for step in hands.done),
+      "its actions are skipped, and closing the program is still asked")
+hands.reachable = True
+
+check(protocols._with_problems("Done, sir.", ["Obs refused it.", "Obs refused it.", "OBS never connected"])
+      == "Done, sir. 2 steps didn't go through: Obs refused it; OBS never connected.",
+      "the same reason twice is said once, with no doubled full stops")
+
+# Waiting until OBS has really stopped before closing it.
+protocols._run([{"service": "obs", "wait_for": "obs-get-record-status", "key": "outputActive", "equals": False, "wait": 15}], {})
+check(hands.done[-1] == ("wait_until", "obs-get-record-status", "outputActive", False, None),
+      "a step can wait until a status says so")
 
 # ---- the Chrome tabs: PUT to open, closed by id ---------------------------------------
 
@@ -401,10 +434,15 @@ class Counted:
     def launch(self, name):
         return True
 
-    def close(self, name):
+    def close(self, name, force=True):
+        closes.append(force)
+        return True
+
+    def is_running(self, name):
         return True
 
 
+closes = []
 real_hands = protocols.Hands
 protocols.Hands._apps = Counted()
 fresh = protocols.Hands()
@@ -412,6 +450,7 @@ fresh.launch_app("OBS Studio")
 fresh.close_app("OBS Studio")
 protocols.Hands().launch_app("OBS Studio")
 check(made == [1], f"the program list is read once, not for every step ({len(made)} reads)")
+check(closes == [False], "a protocol asks a program to close and never forces it (forced, OBS offers safe mode)")
 protocols.Hands._apps = None
 
 source = (ROOT / "actions" / "applications.py").read_text(encoding="utf-8")

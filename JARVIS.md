@@ -1254,6 +1254,16 @@ That record is not believed on its own: a protocol counts as engaged only
 while something it opened -- a tab, the project's window, a program -- is
 still open, so one closed by hand simply engages again.
 
+A program a protocol closes is asked to close, as its close button asks,
+and never forced: forcing OBS is what makes it offer safe mode on its next
+start. Before closing OBS, clean slate waits until OBS says the recording
+and replay buffer have really stopped (`wait_for` steps), since closing it
+while it finishes the file makes it ask first. A service counts as ready
+only while its `live` status answers: OBS's connector runs on after OBS
+closes, answering "Not connected", so a connection left over like that is
+closed and made again. A service that cannot be reached is named once and
+its other steps skipped, rather than each failing aloud.
+
 The stream protocol keeps the replay buffer running for "clip that" but
 does not save it at the end: the recording already holds those seconds,
 and saving it too made a second copy of the same video. A Cursor started

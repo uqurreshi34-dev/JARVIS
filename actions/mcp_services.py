@@ -808,12 +808,46 @@ def connected(name):
     return bool(server and server.client)
 
 
+def ready(name):
+    """Whether [name] is connected and really answering.
+
+    A connector can outlive what it connects to: OBS's keeps running after
+    OBS closes, answering every request with "Not connected". So a service
+    with a "live" status in mcp.json is ready only while that status
+    answers; one without is ready once connected.
+    """
+    server = _servers.get(name)
+
+    if not server or not server.client:
+        return False
+
+    probes = [item["tool"] for item in _live_items(server.entry) if _agent_name(name, item["tool"]) in _tools]
+
+    return not probes or _quiet_call(server, probes[0]) is not None
+
+
+def _drop(name):
+    """Close a connection that no longer answers, so the next try starts afresh."""
+    server = _servers.get(name)
+
+    if server is None:
+        return
+
+    if server._stop is not None and _loop is not None:
+        _loop.call_soon_threadsafe(server._stop.set)
+
+    server.client = None
+    server.retry_at = 0.0
+
+
 def connect_now(name, wait_seconds=30.0, step=2.0):
     """Connect [name] now rather than at its next retry, waiting up to [wait_seconds].
 
     For a program just started by a protocol -- OBS takes a few seconds to
     open its connection -- so its first action need not wait out the
-    minute-long retry meant for a service that is simply closed.
+    minute-long retry meant for a service that is simply closed. A
+    connection left over from before, that no longer answers, is closed and
+    made again rather than trusted.
     """
     deadline = time.monotonic() + wait_seconds
 
@@ -821,7 +855,10 @@ def connect_now(name, wait_seconds=30.0, step=2.0):
         tools(include_actions=True)
 
         if connected(name):
-            return True
+            if ready(name):
+                return True
+
+            _drop(name)
 
         if time.monotonic() >= deadline:
             return False
@@ -831,6 +868,42 @@ def connect_now(name, wait_seconds=30.0, step=2.0):
 
         if server is not None:
             server.retry_at = 0.0
+
+
+def wait_until(name, tool, key=None, equals=None, text=None, wait_seconds=15.0, step=0.5):
+    """Ask a read-only status tool until it says what is wanted. True if it did.
+
+    [key] and [equals] for a JSON answer ({"outputActive": false}); [text]
+    for one in words ("is inactive"). For a protocol that must not close OBS
+    while it is still finishing a recording.
+    """
+    server = _servers.get(name)
+
+    if not server or not server.client or _agent_name(name, tool) not in _tools:
+        return False
+
+    deadline = time.monotonic() + wait_seconds
+
+    while True:
+        answer = _quiet_call(server, tool)
+
+        if answer is not None:
+            if text is not None and re.search(rf"\b{re.escape(_plain(text))}\b", _plain(answer)):
+                return True
+
+            if key is not None:
+                try:
+                    data = json.loads(answer)
+                except ValueError:
+                    data = None
+
+                if isinstance(data, dict) and data.get(key) == equals:
+                    return True
+
+        if time.monotonic() >= deadline:
+            return False
+
+        time.sleep(step)
 
 
 def act(server_name, tool, arguments=None, then=None):

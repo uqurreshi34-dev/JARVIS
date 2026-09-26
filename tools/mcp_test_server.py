@@ -55,7 +55,13 @@ def record_status() -> str:
 
     if path and os.path.exists(path):
         with open(path, encoding="utf-8") as handle:
-            return handle.read()
+            status = handle.read()
+
+        # The connector running on after OBS itself has closed.
+        if status == "gone":
+            raise ToolError("Error getting record status: Not connected or identified with OBS WebSocket server")
+
+        return status
 
     return '{"outputActive": false}'
 

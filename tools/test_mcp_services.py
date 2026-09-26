@@ -920,6 +920,35 @@ started = json.loads(mcp_services._quiet_call(mcp_services._servers["test"], "st
 check(started[-1:] == [real], f"and the server is started with it ({started[-1:]})")
 mcp_services.close()
 
+# Ready means answering, not merely connected: OBS's connector runs on after
+# OBS closes, and answers everything with "Not connected".
+write_config({"test": {"command": sys.executable, "args": [SERVER], "env": {"STATUS": "${JARVIS_TEST_STATUS}"},
+                       "allowed_actions": ["create_note"], "confirm_actions": False,
+                       "live": [{"tool": "record_status", "active": "outputActive", "label": "REC"}]}})
+os.environ["JARVIS_TEST_STATUS"] = STATUS
+with open(STATUS, "w", encoding="utf-8") as handle:
+    handle.write("gone")
+mcp_services.tools()
+check(mcp_services.connected("test") and not mcp_services.ready("test"),
+      "a connector whose program has gone is connected but not ready")
+first = mcp_services._servers["test"].client
+check(not mcp_services.connect_now("test", wait_seconds=1.5, step=0.5), "and waiting for it gives up once its time is up")
+with open(STATUS, "w", encoding="utf-8") as handle:
+    json.dump({"outputActive": True}, handle)
+check(mcp_services.connect_now("test", wait_seconds=10, step=0.5) and mcp_services.ready("test")
+      and mcp_services._servers["test"].client is not first,
+      "once the program is back, a fresh connection is made rather than the dead one trusted")
+
+check(not mcp_services.wait_until("test", "record_status", key="outputActive", equals=False, wait_seconds=0.6, step=0.2),
+      "waiting for a recording to stop waits while it is still running")
+with open(STATUS, "w", encoding="utf-8") as handle:
+    json.dump({"outputActive": False}, handle)
+check(mcp_services.wait_until("test", "record_status", key="outputActive", equals=False, wait_seconds=3, step=0.2),
+      "and is done once it has")
+check(mcp_services.wait_until("test", "replay_status", text="is inactive", wait_seconds=3, step=0.2),
+      "a status in words is waited for too")
+mcp_services.close()
+
 write_config({"off": {"command": sys.executable, "args": [SERVER], "disabled": True}})
 check(mcp_services.configured() == (), "a disabled entry is ignored")
 

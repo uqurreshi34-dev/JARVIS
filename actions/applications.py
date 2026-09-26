@@ -32,6 +32,9 @@ _MIN_TOKEN_LENGTH = 3
 
 
 _CLOSE_TIMEOUT = 5.0
+
+# How long a program asked to close, and never forced, gets to go.
+_ASK_TIMEOUT = 12.0
 _TERMINATE_TIMEOUT = 3.0
 _POLL_INTERVAL = 0.2
 
@@ -244,7 +247,12 @@ class ApplicationManager:
         app = self.find(name)
         return bool(app and self._match_processes(app))
 
-    def close(self, name):
+    def close(self, name, force=True):
+        """Close a program's windows. With [force], end it if they stay open.
+
+        Without [force] it is only asked, as clicking its close button asks:
+        ending OBS mid-question is what makes it offer safe mode next time.
+        """
         app = self.find(name)
 
         if not app:
@@ -265,10 +273,10 @@ class ApplicationManager:
         # Success is the window going away, not the process exiting. Packaged
         # apps run inside a shared host that outlives them, so waiting for
         # the process would report failure on every UWP application.
-        gone = self._wait_for_windows(targets, _CLOSE_TIMEOUT)
+        gone = self._wait_for_windows(targets, _CLOSE_TIMEOUT if force else _ASK_TIMEOUT)
 
-        if gone:
-            return True
+        if gone or not force:
+            return gone
 
         # The windows are still there, so fall back to ending the processes
         # that matched on identity rather than on a window title.

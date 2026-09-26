@@ -29,12 +29,19 @@ do more than asking for each step in turn could:
     {"project": name}                  a Cursor project
     {"app": name}                      a program, by its Start-menu name
     {"service": name, "wait": secs}    wait for a connected service to connect
+                                       and really answer
+    {"service": s, "wait_for": status tool, "key": k, "equals": v}
+    {"service": s, "wait_for": status tool, "text": words}
+                                       wait until a status says so -- OBS's
+                                       recording truly stopped, say
     {"service": s, "tool": t, "arguments": {...}, "then": t2}
                                        one of that service's allowed actions
                                        that runs without asking (mcp.json)
     {"close_tabs": true}               the tabs this protocol opened
     {"close_project": name}            that project's Cursor window
-    {"close_app": name}                that program
+    {"close_app": name}                that program, asked to close and never
+                                       forced (forcing OBS makes it offer safe
+                                       mode next time)
     {"ask": question, "yes": step, "no": step}
                                        a yes or no, with the countdown ring;
                                        an unanswered question does neither.
@@ -61,6 +68,9 @@ STATE_NAME = ".jarvis-protocols.json"
 
 # How long the clean slate's question stands, with the countdown ring.
 ASK_SECONDS = 20
+
+# How long a clean slate gives a service to answer before leaving it be.
+CLEAR_WAIT_SECONDS = 8.0
 
 _lock = threading.Lock()
 _flash_listener = None
@@ -257,7 +267,17 @@ class Hands:
         return bool(self._applications().launch(name))
 
     def close_app(self, name):
-        return bool(self._applications().close(name))
+        apps = self._applications()
+
+        # Not running is already closed.
+        if not apps.is_running(name):
+            return True
+
+        return bool(apps.close(name, force=False))
+
+    def wait_until(self, service, tool, key, equals, text, seconds):
+        from actions import mcp_services
+        return mcp_services.wait_until(service, tool, key=key, equals=equals, text=text, wait_seconds=seconds)
 
     def still_open(self, record):
         """Whether anything a protocol opened is still there.
@@ -320,7 +340,13 @@ def _do(step, record):
         return None if hands.close_project(str(step["close_project"])) else f"the {step['close_project']} project didn't close"
 
     if "close_app" in step:
-        return None if hands.close_app(str(step["close_app"])) else f"{step['close_app']} didn't close"
+        return None if hands.close_app(str(step["close_app"])) else f"{step['close_app']} is still open; it may be asking you something"
+
+    if "service" in step and "wait_for" in step:
+        seconds = float(step.get("wait") or 15)
+        done = hands.wait_until(str(step["service"]), str(step["wait_for"]), step.get("key"),
+                                step.get("equals"), step.get("text"), seconds)
+        return None if done else f"{step['service']} didn't finish in time"
 
     if "service" in step and "tool" not in step:
         seconds = float(step.get("wait") or 30)
@@ -335,18 +361,44 @@ def _do(step, record):
     return f"a step I don't recognise ({', '.join(sorted(step))})"
 
 
-def _run(steps, record):
-    """Do each step in turn. Returns the reasons the ones that mattered failed."""
+def _run(steps, record, clearing=False):
+    """Do each step in turn. Returns the reasons the ones that mattered failed.
+
+    A service that cannot be reached is said once, and its other steps are
+    skipped, rather than each failing on its own. Clearing, a service is
+    first given a moment to answer: its connection may be left over from
+    an OBS that has since closed and opened again.
+    """
     problems = []
+    unreachable = set()
+    checked = set()
 
     for step in steps if isinstance(steps, list) else []:
         if not isinstance(step, dict) or "ask" in step:
             continue
 
+        service = str(step["service"]) if "service" in step else None
+
+        if service in unreachable:
+            continue
+
+        if clearing and service and service not in checked:
+            checked.add(service)
+
+            if not hands.wait_service(service, CLEAR_WAIT_SECONDS):
+                unreachable.add(service)
+                problems.append(f"I couldn't reach {_named_service(service)}, so I left it as it was")
+                continue
+
         try:
             problem = _do(step, record)
         except Exception as error:
             problem = f"something went wrong ({error})"
+
+        if service and problem and "tool" not in step and "wait_for" not in step:
+            # Waiting for the service failed: nothing else of it can work.
+            unreachable.add(service)
+            problem = f"{_named_service(service)} never connected, so its steps were skipped"
 
         if problem and not step.get("optional"):
             problems.append(problem)
@@ -354,14 +406,27 @@ def _run(steps, record):
     return problems
 
 
+def _named_service(service):
+    """"OBS" as it is said, not "Obs"."""
+    return service.upper() if len(service) <= 4 else service.replace("_", " ").capitalize()
+
+
 def _with_problems(sentence, problems):
-    if not problems:
+    reasons = []
+
+    for problem in problems:
+        reason = str(problem).strip().rstrip(".").strip()
+
+        if reason and reason not in reasons:
+            reasons.append(reason)
+
+    if not reasons:
         return sentence
 
-    if len(problems) == 1:
-        return f"{sentence} One step didn't go through: {problems[0]}."
+    if len(reasons) == 1:
+        return f"{sentence} One step didn't go through: {reasons[0]}."
 
-    return f"{sentence} {len(problems)} steps didn't go through: {'; '.join(problems)}."
+    return f"{sentence} {len(reasons)} steps didn't go through: {'; '.join(reasons)}."
 
 
 def _spoken(name):
@@ -457,7 +522,7 @@ def clear(the_plan):
     protocols = _protocols()
 
     for record in the_plan.records:
-        the_plan.problems += _run(protocols.get(record["name"], {}).get("clear"), record)
+        the_plan.problems += _run(protocols.get(record["name"], {}).get("clear"), record, clearing=True)
 
     with _lock:
         cleared = {record["name"] for record in the_plan.records}
