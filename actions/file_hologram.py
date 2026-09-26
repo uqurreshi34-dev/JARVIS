@@ -101,7 +101,7 @@ _ORDINALS = {
 # about purpose, and taking it for file four would answer the wrong thing.
 _SOUNDS_LIKE = {"won": 1, "to": 2, "too": 2, "tree": 3, "ate": 8}
 
-_BEFORE_A_NUMBER = ("file", "number", "item", "folder", "card")
+_BEFORE_A_NUMBER = ("file", "number", "item", "folder", "card", "page")
 
 
 def number_in(words):
@@ -230,7 +230,7 @@ def _listed(relative):
         except OSError:
             continue
 
-    folders.sort(key=lambda item: item["name"].casefold())
+    folders.sort(key=lambda item: _natural(item["name"]))
     found.sort(key=lambda item: item["modified"], reverse=True)
 
     items = folders + found
@@ -239,6 +239,11 @@ def _listed(relative):
         item["number"] = number
 
     return items
+
+
+def _natural(name):
+    """Sort key that puts Folder 2 before Folder 10, as a person would."""
+    return [(0, int(part), "") if part.isdigit() else (1, 0, part) for part in re.split(r"(\d+)", name.casefold()) if part]
 
 
 def _size_text(size):
@@ -349,7 +354,8 @@ def asked(text):
     """What a command asks of the hologram, or None if it is not about it.
 
     ("show", folder), ("close", None); and only while it is showing:
-    ("describe", n), ("preview", n), ("open", n), ("page", +1 or -1), ("back", None).
+    ("describe", n), ("preview", n), ("open", n), ("page", +1 or -1), ("turn", n or "first" / "last"),
+    ("where", None), ("back", None). Anything with "page" in it is about pages, never a card.
     """
     said = " ".join(_words(text))
 
@@ -378,12 +384,11 @@ def asked(text):
 
     words = [word for word in said.split() if word not in ("jarvis", "please", "the", "a", "me", "us")]
 
-    if words in (["next", "page"], ["more", "files"], ["show", "more"], ["next"], ["more"], ["page", "down"]):
-        return "page", 1
+    # Pages first, so "page one" turns to page one and never means card one.
+    turned = _page_asked(words)
 
-    if words in (["previous", "page"], ["last", "page"], ["back", "a", "page"], ["go", "back", "a", "page"],
-                 ["previous"], ["page", "up"]):
-        return "page", -1
+    if turned is not None:
+        return turned
 
     if words in (["back"], ["go", "back"], ["up"], ["go", "up"], ["up", "a", "folder"], ["go", "up", "a", "folder"],
                  ["back", "up"], ["parent", "folder"]):
@@ -408,6 +413,87 @@ def asked(text):
     # A bare number, "three" or "file three", while the files are showing.
     if len(words) <= 2:
         return "preview", value
+
+    return None
+
+
+# The words a page command is made of. Anything else in the sentence and it is
+# not one: "open the bbc news page" is for the browser, not the hologram.
+_PAGE_WORDS = ("page", "pages")
+_FORWARD = ("next", "forward", "forwards", "following", "down", "more")
+_BACKWARD = ("previous", "prev", "back", "backward", "backwards", "before", "earlier", "up")
+_PAGE_ENDS = {"first": "first", "last": "last", "final": "last", "end": "last", "start": "first"}
+_PAGE_FILLER = frozenset((
+    "go", "to", "turn", "flip", "move", "skip", "jump", "take", "show", "see", "the", "a", "an", "one", "of", "on",
+    "number", "this", "current", "which", "what", "whats", "am", "i", "we", "are", "is", "it", "at", "files", "file",
+))
+_JUST_FORWARD = (["next"], ["more"], ["more", "files"], ["show", "more"], ["next", "files"])
+_JUST_BACKWARD = (["previous"], ["previous", "files"])
+
+
+def _page_asked(words):
+    """("page", +1 / -1), ("turn", n), ("turn", "first" / "last"), ("where", None), or None."""
+    if words in _JUST_FORWARD:
+        return "page", 1
+
+    if words in _JUST_BACKWARD:
+        return "page", -1
+
+    if not any(word in _PAGE_WORDS for word in words):
+        return None
+
+    known = set(_PAGE_WORDS) | set(_FORWARD) | set(_BACKWARD) | set(_PAGE_ENDS) | _PAGE_FILLER
+    value = number_in(words)
+
+    for index, word in enumerate(words):
+        is_number = (word.isdigit() or word in _WORDS or word in _ORDINALS
+                     or (word in _SOUNDS_LIKE and index and words[index - 1] in _BEFORE_A_NUMBER))
+
+        if word not in known and not is_number:
+            return None
+
+    # "back to page one", "the second page": a page named outright.
+    named = _named_page(words)
+
+    if named is not None:
+        return "turn", named
+
+    # "back a page", "go back one page": a direction, and the "one" is a count.
+    if any(word in _FORWARD for word in words):
+        return "page", 1
+
+    if any(word in _BACKWARD for word in words):
+        return "page", -1
+
+    for word in words:
+        if word in _PAGE_ENDS:
+            return "turn", _PAGE_ENDS[word]
+
+    if value is not None:
+        return "turn", value
+
+    return "where", None
+
+
+def _named_page(words):
+    """The page number said as "page two" / "page number 2" / "second page", or None."""
+    for index, word in enumerate(words):
+        if word not in _PAGE_WORDS:
+            continue
+
+        after = words[index + 1:]
+
+        if after[:1] == ["number"]:
+            after = after[1:]
+
+        if after:
+            said = number_in(["page"] + after[:2])
+
+            if said is not None and (after[0].isdigit() or after[0] in _WORDS or after[0] in _SOUNDS_LIKE):
+                return said
+
+        if index and words[index - 1] in _ORDINALS and words[index - 1] not in _PAGE_ENDS:
+            return _ORDINALS[words[index - 1]]
 
     return None
 
@@ -525,6 +611,50 @@ def page(step):
     return f"Page {spoken_number(wanted + 1)}, sir: {spoken_number(first)} to {spoken_number(last)}."
 
 
+def turn(value):
+    """Go to page [value] (from one), or "first" / "last". Returns what to say."""
+    with _lock:
+        if _view is None:
+            return "The files aren't showing, sir."
+
+        pages = max(1, -(-len(_view["items"]) // PAGE_SIZE))
+        current = _view["page"]
+
+    wanted = {"first": 1, "last": pages}.get(value, value)
+
+    if not isinstance(wanted, int) or wanted < 1 or wanted > pages:
+        return ("There's only one page, sir." if pages == 1
+                else f"There are {spoken_number(pages)} pages, sir.")
+
+    if wanted - 1 == current:
+        return f"This is page {spoken_number(wanted)}, sir."
+
+    return page(wanted - 1 - current)
+
+
+def where():
+    """Which page is showing. Returns what to say."""
+    with _lock:
+        if _view is None:
+            return "The files aren't showing, sir."
+
+        pages = max(1, -(-len(_view["items"]) // PAGE_SIZE))
+        current = _view["page"] + 1
+
+    if pages == 1:
+        return "Everything fits on one page, sir."
+
+    return f"Page {spoken_number(current)} of {spoken_number(pages)}, sir."
+
+
+def navigate(which):
+    """An arrow tapped on the hologram: "back", "previous" or "next"."""
+    if which == "back":
+        return back()
+
+    return page(1 if which == "next" else -1)
+
+
 def _turn_to(value):
     """Show the page holding [value]."""
     with _lock:
@@ -539,7 +669,24 @@ def back():
     if not folder:
         return "This is the top of your JARVIS folder, sir."
 
-    return show("/".join(folder.split("/")[:-1]))
+    parent, left = "/".join(folder.split("/")[:-1]), folder.split("/")[-1]
+    said = show(parent)
+    turned = 0
+
+    # Back on the page of the folder just left, not always page one.
+    with _lock:
+        if _view is not None:
+            number = next((item["number"] for item in _view["items"]
+                           if item["kind"] == "folder" and item["name"] == left), 1)
+            _view["page"] = (number - 1) // PAGE_SIZE
+            turned = _view["page"]
+
+    _publish()
+
+    if turned:
+        return f"Back in {_where(parent)}, sir: page {spoken_number(turned + 1)}."
+
+    return said
 
 
 def describe(value):
@@ -649,6 +796,7 @@ def answer(text):
 
     kind, value = request
     actions = {"show": show, "close": lambda _value: close(), "page": page, "back": lambda _value: back(),
+               "turn": turn, "where": lambda _value: where(),
                "describe": describe, "preview": preview, "open": open_card}
 
     return actions[kind](value)

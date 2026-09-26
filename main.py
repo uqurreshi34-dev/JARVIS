@@ -846,6 +846,9 @@ def main():
     # off this thread, since a big PDF takes a moment to read.
     files_hologram.card_clicked.connect(
         lambda number: threading.Thread(target=file_hologram.click, args=(number,), daemon=True).start())
+    # The arrows on the hologram: back out of a folder, or turn a page.
+    files_hologram.nav_clicked.connect(
+        lambda which: threading.Thread(target=file_hologram.navigate, args=(which,), daemon=True).start())
     hud.shutdown.connect(files_hidden)
 
     def on_files_dropped(paths):

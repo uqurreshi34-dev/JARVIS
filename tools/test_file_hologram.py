@@ -13,8 +13,11 @@ Runs in a sandboxed JARVIS folder. Checked:
   with no text, a picture shown, a folder's contents, a number out of range;
 - open: a folder steps inside and "go back" comes out; a document opens with
   its own program; a program or script is never run;
-- pages of ten, with numbers that stay with their files;
-- the panel draws the cards and a click names the card under it;
+- pages of ten, with numbers that stay with their files; page words
+  ("page one", "go to previous page") are pages, never a card; folders in a
+  person's order, and go back returns to the page a folder was on;
+- the panel draws the cards and a click names the card under it; the arrows
+  show only where there is somewhere to go, and a tap on one turns the page;
 - through commands: no model call, and "show me my files" is the hologram.
 
     python tools/test_file_hologram.py
@@ -121,6 +124,19 @@ SAID = {
     "open file too": ("open", 2),
     "next page": ("page", 1),
     "previous page": ("page", -1),
+    "go to previous page": ("page", -1),
+    "go to the next page": ("page", 1),
+    "go back a page": ("page", -1),
+    "go back one page": ("page", -1),
+    "page one": ("turn", 1),
+    "page 2": ("turn", 2),
+    "go to page to": ("turn", 2),
+    "back to page one": ("turn", 1),
+    "the second page": ("turn", 2),
+    "page number three": ("turn", 3),
+    "first page": ("turn", "first"),
+    "last page": ("turn", "last"),
+    "which page am i on": ("where", None),
     "go back": ("back", None),
     "close the files": ("close", None),
     "close the hologram": ("close", None),
@@ -130,7 +146,7 @@ for spoken, meant in SAID.items():
     check(fh.asked(spoken) == meant, f"{spoken!r} -> {fh.asked(spoken)}")
 
 for spoken in ("what time is it", "set a timer for five minutes", "what is the file for", "open chrome",
-               "remind me to buy two pints of milk", "what's the weather"):
+               "remind me to buy two pints of milk", "what's the weather", "open the bbc news page"):
     check(fh.asked(spoken) is None, f"left alone while showing: {spoken!r}")
 
 # ---- what is said back ----------------------------------------------------------------------------
@@ -181,9 +197,38 @@ check(said.endswith("Say next page for more.") and shown[-1]["pages"] == 2 and l
 check(fh.page(1) == "Page two, sir: eleven to fifteen." and [c["number"] for c in shown[-1]["cards"]] == [11, 12, 13, 14, 15],
       "the next page, numbered on from ten")
 check(fh.page(1) == "That's the last page, sir.", "and no page past the last")
-fh.page(-1)
+check(fh.answer("page one") == "Page one, sir: one to ten." and shown[-1]["page"] == 0,
+      "'page one' turns to page one, and does not describe card one")
+check(shown[-1]["focus"] is None, "with nothing in focus")
+check(fh.answer("page one") == "This is page one, sir.", "'page one' on page one says so")
+check(fh.answer("page three") == "There are two pages, sir.", "a page that isn't there says how many there are")
+check(fh.answer("last page") == "Page two, sir: eleven to fifteen.", "'last page' is the final page")
+check(fh.answer("which page am i on") == "Page two of two, sir.", "and which page it is")
+check(fh.answer("go to previous page") == "Page one, sir: one to ten.", "'go to previous page' turns back")
+check(fh.answer("go to previous page") == "That's the first page, sir.", "and no page before the first")
 fh.preview(12)
 check(shown[-1]["page"] == 1 and shown[-1]["focus"]["number"] == 12, "asking about file twelve turns to its page")
+
+# Folders in a person's order, and back to the page a folder was on.
+import shutil  # noqa: E402
+
+for index in range(1, 11):
+    os.makedirs(os.path.join(folder, f"Archive {index}"))
+
+fh.show("")
+check([card["name"] for card in shown[-1]["cards"][:3]] == ["Archive 1", "Archive 2", "Archive 3"]
+      and shown[-1]["cards"][9]["name"] == "Archive 10", "Archive 2 comes before Archive 10")
+fh.answer("page two")
+check(fh.answer("open thirteen").startswith("The Reports folder, sir"), "a folder on page two opens")
+check(fh.answer("go back") == "Back in your JARVIS folder, sir: page two." and shown[-1]["page"] == 1,
+      "and go back returns to page two, where it was")
+
+for index in range(1, 11):
+    shutil.rmtree(os.path.join(folder, f"Archive {index}"))
+
+fh.show("")
+fh.page(1)
+fh.preview(12)
 
 check(fh.close() == "Files closed, sir." and hidden and not fh.showing(), "close the files puts it away")
 check(fh.asked("what's file three") is None, "and the numbers are nobody's again")
@@ -229,6 +274,50 @@ panel.mousePressEvent(mouse(QEvent.Type.MouseButtonPress, target))
 panel.mouseReleaseEvent(mouse(QEvent.Type.MouseButtonRelease, target))
 check(clicked == [3], f"a click names the card under it, lean and all ({clicked})")
 
+# The arrows: page arrows only where there is a page that way, a back
+# arrow only inside a folder, and a tap turns the page.
+for index in range(3):
+    write(f"more {index}.txt", f"more {index}", now - 3000 - index)
+
+fh.show("")
+app.processEvents()
+panel.render(image, QPoint(0, 0))
+check(sorted(panel._nav_rects) == ["next"], f"page one of two: only the right arrow ({sorted(panel._nav_rects)})")
+
+navigated = []
+panel.nav_clicked.connect(navigated.append)
+arrow = panel._lean().map(panel._nav_rects["next"].center())
+panel.mousePressEvent(mouse(QEvent.Type.MouseButtonPress, arrow))
+panel.mouseReleaseEvent(mouse(QEvent.Type.MouseButtonRelease, arrow))
+check(navigated == ["next"] and clicked == [3], f"a tap on the right arrow is next, not a card ({navigated})")
+
+check(fh.navigate("next") == "Page two, sir: eleven to eighteen.", "and it turns the page")
+app.processEvents()
+panel.render(image, QPoint(0, 0))
+check(sorted(panel._nav_rects) == ["previous"], f"the last page: only the left arrow ({sorted(panel._nav_rects)})")
+
+for index in range(3, 13):
+    write(f"more {index}.txt", f"more {index}", now - 3000 - index)
+
+fh.show("")
+fh.turn(2)
+app.processEvents()
+panel.render(image, QPoint(0, 0))
+check(sorted(panel._nav_rects) == ["next", "previous"], f"a middle page: both arrows ({sorted(panel._nav_rects)})")
+
+fh.show("Reports")
+app.processEvents()
+panel.render(image, QPoint(0, 0))
+check(sorted(panel._nav_rects) == ["back"], f"inside a folder: the back arrow ({sorted(panel._nav_rects)})")
+check(fh.navigate("back").startswith("Your JARVIS folder") and len(shown[-1]["trail"]) == 1, "and a tap on it comes out")
+app.processEvents()
+panel.render(image, QPoint(0, 0))
+check("back" not in panel._nav_rects, "where the back arrow goes")
+
+for index in range(13):
+    os.remove(os.path.join(folder, f"more {index}.txt"))
+
+fh.show("")
 fh.close()
 app.processEvents()
 check(not panel.isVisible(), "and goes when the files are closed")

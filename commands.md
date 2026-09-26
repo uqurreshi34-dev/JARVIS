@@ -194,15 +194,21 @@ a file's name.
 | what's in file three / what is file three about | the same |
 | three | the same, while the files are showing |
 | open three | a folder: step inside it; a file: opens it in its own program |
-| go back | up a folder |
-| next page / previous page | ten at a time; numbers stay with their files |
+| go back | up a folder, back to the page that folder was on |
+| next page / previous page / go to previous page / go back a page | ten at a time; numbers stay with their files |
+| page one / go to page two / the second page | straight to that page |
+| first page / last page | the first or the final page |
+| which page am I on | says which page of how many |
 | close the files | puts it away |
 
 Numbers work as words, digits, "number three" or "the third". A picture is
 shown on the hologram; a video or zip has no text to show and says so.
 JARVIS's own files and anything holding a key are never listed, and a
 program or script is never run from here. Clicking a card does the same as
-saying its number.
+saying its number. Anything with "page" in it is about pages, never a card,
+so "page one" is page one and "file one" is file one. Round arrows in the
+hologram's header can be tapped too: a back arrow inside a folder, and page
+arrows only where there is a page that way.
 
 ## Folders
 

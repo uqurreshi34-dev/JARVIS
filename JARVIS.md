@@ -1281,7 +1281,15 @@ first, ten to a page. Numbers are what you say ("summarise file three",
 claimed only while the hologram shows, so "set a timer for five minutes"
 is never taken for a card. Sound-alikes ("file won") count only straight
 after "file" or "number", and "for" never does, so "what is the file for"
-is not file four.
+is not file four. Page words are read first ("page one", "go to previous
+page", "back to page one", "last page"), and a sentence with "page" in it is
+never a card; a direction wins over a count ("go back one page" is back a
+page), a page named outright wins over a direction ("back to page one").
+Only page vocabulary counts, so "open the bbc news page" is left for the
+browser. Folders sort as a person would (Archive 2 before Archive 10), and
+going back lands on the page the folder was on. The header carries round
+arrows: back inside a folder, previous and next only where there is a page
+that way; tapping one does what saying it does.
 
 Free throughout: the listing and a file's first three lines come from the
 disk (text, Word, the first pages of a PDF), a picture is shown, and

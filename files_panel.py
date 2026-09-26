@@ -36,6 +36,7 @@ _ROWS = 5
 _CARD_H = 58
 _CARD_GAP = 8
 _FOOT = 34
+_ARROW_R = 11               # the round arrow buttons in the header
 
 _LEAN_DEGREES = 6.0         # the projection leans towards the HUD it comes from
 _APPEAR_EACH = 0.055        # seconds between one card materialising and the next
@@ -62,6 +63,7 @@ class FilesPanel(QWidget):
     show_view = pyqtSignal(dict)
     hide_view = pyqtSignal()
     card_clicked = pyqtSignal(int)
+    nav_clicked = pyqtSignal(str)       # "back", "previous" or "next"
     closed = pyqtSignal()
 
     def __init__(self):
@@ -78,6 +80,7 @@ class FilesPanel(QWidget):
         self._drag_offset = None
         self._press = None
         self._card_rects = {}
+        self._nav_rects = {}
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -199,6 +202,12 @@ class FilesPanel(QWidget):
 
         point = self._unlean(event.position())
 
+        # The arrows in the header first: they are never under a card.
+        for which, rect in self._nav_rects.items():
+            if rect.adjusted(-6, -6, 6, 6).contains(point):
+                self.nav_clicked.emit(which)
+                return
+
         for number, rect in self._card_rects.items():
             if rect.contains(point):
                 self.card_clicked.emit(number)
@@ -285,37 +294,95 @@ class FilesPanel(QWidget):
             painter.drawLine(QPointF(x, y), QPointF(x, y + span * dy))
 
     def _paint_header(self, painter):
+        """FILES, where you are, and the arrows.
+
+        A back arrow on the left while inside a folder; page arrows on the
+        right, each drawn only when there is a page that way to go.
+        """
         view = self._view
         title = QFont("Consolas", 12, QFont.Weight.Bold)
         title.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 118)
         small = QFont("Consolas", 7, QFont.Weight.Bold)
         title_m, small_m = QFontMetrics(title), QFontMetrics(small)
+        middle = 29
+        self._nav_rects = {}
+
+        trail_parts = view.get("trail") or ["JARVIS"]
+        left = _MARGIN + 18
+
+        if len(trail_parts) > 1:
+            self._nav_rects["back"] = self._paint_arrow(painter, QPointF(left + _ARROW_R - 4, middle), -1, _FOLDER)
+            left += 2 * _ARROW_R + 6
 
         painter.setFont(title)
         painter.setPen(self._tint(_ACCENT, 240))
-        painter.drawText(QPointF(_MARGIN + 18, 34), "FILES")
+        painter.drawText(QPointF(left, 34), "FILES")
+        left += title_m.horizontalAdvance("FILES") + 14
 
-        trail = " / ".join(view.get("trail") or ["JARVIS"]).upper()
-        left = _MARGIN + 18 + title_m.horizontalAdvance("FILES") + 14
-        count = view.get("count", 0)
-        right_words = f"{count} ITEM{'S' if count != 1 else ''}"
-
-        if view.get("pages", 1) > 1:
-            right_words = f"PAGE {view['page'] + 1}/{view['pages']}  -  " + right_words
-
-        right_words = fitting([right_words, right_words.split("  -  ")[0]], small_m, 150)
         right = _WIDTH - _MARGIN - 18
+        pages, page = view.get("pages", 1), view.get("page", 0)
+
+        if pages > 1:
+            # Room is kept for both arrows, so the page words never jump.
+            next_centre = QPointF(right - _ARROW_R, middle)
+
+            if page < pages - 1:
+                self._nav_rects["next"] = self._paint_arrow(painter, next_centre, 1, _ACCENT)
+
+            words = f"PAGE {page + 1} OF {pages}"
+            words_right = right - 2 * _ARROW_R - 8
+            painter.setFont(small)
+            painter.setPen(self._tint(_TEXT, 230))
+            painter.drawText(QPointF(words_right - small_m.horizontalAdvance(words), 33), words)
+
+            previous_centre = QPointF(words_right - small_m.horizontalAdvance(words) - 8 - _ARROW_R, middle)
+
+            if page > 0:
+                self._nav_rects["previous"] = self._paint_arrow(painter, previous_centre, -1, _ACCENT)
+
+            right = previous_centre.x() - _ARROW_R
+
+        count = view.get("count", 0)
+        trail = " / ".join(trail_parts).upper()
+        items = f"{count} ITEM{'S' if count != 1 else ''}"
+        room = right - 14 - left
 
         painter.setFont(small)
-        painter.setPen(self._tint(_DIM, 230))
-        painter.drawText(QPointF(right - small_m.horizontalAdvance(right_words), 33), right_words)
-
-        room = right - small_m.horizontalAdvance(right_words) - 14 - left
         painter.setPen(self._tint(_TEXT, 220))
-        painter.drawText(QPointF(left, 33), fitting([trail, trail.split(" / ")[-1]], small_m, room))
+        painter.drawText(QPointF(left, 33), fitting([f"{trail}  -  {items}", trail, trail.split(" / ")[-1]], small_m, room))
 
         painter.setPen(QPen(self._tint(_ACCENT, 70), 1.0))
         painter.drawLine(QPointF(_MARGIN, _HEADER - 10), QPointF(_WIDTH - _MARGIN, _HEADER - 10))
+
+    def _paint_arrow(self, painter, centre, direction, colour):
+        """A round arrow button, pulsing softly so it reads as something to press. Returns its rect."""
+        pulse = 0.5 + 0.5 * math.sin(_now() * 3.2)
+        ring = QRectF(centre.x() - _ARROW_R, centre.y() - _ARROW_R, 2 * _ARROW_R, 2 * _ARROW_R)
+
+        painter.save()
+        glow = QPainterPath()
+        glow.addEllipse(ring.adjusted(-3, -3, 3, 3))
+        painter.fillPath(glow, self._tint(colour, 18 + 22 * pulse))
+
+        face = QPainterPath()
+        face.addEllipse(ring)
+        painter.fillPath(face, QColor(4, 12, 20, 230))
+        painter.setPen(QPen(self._tint(colour, 150 + 80 * pulse), 1.4))
+        painter.drawPath(face)
+
+        span = _ARROW_R * 0.42
+        tip = QPointF(centre.x() + direction * span * 0.7, centre.y())
+        tail_x = centre.x() - direction * span * 0.5
+        chevron = QPainterPath()
+        chevron.moveTo(tail_x, centre.y() - span)
+        chevron.lineTo(tip)
+        chevron.lineTo(tail_x, centre.y() + span)
+        painter.setPen(QPen(self._tint(colour, 245), 2.0, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.drawPath(chevron)
+        painter.restore()
+
+        return ring
 
     def _paint_card(self, painter, rect, card, appear, lit):
         if appear <= 0.0:
@@ -530,9 +597,22 @@ class FilesPanel(QWidget):
         painter.setPen(self._tint(_DIM, 200))
 
         room = _WIDTH - 2 * (_MARGIN + 18)
+        # The hint names what can be said here: pages only when there are
+        # some, going back only inside a folder.
+        view = self._view
+        extra = []
+
+        if view.get("pages", 1) > 1:
+            extra.append("PREVIOUS PAGE" if view.get("page", 0) == view["pages"] - 1 else "NEXT PAGE")
+
+        if len(view.get("trail") or []) > 1:
+            extra.append("GO BACK")
+
+        full = ["WHAT'S FILE 3", "SUMMARISE FILE 3", "OPEN 3"] + extra + ["CLOSE FILES"]
         hint = fitting([
-            "SAY: WHAT'S FILE 3 - SUMMARISE FILE 3 - OPEN 3 - NEXT PAGE - CLOSE FILES",
-            "SAY: SUMMARISE FILE 3 - OPEN 3 - CLOSE FILES",
+            "SAY: " + " - ".join(full),
+            "SAY: " + " - ".join(["SUMMARISE FILE 3", "OPEN 3"] + extra + ["CLOSE FILES"]),
+            "SAY: " + " - ".join(["SUMMARISE FILE 3"] + extra[:1] + ["CLOSE FILES"]),
             "SAY: SUMMARISE FILE 3",
         ], small_m, room)
         painter.drawText(QPointF((_WIDTH - small_m.horizontalAdvance(hint)) / 2, _HEIGHT - 16), hint)
