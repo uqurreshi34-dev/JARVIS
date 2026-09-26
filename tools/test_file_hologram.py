@@ -3,7 +3,9 @@
 Runs in a sandboxed JARVIS folder. Checked:
 
 - what is said: show, show a subfolder's files, close; numbers as digits,
-  words, ordinals and "number three", with sound-alikes only after "file";
+  words, ordinals and "number three", with sound-alikes only after a card
+  word ("file", "image", "document"...), and "for" as four only without
+  "the" before it ("image for", not "what is the file for");
   and the numbers are claimed only while the hologram is showing, so "what
   time is it" or "set a timer for five minutes" still reach their commands;
 - what is listed: folders by name, then files newest first, numbered; never
@@ -127,6 +129,12 @@ SAID = {
     "let me see file four": ("show_card", 4),
     "display number three": ("show_card", 3),
     "show me folder three": ("show_card", 3),
+    "show me image for": ("show_card", 4),
+    "show me image six": ("show_card", 6),
+    "summarise document for": ("preview", 4),
+    "open picture 3": ("open", 3),
+    "closed the files": ("close", None),
+    "close all files": ("close", None),
     "open three": ("open", 3),
     "open number two": ("open", 2),
     "open file too": ("open", 2),
@@ -154,7 +162,8 @@ for spoken, meant in SAID.items():
     check(fh.asked(spoken) == meant, f"{spoken!r} -> {fh.asked(spoken)}")
 
 for spoken in ("what time is it", "set a timer for five minutes", "what is the file for", "open chrome",
-               "remind me to buy two pints of milk", "what's the weather", "open the bbc news page"):
+               "remind me to buy two pints of milk", "what's the weather", "open the bbc news page",
+               "what is this file for", "what is the image for"):
     check(fh.asked(spoken) is None, f"left alone while showing: {spoken!r}")
 
 # ---- what is said back ----------------------------------------------------------------------------

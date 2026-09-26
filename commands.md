@@ -202,7 +202,8 @@ a file's name.
 | which page am I on | says which page of how many |
 | close the files | puts it away |
 
-Numbers work as words, digits, "number three" or "the third". A picture is
+Numbers work as words, digits, "number three" or "the third", and a card
+can be called what it is ("image four", "document two"). A picture is
 shown on the hologram; a video or zip has no text to show and says so.
 JARVIS's own files and anything holding a key are never listed, and a
 program or script is never run from here. Clicking a card does the same as

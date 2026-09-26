@@ -97,18 +97,29 @@ _ORDINALS = {
 
 
 # How speech recognition sometimes writes a number. Believed only straight
-# after "file" or "number". Not "for": "what is the file for" is a question
-# about purpose, and taking it for file four would answer the wrong thing.
+# after a word that names a card ("file", "image", "number"...). "for" is
+# believed only without "the" before that word: "show me image for" is
+# image four, "what is the file for" asks what a file is for.
 _SOUNDS_LIKE = {"won": 1, "to": 2, "too": 2, "tree": 3, "ate": 8}
+_FOUR_LIKE = {"for": 4, "fore": 4}
 
-_BEFORE_A_NUMBER = ("file", "number", "item", "folder", "card", "page")
+# What a card may be called, by what it is.
+_CARD_NOUNS = ("file", "files", "number", "item", "folder", "card", "image", "images", "picture", "photo", "pic",
+               "video", "document", "doc", "pdf", "spreadsheet", "song", "track", "clip")
+_BEFORE_A_NUMBER = _CARD_NOUNS + ("page",)
 
 
-def number_in(words):
-    """The number said in [words] (a list), or None: "3", "three", "twenty one", "third"."""
+def number_in(words, four_ok=False):
+    """The number said in [words] (a list), or None: "3", "three", "twenty one", "third".
+
+    [four_ok]: "for" straight after a card word counts as four.
+    """
     for index, word in enumerate(words):
         if word in _SOUNDS_LIKE and index and words[index - 1] in _BEFORE_A_NUMBER:
             return _SOUNDS_LIKE[word]
+
+        if four_ok and word in _FOUR_LIKE and index and words[index - 1] in _BEFORE_A_NUMBER:
+            return _FOUR_LIKE[word]
 
         if word.isdigit():
             return int(word)
@@ -341,7 +352,7 @@ _SHOW_IN = re.compile(
     r"(?:(?:the\s+)?files\s+in\s+(?:my\s+|the\s+)?(?P<a>.+?)(?:\s+folder)?|(?:my\s+|the\s+)?(?P<b>.+?)\s+(?:folder\s+)?files)(?:\s+please)?$"
 )
 _CLOSE = re.compile(
-    r"^(?:(?:jarvis|please|ok|okay)\s+)*(?:close|hide|put\s+away|dismiss|clear)\s+(?:my\s+|the\s+)?"
+    r"^(?:(?:jarvis|please|ok|okay)\s+)*(?:close[ds]?|hide|put\s+away|dismiss|clear)\s+(?:my\s+|the\s+|all\s+)?"
     r"(?:files|file\s+hologram|files\s+hologram|hologram)(?:\s+please)?$"
 )
 
@@ -397,8 +408,10 @@ def asked(text):
         return "back", None
 
     # The rest name a card: "file three", "number three", "the third", "three".
-    about_a_card = any(word in ("file", "files", "number", "folder", "item", "card") for word in words) or len(words) <= 3
-    value = number_in(words)
+    about_a_card = any(word in _CARD_NOUNS for word in words) or len(words) <= 3
+    # "the file for" is about a file's purpose; "image for" is image four.
+    four_ok = not re.search(r"\b(?:the|this|that|a|an|my|your)\s+[a-z]+\s+fore?\b", said)
+    value = number_in(words, four_ok=four_ok)
 
     if value is None or not about_a_card:
         return None

@@ -1280,8 +1280,11 @@ first, ten to a page. Numbers are what you say ("summarise file three",
 "open three"), because speech recognition mangles file names; they are
 claimed only while the hologram shows, so "set a timer for five minutes"
 is never taken for a card. Sound-alikes ("file won") count only straight
-after "file" or "number", and "for" never does, so "what is the file for"
-is not file four. Page words are read first ("page one", "go to previous
+after a word naming a card ("file", "number", "image", "document", ...);
+"for" counts as four there only without "the" or "this" before that word,
+so "show me image for" is image four but "what is the file for" is not
+file four. "Closed the files", as speech recognition sometimes writes it,
+still closes them. Page words are read first ("page one", "go to previous
 page", "back to page one", "last page"), and a sentence with "page" in it is
 never a card; a direction wins over a count ("go back one page" is back a
 page), a page named outright wins over a direction ("back to page one").
