@@ -47,6 +47,9 @@ _PROTECTED_NAMES = frozenset({
     # report (tools/check_services_no_console.py).
     "mcp-servers.log",
     "mcp-check.txt",
+    # Your protocols, and which are engaged with the tabs each opened.
+    "protocols.json",
+    ".jarvis-protocols.json",
     # The Outlook sign-in; moving it signs calendar sync out.
     "outlook_token_cache.json",
     # Caches, cheap to lose but fetched again over the network if moved.

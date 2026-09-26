@@ -69,6 +69,7 @@ from actions import (
     social,
     tasks,
     project_setup,
+    protocols,
     tripo,
 )
 from actions.screen import describe_capture
@@ -890,6 +891,72 @@ def _confirm_service_action(proposal, summary):
         return f"{lead} {question}"
 
     return question
+
+
+def _protocol(command):
+    """Engage or clear a protocol (actions/protocols.py), speaking as it goes.
+
+    Engaging says so at once and the rest when it is done; OBS can take a
+    few seconds to start. A clean slate does everything but its question
+    first, then asks it with the countdown ring; an unanswered question
+    leaves things as they are.
+    """
+    kind, name = protocols.asked(command) or (None, None)
+
+    if kind == "unknown":
+        return _query("protocol", lambda: f"I don't have a {name} protocol, sir.")
+
+    if kind == "engage":
+        spoken = name.replace("_", " ")
+
+        return _action(
+            "protocol",
+            f"Initiating {spoken} protocol, sir.",
+            lambda: protocols.engage(name),
+            detail=name,
+            timeout=None,
+            success_response=lambda said: said,
+        )
+
+    plan = protocols.plan(name if kind == "clear" else None)
+
+    if plan is None:
+        if kind == "clear":
+            return _query("protocol", lambda: f"The {name.replace('_', ' ')} protocol isn't engaged, sir.")
+
+        return _query("protocol", lambda: "Nothing to clear, sir. No protocol is engaged.")
+
+    def asked_or_done(said):
+        if not plan.question:
+            return said
+
+        # The question comes after the work, so its countdown starts as it is asked.
+        _confirm(
+            "protocol_question",
+            "",
+            lambda: protocols.answer(plan, yes=True),
+            yes_text=phrases.pick("acknowledge"),
+            success_response=lambda words: words,
+            no_action=lambda: _action(
+                "protocol", phrases.pick("acknowledge"),
+                lambda: protocols.answer(plan, yes=False),
+                timeout=None, success_response=lambda words: words,
+            ),
+            timeout=None,
+            lapses_after=protocols.ASK_SECONDS,
+        )
+        return said
+
+    opening = "Initiating clean slate protocol, sir." if kind == "clean_slate" else f"Clearing the {name.replace('_', ' ')} protocol, sir."
+
+    return _action(
+        "protocol",
+        opening,
+        lambda: protocols.clear(plan),
+        detail=name or "clean slate",
+        timeout=None,
+        success_response=asked_or_done,
+    )
 
 
 def _run_agent_investigation(task, actions=False):
@@ -3662,6 +3729,11 @@ _OWN_RECORDS = frozenset({
 
 _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 
+# Commands recognised on the fast path that no later route may take, though
+# they may name a connected service: a protocol runs OBS's own actions
+# itself, and "initiate stream protocol" is not a request for Agent Mode.
+_SETTLED_HERE = frozenset({"protocol"})
+
 _PRESENCE = re.compile(
     r"^(?:are\s+you|r\s+u|r\s+you|are\s+u|you)\s+"
     r"(?:still\s+)?"
@@ -3708,6 +3780,11 @@ def _fast_path(command):
 
     if topic:
         return _blank_result("read_notes", text=_original_case(command, topic))
+
+    # "Initiate startup protocol", "clean slate protocol": the protocols are
+    # the user's own, in protocols.json, and run with no model call.
+    if protocols.asked(command):
+        return _blank_result("protocol")
 
     # Numbers only and three words required, so this cannot claim an
     # ordinary "play" or "read". Parsed again in the handler rather than
@@ -5142,7 +5219,7 @@ def _handle_command(command, *, fast_only=False, probe=False):
     # A question about JARVIS's own records, once recognised, is answered
     # from them: none of the routes below may take it. "What did my research
     # report say about deep sleep" must not start a new research run.
-    own_records = bool(result) and result["intent"] in _OWN_RECORDS
+    own_records = bool(result) and result["intent"] in _OWN_RECORDS | _SETTLED_HERE
 
     if not fast_only and not own_records:
 
@@ -5691,6 +5768,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "presence_check":
         return _query(intent, lambda: phrases.pick("presence"))
+
+    if intent == "protocol":
+        return _protocol(command)
 
     if intent == "sensor_question":
         # Asked again here rather than carried through the result, which

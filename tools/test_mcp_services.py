@@ -759,6 +759,15 @@ said = mcp_services.run_instant(mcp_services.instant("clip that"))
 check(said == "Clipped, sir. Saved as Replay 26 September at 00:02.",
       f"and it is the new file each time, not the one before ({said!r})")
 
+# A protocol's step: one allowed action, done or not, and why not.
+done, made = mcp_services.act("test", "create_note", {"title": "protocol"}, then="last_replay")
+check(done and made and made["name"].startswith("Replay 26 September"), f"a protocol step runs, and can name the file it made ({made})")
+done, why = mcp_services.act("test", "rename_everything", {})
+check(not done and "isn't set to run straight away" in why, f"only an allowed action that runs without asking ({why!r})")
+done, why = mcp_services.act("nowhere", "create_note", {})
+check(not done and "couldn't reach" in why, f"a service that is not there says so ({why!r})")
+check(mcp_services.connected("test") and mcp_services.connect_now("test", wait_seconds=1), "a connected service is ready at once")
+
 real_wait = mcp_services.THEN_SECONDS
 mcp_services.THEN_SECONDS = 1.0
 said = mcp_services.run_instant(mcp_services.instant("clip the lot"))

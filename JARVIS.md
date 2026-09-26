@@ -1226,6 +1226,31 @@ the panel and the announcements can be tried without hardware.
 
 ---
 
+### Protocols - `actions/protocols.py`, `actions/chrome_tabs.py`
+"Initiate startup protocol" opens the morning's sites and your project;
+"stream protocol" starts OBS, unmutes the mic and starts recording; "clean
+slate protocol" undoes whichever are engaged, the most recent first. No
+model call: the fast path takes them, before connected services, so
+"stream protocol" is never mistaken for a request to OBS's Agent Mode.
+
+They are the user's own, in `protocols.json` in the JARVIS folder: each
+has `engage` steps, a `say`, `clear` steps and a `cleared` line, and may
+have `aliases`. A step is only something JARVIS already does -- a tab in
+the JARVIS Chrome, a Cursor project, a program, a connected service's
+allowed action that runs without asking -- so a protocol can never do more
+than asking for each step in turn could. A step may be `optional`; any
+other that fails is named in the reply. One `ask` step per clean slate
+puts a yes or no with the countdown ring after the rest is done, and an
+unanswered question leaves things as they are.
+
+Tabs open in the JARVIS Chrome through its own debugging endpoint (PUT
+/json/new), and JARVIS keeps each tab's id, so a clean slate closes those
+tabs and no others -- not ones you opened, and not your everyday Chrome,
+which never has that endpoint. The JARVIS Chrome is started if it is not
+running, exactly as its shortcut starts it. What is engaged, and each
+protocol's tab ids, are kept in `.jarvis-protocols.json`, so a clean slate
+still knows after a restart. Both files are JARVIS's own and never moved.
+
 ### Start-up: `boot.py`
 Each start plays a systems check on the HUD while he greets you; nothing
 waits for it. The panel fades in, the ticks light round the dial, the rings

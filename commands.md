@@ -395,6 +395,21 @@ changing at all.
 Close it when you are not watching. The feeds are free and shared, and
 the radar keeps asking them for as long as it is open.
 
+## Protocols
+
+A run of things he already does, in one sentence. **Free**: no model call.
+Yours to change, in `protocols.json` in your JARVIS folder.
+
+| Say | Does |
+|---|---|
+| initiate startup protocol | Sky Sports, BBC News and GitHub in the JARVIS Chrome, and your JARVIS project |
+| initiate stream protocol | starts OBS, unmutes the mic, starts the replay buffer and recording |
+| clean slate protocol | undoes whatever is engaged: closes only the tabs he opened, stops recording, saves the replay, closes OBS, then asks "Shall I close the JARVIS project?" (yes closes it; no, or no answer, leaves it open) |
+| clear the stream protocol | undoes just that one |
+
+"Start up protocol" and "clean slate" alone work too. A step that fails is
+named in his reply; the rest still happen.
+
 ## The sensors
 
 Boards on the wifi (see JARVIS.md) report to a panel on top of the HUD,

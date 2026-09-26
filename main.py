@@ -44,6 +44,7 @@ from PyQt6.QtWidgets import QApplication
 from actions import (
     aircraft,
     places,
+    protocols,
     sensors,
     camera,
     contacts,
@@ -920,6 +921,7 @@ def main():
 
     # What services report as live (OBS recording, say), watched quietly.
     mcp_services.set_flash_listener(lambda word: hud.live_flash.emit(str(word)))
+    protocols.set_flash_listener(lambda word: hud.live_flash.emit(str(word)))
     mcp_services.start_live(
         lambda key, label, active, paused, seconds, colour: hud.live_status.emit(
             str(key), str(label), bool(active), bool(paused), float(seconds), str(colour)

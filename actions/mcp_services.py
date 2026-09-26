@@ -800,6 +800,70 @@ def run_instant(match):
     return _filled(match.get("say"), made) or said
 
 
+# ---- protocols: a named run of actions (actions/protocols.py) ----------------
+
+def connected(name):
+    """Whether the service [name] is connected right now."""
+    server = _servers.get(name)
+    return bool(server and server.client)
+
+
+def connect_now(name, wait_seconds=30.0, step=2.0):
+    """Connect [name] now rather than at its next retry, waiting up to [wait_seconds].
+
+    For a program just started by a protocol -- OBS takes a few seconds to
+    open its connection -- so its first action need not wait out the
+    minute-long retry meant for a service that is simply closed.
+    """
+    deadline = time.monotonic() + wait_seconds
+
+    while True:
+        tools(include_actions=True)
+
+        if connected(name):
+            return True
+
+        if time.monotonic() >= deadline:
+            return False
+
+        time.sleep(step)
+        server = _servers.get(name)
+
+        if server is not None:
+            server.retry_at = 0.0
+
+
+def act(server_name, tool, arguments=None, then=None):
+    """Run one action a protocol names. Returns (done, what it made or why not).
+
+    The same limits as an instant phrase: only an allowed action of a
+    service that runs its actions without asking, so a protocol can never
+    do more than saying its steps one by one could. [then] is a read-only
+    tool asked afterwards for the file the action made, as for "clip that".
+    """
+    tools(include_actions=True)
+
+    name = _agent_name(server_name, tool)
+    server = _servers.get(server_name)
+    spoken = server_name.replace("_", " ").capitalize()
+
+    if not server or not server.client:
+        return False, f"I couldn't reach {spoken}"
+
+    if name not in _immediate:
+        return False, f"{tool} isn't set to run straight away on {spoken}"
+
+    follow = then if then and _agent_name(server_name, then) in _tools else None
+    before = _quiet_call(server, follow) if follow else None
+
+    proposal = {"name": name, "server": server_name, "tool": tool, "arguments": dict(arguments or {})}
+
+    if execute(proposal) is None:
+        return False, proposal.get("failure") or f"{spoken} refused it"
+
+    return True, (_made_file(server, follow, before) if follow else None)
+
+
 # How long to wait for what an action made to show up: OBS writes a replay
 # file after saying it will, taking a second or two for a long buffer.
 THEN_SECONDS = 5.0
