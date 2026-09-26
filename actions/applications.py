@@ -239,6 +239,11 @@ class ApplicationManager:
             stderr=subprocess.DEVNULL,
         )
 
+    def is_running(self, name):
+        """Whether the program has a window open now."""
+        app = self.find(name)
+        return bool(app and self._match_processes(app))
+
     def close(self, name):
         app = self.find(name)
 

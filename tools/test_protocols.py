@@ -129,6 +129,11 @@ class Pretend:
         self.done.append(("wait", name))
         return True
 
+    open_now = True     # whether what a protocol opened is still on screen
+
+    def still_open(self, record):
+        return self.open_now
+
     def act(self, service, tool, arguments, then):
         self.done.append(("act", tool, then))
         if tool in self.fail:
@@ -173,7 +178,20 @@ check(hands.done == [("open", "https://www.skysports.com"), ("open", "https://ww
       "each step in order: the three sites, then the project")
 check(flashed[-1:] == ["STARTUP PROTOCOL"], f"and the HUD flashes it ({flashed})")
 check(protocols.engaged() == ["startup"], "it is engaged")
-check(protocols.engage("startup") == "The startup protocol is already engaged, sir.", "and is not engaged twice")
+check(protocols.engage("startup") == "The startup protocol is already engaged, sir. Say clean slate to clear it.",
+      "and is not engaged twice while its tabs or project are still open")
+
+# Everything it opened closed by hand, not by a clean slate: it has ended,
+# and engages again rather than insisting it is still engaged.
+hands.open_now = False
+hands.done.clear()
+said = protocols.engage("startup")
+check(said == "Startup protocol engaged, sir." and ("project", "JARVIS") in hands.done,
+      f"closed by hand, it engages again ({said!r})")
+check(protocols.engaged() == ["startup"], "and is recorded once, not twice")
+hands.open_now = True
+kept_tabs = json.load(open(os.path.join(folder, protocols.STATE_NAME), encoding="utf-8"))["engaged"][0]["tabs"]
+check(kept_tabs == ["tab104", "tab105", "tab106"], f"with the tabs of this time, not the last ({kept_tabs})")
 
 hands.done.clear()
 hands.fail = {"obs-set-input-mute", "obs-start-replay-buffer"}
@@ -188,7 +206,8 @@ hands.fail = set()
 # What is engaged is kept on disk, so a restart still knows.
 with open(os.path.join(folder, protocols.STATE_NAME), encoding="utf-8") as handle:
     kept = json.load(handle)["engaged"]
-check([item["name"] for item in kept] == ["startup", "stream"] and kept[0]["tabs"] == ["tab101", "tab102", "tab103"],
+check([item["name"] for item in kept] == ["startup", "stream"] and kept[0]["tabs"] == ["tab104", "tab105", "tab106"]
+      and kept[0]["projects"] == ["JARVIS"] and kept[1]["apps"] == ["OBS Studio"],
       "what is engaged, and the tabs it opened, survive a restart")
 
 # ---- clearing --------------------------------------------------------------------
@@ -203,7 +222,7 @@ said = protocols.clear(plan)
 check(hands.done == [("act", "obs-stop-record", None),
                      ("act", "obs-save-replay-buffer", "obs-get-last-replay-buffer-replay"),
                      ("act", "obs-stop-replay-buffer", None), ("close_app", "OBS Studio"),
-                     ("close_tabs", ("tab101", "tab102", "tab103"))],
+                     ("close_tabs", ("tab104", "tab105", "tab106"))],
       f"recording stopped, replay saved, OBS closed, then only its own tabs ({hands.done})")
 check(said == "Shall I close the JARVIS project, sir?", f"and the question comes last ({said!r})")
 check(protocols.engaged() == [], "nothing is engaged afterwards")
@@ -224,7 +243,7 @@ protocols.engage("startup")
 protocols.engage("stream")
 hands.done.clear()
 said = protocols.clear(protocols.plan("stream"))
-check(said == "All clear, sir." and protocols.engaged() == ["startup"] and ("close_tabs", ("tab107", "tab108", "tab109")) not in hands.done,
+check(said == "All clear, sir." and protocols.engaged() == ["startup"] and not any(step[0] == "close_tabs" for step in hands.done),
       f"clearing one protocol leaves the other engaged, its tabs untouched ({said!r})")
 protocols.clear(protocols.plan("startup"))
 check(protocols.plan() is None, "with nothing engaged, there is nothing to clear")
@@ -279,8 +298,12 @@ check(ids == ["new1", "new2"] and reason is None, f"tabs open in a running JARVI
 check(FakeChrome.pages["new2"] == "https://www.bbc.co.uk/news", "each to its own site")
 check(chrome_tabs.close_tabs(ids + ["gone"]) == 2 and set(FakeChrome.pages) == {"old1"},
       "closing closes those tabs only; your own stays, and one already gone is no failure")
+real = protocols.Hands()
+check(real.still_open({"tabs": ["old1", "gone"]}), "a protocol whose tab is still open is still there")
+check(not real.still_open({"tabs": ["gone1", "gone2"]}), "one whose tabs were all closed by hand is not")
 server.shutdown()
 check(chrome_tabs.close_tabs(["new1"]) == 0, "with Chrome closed, there is nothing to close and nothing fails")
+check(not real.still_open({"tabs": ["old1"]}), "nor is one whose Chrome was closed")
 
 # ---- through commands -------------------------------------------------------------------
 

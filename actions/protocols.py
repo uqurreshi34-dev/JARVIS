@@ -259,6 +259,31 @@ class Hands:
     def close_app(self, name):
         return bool(self._applications().close(name))
 
+    def still_open(self, record):
+        """Whether anything a protocol opened is still there.
+
+        Closing the tabs and the project by hand, instead of saying "clean
+        slate", leaves the protocol recorded as engaged; that record alone
+        is not believed. Anything unknowable counts as still there.
+        """
+        from actions import chrome_tabs
+
+        if record.get("tabs") and chrome_tabs.running():
+            alive = {tab["id"] for tab in chrome_tabs.tabs()}
+
+            if alive & set(record["tabs"]):
+                return True
+
+        for name in record.get("projects") or ():
+            if self._project_manager().is_open(name):
+                return True
+
+        for name in record.get("apps") or ():
+            if self._applications().is_running(name):
+                return True
+
+        return False
+
     def wait_service(self, name, seconds):
         from actions import mcp_services
         return mcp_services.connect_now(name, wait_seconds=seconds)
@@ -280,9 +305,11 @@ def _do(step, record):
         return reason
 
     if "project" in step:
+        record.setdefault("projects", []).append(str(step["project"]))
         return None if hands.open_project(str(step["project"])) else f"I couldn't open the {step['project']} project"
 
     if "app" in step:
+        record.setdefault("apps", []).append(str(step["app"]))
         return None if hands.launch_app(str(step["app"])) else f"I couldn't start {step['app']}"
 
     if "close_tabs" in step:
@@ -351,8 +378,18 @@ def engage(name):
         return f"I don't have a {_spoken(name)} protocol, sir."
 
     with _lock:
-        if any(item["name"] == name for item in _state()):
-            return f"The {_spoken(name)} protocol is already engaged, sir."
+        earlier = next((item for item in _state() if item["name"] == name), None)
+
+    # Engaged only if something it opened is still open: everything closed by
+    # hand is a protocol that has ended, and it simply engages again.
+    try:
+        still_there = earlier is not None and hands.still_open(earlier)
+    except Exception as error:
+        print(f"[JARVIS] could not check the {name} protocol: {error}")
+        still_there = earlier is not None
+
+    if still_there:
+        return f"The {_spoken(name)} protocol is already engaged, sir. Say clean slate to clear it."
 
     _flash(f"{_spoken(name)} protocol")
 

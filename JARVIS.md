@@ -1250,6 +1250,9 @@ which never has that endpoint. The JARVIS Chrome is started if it is not
 running, exactly as its shortcut starts it. What is engaged, and each
 protocol's tab ids, are kept in `.jarvis-protocols.json`, so a clean slate
 still knows after a restart. Both files are JARVIS's own and never moved.
+That record is not believed on its own: a protocol counts as engaged only
+while something it opened -- a tab, the project's window, a program -- is
+still open, so one closed by hand simply engages again.
 
 The stream protocol keeps the replay buffer running for "clip that" but
 does not save it at the end: the recording already holds those seconds,

@@ -241,6 +241,16 @@ class ProjectManager:
 
         return f"Your recent projects are {listed}."
 
+    def is_open(self, name):
+        """Whether a Cursor window for the project is open now."""
+        project = self.find(name)
+
+        if not project:
+            return False
+
+        needle = project.name.casefold()
+        return any(needle in title.casefold() for _, title in _cursor_windows())
+
     def close(self, name):
         """Close the Cursor window for a project, leaving others open."""
         project = self.find(name)
