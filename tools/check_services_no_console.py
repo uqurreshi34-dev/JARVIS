@@ -47,7 +47,12 @@ async def _try(target):
 
 
 def main():
+    from dotenv import load_dotenv
     from mcp.client.stdio import StdioServerParameters, get_default_environment
+
+    # The keys mcp.json refers to (${OBS_WEBSOCKET_PASSWORD}) are in .env,
+    # which JARVIS reads as it starts; run on its own, this must read it too.
+    load_dotenv(ROOT / ".env")
 
     lines = [
         f"console: stdout={'none' if sys.stdout is None else 'present'}, "
@@ -57,9 +62,13 @@ def main():
     ]
 
     for name, entry in mcp_services._read_config().items():
-        entry = mcp_services._expand(entry) if not entry.get("url") else entry
-
         if entry.get("url") or not entry.get("command"):
+            continue
+
+        try:
+            entry = mcp_services._expand(entry)
+        except KeyError as missing:
+            lines += [f"{name}:", f"  not tried: {missing.args[0]} is not set in .env", ""]
             continue
 
         env = get_default_environment()
