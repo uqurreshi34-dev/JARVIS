@@ -69,6 +69,14 @@ def replay_status() -> str:
 
 
 @app.tool(annotations=READ_ONLY)
+def started_with() -> str:
+    """The arguments this server was started with, as JARVIS passed them."""
+    import json
+    import sys
+    return json.dumps(sys.argv[1:])
+
+
+@app.tool(annotations=READ_ONLY)
 def last_replay() -> str:
     """Names the last file saved, as OBS names its replays: one per line in MARKER."""
     marker = os.environ.get("MARKER")

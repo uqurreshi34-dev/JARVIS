@@ -1021,7 +1021,10 @@ as the .exe would, with no console, and says how each one fared.
 moves them, and the model's file tool never reads `mcp.json`, its copies
 or the Outlook sign-in, which hold keys. For the same reason the filesystem
 service is given the JARVIS folder's Documents, Notes, Reports,
-Spreadsheets and images folders, never the JARVIS folder itself.
+Spreadsheets and images folders, never the JARVIS folder itself. A folder
+named in a service's arguments is passed spelt as it is on disk, so
+renaming images to Images or IMAGES never has the filesystem server, which
+compares paths letter by letter, refuse the folder it was given.
 
 Services connect at start-up, in the background and side by side, rather
 than on the first request that needs one; the start-up check's SERVICES

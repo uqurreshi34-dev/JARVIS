@@ -879,6 +879,38 @@ check("TaskGroup" not in status and ("FileNotFoundError" in status or "No such f
       f"so a program that cannot be found says so ({status[:160]!r})")
 mcp_services.close()
 
+# A folder given in mcp.json is passed spelt as it is on disk, so renaming
+# images to Images (or IMAGES) never leaves a letter-by-letter server
+# refusing the folder it was given.
+import tempfile as _tempfile  # noqa: E402
+
+place = _tempfile.mkdtemp()
+os.makedirs(os.path.join(place, "JARVIS", "Images"))
+real = os.path.join(place, "JARVIS", "Images")
+
+for written in (os.path.join(place, "JARVIS", "images"), os.path.join(place, "jarvis", "IMAGES"),
+                os.path.join(place, "Jarvis", "iMages")):
+    check(mcp_services._on_disk_case(written) == real, f"{os.path.basename(written)!r} is passed as the folder's own name")
+
+check(mcp_services._on_disk_case(real) == real, "a name already right is left as it is")
+check(mcp_services._on_disk_case("-y") == "-y" and mcp_services._on_disk_case("@scope/server") == "@scope/server",
+      "arguments that are not paths are not touched")
+missing = os.path.join(place, "JARVIS", "Nowhere")
+check(mcp_services._on_disk_case(missing) == missing, "a folder that does not exist is passed as written")
+
+os.makedirs(os.path.join(place, "JARVIS", "notes"))
+os.makedirs(os.path.join(place, "JARVIS", "Notes"), exist_ok=True)
+both = sorted(name for name in os.listdir(os.path.join(place, "JARVIS")) if name.casefold() == "notes")
+if len(both) == 2:   # a case-sensitive system, where both can exist
+    asked = os.path.join(place, "JARVIS", "NOTES")
+    check(mcp_services._on_disk_case(asked) == asked, "two folders differing only by case: neither is guessed")
+
+write_config({"test": {"command": sys.executable, "args": [SERVER, os.path.join(place, "jarvis", "images")]}})
+mcp_services.tools()
+started = json.loads(mcp_services._quiet_call(mcp_services._servers["test"], "started_with") or "[]")
+check(started[-1:] == [real], f"and the server is started with it ({started[-1:]})")
+mcp_services.close()
+
 write_config({"off": {"command": sys.executable, "args": [SERVER], "disabled": True}})
 check(mcp_services.configured() == (), "a disabled entry is ignored")
 

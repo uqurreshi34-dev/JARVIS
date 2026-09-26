@@ -415,12 +415,52 @@ def _transport(entry):
 
     parameters = StdioServerParameters(
         command=entry["command"],
-        args=list(entry.get("args") or ()),
+        args=[_on_disk_case(arg) for arg in (entry.get("args") or ())],
         env=env,
         cwd=entry.get("cwd"),
     )
 
     return stdio_client(parameters, errlog=_server_log())
+
+
+def _on_disk_case(arg):
+    """[arg], if it is a path to something that exists, spelt as it is on disk.
+
+    A folder renamed from images to Images still matches "images" in
+    mcp.json -- Windows ignores case -- but a server that checks paths
+    letter by letter (the filesystem server does) then refuses the model's
+    "Images\\..." as outside what it was given. So each part is given the
+    name the folder really has. Only case changes: a part with no match, or
+    two that differ only by case (possible off Windows), leaves [arg] as it
+    was, and anything that is not an absolute path is not touched.
+    """
+    if not isinstance(arg, str) or not os.path.isabs(arg):
+        return arg
+
+    drive, rest = os.path.splitdrive(arg)
+    anchor = drive + (os.sep if rest[:1] in ("\\", "/") else "")
+    parts = [part for part in re.split(r"[\\/]+", rest) if part]
+    current = anchor or os.sep
+
+    for part in parts:
+        try:
+            entries = os.listdir(current)
+        except OSError:
+            return arg
+
+        if part in entries:
+            name = part
+        else:
+            matches = [entry for entry in entries if entry.casefold() == part.casefold()]
+
+            if len(matches) != 1:
+                return arg
+
+            name = matches[0]
+
+        current = os.path.join(current, name)
+
+    return current
 
 
 _server_log_file = None
