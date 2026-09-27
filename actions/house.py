@@ -435,6 +435,97 @@ def _to_you(name):
     return "your " + name[3:] if name.casefold().startswith("my ") else name
 
 
+def _said(name):
+    """A room as a sentence names it: "your room", "room 4", "the kitchen"."""
+    named = _to_you(name)
+    lowered = named.casefold()
+
+    if lowered.startswith(("your ", "the ")) or re.search(r"\d", lowered) or re.match(r"^room\s+\S+$", lowered):
+        return named
+
+    return "the " + named
+
+
+# ---- sensor questions about the plan's rooms -----------------------------------------------
+
+def question(text):
+    """A sensor question naming a room on the plan, or None: (what, place key, room name).
+
+    "is anyone in the kitchen", "how warm is my bedroom": asked the way
+    sensors.question asks, about a room the plan knows by name or alias,
+    whether or not a board in it has reported, so a room with no sensor
+    says so rather than going to the model.
+    """
+    # Only with a plan of your own: the starter is there to be shown and
+    # changed, not to answer for rooms you may not have.
+    if not _exists(CONFIG_NAME):
+        return None
+
+    words = _strip_polite(_words(text))
+
+    if not words or words[0] not in sensors._QUESTION_STARTS:
+        return None
+
+    asked = [what for what, cues in sensors._ASKING.items() if what != "everything" and any(w in cues for w in words)]
+
+    if not asked:
+        return None
+
+    key = active_place()
+
+    with _lock:
+        if _view is not None:
+            key = _view["place"]
+
+    known = places()
+
+    if key not in known:
+        return None
+
+    said = " " + " ".join(words) + " "
+    best = None
+
+    for room in _rooms(known[key]):
+        if room["kind"] == "passage":
+            continue
+
+        for name in _room_names(room):
+            if f" {name} " in said and (best is None or len(name) > len(best[1])):
+                best = (room["name"], name)
+
+    if best is None:
+        return None
+
+    for what in ("presence", "humidity", "temperature"):
+        if what in asked:
+            return what, key, best[0]
+
+    return None
+
+
+def answer_question(text):
+    """What the room's boards say to question(text), or that it has no sensor. None if not one."""
+    asked = question(text)
+
+    if asked is None:
+        return None
+
+    what, key, room_name = asked
+    drawn = render(key, room_name)
+    room = next((room for room in drawn["rooms"] if room["name"] == room_name), None) if drawn else None
+
+    if room is None:
+        return None
+
+    follow([board["name"] for board in room["boards"]])
+    names = [board["name"] for board in room["boards"]]
+
+    if not names:
+        return f"{_first_up(_said(room_name))} has no sensor yet, sir."
+
+    return sensors.answer((what, names)) or f"No reading from {_said(room_name)} yet, sir."
+
+
 def spoken_spaces(counts):
     """"seven rooms, a kitchen and a landing": what a house has, as it is said."""
     parts = []
@@ -770,7 +861,7 @@ def describe_room(place_key, room_name):
     if room is None:
         return None
 
-    title = _first_up(_to_you(room["name"]))
+    title = _first_up(_said(room["name"]))
     boards = [drawn["boards"][board["name"]] for board in room["boards"] if board["name"] in drawn["boards"]]
     cameras = [(camera, drawn["boards"].get(camera["name"])) for camera in room["cameras"]]
     now = time.monotonic()

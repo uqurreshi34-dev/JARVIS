@@ -3734,7 +3734,7 @@ _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 # Commands recognised on the fast path that no later route may take, though
 # they may name a connected service: a protocol runs OBS's own actions
 # itself, and "initiate stream protocol" is not a request for Agent Mode.
-_SETTLED_HERE = frozenset({"protocol", "file_hologram", "house"})
+_SETTLED_HERE = frozenset({"protocol", "file_hologram", "house", "house_question"})
 
 
 def _sensor_answer(command):
@@ -3842,6 +3842,13 @@ def _fast_path(command):
     # room", "is anyone in the kitchen". Rooms are the boards' own names, so
     # it only claims a question naming one of them (or "in here"), and
     # "what's the temperature outside" goes on to the weather.
+    # Asked about a room on the house plan ("is anyone in the kitchen", "how
+    # warm is room 4"), the plan decides which boards are meant: its own,
+    # or none, said so. First, because a board's name can sit inside a
+    # room's ("room" in "front room") and answer for the wrong room.
+    if house.question(command):
+        return _blank_result("house_question")
+
     if sensors.question(command):
         return _blank_result("sensor_question")
 
@@ -5803,6 +5810,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "house":
         return _query(intent, lambda: house.answer(command) or "The house isn't showing, sir.")
+
+    if intent == "house_question":
+        return _query(intent, lambda: house.answer_question(command) or "No sensors have reported yet, sir.")
 
     if intent == "sensor_question":
         # Asked again here rather than carried through the result, which

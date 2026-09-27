@@ -61,6 +61,7 @@ for name in (house.CONFIG_NAME, house.STATE_NAME):
         os.remove(os.path.join(folder, name))
 
 sensors.reset()
+sensors.set_namer(house.room_of)    # as main.py does
 shown, hidden = [], []
 house.set_listeners(on_view=shown.append, on_hide=lambda: hidden.append(True))
 
@@ -150,7 +151,7 @@ drawn = house.render("home")
 kitchen = next(room for room in drawn["rooms"] if room["name"] == "kitchen")
 check([board["name"] for board in kitchen["boards"]] == ["kitchen"] and drawn["boards"]["kitchen"]["room"] == "kitchen",
       "a board called kitchen lights the kitchen, found by its name")
-check(house.describe_room("home", "kitchen") == "Kitchen: 19.5 degrees, 55 percent humidity, sir.",
+check(house.describe_room("home", "kitchen") == "The kitchen: 19.5 degrees, 55 percent humidity, sir.",
       f"and the kitchen reads it ({house.describe_room('home', 'kitchen')!r})")
 sensors.report({"name": "hallway", "temperature": 18.0})
 check("hallway" in [item["name"] for item in house.render("home")["unplaced"]],
@@ -164,6 +165,21 @@ check([camera["name"] for camera in front["cameras"]] == ["front room cam"] and 
       and front["cameras"][0]["wall"] == "north", "a camera called 'front room cam' looks out of the front room's window")
 check(house.room_of("front room cam") == "front room" and house.room_of("room") == "my room"
       and house.room_of("nothing") is None, "and a board's room is known by its name")
+# Sensor questions about the plan's rooms, sensor or none.
+check(house.question("is anyone in the front room") == ("presence", "home", "front room"), "a sensor question names a plan room")
+check(house.question("is anyone in the front room") is not None and house.question("is anyone in a castle") is None,
+      "only rooms the plan has")
+check(house.answer_question("is anyone in the front room") == "The front room has no sensor yet, sir.",
+      "and a room with no sensor says so, rather than going to the model")
+said = house.answer_question("how warm is the kitchen")
+check(said.startswith("The kitchen is 19.5 degrees"), f"a room's own board answers it ({said!r})")
+sensors.report({"name": "room", "temperature": 21.4, "humidity": 48})
+said = house.answer_question("how warm is the front room")
+check("21.4" not in said, f"a board whose name sits inside a room's never answers for it ({said!r})")
+for spoken in ("is anyone in london", "what's the temperature outside", "tell me about the kitchen", "is it warm"):
+    check(house.question(spoken) is None, f"not a plan room's sensor question: {spoken!r}")
+check(house.question("is anyone in the hall") is None, "a passage is never asked after")
+
 check(house.spoken_spaces({"room": 7, "kitchen": 1, "landing": 1}) == "seven rooms, a kitchen and a landing",
       "seven rooms, a kitchen and a landing, as it is said")
 
@@ -175,8 +191,8 @@ check(said == "Your room: 21.4 degrees, 48 percent humidity, someone there, move
 check(shown[-1]["focus"] == "my room", "and it comes into focus")
 
 said = house.answer("show me the landing")
-check(said == "Landing has no sensor yet, sir." and shown[-1]["focus"] == "landing", f"a room with no sensor ({said!r})")
-check(house.describe_room("home", "front room") == "Front room: its camera is online, sir.",
+check(said == "The landing has no sensor yet, sir." and shown[-1]["focus"] == "landing", f"a room with no sensor ({said!r})")
+check(house.describe_room("home", "front room") == "The front room: its camera is online, sir.",
       "a room with only a camera says so")
 
 sensors.report({"name": "cam", "event": "online"})
@@ -194,7 +210,7 @@ check(house.close() == "House closed, sir." and hidden and not house.showing(), 
 check(house.asked("close it") is None, "and 'close it' is nobody's again")
 
 said = house.answer("how's the landing")
-check(house.showing() and shown[-1]["focus"] == "landing" and said == "Landing has no sensor yet, sir.",
+check(house.showing() and shown[-1]["focus"] == "landing" and said == "The landing has no sensor yet, sir.",
       "asking after a room with the house away shows it, focused")
 
 # Floors named as the house is spoken of.
@@ -352,8 +368,12 @@ else:
               "and 'what's happening in my room' reads the room")
         result = commands.handle_command("what's the temperature in the room")
         said = result["action"]()
-        check(result["intent"] == "sensor_question" and "21.4" in said and shown[-1]["focus"] == "my room",
-              f"a sensor question is still the sensors', and lights its room ({said!r})")
+        check(result["intent"] == "house_question" and said == "Your room is 21.4 degrees, sir."
+              and shown[-1]["focus"] == "my room",
+              f"a sensor question about a plan room is answered by its boards, and lights it ({said!r})")
+        result = commands.handle_command("is anyone in the front room")
+        check(result["intent"] == "house_question" and result["action"]() == "The front room has no sensor yet, sir.",
+              "commands: 'is anyone in the front room' says it has no sensor, with no model call")
         result = commands.handle_command("closed the house")
         check(result["intent"] == "house" and result["action"]() == "House closed, sir.", "and closes")
     finally:

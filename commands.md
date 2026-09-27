@@ -459,6 +459,11 @@ A room is whatever the board is called (SENSOR_NAME), so a new board can
 be asked about as soon as it reports. "What's the temperature outside"
 names no board, so it is still the weather.
 
+With a house.json, the same questions work for any room on the plan by
+its own name or alias ("is anyone in the kitchen", "how warm is room 4",
+"is anybody in my bedroom"): the room's boards answer, and a room with
+none says so ("The kitchen has no sensor yet, sir").
+
 Welcome back is for you. It is only said when nobody has moved for a
 while, never while you have been talking to JARVIS in the last five
 minutes (you are plainly there), and, with Tailscale on your phone, only

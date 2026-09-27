@@ -1344,6 +1344,12 @@ camera in that room, looking out through its window (the one whose
 "looks" says what it sees, else any); a room with no window on the plan
 looks north, plain to see and put right. house.room_of gives sensors.py
 the plan's name for a board's room, so its answers say "your room".
+house.question takes sensor questions (sensors.py's own cue words) that
+name a plan room, before sensors.question does, because a board's name
+can sit inside a room's ("room" inside "front room") and would answer for
+the wrong room; the room's boards answer through sensors.answer, and a
+room with none says so. Only with a house.json of your own, never the
+starter.
 
 ### Who moved - `actions/presence.py`
 A PIR sees movement, not a person, so "welcome back" needs a witness. It
