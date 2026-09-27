@@ -1339,6 +1339,26 @@ no bathroom kind, and the starter has none: a bathroom is no place for a
 sensor or a map. A board that reports with a room's name or alias as its
 SENSOR_NAME is placed in that room by name alone; one that matches
 nothing is "not on the plan", with the hint to name it after a room.
+Cameras too: a board named after a room plus "cam" ("my room cam") is a
+camera in that room, looking out through its window (the one whose
+"looks" says what it sees, else any); a room with no window on the plan
+looks north, plain to see and put right. house.room_of gives sensors.py
+the plan's name for a board's room, so its answers say "your room".
+
+### Who moved - `actions/presence.py`
+A PIR sees movement, not a person, so "welcome back" needs a witness. It
+is your phone, as Tailscale on the PC sees it: `tailscale status --json`
+(no console window, at most every 30 seconds) lists the phone with the
+addresses it can be reached on. Online is not home, since the phone is
+online on 4G across town; home is an address on this PC's network (its
+/24, or JARVIS_HOME_NETWORK) among the phone's. The phone is
+JARVIS_PHONE_DEVICE, else the tailnet's only phone, never a guess among
+two. sensors.py asks only when a return would be greeted: home or unknown
+is welcome back, away is "Movement in your room, sir, and your phone isn't
+home", and a failing check never stops the greeting. Speaking at the desk
+calls sensors.heard_you(), and movement within five minutes of it is you,
+never an arrival; commands from the phone do not count, as they could come
+from anywhere.
 Boards report by name, so the same boards carried to another place are
 placed by that place's plan: showing a place makes it the one in use,
 remembered in .jarvis-house.json. The first show writes a starter plan

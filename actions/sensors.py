@@ -52,6 +52,36 @@ GREET_AGAIN_SECONDS = 1800
 # lately, and at most once per GREET_AGAIN_SECONDS -- never per room.
 _last_greeting = None
 
+# Talking to JARVIS is proof enough that you are here: movement while you
+# have spoken to him in the last five minutes is you, and never a return.
+TALKING_SECONDS = 300
+_last_spoken = None
+
+# Who moved, when it matters: a callable answering "home", "away" or
+# "unknown" for your phone (actions/presence.py, wired in by main.py). With
+# none, or "unknown", a return is greeted as it always was.
+_presence = None
+
+# What a board's room is called on the house plan ("room" -> "my room"),
+# so answers say "your room" rather than the board's own name.
+_namer = None
+
+
+def heard_you():
+    """You spoke to JARVIS just now. Called for every command."""
+    global _last_spoken
+    _last_spoken = _now()
+
+
+def set_presence(callback):
+    global _presence
+    _presence = callback
+
+
+def set_namer(callback):
+    global _namer
+    _namer = callback
+
 
 _lock = threading.Lock()
 
@@ -129,13 +159,25 @@ def present(name, within=PRESENT_SECONDS):
     return bool(moved and _now() - moved < within)
 
 
+def _whose_phone():
+    if _presence is None:
+        return "unknown"
+
+    try:
+        return _presence()
+    except Exception as error:
+        print(f"[JARVIS] could not tell whether your phone is home: {error}")
+        return "unknown"
+
+
 def reset():
     """Forget everything. For tests, and for a fresh start."""
-    global _last_greeting
+    global _last_greeting, _last_spoken
 
     with _lock:
         _sensors.clear()
         _last_greeting = None
+        _last_spoken = None
 
 
 def report(payload):
@@ -200,8 +242,11 @@ def report(payload):
 
             state["moved"] = now
 
+            talking = _last_spoken is not None and now - _last_spoken < TALKING_SECONDS
+
             fresh = (
                 not someone_home
+                and not talking
                 and (_last_greeting is None
                      or now - _last_greeting > GREET_AGAIN_SECONDS)
             )
@@ -229,7 +274,14 @@ def report(payload):
         return None
 
     if event == "motion":
-        return "Welcome back, sir." if fresh else None
+        if not fresh:
+            return None
+
+        # Movement with your phone away is not you coming back.
+        if _whose_phone() == "away":
+            return f"Movement in {_place(name)}, sir, and your phone isn't home."
+
+        return "Welcome back, sir."
 
     return None
 
@@ -325,8 +377,24 @@ def _ago(seconds):
 
 
 def _place(name):
-    """'the kitchen' -- how a room is named mid-sentence."""
-    return f"the {name}" if not name.startswith(("the ", "my ")) else name
+    """'the kitchen', 'your room' -- how a board's room is named mid-sentence.
+
+    The house plan's name for it when there is one, said to you: its "my
+    room" is "your room".
+    """
+    if _namer is not None:
+        try:
+            named = _namer(name)
+        except Exception:
+            named = None
+
+        if named:
+            name = named
+
+    if name.startswith("my "):
+        return "your " + name[3:]
+
+    return f"the {name}" if not name.startswith(("the ", "your ")) else name
 
 
 def _presence_words(name, board):

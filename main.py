@@ -48,6 +48,7 @@ from actions import (
     places,
     file_hologram,
     house,
+    presence,
     protocols,
     sensors,
     camera,
@@ -642,6 +643,11 @@ class Assistant:
             self._begin_interaction()
             self._state(THINKING)
 
+            # Spoken at the desk: you are in the room, so movement there now
+            # is you and not a return. (A command from the phone could come
+            # from anywhere, so it does not count.)
+            sensors.heard_you()
+
             try:
                 started = time.monotonic()
                 result = handle_command(command)
@@ -878,6 +884,10 @@ def main():
     # Each report redraws it while it is up; sensors.py calls this on the
     # web server's thread and the signal carries the view across.
     sensors.add_listener(house.refresh)
+    # Answers name a board's room as the plan does ("your room"), and a
+    # return is only "welcome back" when your phone is home too.
+    sensors.set_namer(house.room_of)
+    sensors.set_presence(presence.phone)
     house_hologram.room_clicked.connect(
         lambda name: threading.Thread(target=house.tapped, args=(name,), daemon=True).start())
     hud.shutdown.connect(house_hidden)

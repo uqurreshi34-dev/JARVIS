@@ -34,7 +34,9 @@ a wall feature or a camera how far along that wall. Boards report by
 name, so a board carried to another place is placed by that place's
 plan: "show me mum's house" shows it and makes it the place in use,
 remembered in .jarvis-house.json. A board named after a room (SENSOR_NAME
-"kitchen") is in that room without being listed at all.
+"kitchen") is in that room without being listed at all, and a camera named
+after one ("my room cam") looks out through that room's window; a window
+can say what it looks at ({"kind": "window", "looks": "street"}).
 
 Each space has a "kind": "room" (the default), "kitchen", "landing", or
 "passage" for a corridor or stairs, drawn faintly so the plan hangs
@@ -270,7 +272,8 @@ def _rooms(place):
         features = [
             {"wall": feature["wall"], "at": min(1.0, max(0.0, _number(feature.get("at"), 0.5))),
              "width": max(0.2, _number(feature.get("width"), 0.9)),
-             "kind": "window" if feature.get("kind") == "window" else "door"}
+             "kind": "window" if feature.get("kind") == "window" else "door",
+             "looks": str(feature.get("looks") or "").strip()}
             for feature in raw.get("features") or []
             if isinstance(feature, dict) and feature.get("wall") in _WALLS
         ]
@@ -345,21 +348,29 @@ def render(place_key=None, focus=None):
             }
 
     # A board named after a room ("kitchen", SENSOR_NAME in its sketch) is in
-    # that room, in the middle, with nothing to add to house.json.
+    # that room, by its far wall, with nothing to add to house.json. A camera
+    # named after one ("my room cam") looks out through that room's window.
+    spaces = [room for room in rooms if room["kind"] != "passage"]
+
     for name, report in heard.items():
         if name in placed:
             continue
 
-        room = _find_room(name, [room for room in rooms if room["kind"] != "passage"])
+        camera_of = _camera_room(name, spaces)
+        room = camera_of or _find_room(name, spaces)
 
         if room is None:
             continue
 
-        room["boards"].append({"name": name, "at": [0.78, 0.28]})
+        if camera_of:
+            room["cameras"].append(_camera_through_window(name, room))
+        else:
+            room["boards"].append({"name": name, "at": [0.78, 0.28]})
+
         placed.add(name)
         boards[name] = {
             "room": room["name"],
-            "camera": False,
+            "camera": bool(camera_of),
             "state": _state(report, report["seen_ago"]),
             "seen_at": now - report["seen_ago"],
             "moved_at": now - report["moved_ago"] if report["moved_ago"] is not None else None,
@@ -380,6 +391,48 @@ def render(place_key=None, focus=None):
         "floor_names": _floor_names(place),
         "counts": {kind: sum(1 for room in rooms if room["kind"] == kind) for kind in _COUNTED},
     }
+
+
+_CAMERA_WORDS = ("cam", "camera", "webcam")
+
+
+def _camera_room(name, rooms):
+    """The room a camera is named after ("my room cam"), or None for a board that is not a camera."""
+    words = _key(name).split()
+
+    if len(words) < 2 or words[-1] not in _CAMERA_WORDS:
+        return None
+
+    return _find_room(" ".join(words[:-1]), rooms)
+
+
+def _camera_through_window(name, room):
+    """A camera looking out of the room: through the window that says what it sees, else any window."""
+    windows = [feature for feature in room["features"] if feature["kind"] == "window"]
+    window = next((feature for feature in windows if feature["looks"]), windows[0] if windows else None)
+
+    if window is None:
+        # No window on the plan: looking out through the north wall, as
+        # good a guess as any and plain to see on the map to be put right.
+        return {"name": name, "wall": "north", "at": 0.5, "looks": ""}
+
+    return {"name": name, "wall": window["wall"], "at": window["at"], "looks": window["looks"]}
+
+
+def room_of(board_name):
+    """The house plan's name for the room a board is in, or None. For sensors.set_namer."""
+    drawn = render()
+
+    if not drawn:
+        return None
+
+    board = drawn["boards"].get(str(board_name or "").strip().casefold())
+    return board["room"] if board else None
+
+
+def _to_you(name):
+    """How JARVIS says a room to you: the plan's "my room" is "your room"."""
+    return "your " + name[3:] if name.casefold().startswith("my ") else name
 
 
 def spoken_spaces(counts):
@@ -717,7 +770,7 @@ def describe_room(place_key, room_name):
     if room is None:
         return None
 
-    title = _first_up(room["name"])
+    title = _first_up(_to_you(room["name"]))
     boards = [drawn["boards"][board["name"]] for board in room["boards"] if board["name"] in drawn["boards"]]
     cameras = [(camera, drawn["boards"].get(camera["name"])) for camera in room["cameras"]]
     now = time.monotonic()

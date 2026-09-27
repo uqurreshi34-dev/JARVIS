@@ -155,25 +155,36 @@ check(house.describe_room("home", "kitchen") == "Kitchen: 19.5 degrees, 55 perce
 sensors.report({"name": "hallway", "temperature": 18.0})
 check("hallway" in [item["name"] for item in house.render("home")["unplaced"]],
       "a passage never takes a board: a hallway board is not on the plan")
+# A camera named after a room looks out through that room's window, with
+# what the window looks at; nothing about it in house.json.
+sensors.report({"name": "front room cam", "event": "online"})
+drawn = house.render("home")
+front = next(room for room in drawn["rooms"] if room["name"] == "front room")
+check([camera["name"] for camera in front["cameras"]] == ["front room cam"] and drawn["boards"]["front room cam"]["camera"]
+      and front["cameras"][0]["wall"] == "north", "a camera called 'front room cam' looks out of the front room's window")
+check(house.room_of("front room cam") == "front room" and house.room_of("room") == "my room"
+      and house.room_of("nothing") is None, "and a board's room is known by its name")
 check(house.spoken_spaces({"room": 7, "kitchen": 1, "landing": 1}) == "seven rooms, a kitchen and a landing",
       "seven rooms, a kitchen and a landing, as it is said")
 
 # ---- rooms ----------------------------------------------------------------------------------------------
 
 said = house.answer("what's happening in my room")
-check(said == "My room: 21.4 degrees, 48 percent humidity, someone there, movement just now, "
+check(said == "Your room: 21.4 degrees, 48 percent humidity, someone there, movement just now, "
               "the street camera isn't connected yet, sir.", f"a room's readings, movement and camera ({said!r})")
 check(shown[-1]["focus"] == "my room", "and it comes into focus")
 
-said = house.answer("show me the front room")
-check(said == "Front room has no sensor yet, sir." and shown[-1]["focus"] == "front room", f"a room with no sensor ({said!r})")
+said = house.answer("show me the landing")
+check(said == "Landing has no sensor yet, sir." and shown[-1]["focus"] == "landing", f"a room with no sensor ({said!r})")
+check(house.describe_room("home", "front room") == "Front room: its camera is online, sir.",
+      "a room with only a camera says so")
 
 sensors.report({"name": "cam", "event": "online"})
 check(house.describe_room("home", "my room").endswith("the street camera is online, sir."), "a camera that reports is online")
 
-house.tapped("landing")
-check(shown[-1]["focus"] == "landing", "a tap lights a room")
-house.tapped("landing")
+house.tapped("front room")
+check(shown[-1]["focus"] == "front room", "a tap lights a room")
+house.tapped("front room")
 check(shown[-1]["focus"] is None, "and a second tap puts it out")
 
 house.follow(["room"])
@@ -337,7 +348,7 @@ else:
         check(result["intent"] == "house" and result["action"]().startswith("Your house, sir:"),
               "commands: 'show me the house' is the hologram, with no model call")
         result = commands.handle_command("what's happening in my room")
-        check(result["intent"] == "house" and result["action"]().startswith("My room: 21.4 degrees"),
+        check(result["intent"] == "house" and result["action"]().startswith("Your room: 21.4 degrees"),
               "and 'what's happening in my room' reads the room")
         result = commands.handle_command("what's the temperature in the room")
         said = result["action"]()

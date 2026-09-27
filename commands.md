@@ -459,6 +459,13 @@ A room is whatever the board is called (SENSOR_NAME), so a new board can
 be asked about as soon as it reports. "What's the temperature outside"
 names no board, so it is still the weather.
 
+Welcome back is for you. It is only said when nobody has moved for a
+while, never while you have been talking to JARVIS in the last five
+minutes (you are plainly there), and, with Tailscale on your phone, only
+when your phone is home too. Movement with your phone away is said as it
+is: "Movement in your room, sir, and your phone isn't home." With no way to
+tell (Tailscale off, no phone found), it is welcome back as before.
+
 ### Your house, as a hologram
 
 **Free**: no model call. A 3D floor plan beside the HUD, floors stacked,
@@ -484,7 +491,9 @@ kind: a room, the kitchen, a landing, or a passage (a corridor, stairs),
 drawn faintly and never counted or listed; bathrooms are left off
 altogether. A board is placed by its own name: call it after a room
 (SENSOR_NAME "kitchen", or "room 7" for a room with that alias) and it
-lights that room, with nothing added to house.json. A board that
+lights that room, with nothing added to house.json. A camera the same way:
+SENSOR_NAME "my room cam" looks out through that room's window, and a
+window with "looks": "street" names what the camera sees. A board that
 reports but is on no room says so. Tap a room, on the plan or in the list,
 to light it. The file hologram and the house take turns: showing one puts
 the other away. Asking a sensor question ("what's the temperature in the
