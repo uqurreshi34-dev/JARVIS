@@ -77,8 +77,13 @@ NetworkClientSecure secure;
 unsigned long lastReading = 0;
 unsigned long lastMotion = 0;
 unsigned long lastHeartbeat = 0;
-bool wasMoving = false;
 bool saidOnline = false;
+
+volatile bool motionPending = false;
+
+void IRAM_ATTR onMotion() {
+  motionPending = true;
+}
 
 // Post one JSON report to JARVIS. Returns the HTTP status, or a negative
 // HTTPClient error, which is printed with its meaning.
@@ -91,7 +96,7 @@ int report(const String &json) {
     return -1;
   }
 
-  https.setTimeout(8000);
+  https.setTimeout(3000);
   https.addHeader("Content-Type", "application/json");
   https.addHeader("X-Jarvis-Token", JARVIS_TOKEN);
 
@@ -188,6 +193,7 @@ void setup() {
   // Held low when nothing drives it: an unconnected pin floats and reads
   // noise as movement. The PIR's own output overrides the weak pull-down.
   pinMode(PIR_PIN, INPUT_PULLDOWN);
+  attachInterrupt(digitalPinToInterrupt(PIR_PIN), onMotion, RISING);
   dht.begin();
 
   Serial.print("[jarvis] ");
@@ -222,15 +228,16 @@ void loop() {
     }
   }
 
-  // Movement is reported as it starts, not for as long as it lasts.
-  bool moving = digitalRead(PIR_PIN) == HIGH;
+  // Movement is latched by the interrupt, so an HTTPS request cannot make
+  // the PIR transition disappear while the loop is busy.
+  if (motionPending) {
+    motionPending = false;
 
-  if (moving && !wasMoving && (lastMotion == 0 || now - lastMotion >= MOTION_GAP_MS)) {
-    reportEvent("motion");
-    lastMotion = now;
+    if (lastMotion == 0 || now - lastMotion >= MOTION_GAP_MS) {
+      reportEvent("motion");
+      lastMotion = now;
+    }
   }
-
-  wasMoving = moving;
 
   if (lastReading == 0 || now - lastReading >= READING_EVERY_MS) {
     reportReadings();
