@@ -161,8 +161,16 @@ def secrets_header(token):
         "// The same token the phone uses (JARVIS_PHONE_TOKEN in .env).\n"
         f'#define JARVIS_TOKEN "{token}"\n'
         "\n"
-        "// What JARVIS calls this board: \"room\" is said as \"Room sensor online\".\n"
+        "// What JARVIS calls this board. Give separate physical boards different names.\n"
         '#define SENSOR_NAME "room"\n'
+        "\n"
+        "// Which sensors are physically on this board. Set unused ones to 0.\n"
+        "#define JARVIS_HAS_DHT 1\n"
+        "#define JARVIS_HAS_PIR 1\n"
+        "\n"
+        "// For separate boards, for example:\n"
+        "//   PIR board: JARVIS_HAS_DHT 0, JARVIS_HAS_PIR 1\n"
+        "//   DHT board: JARVIS_HAS_DHT 1, JARVIS_HAS_PIR 0\n"
     )
 
 
