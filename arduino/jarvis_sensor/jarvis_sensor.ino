@@ -68,6 +68,7 @@
 
 static const unsigned long READING_EVERY_MS = 30UL * 1000UL;
 static const unsigned long MOTION_GAP_MS = 5UL * 1000UL;
+static const unsigned long HEARTBEAT_EVERY_MS = 15UL * 1000UL;
 static const unsigned long WIFI_RETRY_MS = 10UL * 1000UL;
 
 DHT dht(DHT_PIN, DHT22);
@@ -75,6 +76,7 @@ NetworkClientSecure secure;
 
 unsigned long lastReading = 0;
 unsigned long lastMotion = 0;
+unsigned long lastHeartbeat = 0;
 bool wasMoving = false;
 bool saidOnline = false;
 
@@ -115,8 +117,11 @@ String quoted(const char *text) {
   return String("\"") + text + "\"";
 }
 
-void reportEvent(const char *event) {
-  report(String("{\"name\":") + quoted(SENSOR_NAME) + ",\"event\":" + quoted(event) + "}");
+int reportEvent(const char *event) {
+  return report(
+    String("{\"name\":") + quoted(SENSOR_NAME) +
+    ",\"event\":" + quoted(event) + "}"
+  );
 }
 
 void reportReadings() {
@@ -207,10 +212,14 @@ void loop() {
 
   unsigned long now = millis();
 
-  if (!saidOnline) {
-    reportEvent("online");
-    saidOnline = true;
-    lastReading = 0;
+  if (!saidOnline || lastHeartbeat == 0 || now - lastHeartbeat >= HEARTBEAT_EVERY_MS) {
+    int code = reportEvent("online");
+    lastHeartbeat = now;
+
+    if (code == HTTP_CODE_OK && !saidOnline) {
+      saidOnline = true;
+      lastReading = 0;
+    }
   }
 
   // Movement is reported as it starts, not for as long as it lasts.
