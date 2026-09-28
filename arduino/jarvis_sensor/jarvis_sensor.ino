@@ -1,5 +1,4 @@
-// JARVIS room sensor: an ESP32 (WROOM-32, ESP32-CAM, or C3 Super Mini)
- // with a DHT22 and/or a PIR.
+// JARVIS room sensor: an ESP32 (WROOM-32, or C3 Super Mini) with a DHT22 and a PIR.
 //
 // It reports to JARVIS over HTTPS, checking JARVIS's certificate against
 // JARVIS's own certificate authority (setCACert) -- never setInsecure(),
@@ -24,8 +23,6 @@
 //
 // The pins are picked for the board it is built for (below), and either
 // can be changed by defining DHT_PIN or PIR_PIN in jarvis_secrets.h.
- // A board may carry just one sensor: set JARVIS_HAS_DHT and/or
- // JARVIS_HAS_PIR to 0 or 1 in that board's jarvis_secrets.h.
 //
 // Wiring, WROOM-32 DevKit:
 //   DHT22   + to 3V3,  - to GND,  out to GPIO 4   (a bare DHT22 needs a
@@ -69,25 +66,11 @@
   #endif
 #endif
 
-#ifndef JARVIS_HAS_DHT
-  #define JARVIS_HAS_DHT 1
-#endif
-
-#ifndef JARVIS_HAS_PIR
-  #define JARVIS_HAS_PIR 1
-#endif
-
-#if !JARVIS_HAS_DHT && !JARVIS_HAS_PIR
-  #error "Enable at least one sensor with JARVIS_HAS_DHT or JARVIS_HAS_PIR"
-#endif
-
 static const unsigned long READING_EVERY_MS = 30UL * 1000UL;
 static const unsigned long MOTION_GAP_MS = 5UL * 1000UL;
 static const unsigned long WIFI_RETRY_MS = 10UL * 1000UL;
 
-#if JARVIS_HAS_DHT
 DHT dht(DHT_PIN, DHT22);
-#endif
 NetworkClientSecure secure;
 
 unsigned long lastReading = 0;
@@ -136,7 +119,6 @@ void reportEvent(const char *event) {
   report(String("{\"name\":") + quoted(SENSOR_NAME) + ",\"event\":" + quoted(event) + "}");
 }
 
-#if JARVIS_HAS_DHT
 void reportReadings() {
   float temperature = dht.readTemperature();
   float humidity = dht.readHumidity();
@@ -159,7 +141,6 @@ void reportReadings() {
 
   report(json + "}");
 }
-#endif
 
 bool joinWifi() {
   if (WiFi.status() == WL_CONNECTED) {
@@ -199,35 +180,17 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
-#if JARVIS_HAS_PIR
   // Held low when nothing drives it: an unconnected pin floats and reads
   // noise as movement. The PIR's own output overrides the weak pull-down.
   pinMode(PIR_PIN, INPUT_PULLDOWN);
-#endif
-
-#if JARVIS_HAS_DHT
   dht.begin();
-#endif
 
   Serial.print("[jarvis] ");
   Serial.print(JARVIS_BOARD);
-  Serial.print(": ");
-
-#if JARVIS_HAS_DHT
-  Serial.print("DHT22 on GPIO ");
+  Serial.print(": DHT22 on GPIO ");
   Serial.print(DHT_PIN);
-#endif
-
-#if JARVIS_HAS_DHT && JARVIS_HAS_PIR
-  Serial.print(", ");
-#endif
-
-#if JARVIS_HAS_PIR
-  Serial.print("PIR on GPIO ");
-  Serial.print(PIR_PIN);
-#endif
-
-  Serial.println();
+  Serial.print(", PIR on GPIO ");
+  Serial.println(PIR_PIN);
 
   // JARVIS's own authority: the board accepts JARVIS and nothing else.
   secure.setCACert(JARVIS_CA);
@@ -250,7 +213,6 @@ void loop() {
     lastReading = 0;
   }
 
-#if JARVIS_HAS_PIR
   // Movement is reported as it starts, not for as long as it lasts.
   bool moving = digitalRead(PIR_PIN) == HIGH;
 
@@ -260,14 +222,11 @@ void loop() {
   }
 
   wasMoving = moving;
-#endif
 
-#if JARVIS_HAS_DHT
   if (lastReading == 0 || now - lastReading >= READING_EVERY_MS) {
     reportReadings();
     lastReading = now;
   }
-#endif
 
   delay(50);
 }
