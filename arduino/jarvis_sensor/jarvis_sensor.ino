@@ -1,5 +1,5 @@
 // JARVIS room sensor: an ESP32 (WROOM-32, ESP32-CAM, or C3 Super Mini)
-// with a DHT22 and/or a PIR.
+ // with a DHT22 and/or a PIR.
 //
 // It reports to JARVIS over HTTPS, checking JARVIS's certificate against
 // JARVIS's own certificate authority (setCACert) -- never setInsecure(),
@@ -24,8 +24,8 @@
 //
 // The pins are picked for the board it is built for (below), and either
 // can be changed by defining DHT_PIN or PIR_PIN in jarvis_secrets.h.
-// A board may carry just one sensor: set JARVIS_HAS_DHT and/or
-// JARVIS_HAS_PIR to 0 or 1 in that board's jarvis_secrets.h.
+ // A board may carry just one sensor: set JARVIS_HAS_DHT and/or
+ // JARVIS_HAS_PIR to 0 or 1 in that board's jarvis_secrets.h.
 //
 // Wiring, WROOM-32 DevKit:
 //   DHT22   + to 3V3,  - to GND,  out to GPIO 4   (a bare DHT22 needs a
