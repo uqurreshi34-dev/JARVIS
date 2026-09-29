@@ -4,7 +4,7 @@
 // JARVIS's own certificate authority (setCACert) -- never setInsecure(),
 // which would let anything on the wifi pretend to be JARVIS.
 //
-//   - "online" once, when it joins the wifi;
+//   - "online" when it joins the wifi, and every 15 seconds after that as a heartbeat;
 //   - temperature and humidity every 30 seconds;
 //   - "motion" the moment the PIR sees someone (at most every 5 seconds).
 //
