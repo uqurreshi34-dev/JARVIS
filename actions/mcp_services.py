@@ -60,6 +60,11 @@ What a server may do is decided here, not by the server:
 - A server started as a program sees only the basics it needs to run and
   the variables its entry names, never the API keys JARVIS itself holds.
 
+A service may set "connect_timeout" in mcp.json when its first startup is
+slower than the normal default; the wait is per service, so one slow server
+does not lengthen the others. If that wait expires, the pending connection
+is cancelled so it cannot become a half-registered service later.
+
 Nothing connects until Agent Mode first needs a tool, and a server that
 fails to start costs a printed line, not a broken JARVIS.
 """
@@ -533,10 +538,18 @@ def _connect(name, entry):
     server = _Server(name, entry)
     server._ready = threading.Event()
 
-    asyncio.run_coroutine_threadsafe(_hold(server), _ensure_loop())
+    future = asyncio.run_coroutine_threadsafe(_hold(server), _ensure_loop())
 
-    if not server._ready.wait(CONNECT_SECONDS):
+    timeout = entry.get("connect_timeout", CONNECT_SECONDS)
+
+    try:
+        timeout = max(1.0, float(timeout))
+    except (TypeError, ValueError):
+        timeout = CONNECT_SECONDS
+
+    if not server._ready.wait(timeout):
         server.error = "did not answer in time"
+        future.cancel()
 
     if server.error or server.client is None:
         print(f"[JARVIS] connected service {name!r} unavailable: {server.error}")
