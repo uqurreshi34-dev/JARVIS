@@ -1,6 +1,7 @@
-"""Bitcoin and currency rates, from free keyless APIs.
+"""Bitcoin and currency rates.
 
-CoinGecko gives the Bitcoin price in pounds with its 24 hour change.
+CoinGecko supplies the crypto prices and history, using the optional
+COINGECKO_API_KEY from JARVIS's environment when present.
 Frankfurter serves European Central Bank reference rates, so it is asked for
 both today and the previous publication to work out the direction.
 
@@ -30,7 +31,7 @@ POLL_SECONDS = 120
 
 _CRYPTO_URL = "https://api.coingecko.com/api/v3/simple/price"
 
-# Past prices for reports, which CoinGecko serves free and without a key.
+# Past prices for reports.
 _HISTORY_URL = "https://api.coingecko.com/api/v3/coins/{coin}/market_chart"
 
 # What JARVIS watches. The spoken name is what he says aloud; the id is
@@ -67,11 +68,52 @@ _cache = {}
 
 
 def _get(url, params=None):
+    headers = None
+
+    # CoinGecko's current API accepts Demo keys in this header. Keep the key
+    # off the shared session because that session also talks to Frankfurter.
+    if "api.coingecko.com" in url:
+        key = (os.getenv("COINGECKO_API_KEY") or "").strip()
+
+        if key:
+            headers = {"x-cg-demo-api-key": key}
+
     try:
-        response = _session.get(url, params=params, timeout=TIMEOUT)
+        response = _session.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=TIMEOUT,
+        )
         response.raise_for_status()
 
         return response.json()
+
+    except requests.HTTPError as error:
+        response = getattr(error, "response", None)
+        status = getattr(response, "status_code", None)
+
+        try:
+            detail = response.json() if response is not None else None
+        except ValueError:
+            detail = None
+
+        if isinstance(detail, dict):
+            message = detail.get("error_message")
+
+            if not message and isinstance(detail.get("status"), dict):
+                message = detail["status"].get("error_message")
+
+            detail = message
+
+        detail = str(detail or getattr(response, "text", "") or error).strip()
+        suffix = f": {detail[:300]}" if detail else ""
+
+        print(
+            f"[JARVIS] market lookup failed: "
+            f"HTTP {status or '?'}{suffix}"
+        )
+        return None
 
     except (requests.RequestException, ValueError) as error:
         print(f"[JARVIS] market lookup failed: {error}")
@@ -96,8 +138,8 @@ def _store(key, value):
 def crypto():
     """Every watched coin as {name: (price, percent change)}.
 
-    One request covers all three, which matters: CoinGecko's free tier is
-    generous but not unlimited, and asking three times would be wasteful.
+    One request covers all three, which matters: CoinGecko's request
+    limits apply to calls, and asking three times would be wasteful.
     """
     cached = _cached("crypto", CRYPTO_CACHE)
 
@@ -218,8 +260,8 @@ def period_for(word):
 def history(name, period="day"):
     """Past prices for a coin as a list of (when, price), oldest first.
 
-    CoinGecko serves this free and without a key. Returns an empty list
-    when unavailable, so a report can say so rather than inventing data.
+    Returns an empty list when unavailable, so a report can say so
+    rather than inventing data.
     """
     coin = COINS.get((name or "").casefold())
     window = PERIODS.get(period, PERIODS["day"])
