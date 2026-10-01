@@ -1298,7 +1298,9 @@ here". Future tense is left to the weather; the past tense with no
 stretch ("how cold did it get in my room") is today so far, or the last
 24 hours before 3 am. The answer is said from the record, a chart of the
 stretch (matplotlib, the HUD's colours, starting where the record does if
-that is partway through) is shown on the chart panel, and with the house
+that is partway through, and broken, faintly shaded, wherever the record
+has a hole longer than GAP_SECONDS, so no line is drawn across readings
+never taken) is shown on the chart panel, and with the house
 up its room is lit.
 
 morning_report() is the night just gone in a sentence per room: the

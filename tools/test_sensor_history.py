@@ -346,6 +346,16 @@ night = sensor_history.window("overnight", now=at(0, 9, 30))
 feed(at(-1, 21), at(0, 6), 5, lambda _: 21)
 check(sensor_history.chart_span(["room"], night) == night, "one that covers the stretch is charted whole")
 
+# ---- a hole in the record is a hole on the chart ------------------------------------------------------
+
+rows = [(at(0, 15, minute), 50.0) for minute in range(0, 40, 1)] + [(at(0, 18, minute), 48.0) for minute in range(0, 20, 1)]
+pieces = sensor_history.runs(rows)
+check(len(pieces) == 2 and pieces[0][-1][0] == at(0, 15, 39) and pieces[1][0][0] == at(0, 18),
+      "the record splits where JARVIS was closed, so no line is drawn across it")
+check(len(sensor_history.runs(rows[:40])) == 1, "and an unbroken record is one run")
+picture = sensor_history.chart("humidity", [("your room", rows)], {"start": at(0, 15), "end": at(0, 18, 19)}, "T")
+check(bool(picture) and picture.startswith(b"\x89PNG"), "and is drawn")
+
 # ---- the night, in the morning -----------------------------------------------------------------------
 
 sensor_history.forget()

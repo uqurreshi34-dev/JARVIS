@@ -999,14 +999,27 @@ _LINES = ("#5fc8f5", "#f5b85f", "#8cf58a", "#f57a9b")
 _HOT, _COLD = "#ff8a5b", "#6fb8ff"
 
 
-def _thinned(rows):
-    if len(rows) <= CHART_POINTS:
+def runs(rows):
+    """[rows] split wherever the record has a hole longer than GAP_SECONDS (JARVIS closed, a board unplugged)."""
+    pieces = []
+
+    for row in rows:
+        if pieces and row[0] - pieces[-1][-1][0] <= GAP_SECONDS:
+            pieces[-1].append(row)
+        else:
+            pieces.append([row])
+
+    return pieces
+
+
+def _thinned(rows, most=CHART_POINTS):
+    if len(rows) <= most:
         return rows
 
-    size = len(rows) / CHART_POINTS
+    size = len(rows) / most
     thinned = []
 
-    for index in range(CHART_POINTS):
+    for index in range(most):
         bucket = rows[int(index * size):int((index + 1) * size)] or rows[-1:]
         thinned.append((sum(ts for ts, _ in bucket) / len(bucket), sum(value for _, value in bucket) / len(bucket)))
 
@@ -1060,11 +1073,21 @@ def chart(what, series, stretch, title):
                 continue
 
             colour = _LINES[index % len(_LINES)]
-            points = _thinned(rows)
-            times = [datetime.fromtimestamp(ts) for ts, _ in points]
-            values = [value for _, value in points]
-            axes.plot(times, values, color=colour, linewidth=2.0, label=label)
-            axes.fill_between(times, values, floor, color=colour, alpha=0.08)
+            pieces = runs(rows)
+
+            # Each unbroken run drawn on its own: a line across a hole in the
+            # record would show readings that were never taken.
+            for number, piece in enumerate(pieces):
+                points = _thinned(piece, max(2, round(CHART_POINTS * len(piece) / len(rows))))
+                times = [datetime.fromtimestamp(ts) for ts, _ in points]
+                values = [value for _, value in points]
+                axes.plot(times, values, color=colour, linewidth=2.0, label=label if number == 0 else None,
+                          marker="o" if len(piece) == 1 else None, markersize=3)
+                axes.fill_between(times, values, floor, color=colour, alpha=0.08)
+
+            for before, after in zip(pieces, pieces[1:]):
+                axes.axvspan(datetime.fromtimestamp(before[-1][0]), datetime.fromtimestamp(after[0][0]),
+                             color=_GRID, alpha=0.35, linewidth=0)
 
             high, low = max(rows, key=lambda row: row[1]), min(rows, key=lambda row: row[1])
 
