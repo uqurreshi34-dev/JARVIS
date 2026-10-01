@@ -15,7 +15,9 @@ certificates made here. Checked:
 - phone.py keeps JARVIS's own pair made and serves through phone_tls;
 - JARVIS's own certificates carry the key identifiers that strict checking
   (Python 3.13 and later, by default) insists on, and are checked strictly
-  here on any Python; ones made before that are replaced.
+  here on any Python; ones made before that are replaced;
+- each connection ends with TLS's close_notify, so a strict client (the
+  boards' TLS library) sees a clean end instead of a dropped connection.
 
     python tools/test_phone_tls.py
 """
@@ -237,5 +239,61 @@ check("local_ready = ensure_certificate()" in start and "if not supplied and not
       "phone.py keeps JARVIS's own pair made, even when serving a supplied one")
 check("phone_tls.serving_context(" in start and "ssl_context=context" in start,
       "and serves through phone_tls")
+
+# A finished connection ends with TLS's goodbye (close_notify), not a bare
+# drop: a strict client, as the boards' TLS library is, reads the drop as an
+# error and the board printed one for every report. phone.py's own server
+# class, read from its source like the functions above.
+from werkzeug.serving import ThreadedWSGIServer  # noqa: E402
+
+classes = [node for node in source_tree.body
+           if (isinstance(node, ast.ClassDef) and node.name == "_TidyServer")
+           or (isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "_GOODBYE_SECONDS" for t in node.targets))]
+tidy_space = {"ssl": ssl, "ThreadedWSGIServer": ThreadedWSGIServer}
+exec(compile(ast.Module(body=classes, type_ignores=[]), "phone.py", "exec"), tidy_space)
+check("_TidyServer(" in start and "make_server(" not in start, "phone.py serves through its own tidy server")
+
+
+def goodbye(server_class):
+    """How a strict client sees the end of one request: "clean" or "dropped"."""
+    from flask import Flask
+
+    app = Flask("goodbye")
+    app.add_url_rule("/sensor", "sensor", lambda: {"ok": True}, methods=["POST"])
+    server = server_class("127.0.0.1", 0, app, ssl_context=phone_tls.serving_context(
+        *issued_pair, local=(space["CERT_FILE"], space["KEY_FILE"])))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    with open(space["CA_FILE"], "rb") as handle:
+        context = ssl.create_default_context(cadata=handle.read())
+
+    context.verify_flags |= ssl.VERIFY_X509_STRICT
+
+    try:
+        with socket.create_connection(("127.0.0.1", server.server_port), timeout=5) as raw:
+            with context.wrap_socket(raw, server_hostname="127.0.0.1", suppress_ragged_eofs=False) as tls:
+                tls.sendall(b"POST /sensor HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                            b"Content-Length: 2\r\n\r\n{}")
+                answer = b""
+
+                while True:
+                    chunk = tls.recv(4096)
+
+                    if not chunk:
+                        break
+
+                    answer += chunk
+
+        return "clean" if answer.startswith(b"HTTP/1.1 200") else "no answer"
+
+    except ssl.SSLEOFError:
+        return "dropped"
+
+    finally:
+        server.shutdown()
+
+
+check(goodbye(ThreadedWSGIServer) == "dropped", "werkzeug's own server drops the connection without a goodbye")
+check(goodbye(tidy_space["_TidyServer"]) == "clean", "phone.py's says goodbye, so a strict client sees a clean end")
 
 sys.exit(1 if failures else 0)

@@ -34,6 +34,7 @@ from actions import (
     blender,
     browser,
     camera,
+    cameras,
     charts,
     clipboard,
     contacts,
@@ -2105,6 +2106,34 @@ def _look(question=None):
     return answer
 
 
+def _camera_picture(command):
+    """Ask a camera on the wifi for a picture and show it; describe it when asked what is there.
+
+    Showing is free. Describing goes through the same vision call as the
+    PC's own camera, so the two eyes answer alike, and "close the camera"
+    puts either picture away.
+    """
+    request = cameras.asked(command)
+    said, frame = cameras.picture(command)
+
+    if frame is not None and _camera_listener:
+        looks = request[1]["looks"] if request else ""
+        title = f"{looks.upper()} CAM" if looks else (request[1]["name"].upper() if request else "CAMERA")
+
+        try:
+            _camera_listener(frame, title)
+        except Exception as error:
+            print(f"[JARVIS] could not show the picture: {error}")
+
+    if said:
+        return said
+
+    if frame is None:
+        return "No picture came back, sir."
+
+    return camera.describe_image(frame, command)
+
+
 def _stop_looking():
     camera.release()
 
@@ -3734,7 +3763,7 @@ _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 # Commands recognised on the fast path that no later route may take, though
 # they may name a connected service: a protocol runs OBS's own actions
 # itself, and "initiate stream protocol" is not a request for Agent Mode.
-_SETTLED_HERE = frozenset({"protocol", "file_hologram", "house", "house_question"})
+_SETTLED_HERE = frozenset({"protocol", "file_hologram", "house", "house_question", "camera_picture"})
 
 
 def _sensor_answer(command):
@@ -3797,6 +3826,12 @@ def _fast_path(command):
     # room", "close the house". Rooms and places are house.json's own, so a
     # room is claimed only by its own name, and only after one of the verbs
     # that ask after a room.
+    # A camera on the wifi, by what it looks at: "show me the street",
+    # "what's happening on the street". Only cameras that exist are named,
+    # so with none, the PC's own webcam commands are left as they are.
+    if cameras.asked(command):
+        return _blank_result("camera_picture")
+
     if house.asked(command):
         return _blank_result("house")
 
@@ -5807,6 +5842,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "file_hologram":
         return _query(intent, lambda: file_hologram.answer(command) or "The files aren't showing, sir.")
+
+    if intent == "camera_picture":
+        return _query(intent, lambda: _camera_picture(command))
 
     if intent == "house":
         return _query(intent, lambda: house.answer(command) or "The house isn't showing, sir.")

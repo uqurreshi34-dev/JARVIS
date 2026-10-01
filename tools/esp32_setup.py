@@ -11,15 +11,17 @@ is when the certificates are made):
 
     python tools/esp32_setup.py
 
-It writes two files beside the sketch in arduino/jarvis_sensor/, both kept
-out of git:
+It writes two files beside each sketch, the sensor in arduino/jarvis_sensor/
+and the camera in arduino/jarvis_camera/, all kept out of git:
 
 - jarvis_config.h   JARVIS's address, port and certificate authority.
                     Rewritten on every run.
 - jarvis_secrets.h  your wifi name and password, and the phone token.
                     Made once, with the token filled in from .env; you add
                     the wifi details by hand. Never rewritten, and the
-                    token is never printed.
+                    token is never printed. The camera's is made with the
+                    wifi details already in the sensor's, when there are
+                    some, and named "my room cam".
 
 Checked before anything is written: the certificate authority really did
 sign the certificate JARVIS serves, and that certificate names the address
@@ -51,6 +53,14 @@ DEFAULT_PORT = 8765
 SKETCH = ROOT / "arduino" / "jarvis_sensor"
 CONFIG_H = SKETCH / "jarvis_config.h"
 SECRETS_H = SKETCH / "jarvis_secrets.h"
+
+# The camera, named after its room with "cam" on the end so the house plan
+# places it there and points it out of that room's window.
+CAMERA_SKETCH = ROOT / "arduino" / "jarvis_camera"
+CAMERA_NAME = "my room cam"
+
+# Every sketch: its folder, and the name a new secrets file gives it.
+SKETCHES = ((SKETCH, "room"), (CAMERA_SKETCH, CAMERA_NAME))
 
 # The first ESP32 Arduino release whose TLS library checks an IP address
 # named in a certificate; older ones compare only text names and would
@@ -143,27 +153,56 @@ def config_header(ca, host, port):
     )
 
 
-def secrets_header(token):
-    """jarvis_secrets.h: made once; the wifi details are the user's to add."""
+def secrets_header(token, name="room", wifi=None):
+    """jarvis_secrets.h: made once; the wifi details are the user's to add.
+
+    [wifi] is the (ssid, password) lines already written in another sketch's
+    secrets, copied as they are so the user types them once.
+    """
     token = token or ""
 
     # Written into C source: anything but a plain token would break it.
     if any(ch in token for ch in '"\\\n\r'):
         raise SetupError("JARVIS_PHONE_TOKEN contains characters a sketch cannot hold.")
 
+    if any(ch in name for ch in '"\\\n\r'):
+        raise SetupError("A board's name cannot hold quotes or backslashes.")
+
+    ssid, password = wifi or ('#define WIFI_SSID "your wifi name"', '#define WIFI_PASSWORD "your wifi password"')
+
     return (
         "// Your wifi and JARVIS's token. Kept out of git. Fill in the wifi.\n"
         "#pragma once\n"
         "\n"
-        '#define WIFI_SSID "your wifi name"\n'
-        '#define WIFI_PASSWORD "your wifi password"\n'
+        f"{ssid}\n"
+        f"{password}\n"
         "\n"
         "// The same token the phone uses (JARVIS_PHONE_TOKEN in .env).\n"
         f'#define JARVIS_TOKEN "{token}"\n'
         "\n"
-        "// What JARVIS calls this board: \"room\" is said as \"Room sensor online\".\n"
-        '#define SENSOR_NAME "room"\n'
+        "// What JARVIS calls this board, and the room the house plan puts it in:\n"
+        "// \"room\" is the room's own sensor; \"my room cam\" is its camera.\n"
+        f'#define SENSOR_NAME "{name}"\n'
     )
+
+
+def wifi_lines(secrets_path):
+    """The WIFI_SSID and WIFI_PASSWORD lines of a secrets file, if filled in; else None.
+
+    Read, never printed: the password goes from one ignored file to another.
+    """
+    try:
+        lines = Path(secrets_path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+    ssid = next((line.strip() for line in lines if line.strip().startswith("#define WIFI_SSID ")), None)
+    password = next((line.strip() for line in lines if line.strip().startswith("#define WIFI_PASSWORD ")), None)
+
+    if not ssid or not password or '"your wifi name"' in ssid or '"your wifi password"' in password:
+        return None
+
+    return ssid, password
 
 
 def live_check(host, port, ca, timeout=3.0):
@@ -242,22 +281,30 @@ def main():
         print(f"Not ready: {problem}")
         return 1
 
-    SKETCH.mkdir(parents=True, exist_ok=True)
-    CONFIG_H.write_text(config_header(ca, host, port), encoding="ascii")
+    print(f"Ready. The boards will reach JARVIS at https://{host}:{port}")
+    print("They check JARVIS's certificate against JARVIS's own authority (setCACert).")
 
-    made_secrets = not SECRETS_H.exists()
+    for folder, name in SKETCHES:
+        if not folder.exists():
+            continue
 
-    if made_secrets:
-        SECRETS_H.write_text(secrets_header(token), encoding="ascii")
+        config, secrets = folder / "jarvis_config.h", folder / "jarvis_secrets.h"
+        config.write_text(config_header(ca, host, port), encoding="ascii")
+        print(f"Wrote {config.relative_to(ROOT)}")
 
-    print(f"Ready. The board will reach JARVIS at https://{host}:{port}/sensor")
-    print("It checks JARVIS's certificate against JARVIS's own authority (setCACert).")
-    print(f"Wrote {CONFIG_H.relative_to(ROOT)}")
+        if secrets.exists():
+            print(f"Kept {secrets.relative_to(ROOT)} as it is.")
+            continue
 
-    if made_secrets:
-        print(f"Wrote {SECRETS_H.relative_to(ROOT)}: add your wifi name and password to it.")
-    else:
-        print(f"Kept {SECRETS_H.relative_to(ROOT)} as it is.")
+        # The wifi from a sketch that already has it, so it is typed once.
+        wifi = next((found for other, _name in SKETCHES if other != folder
+                     for found in [wifi_lines(other / "jarvis_secrets.h")] if found), None)
+        secrets.write_text(secrets_header(token, name, wifi), encoding="ascii")
+
+        if wifi:
+            print(f"Wrote {secrets.relative_to(ROOT)} with the wifi you already set, named \"{name}\".")
+        else:
+            print(f"Wrote {secrets.relative_to(ROOT)}: add your wifi name and password to it.")
 
     # The files are right; now whether JARVIS really serves the board
     # something it will accept.

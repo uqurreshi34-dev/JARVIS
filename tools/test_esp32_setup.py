@@ -13,7 +13,8 @@ PC's addresses) -- never the real ones. Checked:
 - the config header carries the address, port and authority, and no token;
 - the secrets header carries the token, with the wifi left for the user,
   and refuses a token that would break the C source;
-- the header files are kept out of git;
+- the header files are kept out of git, for the sensor and the camera;
+- the camera's secrets carry its own name and the wifi already set;
 - the tool's settings are phone.py's own, read from its source.
 
     python tools/test_esp32_setup.py
@@ -150,6 +151,34 @@ try:
 except esp32_setup.SetupError:
     check(True, "a token that would break the C source is refused")
 
+# The camera's secrets: its own name, and the wifi already set for the sensor.
+import tempfile  # noqa: E402
+
+with tempfile.TemporaryDirectory() as scratch:
+    filled = Path(scratch, "filled.h")
+    filled.write_text('#define WIFI_SSID "home"\n#define WIFI_PASSWORD "pass word"\n#define JARVIS_TOKEN "t"\n',
+                      encoding="ascii")
+    blank = Path(scratch, "blank.h")
+    blank.write_text(esp32_setup.secrets_header("t"), encoding="ascii")
+
+    wifi = esp32_setup.wifi_lines(filled)
+    check(wifi == ('#define WIFI_SSID "home"', '#define WIFI_PASSWORD "pass word"'),
+          "the wifi already written for one board is found")
+    check(esp32_setup.wifi_lines(blank) is None and esp32_setup.wifi_lines(Path(scratch, "none.h")) is None,
+          "and not the placeholders, nor a file that is not there")
+
+    camera = esp32_setup.secrets_header("abc123", esp32_setup.CAMERA_NAME, wifi)
+    check('#define SENSOR_NAME "my room cam"' in camera and '#define WIFI_SSID "home"' in camera
+          and '#define JARVIS_TOKEN "abc123"' in camera, "the camera's secrets: its name, the same wifi and token")
+    check(dict(esp32_setup.SKETCHES)[esp32_setup.CAMERA_SKETCH] == "my room cam"
+          and esp32_setup.CAMERA_SKETCH.name == "jarvis_camera", "and the camera sketch is set up beside the sensor's")
+
+try:
+    esp32_setup.secrets_header("t", 'bad"name')
+    check(False, "a name that would break the C source is refused")
+except esp32_setup.SetupError:
+    check(True, "a name that would break the C source is refused")
+
 # The tool uses phone.py's settings without importing it (that would start
 # the voice system). Read phone.py's own definitions, not run them.
 import ast  # noqa: E402
@@ -172,9 +201,14 @@ check(defined.get("TOKEN_ENV") == esp32_setup.TOKEN_ENV and defined.get("PORT_EN
 check(defined.get("CA_FILE") == esp32_setup.CA_FILE.name and defined.get("CERT_FILE") == esp32_setup.CERT_FILE.name,
       f"and so are the certificate files ({defined.get('CA_FILE')}, {defined.get('CERT_FILE')})")
 
-ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
-check("arduino/jarvis_sensor/jarvis_secrets.h" in ignored and "arduino/jarvis_sensor/jarvis_config.h" in ignored,
-      "the header files are kept out of git")
+import fnmatch  # noqa: E402
+
+ignored = [line.strip() for line in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+           if line.strip() and not line.startswith("#")]
+headers = [f"arduino/{sketch}/{name}" for sketch in ("jarvis_sensor", "jarvis_camera")
+           for name in ("jarvis_secrets.h", "jarvis_config.h")]
+check(all(any(fnmatch.fnmatch(path, rule) for rule in ignored) for path in headers),
+      "the header files are kept out of git, for the sensor and the camera")
 
 # The sketch: a bare board reports no phantom movement, and the C3 Super
 # Mini gets pins of its own, clear of the ones that decide how it starts.
