@@ -50,6 +50,7 @@ from actions import (
     house,
     presence,
     protocols,
+    sensor_history,
     sensors,
     camera,
     contacts,
@@ -149,6 +150,10 @@ class Assistant:
         self._turn_stopped = threading.Event()
         self._in_turn = False
 
+        # One voice at a time: a protocol's {"say"} steps run on the action's
+        # own thread while its "Initiating..." may still be playing.
+        self._voice_lock = threading.Lock()
+
     def stop(self):
         self._stop.set()
 
@@ -234,9 +239,10 @@ class Assistant:
             print(f"[JARVIS] stopped; not saying: {text[:60]!r}", flush=True)
             return
 
-        self._reply(text)
-        self._state(SPEAKING)
-        speak(text)
+        with self._voice_lock:
+            self._reply(text)
+            self._state(SPEAKING)
+            speak(text)
 
         if self._turn_stopped.is_set():
             self._state(IDLE)
@@ -349,6 +355,31 @@ class Assistant:
             self._say(answer)
         else:
             self._say(phrases.pick("cannot_find"))
+
+    def _run_said(self, text):
+        """Do a command from a protocol's {"command"} step, as if it were said. True if it was understood.
+
+        Shown on the HUD as heard and answered aloud as usual, so a demo
+        protocol looks and sounds like you asking. Another protocol is
+        refused (protocols.py refuses it first too).
+        """
+        self._heard(text)
+
+        try:
+            result = handle_command(text)
+        except Exception as error:
+            print(f"[JARVIS] protocol command error: {error}")
+            return False
+
+        if not result or result.get("intent") == "protocol":
+            return False
+
+        if result.get("kind") == "query":
+            self._run_query(result)
+        else:
+            self._run_action(result)
+
+        return True
 
     def _on_alert(self, text):
         """Called from a reminder's own thread when one falls due.
@@ -888,6 +919,9 @@ def main():
     # return is only "welcome back" when your phone is home too.
     sensors.set_namer(house.room_of)
     sensors.set_presence(presence.phone)
+    # Every reading kept, for "how warm did my room get overnight", and a
+    # word when a room has been too damp or too warm for too long.
+    sensors.set_recorder(sensor_history.record)
     house_hologram.room_clicked.connect(
         lambda name: threading.Thread(target=house.tapped, args=(name,), daemon=True).start())
     hud.shutdown.connect(house_hidden)
@@ -1003,6 +1037,8 @@ def main():
     set_level_listener(hud.level_changed.emit)
 
     assistant = Assistant(hud)
+    # A protocol's {"say"} and {"command"} steps speak and act as JARVIS does.
+    protocols.set_voice(say=assistant._say, run=assistant._run_said)
     # The recitation page, projected like the news and chart panels. Built
     # here rather than in Assistant because the gate, the HUD state and the
     # page all have to move together, and this is the one place all three

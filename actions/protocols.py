@@ -42,6 +42,12 @@ do more than asking for each step in turn could:
     {"close_app": name}                that program, asked to close and never
                                        forced (forcing OBS makes it offer safe
                                        mode next time)
+    {"say": words}                     JARVIS says it, in his own voice
+    {"command": words}                 anything you could say to him ("show me
+                                       my files"), done and answered as if said;
+                                       never another protocol
+    {"pause": seconds}                 a moment, up to a minute, so what is on
+                                       screen can be seen
     {"ask": question, "yes": step, "no": step}
                                        a yes or no, with the countdown ring;
                                        an unanswered question does neither.
@@ -51,7 +57,10 @@ do more than asking for each step in turn could:
 
 Any step may carry "optional": true, so its failing goes unmentioned. What
 is engaged, and which tabs each opened, is kept in .jarvis-protocols.json
-so a clean slate still knows after JARVIS restarts.
+so a clean slate still knows after JARVIS restarts. A protocol with no
+"clear" leaves nothing to undo, so it is never kept as engaged: a demo
+protocol that shows things off and puts them away runs again whenever
+asked.
 """
 
 import json
@@ -72,8 +81,22 @@ ASK_SECONDS = 20
 # How long a clean slate gives a service to answer before leaving it be.
 CLEAR_WAIT_SECONDS = 8.0
 
+# The longest a {"pause"} step waits: a typo of 600 for 6 must not hang JARVIS.
+MAX_PAUSE_SECONDS = 60.0
+
 _lock = threading.Lock()
 _flash_listener = None
+
+# JARVIS's voice and ears for {"say"} and {"command"} steps (main.py): [say]
+# speaks words; [run] does a command as if it were said and answers whether
+# it was understood.
+_voice = {"say": None, "run": None}
+
+
+def set_voice(say=None, run=None):
+    """Register how a protocol speaks (say(words)) and does a spoken command (run(words) -> bool)."""
+    _voice["say"] = say
+    _voice["run"] = run
 
 
 def set_flash_listener(listener):
@@ -312,6 +335,19 @@ class Hands:
         from actions import mcp_services
         return mcp_services.act(service, tool, arguments, then=then)
 
+    def say(self, words):
+        if _voice["say"] is None:
+            return False
+
+        _voice["say"](words)
+        return True
+
+    def run_command(self, words):
+        return bool(_voice["run"] and _voice["run"](words))
+
+    def pause(self, seconds):
+        time.sleep(seconds)
+
 
 hands = Hands()
 
@@ -334,6 +370,27 @@ def _do(step, record):
 
     if "close_tabs" in step:
         hands.close_tabs(record.get("tabs") or [])
+        return None
+
+    if "say" in step:
+        return None if hands.say(str(step["say"])) else "I had no voice to say it with"
+
+    if "command" in step:
+        words = str(step["command"]).strip()
+
+        # A protocol inside a protocol could run itself for ever.
+        if asked(words) is not None:
+            return f"a protocol can't start another protocol ({words})"
+
+        return None if words and hands.run_command(words) else f"I didn't understand '{words}'"
+
+    if "pause" in step:
+        try:
+            seconds = float(step["pause"])
+        except (TypeError, ValueError):
+            return f"a pause of {step['pause']!r} isn't a number of seconds"
+
+        hands.pause(min(MAX_PAUSE_SECONDS, max(0.0, seconds)))
         return None
 
     if "close_project" in step:
@@ -463,7 +520,11 @@ def engage(name):
 
     with _lock:
         state = [item for item in _state() if item["name"] != name]
-        state.append(record)
+
+        # Nothing to clear, nothing to keep: it has run, and is not engaged.
+        if protocol.get("clear"):
+            state.append(record)
+
         _save_state(state)
 
     journal.action(f"protocol_{name}", "engaged", not problems,

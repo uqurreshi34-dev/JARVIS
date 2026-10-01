@@ -526,6 +526,81 @@ def answer_question(text):
     return sensors.answer((what, names)) or f"No reading from {_said(room_name)} yet, sir."
 
 
+def named_room(text):
+    """The plan's room that [text] names, with its boards: (room name, [board names]), or None.
+
+    The longest of the rooms' names and aliases among the words wins, so
+    "front room" is never "room"; "my room's" counts as "my room". Passages
+    are never named. Only with a plan of your own, as question() is. For
+    sensor_history.py, which asks after a room over time.
+    """
+    if not _exists(CONFIG_NAME):
+        return None
+
+    key = active_place()
+
+    with _lock:
+        if _view is not None:
+            key = _view["place"]
+
+    known = places()
+
+    if key not in known:
+        return None
+
+    said = " " + " ".join(_strip_polite(_words(text))) + " "
+    best = None
+
+    for room in _rooms(known[key]):
+        if room["kind"] == "passage":
+            continue
+
+        for name in _room_names(room):
+            if (f" {name} " in said or f" {name}s " in said) and (best is None or len(name) > len(best[1])):
+                best = (room["name"], name)
+
+    if best is None:
+        return None
+
+    drawn = render(key)
+    room = next((room for room in (drawn or {}).get("rooms") or [] if room["name"] == best[0]), None)
+    return best[0], [board["name"] for board in (room or {}).get("boards") or []]
+
+
+def room_for(board_name):
+    """The plan's room for a board by its name, whether or not it has reported this run; None if none.
+
+    Listed in a room's "boards", or named after a room, as render() places
+    them; a camera is never a room's sensor. For the record of boards that
+    reported before JARVIS last started.
+    """
+    name = _key(board_name)
+    known = places()
+    key = active_place()
+
+    if not name or key not in known:
+        return None
+
+    rooms = _rooms(known[key])
+
+    for room in rooms:
+        if name in {board["name"] for board in room["boards"]}:
+            return room["name"]
+
+    spaces = [room for room in rooms if room["kind"] != "passage"]
+
+    if _camera_room(name, spaces):
+        return None
+
+    room = _find_room(name, spaces)
+    return room["name"] if room else None
+
+
+def spoken_room(name):
+    """A room as a sentence names it, to you: "your room", "the kitchen", "room 4"."""
+    return _said(name)
+
+
 def spoken_spaces(counts):
     """"seven rooms, a kitchen and a landing": what a house has, as it is said."""
     parts = []

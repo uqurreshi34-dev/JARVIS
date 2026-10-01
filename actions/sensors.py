@@ -83,6 +83,17 @@ def set_namer(callback):
     _namer = callback
 
 
+# Kept a record of every report (actions/sensor_history.py, wired in by
+# main.py): called with (name, event, the readings this report carried),
+# and may answer with a nudge to say ("humidity has been high for two hours").
+_recorder = None
+
+
+def set_recorder(callback):
+    global _recorder
+    _recorder = callback
+
+
 _lock = threading.Lock()
 
 # name -> {"seen": monotonic, "moved": monotonic|None, "greeted": monotonic|None,
@@ -209,6 +220,7 @@ def report(payload):
     # Set inside the lock, read after it. Initialised here so the name
     # exists on every path rather than only the one that assigns it.
     fresh = False
+    carried = {}
 
     with _lock:
         state = _sensors.get(name)
@@ -232,6 +244,7 @@ def report(payload):
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 state["readings"][field] = float(value)
                 state["read"] = now
+                carried[field] = float(value)
 
         if event == "motion":
             # Anyone already about, anywhere the sensors can see?
@@ -267,6 +280,20 @@ def report(payload):
             # A display failing must not stop the announcement.
             print(f"[JARVIS] sensor display failed: {error}", flush=True)
 
+    nudge = None
+
+    if _recorder is not None:
+        try:
+            nudge = _recorder(name, event, carried)
+        except Exception as error:
+            # A history that cannot be written must not stop the announcement.
+            print(f"[JARVIS] sensor history failed: {error}", flush=True)
+
+    return _news(name, event, fresh, first_time, returning) or nudge
+
+
+def _news(name, event, fresh, first_time, returning):
+    """What a report itself is worth saying, or None."""
     if event == "online":
         if first_time or returning:
             return f"{_spoken(name)} sensor online, sir."

@@ -68,11 +68,13 @@ from actions import (
     patterns,
     safety,
     screen_control,
+    sensor_history,
     sensors,
     social,
     tasks,
     project_setup,
     protocols,
+    tradingview,
     tripo,
 )
 from actions.screen import describe_capture
@@ -2106,6 +2108,37 @@ def _look(question=None):
     return answer
 
 
+def _show_chart(data, title):
+    if data and _chart_listener:
+        try:
+            _chart_listener(data, title)
+        except Exception as error:
+            print(f"[JARVIS] could not show the chart: {error}")
+
+
+def _sensor_history(command):
+    """What the boards said over a stretch of time, with its chart on the HUD and the room lit on the house."""
+    answered = sensor_history.answer(command)
+
+    if answered is None:
+        return "I couldn't tell which stretch of time you meant, sir."
+
+    said, data, title, boards = answered
+    _show_chart(data, title)
+
+    if boards:
+        house.follow(boards)
+
+    return said
+
+
+def _tradingview(command):
+    """TradingView's readout for a coin, spoken, and its card on the HUD."""
+    said, data, title = tradingview.answer(command)
+    _show_chart(data, title)
+    return said
+
+
 def _camera_picture(command):
     """Ask a camera on the wifi for a picture and show it; describe it when asked what is there.
 
@@ -3763,7 +3796,8 @@ _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 # Commands recognised on the fast path that no later route may take, though
 # they may name a connected service: a protocol runs OBS's own actions
 # itself, and "initiate stream protocol" is not a request for Agent Mode.
-_SETTLED_HERE = frozenset({"protocol", "file_hologram", "house", "house_question", "camera_picture"})
+_SETTLED_HERE = frozenset({"protocol", "file_hologram", "house", "house_question", "camera_picture",
+                           "sensor_history", "tradingview"})
 
 
 def _sensor_answer(command):
@@ -3815,6 +3849,20 @@ def _fast_path(command):
 
     if about:
         return _blank_result("search_reports", text=_original_case(command, about[1]))
+
+    # What the boards said over a stretch of time: "how warm did my room
+    # get overnight". It needs the stretch, a reading and a room, so it is
+    # narrow; and first, because without it the house plan would answer
+    # with the room's reading now.
+    if sensor_history.question(command):
+        return _blank_result("sensor_history")
+
+    # TradingView's readout for a coin JARVIS watches: "bitcoin on
+    # tradingview", "show me ethereum on the four hour chart". A coin and a
+    # word for the analysis are both needed, so "what's bitcoin at" and
+    # "tell me when bitcoin moves" keep their own routes.
+    if tradingview.asked(command):
+        return _blank_result("tradingview")
 
     # The file hologram: "show me my files", then "summarise file three",
     # "open three", "close the files". Numbered cards, so no file is ever
@@ -5845,6 +5893,12 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "camera_picture":
         return _query(intent, lambda: _camera_picture(command))
+
+    if intent == "sensor_history":
+        return _query(intent, lambda: _sensor_history(command))
+
+    if intent == "tradingview":
+        return _query(intent, lambda: _tradingview(command))
 
     if intent == "house":
         return _query(intent, lambda: house.answer(command) or "The house isn't showing, sir.")

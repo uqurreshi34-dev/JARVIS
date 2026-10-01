@@ -53,6 +53,9 @@ _PROTECTED_NAMES = frozenset({
     # The house hologram's plan, and which place is in use.
     "house.json",
     ".jarvis-house.json",
+    # What the sensors said over time, and your settings for it and its nudges.
+    "sensor-history.sqlite",
+    "sensors.json",
     # The Outlook sign-in; moving it signs calendar sync out.
     "outlook_token_cache.json",
     # Caches, cheap to lose but fetched again over the network if moved.
@@ -73,6 +76,8 @@ _PROTECTED_PATTERNS = (
     # Copies of mcp.json kept before an edit ("mcp.json.before-..."). They
     # hold the same keys and tokens, so they stay where they are too.
     re.compile(r"^mcp\.json\..+$", re.IGNORECASE),
+    # SQLite's own companions to a database it is writing.
+    re.compile(r"^(?:sensor-history|jarvis-vectors)\.sqlite-(?:journal|wal|shm)$", re.IGNORECASE),
 )
 
 

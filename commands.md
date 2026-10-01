@@ -438,9 +438,37 @@ Yours to change, in `protocols.json` in your JARVIS folder.
 | initiate stream protocol | starts OBS, unmutes the mic, starts the replay buffer and recording |
 | clean slate protocol | undoes whatever is engaged: closes only the tabs he opened, stops recording and the replay buffer, closes OBS, then asks "Shall I close the JARVIS project?" (yes closes it; no, or no answer, leaves it open) |
 | clear the stream protocol | undoes just that one |
+| initiate demo protocol | your own show reel, if you add one: see below |
 
 "Start up protocol" and "clean slate" alone work too. A step that fails is
 named in his reply; the rest still happen.
+
+A step can also speak and act as you would: `{"say": "..."}` has him say
+it, `{"command": "show me my files"}` does anything you could say to him,
+answered aloud and shown as heard, and `{"pause": 4}` waits (a minute at
+most). A command can never start another protocol. A protocol with no
+"clear" is never kept as engaged, so a demo runs again whenever asked:
+
+    "demo": {
+      "aliases": ["demonstration"],
+      "engage": [
+        {"service": "obs", "wait": 10, "optional": true},
+        {"service": "obs", "tool": "obs-start-record", "optional": true},
+        {"say": "Good evening. Allow me to show you around."},
+        {"command": "show me my files"}, {"pause": 4}, {"command": "close the files"},
+        {"command": "show me the house"}, {"pause": 3},
+        {"command": "what's happening in my room"}, {"command": "close the house"},
+        {"command": "how warm did my room get overnight"}, {"pause": 4},
+        {"command": "show me bitcoin on tradingview"}, {"pause": 5},
+        {"command": "close the chart"},
+        {"say": "That concludes the tour."},
+        {"service": "obs", "tool": "obs-stop-record", "optional": true}
+      ],
+      "say": "Demo complete, sir."
+    }
+
+With OBS open first, the recording holds the whole run; without it, the
+OBS steps are skipped silently and the rest still plays.
 
 ## The sensors
 
@@ -463,6 +491,38 @@ With a house.json, the same questions work for any room on the plan by
 its own name or alias ("is anyone in the kitchen", "how warm is room 4",
 "is anybody in my bedroom"): the room's boards answer, and a room with
 none says so ("The kitchen has no sensor yet, sir").
+
+### Over time
+
+Every reading is kept for 30 days, in `sensor-history.sqlite` in the
+JARVIS folder, never sent anywhere. Ask about a stretch of time and a
+chart of it goes up on the HUD. **Free**: no model call.
+
+| Say | Does |
+|---|---|
+| how warm did my room get overnight | the highest, and when |
+| what was the coldest it got in here last night | the lowest, and when |
+| what was the humidity in my room today | the range, the average, and now |
+| was anyone in my room overnight | movement: how often, first and last |
+| show me the temperature in my room over the last 6 hours | the same, for any stretch |
+
+Stretches: overnight / last night (10 pm to 7 am; at 11 pm it is still
+last night), tonight, today, yesterday, this morning / afternoon /
+evening, yesterday evening, since this morning, the last hour, the last
+half hour, the last 6 hours, a couple of hours, the last 3 days, this
+week. A question needs the stretch, a reading and a room ("in here"
+counts), so "how cold did it get last night" alone is still the weather.
+
+He also says when a room has been off for too long: humidity over 70
+percent for two hours ("opening a window would help"), over 27 degrees or
+under 16 for half an hour. Once per room every six hours, and never
+between 11 pm and 7 am. All of it, the night's hours too, is yours in
+`sensors.json` in the JARVIS folder (none is needed):
+
+    {"overnight": {"from": "22:00", "to": "07:00"},
+     "quiet_hours": {"from": "23:00", "to": "07:00"},
+     "nudges": [{"reading": "humidity", "above": 65, "for_minutes": 90,
+                 "say": "{Place} has been damp for {duration}, sir: {value} percent."}]}
 
 Welcome back is for you. It is only said when nobody has moved for a
 while, never while you have been talking to JARVIS in the last five
@@ -577,6 +637,24 @@ Dates understood: "tomorrow", "next Friday", "the twenty fifth of December",
 
 Prices are always exact, never rounded. Alerts fire on a move in either
 direction, once per move.
+
+### TradingView
+
+With the TradingView service connected (mcp.json), its readout of a coin
+he watches, said and shown as a card on the HUD. **Free**: no model call.
+
+| Say | Does |
+|---|---|
+| bitcoin on tradingview | the one hour chart: price, change, RSI, the Bollinger signal |
+| show me ethereum on the four hour chart | another timeframe: five or fifteen minute, hour, four hour, daily, weekly, monthly |
+| what's the rsi on xrp | the same readout |
+| close the chart | puts the card away |
+
+The card shows the price, the day's open, high and low, where RSI sits
+between oversold and overbought, the signal, and the support and
+resistance levels around the price. Prices are in dollars (the coin
+against USDT on Binance) and exact. Only the numbers and the few words
+expected are taken from TradingView's answer.
 
 ## Camera
 
@@ -1060,6 +1138,7 @@ Ctrl+C skips the cleanup, so prefer saying it.
 - Disk below 10% free
 - Memory above 92% for a sustained period
 - A coin moving past your threshold
+- A room too damp, too warm or too cold for too long (see The sensors)
 - What's in the diary for today and tomorrow, at startup
 - Anything missed while he was closed, when he next starts
 - A habit he's noticed, offered once — see Patterns

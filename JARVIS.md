@@ -981,6 +981,19 @@ nothing more, so "stop the replay buffer" can never run "start the replay
 buffer". A phrase only runs a tool the service already lets run without
 asking; anything else, or anything not matched, takes the ordinary route.
 
+TradingView is connected the same way (`tradingview-mcp-server`, every
+tool marked read-only). Besides offering its tools to the model,
+`actions/tradingview.py` asks one of them itself: "bitcoin on tradingview"
+or "show me ethereum on the four hour chart" calls `coin_analysis` for the
+coin's USDT pair on Binance, on the fast path with no model call, through
+`mcp_services.read()`, which asks read-only tools only (`offering()`
+finds whichever connected service has the tool, so nothing depends on
+the name in mcp.json). Only the numbers and the few words it expects are
+taken from the answer, so nothing else the service says is ever spoken;
+the price is said exactly, and a card (price, change, open, high and low,
+an RSI gauge, the Bollinger signal, the pivot levels around the price) is
+drawn with matplotlib for the chart panel.
+
 The services strip shows every service while all are idle, and only the
 working ones while any is ("OBS +2").
 
@@ -1239,6 +1252,32 @@ person already home, not an arrival in each.
 exactly as the sketch does (HTTPS, JARVIS's own authority, the token), so
 the panel and the announcements can be tried without hardware.
 
+### Sensor history - `actions/sensor_history.py`
+sensors.report hands every report to a recorder (`sensors.set_recorder`,
+wired in by main.py): sensor_history.record keeps each reading and each
+movement in `sensor-history.sqlite` in the JARVIS folder (one table, by
+board and time, cleared of anything older than `keep_days`), and may hand
+back a nudge, which report returns when the report itself has nothing to
+say, so it goes through the same announcement gate as everything else.
+
+A nudge is a reading past a limit for the whole of its minutes with no
+hole in the record (the reading just before the stretch counts, and no
+gap longer than 20 minutes), said once per room per `nudge_again_hours`,
+and never in quiet hours. Limits, words, the night's hours, the parts of
+the day and the quiet hours are all `sensors.json`'s, over the defaults
+in the module, and re-read only when the file changes.
+
+Questions about a stretch of time ("how warm did my room get overnight")
+are taken on the fast path before the house plan's questions, since
+otherwise the plan would answer with the reading now. A question needs a
+stretch (window()), a reading (sensors.py's cue words, and superlatives
+such as "coldest") and somewhere: a room on the plan by name or alias
+(house.named_room; a board placed there by name counts even before it
+has reported this run, through house.room_for), a board by name, or "in
+here". Future tense is left to the weather. The answer is said from the
+record, a chart of the stretch (matplotlib, the HUD's colours) is shown on
+the chart panel, and with the house up its room is lit.
+
 ---
 
 ### Protocols - `actions/protocols.py`, `actions/chrome_tabs.py`
@@ -1268,6 +1307,16 @@ still knows after a restart. Both files are JARVIS's own and never moved.
 That record is not believed on its own: a protocol counts as engaged only
 while something it opened -- a tab, the project's window, a program -- is
 still open, so one closed by hand simply engages again.
+
+Three steps speak and act as you would, for a demo protocol a screen
+recording can capture: `say` speaks through main.py's voice (one voice at
+a time, so it waits for "Initiating..." to finish), `command` runs any
+command through handle_command and answers it aloud, shown as heard
+(`protocols.set_voice`, wired in by main.py), and `pause` waits, held to
+`MAX_PAUSE_SECONDS`. A command that starts a protocol is refused, by
+protocols.py and again by main.py, so none can run itself for ever. A
+protocol with no `clear` has nothing to undo and is never recorded as
+engaged.
 
 A program a protocol closes is asked to close, as its close button asks,
 and never forced: forcing OBS is what makes it offer safe mode on its next

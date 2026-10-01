@@ -1498,18 +1498,12 @@ def _result_text(result):
     return "\n".join(parts)
 
 
-def call(tool_name, arguments):
-    """Run one connected-service tool. Returns quoted data, or an error dict."""
-    target = _tools.get(tool_name)
-
-    if not target:
-        return {"error": f"Unknown connected-service tool: {tool_name}"}
-
-    server_name, tool = target
+def _invoke(server_name, tool, arguments):
+    """Run one tool, pulsing the strip and keeping a journal line. (text, None) or (None, why not)."""
     server = _servers.get(server_name)
 
     if not server or not server.client:
-        return {"error": f"The connected service '{server_name}' is not available."}
+        return None, f"The connected service '{server_name}' is not available."
 
     summary = f"{server_name}.{tool} {json.dumps(arguments or {}, ensure_ascii=False)[:200]}"
 
@@ -1523,7 +1517,7 @@ def call(tool_name, arguments):
     except Exception as error:
         journal.write("mcp", summary, f"failed: {error}")
         _report(server_name, IDLE)
-        return {"error": f"The connected service '{server_name}' failed: {error}"}
+        return None, f"The connected service '{server_name}' failed: {error}"
 
     _report(server_name, IDLE)
 
@@ -1531,11 +1525,49 @@ def call(tool_name, arguments):
 
     if getattr(result, "is_error", False):
         journal.write("mcp", summary, "tool reported an error")
-        return {"error": safety.clean(text, 2000) or "The tool reported an error."}
+        return None, safety.clean(text, 2000) or "The tool reported an error."
 
     journal.write("mcp", summary, f"{len(text)} characters")
 
+    return text, None
+
+
+def call(tool_name, arguments):
+    """Run one connected-service tool. Returns quoted data, or an error dict."""
+    target = _tools.get(tool_name)
+
+    if not target:
+        return {"error": f"Unknown connected-service tool: {tool_name}"}
+
+    server_name, tool = target
+    text, problem = _invoke(server_name, tool, arguments)
+
+    if problem is not None:
+        return {"error": problem}
+
     return safety.quote(f"{server_name}_result", text, RESULT_CHARS)
+
+
+def offering(tool):
+    """The connected services offering a read-only tool called [tool], by name. Connects on first use."""
+    tools()
+    return sorted({server for server, name in _tools.values() if name == tool and connected(server)})
+
+
+def read(server_name, tool, arguments=None):
+    """Ask a read-only tool for JARVIS's own use, not the model's: (text, None) or (None, why not).
+
+    Read-only only -- a tool the service marks so, or mcp.json trusts as
+    such -- so a skill built on this can never change anything. The answer
+    is the service's own text, unquoted: whoever reads it must take only
+    the values it expects, as tradingview.py does with the numbers.
+    """
+    tools()
+
+    if _tools.get(_agent_name(server_name, tool)) != (server_name, tool):
+        return None, f"The connected service '{server_name}' has no read-only {tool}."
+
+    return _invoke(server_name, tool, arguments)
 
 
 def close():
