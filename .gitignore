@@ -27,4 +27,5 @@ arduino/*/jarvis_config.h
 # PlatformIO's build output and the editor index it makes on each machine.
 arduino/*/.pio/
 arduino/*/compile_commands.json
+arduino/*/*.ino.cpp
 arduino/*/.cache/

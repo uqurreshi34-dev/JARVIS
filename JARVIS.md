@@ -1216,9 +1216,13 @@ output high for as long as you move, so "moved" on the HUD stays current.
 
 The sketch is one file built two ways: the Arduino IDE opens
 `jarvis_sensor.ino`, and PlatformIO builds the same file (`src_dir` is the
-sketch folder, `build_src_filter` names it), with an env for each board:
-`pio run -e wroom` and `pio run -e c3`. PlatformIO's `.pio/`, `.cache/` and
-`compile_commands.json` are made per machine and kept out of git.
+sketch folder), with an env for each board: `pio run -e wroom` and `pio
+run -e c3`. PlatformIO converts the sketch into `jarvis_sensor.ino.cpp`
+beside it and compiles that, so `build_src_filter` names the converted
+file: naming the `.ino` itself matched nothing, and the build failed with
+"undefined reference to setup()". PlatformIO's `.pio/`, `.cache/`,
+`compile_commands.json` and the converted `.ino.cpp` are made per machine
+and kept out of git.
 
 JARVIS's certificates carry the key identifiers RFC 5280 asks for (which
 authority signed it, and whose key is whose). Python 3.13 and later check

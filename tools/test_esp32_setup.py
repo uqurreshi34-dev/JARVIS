@@ -229,6 +229,15 @@ called = [line for line in sketch.splitlines() if "setInsecure(" in line.split("
 check(not called and "secure.setCACert(JARVIS_CA)" in sketch, "the board checks JARVIS's certificate, never setInsecure")
 
 # Leave a config beside the stand-in headers for a compile check, when asked.
+# PlatformIO compiles the sketch as the <name>.ino.cpp it converts it into,
+# so that is what each sketch's build_src_filter must name: naming the .ino
+# matched no file, and the build failed with "undefined reference to setup()".
+for sketch in ("jarvis_sensor", "jarvis_camera"):
+    ini = (ROOT / "arduino" / sketch / "platformio.ini").read_text(encoding="utf-8")
+    filters = [line.split("=", 1)[1].split() for line in ini.splitlines() if line.startswith("build_src_filter")]
+    check(filters == [[f"+<{sketch}.ino.cpp>"]],
+          f"{sketch}: PlatformIO builds the converted sketch, and nothing else in the folder ({filters})")
+
 if os.environ.get("WRITE_CONFIG_TO"):
     Path(os.environ["WRITE_CONFIG_TO"], "jarvis_config.h").write_text(header, encoding="ascii")
 
