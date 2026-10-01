@@ -564,9 +564,25 @@ def ensure_certificate():
 # How long a connection is given to answer JARVIS's TLS goodbye.
 _GOODBYE_SECONDS = 1.0
 
+# How long a connection is given to finish its TLS handshake. A board on the
+# wifi takes well under a second; one that has not finished in this long has
+# lost a packet or gone, and is dropped.
+_HANDSHAKE_SECONDS = 10.0
+
 
 class _TidyServer(ThreadedWSGIServer):
-    """The phone server, ending each TLS connection the way TLS says to.
+    """The phone server: each TLS handshake on its own thread, and each connection ended as TLS says to.
+
+    werkzeug wraps the listening socket, so the TLS handshake happens
+    inside accept(), on the one thread that accepts every connection, with
+    no time limit. A single connection that stalls part way through its
+    handshake (a packet lost on the wifi is enough) stops JARVIS accepting
+    anything, and the sensor board waiting on it sits out its own
+    handshake limit of two minutes: the board fell silent for two minutes
+    after a report, and its movement was missed. Here the listening socket
+    is wrapped not to handshake on accept; each connection handshakes on
+    its own request thread, given _HANDSHAKE_SECONDS, and one that stalls
+    holds up nothing but itself.
 
     socketserver closes a finished connection by shutting down the TCP
     socket under the TLS layer, so the other end sees the connection
@@ -575,6 +591,28 @@ class _TidyServer(ThreadedWSGIServer):
     one for every report ("(-76) UNKNOWN ERROR CODE (004C)"). unwrap()
     sends close_notify first, then the socket is closed as before.
     """
+
+    def __init__(self, host, port, app, ssl_context=None, **options):
+        super().__init__(host, port, app, **options)
+
+        if ssl_context is not None:
+            self.socket = ssl_context.wrap_socket(self.socket, server_side=True, do_handshake_on_connect=False)
+            self.ssl_context = ssl_context
+
+    def finish_request(self, request, client_address):
+        if isinstance(request, ssl.SSLSocket):
+            before = request.gettimeout()
+
+            try:
+                request.settimeout(_HANDSHAKE_SECONDS)
+                request.do_handshake()
+            except (OSError, ValueError):
+                # Stalled, refused or gone: shutdown_request closes it.
+                return
+
+            request.settimeout(before)
+
+        super().finish_request(request, client_address)
 
     def shutdown_request(self, request):
         if isinstance(request, ssl.SSLSocket):

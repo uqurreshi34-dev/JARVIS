@@ -6,7 +6,8 @@
 //
 //   - "online" when it joins the wifi, and every 15 seconds after that as a heartbeat;
 //   - temperature and humidity every 30 seconds;
-//   - "motion" the moment the PIR sees someone (at most every 5 seconds).
+//   - "motion" the moment the PIR sees someone, and again every 5 seconds for
+//     as long as it still does, so "moved" on the HUD is always the latest.
 //
 // JARVIS decides what is worth saying (sensors.py): a board coming online,
 // movement in an empty room. The board just reports.
@@ -72,6 +73,11 @@ static const unsigned long READING_EVERY_MS = 30UL * 1000UL;
 static const unsigned long MOTION_GAP_MS = 5UL * 1000UL;
 static const unsigned long HEARTBEAT_EVERY_MS = 15UL * 1000UL;
 static const unsigned long WIFI_RETRY_MS = 10UL * 1000UL;
+
+// How long a TLS handshake with JARVIS may take. It takes well under a
+// second; the library's own limit is two minutes, and a handshake that lost
+// a packet kept the board silent, and blind to movement, for all of them.
+static const unsigned long HANDSHAKE_SECONDS = 10;
 
 DHT dht(DHT_PIN, DHT22);
 NetworkClientSecure secure;
@@ -207,6 +213,7 @@ void setup() {
 
   // JARVIS's own authority: the board accepts JARVIS and nothing else.
   secure.setCACert(JARVIS_CA);
+  secure.setHandshakeTimeout(HANDSHAKE_SECONDS);
 
   WiFi.setAutoReconnect(true);
   joinWifi();
@@ -231,14 +238,16 @@ void loop() {
   }
 
   // Movement is latched by the interrupt, so an HTTPS request cannot make
-  // the PIR transition disappear while the loop is busy.
-  if (motionPending) {
-    motionPending = false;
+  // the PIR transition disappear while the loop is busy. While the PIR's
+  // output stays high it is still seeing movement (a PIR set to retrigger
+  // holds it high for as long as you move), so that is reported too, every
+  // MOTION_GAP_MS, rather than only the moment it began.
+  bool moving = motionPending || digitalRead(PIR_PIN) == HIGH;
+  motionPending = false;
 
-    if (lastMotion == 0 || now - lastMotion >= MOTION_GAP_MS) {
-      reportEvent("motion");
-      lastMotion = now;
-    }
+  if (moving && (lastMotion == 0 || now - lastMotion >= MOTION_GAP_MS)) {
+    reportEvent("motion");
+    lastMotion = now;
   }
 
   if (lastReading == 0 || now - lastReading >= READING_EVERY_MS) {

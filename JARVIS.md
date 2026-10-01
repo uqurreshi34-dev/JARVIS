@@ -1198,6 +1198,22 @@ giving the other end a second to answer, then closes as before.
 test_phone_tls.py shows werkzeug's own server dropping and this one
 ending cleanly, to a strict client.
 
+And no handshake holds up another. werkzeug wraps the listening socket,
+so each TLS handshake ran inside accept(), on the one thread accepting
+every connection, with no time limit: one connection stalled mid-handshake
+(a packet lost on the wifi) froze the server, while the board waited out
+its library's two-minute handshake limit, silent and blind to movement.
+`_TidyServer` wraps the listening socket with do_handshake_on_connect off
+and handshakes each connection on its own request thread, given
+`_HANDSHAKE_SECONDS` (10). The sketches set setHandshakeTimeout(10) too,
+so a stalled report costs a board ten seconds, not two minutes.
+test_phone_tls.py shows werkzeug's own server blocked beside a stalled
+connection and this one answering.
+
+The sensor sketch reports "motion" when the PIR's output rises, and again
+every five seconds while it stays high: a PIR set to retrigger holds its
+output high for as long as you move, so "moved" on the HUD stays current.
+
 The sketch is one file built two ways: the Arduino IDE opens
 `jarvis_sensor.ino`, and PlatformIO builds the same file (`src_dir` is the
 sketch folder, `build_src_filter` names it), with an env for each board:

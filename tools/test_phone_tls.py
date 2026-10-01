@@ -30,6 +30,7 @@ import ssl
 import sys
 import tempfile
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -248,7 +249,8 @@ from werkzeug.serving import ThreadedWSGIServer  # noqa: E402
 
 classes = [node for node in source_tree.body
            if (isinstance(node, ast.ClassDef) and node.name == "_TidyServer")
-           or (isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "_GOODBYE_SECONDS" for t in node.targets))]
+           or (isinstance(node, ast.Assign)
+               and any(getattr(t, "id", "") in ("_GOODBYE_SECONDS", "_HANDSHAKE_SECONDS") for t in node.targets))]
 tidy_space = {"ssl": ssl, "ThreadedWSGIServer": ThreadedWSGIServer}
 exec(compile(ast.Module(body=classes, type_ignores=[]), "phone.py", "exec"), tidy_space)
 check("_TidyServer(" in start and "make_server(" not in start, "phone.py serves through its own tidy server")
@@ -295,5 +297,61 @@ def goodbye(server_class):
 
 check(goodbye(ThreadedWSGIServer) == "dropped", "werkzeug's own server drops the connection without a goodbye")
 check(goodbye(tidy_space["_TidyServer"]) == "clean", "phone.py's says goodbye, so a strict client sees a clean end")
+
+
+# A connection that stalls part way through its TLS handshake must hold up
+# nobody else. werkzeug handshakes inside accept(), on the one thread that
+# accepts every connection, so one stalled connection froze the server, and
+# the sensor board waited out its two-minute handshake limit in silence.
+def beside_a_stall(server_class):
+    """What a board's report gets while another connection has stalled mid-handshake: "answered" or "blocked"."""
+    from flask import Flask
+
+    app = Flask("stall")
+    app.add_url_rule("/sensor", "sensor", lambda: {"ok": True}, methods=["POST"])
+    server = server_class("127.0.0.1", 0, app, ssl_context=phone_tls.serving_context(
+        *issued_pair, local=(space["CERT_FILE"], space["KEY_FILE"])))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    with open(space["CA_FILE"], "rb") as handle:
+        context = ssl.create_default_context(cadata=handle.read())
+
+    # Connected, and then silent: never says hello.
+    stalled = socket.create_connection(("127.0.0.1", server.server_port), timeout=5)
+    time.sleep(0.3)
+
+    try:
+        with socket.create_connection(("127.0.0.1", server.server_port), timeout=3) as raw:
+            with context.wrap_socket(raw, server_hostname="127.0.0.1") as tls:
+                tls.sendall(b"POST /sensor HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                            b"Content-Length: 2\r\nConnection: close\r\n\r\n{}")
+                return "answered" if tls.recv(200).startswith(b"HTTP/1.1 200") else "no answer"
+    except (socket.timeout, ssl.SSLError, OSError):
+        return "blocked"
+    finally:
+        stalled.close()
+        server.shutdown()
+
+
+check(beside_a_stall(ThreadedWSGIServer) == "blocked",
+      "werkzeug's own server stops answering while one connection stalls in its handshake")
+check(beside_a_stall(tidy_space["_TidyServer"]) == "answered",
+      "phone.py's answers the board anyway: each handshake has its own thread")
+
+tidy_space["_HANDSHAKE_SECONDS"] = 0.5
+quiet = tidy_space["_TidyServer"]("127.0.0.1", 0, lambda environ, start: [], ssl_context=phone_tls.serving_context(
+    *issued_pair, local=(space["CERT_FILE"], space["KEY_FILE"])))
+threading.Thread(target=quiet.serve_forever, daemon=True).start()
+
+with socket.create_connection(("127.0.0.1", quiet.server_port), timeout=5) as idle:
+    started = time.monotonic()
+
+    try:
+        closed = idle.recv(1) == b""
+    except OSError:
+        closed = True
+
+check(closed and time.monotonic() - started < 3, "and a stalled handshake is dropped after its time, not kept for ever")
+quiet.shutdown()
 
 sys.exit(1 if failures else 0)

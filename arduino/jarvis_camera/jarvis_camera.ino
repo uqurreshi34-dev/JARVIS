@@ -62,6 +62,10 @@ static const unsigned long HEARTBEAT_EVERY_MS = 15UL * 1000UL;
 static const unsigned long ASK_EVERY_MS = 3UL * 1000UL;
 static const unsigned long WIFI_RETRY_MS = 10UL * 1000UL;
 
+// How long a TLS handshake with JARVIS may take: well under a second, where
+// the library's own limit is two minutes of silence.
+static const unsigned long HANDSHAKE_SECONDS = 10;
+
 NetworkClientSecure secure;
 
 unsigned long lastHeartbeat = 0;
@@ -258,6 +262,7 @@ void setup() {
 
   // JARVIS's own authority: the board accepts JARVIS and nothing else.
   secure.setCACert(JARVIS_CA);
+  secure.setHandshakeTimeout(HANDSHAKE_SECONDS);
 
   WiFi.setAutoReconnect(true);
   joinWifi();
