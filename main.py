@@ -703,6 +703,17 @@ class Assistant:
             else:
                 self._run_action(result)
 
+            # The night just gone, once a morning, after the first answer of
+            # it: queued like any announcement, so it waits for the turn.
+            try:
+                night = sensor_history.morning_report()
+            except Exception as error:
+                print(f"[JARVIS] could not report the night: {error}")
+                night = None
+
+            if night:
+                self._on_alert(night)
+
             if TIMING:
                 _done_at = time.monotonic()
                 print(

@@ -1274,9 +1274,20 @@ stretch (window()), a reading (sensors.py's cue words, and superlatives
 such as "coldest") and somewhere: a room on the plan by name or alias
 (house.named_room; a board placed there by name counts even before it
 has reported this run, through house.room_for), a board by name, or "in
-here". Future tense is left to the weather. The answer is said from the
-record, a chart of the stretch (matplotlib, the HUD's colours) is shown on
-the chart panel, and with the house up its room is lit.
+here". Future tense is left to the weather; the past tense with no
+stretch ("how cold did it get in my room") is today so far, or the last
+24 hours before 3 am. The answer is said from the record, a chart of the
+stretch (matplotlib, the HUD's colours, starting where the record does if
+that is partway through) is shown on the chart panel, and with the house
+up its room is lit.
+
+morning_report() is the night just gone in a sentence per room: the
+temperature and humidity ranges and the last movement. main.py asks for
+it after each spoken command's answer and queues what it gets through
+_on_alert, so it is said once the turn is over. It answers once a day,
+between the night's end and `morning_report`'s `until` (noon), and the
+day it was given is kept in the record's own `reports` table, so a
+restart does not repeat it.
 
 ---
 

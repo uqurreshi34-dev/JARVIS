@@ -317,6 +317,82 @@ sensor_history._pruned_at = None
 sensor_history.record("room", "", {"temperature": 21})
 check(sensor_history._rows("SELECT COUNT(*) FROM readings")[0][0] == 1, "readings older than keep_days are cleared out")
 
+# ---- the past tense, with no stretch named --------------------------------------------------------
+
+sensor_history.forget()
+clock["now"] = NOW
+feed(at(0, 6), at(0, 9, 30), 5, lambda moment: 20 - (moment - at(0, 6)) / 3600)
+
+said = sensor_history.answer("how cold did it get in my room")[0]
+check(said.startswith("Your room got down to 16.5 degrees today, at 9:30 am"), f"'how cold did it get in my room' is today's lowest ({said!r})")
+said = sensor_history.answer("what was the warmest my room got")[0]
+check(said.startswith("Your room got up to 20.0 degrees today, at 6 am"), f"and the warmest ({said!r})")
+check(sensor_history.answer("what was the humidity in my room today")[0].startswith("I have no humidity reading from your room today, sir."),
+      "a board that sent no humidity says so, plainly")
+check(sensor_history.question("how cold is my room") is None, "'how cold is my room' is still the reading now")
+check(sensor_history.question("how cold did it get") is None, "and 'how cold did it get' still the weather")
+clock["now"] = at(0, 1)
+check(sensor_history.question("how cold did my room get")["window"]["spoken"] == "in the last 24 hours",
+      "in the small hours, the last 24 hours rather than an hour of today")
+clock["now"] = NOW
+
+# ---- the chart starts where the record does --------------------------------------------------------
+
+today = sensor_history.window("today")
+span = sensor_history.chart_span(["room"], today)
+check(at(0, 5, 50) < span["start"] < at(0, 6) and span["end"] == today["end"],
+      "a record begun at 6 am is charted from 6 am, not midnight")
+night = sensor_history.window("overnight", now=at(0, 9, 30))
+feed(at(-1, 21), at(0, 6), 5, lambda _: 21)
+check(sensor_history.chart_span(["room"], night) == night, "one that covers the stretch is charted whole")
+
+# ---- the night, in the morning -----------------------------------------------------------------------
+
+sensor_history.forget()
+feed(at(-1, 21), at(0, 7, 30), 5, night_temperature)
+feed(at(-1, 21), at(0, 7, 30), 5, lambda moment: 55 + (moment - at(-1, 21)) / 3600, field="humidity")
+
+for minute in (5, 12):
+    clock["now"] = at(0, 1, minute)
+    sensor_history.record("room", "motion", {})
+
+check(sensor_history.morning_report(now=at(0, 6, 30)) is None, "no report before the night has ended")
+report = sensor_history.morning_report(now=at(0, 8))
+check(report is not None and report.startswith("Overnight, your room went from ")
+      and "humidity went from 56 to 65 percent" in report and report.endswith("the last movement was at 1:12 am, sir."),
+      f"the night, once the morning has begun ({report!r})")
+check(sensor_history.morning_report(now=at(0, 8, 5)) is None, "and only once a morning")
+sensor_history._settings["stamp"] = None
+check(sensor_history.morning_report(now=at(0, 9)) is None, "kept in the record, so a restart does not repeat it")
+check(sensor_history.morning_report(now=at(1, 13)) is None, "not after noon")
+
+sensor_history.forget()
+feed(at(-1, 23), at(0, 7), 10, lambda _: 19.0)
+report = sensor_history.morning_report(now=at(0, 7, 15))
+check(report == "Overnight, your room stayed around 19.0 degrees and there was no movement at all, sir. "
+      "I've only been keeping a record since 11 pm.", f"a still night, begun late ({report!r})")
+
+sensor_history.forget()
+check(sensor_history.morning_report(now=at(0, 8)) is None, "nothing overnight, nothing said")
+
+feed(at(0, 21), at(1, 7), 10, lambda _: 19.0)
+
+with open(os.path.join(folder, "sensors.json"), "w", encoding="utf-8") as handle:
+    json.dump({"morning_report": False}, handle)
+
+check(sensor_history.morning_report(now=at(1, 8)) is None, "and none with \"morning_report\": false")
+
+with open(os.path.join(folder, "sensors.json"), "w", encoding="utf-8") as handle:
+    json.dump({"morning_report": {"until": "09:00"}}, handle)
+
+check(sensor_history.morning_report(now=at(1, 9, 30)) is None and sensor_history.morning_report(now=at(1, 8, 30)),
+      "and \"until\" moves the end of the morning")
+os.remove(os.path.join(folder, "sensors.json"))
+
+source = (ROOT / "main.py").read_text(encoding="utf-8")
+check("sensor_history.morning_report()" in source and "self._on_alert(night)" in source,
+      "main.py gives it after the first answer, through the announcement queue")
+
 # ---- through commands ---------------------------------------------------------------------------
 
 sensor_history.forget()

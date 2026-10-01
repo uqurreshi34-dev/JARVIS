@@ -14,8 +14,11 @@ Asked aloud, and never a model call:
     what was the humidity in my room today     the range, the average, and now
     was anyone in my room overnight            movement: when, and how often
     show me the temperature in my room over the last 6 hours
+    how cold did it get in my room             no stretch named, in the past tense: today
 
-Each answer puts a chart of it on the HUD. A question needs a stretch of
+Each answer puts a chart of it on the HUD, from where the record begins
+if that is partway through. And the first time you speak to him each
+morning, after his answer, he tells you how the night went. A question needs a stretch of
 time, something to ask about, and somewhere: a room on the house plan, a
 board by name, or "in here", so "how cold did it get last night" alone is
 still the weather's.
@@ -30,6 +33,7 @@ the JARVIS folder (none of it is needed; these are the defaults):
                     "evening": ["18:00", "23:59"]},
       "quiet_hours": {"from": "23:00", "to": "07:00"},
       "nudge_again_hours": 6,
+      "morning_report": {"until": "12:00"},      (false for none)
       "nudges": [
         {"reading": "humidity", "above": 70, "for_minutes": 120,
          "say": "Humidity in {place} has been over {limit} percent for {duration}, sir. ..."},
@@ -67,6 +71,7 @@ DEFAULTS = {
     "day_parts": {"morning": ["06:00", "12:00"], "afternoon": ["12:00", "18:00"], "evening": ["18:00", "23:59"]},
     "quiet_hours": {"from": "23:00", "to": "07:00"},
     "nudge_again_hours": 6,
+    "morning_report": {"until": "12:00"},
     "nudges": [
         {"reading": "humidity", "above": 70, "for_minutes": 120,
          "say": "Humidity in {place} has been over {limit} percent for {duration}, sir. "
@@ -200,6 +205,10 @@ def _read_settings(path):
         "quiet_hours": _span(data.get("quiet_hours"), DEFAULTS["quiet_hours"]),
         "nudge_again_hours": again if again is not None and again >= 0 else DEFAULTS["nudge_again_hours"],
         "nudges": _nudge_rules(data["nudges"] if "nudges" in data else DEFAULTS["nudges"]),
+        # Until when in the morning the night's report may be given; None for never.
+        "morning_until": None if data.get("morning_report") is False else
+        _parse_time((data.get("morning_report") or {}).get("until") if isinstance(data.get("morning_report"), dict) else None)
+        or _parse_time(DEFAULTS["morning_report"]["until"]),
     }
 
 
@@ -557,6 +566,26 @@ _SUPERLATIVES = {"temperature": ("warmest", "hottest", "coldest", "coolest", "ch
 _REACHED = ("get", "got", "reach", "reached", "go", "went", "climb", "climbed", "drop", "dropped", "fall", "fell")
 
 
+# Asked in the past tense with no stretch named ("how cold did it get in my
+# room", "what was the warmest my room got"), a question is about today so
+# far; "how cold is my room" is the reading now, and stays the plan's.
+_PAST = ("did", "got", "reached", "went", "dropped", "fell", "climbed", "peaked", "was", "were", "been")
+
+# Before this hour, "today" is too short to say much: the last 24 hours instead.
+_SO_FAR_HOURS = 3
+
+
+def _so_far(now=None):
+    """Today so far, or the last 24 hours in the small hours."""
+    now = _clock() if now is None else now
+    moment = datetime.fromtimestamp(now)
+
+    if moment.hour < _SO_FAR_HOURS:
+        return {"start": now - 86400, "end": now, "spoken": "in the last 24 hours"}
+
+    return {"start": datetime(moment.year, moment.month, moment.day).timestamp(), "end": now, "spoken": "today"}
+
+
 def _strip_polite(words):
     while words and words[0] in _POLITE:
         words = words[1:]
@@ -624,6 +653,9 @@ def question(text):
         return None
 
     stretch = window(text)
+
+    if stretch is None and any(word in _PAST for word in words):
+        stretch = _so_far()
 
     if stretch is None:
         return None
@@ -728,8 +760,8 @@ def _sentence(what, aspect, spoken, boards, stretch, rows):
 
     if not rows:
         if _reported(boards, stretch):
-            kind = "a temperature" if what == "temperature" else "a humidity reading"
-            return f"I have no {kind} from {spoken} {stretch['spoken']}, sir."
+            kind = "temperature" if what == "temperature" else "humidity"
+            return f"I have no {kind} reading from {spoken} {stretch['spoken']}, sir."
 
         return f"I have no record from {spoken} {stretch['spoken']}; its sensor wasn't reporting, sir."
 
@@ -829,7 +861,131 @@ def answer(text):
 
     places = " & ".join(spoken for spoken, _ in where)
     title = " \u00b7 ".join((places.upper(), what.upper(), stretch["spoken"].upper()))
-    return said, chart(what, series, stretch, title), title, boards
+    return said, chart(what, series, chart_span(boards, stretch), title), title, boards
+
+
+def chart_span(boards, stretch):
+    """[stretch] as drawn: from where the record of [boards] starts, if that is partway through.
+
+    A record begun at 3 pm, charted for "today", is otherwise mostly empty
+    axis from midnight on.
+    """
+    marks = ",".join("?" for _ in boards)
+    first = _rows(f"SELECT MIN(ts) FROM readings WHERE board IN ({marks}) AND ts >= ? AND ts <= ?",
+                  (*boards, stretch["start"], stretch["end"])) if boards else []
+    first = first[0][0] if first else None
+
+    if first is None or first <= stretch["start"] + GAP_SECONDS:
+        return stretch
+
+    margin = max(60.0, (stretch["end"] - first) * 0.03)
+    return dict(stretch, start=max(stretch["start"], first - margin))
+
+
+# ---- the night, said in the morning ---------------------------------------------------------------------
+
+def _given(day, mark=False):
+    """Whether the night's report has been given on [day] ("2026-10-02"); with [mark], that it now has."""
+    with _lock:
+        connection = _connect()
+
+        if connection is None:
+            return True
+
+        try:
+            with connection:
+                connection.execute("CREATE TABLE IF NOT EXISTS reports (day TEXT PRIMARY KEY)")
+
+                if mark:
+                    connection.execute("INSERT OR IGNORE INTO reports (day) VALUES (?)", (day,))
+                    return True
+
+                return connection.execute("SELECT 1 FROM reports WHERE day = ?", (day,)).fetchone() is not None
+        finally:
+            connection.close()
+
+
+def _range_words(what, rows):
+    low, high = min(value for _, value in rows), max(value for _, value in rows)
+    unit = " degrees" if what == "temperature" else " percent"
+
+    if high - low < (0.2 if what == "temperature" else 1):
+        return f"stayed around {_said_value(what, sum(value for _, value in rows) / len(rows))}{unit}"
+
+    return f"went from {_said_value(what, low)} to {_said_value(what, high)}{unit}"
+
+
+def morning_report(now=None):
+    """The night just gone, once a morning: what to say, or None.
+
+    Given the first time it is asked for between the night's end and
+    morning_report's "until" (noon, by default), and only once a day, kept
+    in the record itself so a restart does not repeat it. None when the
+    boards said nothing overnight, or sensors.json says "morning_report": false.
+    """
+    now = _clock() if now is None else now
+    rules = settings()
+    until = rules["morning_until"]
+
+    if until is None:
+        return None
+
+    moment = datetime.fromtimestamp(now)
+    minute = moment.hour * 60 + moment.minute
+    night_end = rules["overnight"][1][0] * 60 + rules["overnight"][1][1]
+
+    if not night_end <= minute < until[0] * 60 + until[1]:
+        return None
+
+    day = moment.date().isoformat()
+
+    if _given(day):
+        return None
+
+    start, end = _night(now, rules["overnight"])
+    stretch = {"start": start, "end": end, "spoken": "overnight"}
+    rooms = {}
+
+    for board in _boards_with_history():
+        if _reported([board], stretch):
+            rooms.setdefault(_place(board), []).append(board)
+
+    _given(day, mark=True)
+
+    if not rooms:
+        return None
+
+    sentences = []
+
+    for spoken, boards in sorted(rooms.items()):
+        parts = []
+        temperature = _readings("temperature", boards, stretch)
+        humidity = _readings("humidity", boards, stretch)
+        moments = _movements(boards, stretch)
+
+        if temperature:
+            parts.append(_range_words("temperature", temperature))
+
+        if humidity:
+            parts.append(f"humidity {_range_words('humidity', humidity)}")
+
+        if moments:
+            parts.append(f"the last movement was {_clock_words(moments[-1], stretch)}")
+        elif parts:
+            parts.append("there was no movement at all")
+
+        if not parts:
+            continue
+
+        said = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+        sentences.append(f"{spoken} {said}.")
+
+    if not sentences:
+        return None
+
+    sentences[0] = "Overnight, " + sentences[0][:-1] + ", sir."
+    return " ".join(sentences[:1] + [_first_up(sentence) for sentence in sentences[1:]]) \
+        + _since_note([board for boards in rooms.values() for board in boards], stretch)
 
 
 # ---- the chart --------------------------------------------------------------------------------------

@@ -505,13 +505,23 @@ chart of it goes up on the HUD. **Free**: no model call.
 | what was the humidity in my room today | the range, the average, and now |
 | was anyone in my room overnight | movement: how often, first and last |
 | show me the temperature in my room over the last 6 hours | the same, for any stretch |
+| how cold did it get in my room | no stretch named: today so far |
 
 Stretches: overnight / last night (10 pm to 7 am; at 11 pm it is still
 last night), tonight, today, yesterday, this morning / afternoon /
 evening, yesterday evening, since this morning, the last hour, the last
 half hour, the last 6 hours, a couple of hours, the last 3 days, this
-week. A question needs the stretch, a reading and a room ("in here"
-counts), so "how cold did it get last night" alone is still the weather.
+week. A question needs a reading and a room ("in here" counts), and a
+stretch or the past tense ("did it get", "was"), so "how cold did it get
+last night" alone is still the weather and "how cold is my room" is the
+reading now. The chart starts where the record does.
+
+The first time you speak to him each morning, after his answer, he tells
+you how the night went: "Overnight, your room went from 18.2 to 21.4
+degrees, humidity went from 55 to 63 percent and the last movement was at
+1:12 am, sir." Once a day, between the end of the night and noon, and
+only if a board reported overnight. `"morning_report": false` in
+sensors.json turns it off; `{"until": "10:00"}` ends the morning sooner.
 
 He also says when a room has been off for too long: humidity over 70
 percent for two hours ("opening a window would help"), over 27 degrees or
@@ -1139,6 +1149,7 @@ Ctrl+C skips the cleanup, so prefer saying it.
 - Memory above 92% for a sustained period
 - A coin moving past your threshold
 - A room too damp, too warm or too cold for too long (see The sensors)
+- How the night went in your room, once a morning (see The sensors)
 - What's in the diary for today and tomorrow, at startup
 - Anything missed while he was closed, when he next starts
 - A habit he's noticed, offered once — see Patterns
