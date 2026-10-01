@@ -11,6 +11,7 @@ from voice import (
 )
 from speech import prewarm, set_amplitude_listener, speak, set_sentence_listener
 from speech import set_speaking_listener, stop_speaking as stop_speech
+from speech import first_sound, mark_turn
 from news_panel import NewsPanel
 from quran_panel import QuranPanel
 from radar_panel import RadarPanel
@@ -52,6 +53,7 @@ from actions import (
     protocols,
     sensor_history,
     sensors,
+    status_report,
     camera,
     contacts,
     diary,
@@ -678,6 +680,7 @@ class Assistant:
             # is you and not a return. (A command from the phone could come
             # from anywhere, so it does not count.)
             sensors.heard_you()
+            mark_turn()
 
             try:
                 started = time.monotonic()
@@ -702,6 +705,10 @@ class Assistant:
                 self._run_query(result)
             else:
                 self._run_action(result)
+
+            # How long from hearing you to his first word, for "status report".
+            if first_sound() is not None:
+                status_report.note_turn(first_sound() - _heard_at)
 
             # The night just gone, once a morning, after the first answer of
             # it: queued like any announcement, so it waits for the turn.

@@ -79,6 +79,7 @@ stays on the PC.
 | what time is it | date and time |
 | what's the weather like | forecast for wherever you've said you are |
 | how's my system | CPU, memory, disk, battery |
+| status report | JARVIS himself: which connected services are up, the sensor boards, today's sensor record and its gaps, how quickly he has been answering, and the last day's model calls with the share read from the cache (also "run diagnostics", "run a self check") |
 | how much battery do I have | battery only |
 | take a screenshot | saves to your JARVIS folder |
 | minimise everything | clears the desktop |
@@ -533,6 +534,25 @@ between 11 pm and 7 am. All of it, the night's hours too, is yours in
      "quiet_hours": {"from": "23:00", "to": "07:00"},
      "nudges": [{"reading": "humidity", "above": 65, "for_minutes": 90,
                  "say": "{Place} has been damp for {duration}, sir: {value} percent."}]}
+
+### Following on
+
+Straight after a sensor question, a fragment is enough: he keeps what
+you asked about for a minute. **Free**: no model call.
+
+| Say, after "how warm did my room get overnight" | He answers |
+|---|---|
+| and humidity? | how humid it got overnight |
+| what about yesterday? | the same, yesterday |
+| and the lowest? | the lowest instead |
+| how about room 4? | another room (or that it has no sensor) |
+| and now? | the reading now |
+| and the past 3 hours? | that stretch instead |
+| show me that again | the same answer and chart |
+
+Only when every word is accounted for, so "and the weather?" or "what
+about tomorrow?" go their own way, and any other command in between, or a
+minute's silence, ends it.
 
 Welcome back is for you. It is only said when nobody has moved for a
 while, never while you have been talking to JARVIS in the last five

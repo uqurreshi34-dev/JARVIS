@@ -50,8 +50,29 @@ _NEURAL_SYNTHESIS_DEADLINE = 8.0
 # ends rather than chopping mid-thought.
 _SPOKEN_CHUNK = 220
 
+# A reply of two sentences or more starts with its first sentence alone, so
+# the first words wait only for that sentence's synthesis, not the whole
+# reply's; the rest is synthesised while it plays. Not for a first sentence
+# this short ("Yes, sir."), which is better said in one breath with the next.
+_LEAD_SENTENCE_MIN = 25
+
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 _CLAUSE_END = re.compile(r"(?<=[,;:])\s+")
+
+
+def _speakable_chunks(text, limit=_SPOKEN_CHUNK):
+    """_split_for_speech's pieces, with a long enough first sentence on its own so it starts sooner."""
+    chunks = _split_for_speech(text, limit)
+
+    if not chunks:
+        return chunks
+
+    sentences = _SENTENCE_END.split(chunks[0], maxsplit=1)
+
+    if len(sentences) == 2 and len(sentences[0]) >= _LEAD_SENTENCE_MIN:
+        return [sentences[0], sentences[1]] + chunks[1:]
+
+    return chunks
 
 
 def _split_for_speech(text, limit=_SPOKEN_CHUNK):
@@ -166,6 +187,29 @@ _paused = threading.Event()
 # Told True when an utterance starts playing and False when it ends, so the
 # HUD shows its stop button only while there is something to stop.
 _speaking_listener = None
+
+
+# When the current turn's first sound played (time.monotonic()), or None:
+# main.py marks each turn and reads it after, for how long replies take.
+_first_sound = None
+
+
+def mark_turn():
+    """A new turn: forget when the last one's first sound played."""
+    global _first_sound
+    _first_sound = None
+
+
+def first_sound():
+    """When this turn's first sound played, or None if nothing has yet."""
+    return _first_sound
+
+
+def _sounding():
+    global _first_sound
+
+    if _first_sound is None:
+        _first_sound = time.monotonic()
 
 
 def speech_epoch():
@@ -810,7 +854,9 @@ class SpeechEngine:
             pass
 
     def _speak_neural(self, text):
-        chunks = _split_for_speech(text)
+        # A reply already in the cache plays whole, at once; anything else
+        # starts with its first sentence (_speakable_chunks).
+        chunks = [text] if self._is_cached(text) else _speakable_chunks(text)
 
         if len(chunks) <= 1:
             data, samplerate, boundaries = self._audio_for_bounded(
@@ -881,6 +927,7 @@ class SpeechEngine:
         spoken in earlier chunks, so the HUD keeps counting up instead of
         jumping back to the first sentence at every join.
         """
+        _sounding()
         position = 0
         total = len(data)
         next_boundary = 0
@@ -998,6 +1045,8 @@ class SpeechEngine:
     def _speak_fallback(self, text):
         if _stop.is_set():
             return
+
+        _sounding()
 
         engine = pyttsx3.init()
         engine.setProperty("rate", self.rate)

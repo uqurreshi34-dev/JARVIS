@@ -1311,6 +1311,43 @@ between the night's end and `morning_report`'s `until` (noon), and the
 day it was given is kept in the record's own `reports` table, so a
 restart does not repeat it.
 
+### Follow-ups - `actions/followups.py`
+After a sensor question, a fragment ("and humidity?", "what about
+yesterday?", "and the lowest?", "how about room 4?", "and now?", "show
+me that again") is rewritten into the whole question at the very start of
+_handle_command, before pronouns are read, and then goes the ordinary
+way. What a question was about (the reading, high, low or the range, the
+stretch and the room) is kept by the sensor intents' handlers once
+answered, for FOLLOW_SECONDS (60, as "it" is). A fragment is taken only
+when every word is a reading, a stretch, a room or its alias, high or
+low, or the small words around them; a question complete in itself is
+asked as it is; and handle_command ends the context after any command
+that is not a sensor question.
+
+### Status report - `actions/status_report.py`
+"Status report" is JARVIS on himself, with no model call: connected
+services up and down (mcp_services.configured and connected), the boards
+reporting, today's sensor record and its gaps (sensor_history.runs), how
+quickly he has answered, and the last day's model calls from usage.py
+with the share of input read from the cache. Tokens only, as usage.py
+keeps them, never prices. The reply timing is main.py's: each spoken
+turn marks speech (mark_turn), speech notes the turn's first sound, and
+the seconds from the words being heard to that sound go to note_turn,
+the last 50 kept in memory.
+
+right_now() is the same knowledge for the model: the time, and each room's
+readings with how the day has gone. knowledge.answer gives it to every
+general question as the last system message, labelled as background and
+not instructions, after the steady prompt so it never spoils a cached
+prefix. "Should I open a window" is then answered from the room.
+
+The first words come sooner too. speech.py synthesises a reply in pieces,
+the next while the last plays, but a reply under 220 characters was one
+piece, so two sentences waited for both to be synthesised.
+_speakable_chunks starts a reply with its first sentence alone when that
+sentence is long enough to stand alone, unless the whole reply is already
+cached and plays at once.
+
 ---
 
 ### Protocols - `actions/protocols.py`, `actions/chrome_tabs.py`

@@ -47,6 +47,7 @@ from actions import (
     folder_organizer,
     folder_undo,
     folders,
+    followups,
     git_tasks,
     image_choices,
     images,
@@ -71,6 +72,7 @@ from actions import (
     sensor_history,
     sensors,
     social,
+    status_report,
     tasks,
     project_setup,
     protocols,
@@ -270,6 +272,12 @@ _FAST_PHRASES = (
       "how is my memory", "how much memory am i using",
       "how much battery do i have", "whats my battery"),
      "get_system_status"),
+    (("status report", "give me a status report", "full status report",
+      "give me a full status report", "run diagnostics", "run a diagnostic",
+      "run a diagnostics check", "run a self check", "self check",
+      "whats your status", "what is your status",
+      "how are your systems", "status check"),
+     "status_report"),
     (("whats on my clipboard", "what is on my clipboard",
       "read my clipboard", "check my clipboard"), "read_clipboard"),
     (("show me the news", "whats the news", "what is the news",
@@ -2114,6 +2122,16 @@ def _show_chart(data, title):
             _chart_listener(data, title)
         except Exception as error:
             print(f"[JARVIS] could not show the chart: {error}")
+
+
+def _remembered(command, said):
+    """A sensor question answered: kept, so "and humidity?" can follow it (actions/followups.py)."""
+    try:
+        followups.remember(command)
+    except Exception as error:
+        print(f"[JARVIS] could not keep the question for a follow-up: {error}")
+
+    return said
 
 
 def _sensor_history(command):
@@ -5293,10 +5311,22 @@ def handle_command(command, *, fast_only=False, probe=False):
 
             _set_aside = None
 
+        if not probe:
+            followups.handled(result.get("intent") if result else None)
+
         return result
 
 
 def _handle_command(command, *, fast_only=False, probe=False):
+    # "And humidity?" straight after a sensor question is that question
+    # again, about humidity (actions/followups.py). First, before "it" and
+    # "that" are read as the last subject.
+    whole = followups.rewrite(command)
+
+    if whole:
+        print(f"[follow-up] {command!r} -> {whole!r}")
+        command = whole
+
     command = _resolve_pronouns(command)
 
     answered = _resolve_awaiting(command)
@@ -5895,7 +5925,7 @@ def _handle_command(command, *, fast_only=False, probe=False):
         return _query(intent, lambda: _camera_picture(command))
 
     if intent == "sensor_history":
-        return _query(intent, lambda: _sensor_history(command))
+        return _query(intent, lambda: _remembered(command, _sensor_history(command)))
 
     if intent == "tradingview":
         return _query(intent, lambda: _tradingview(command))
@@ -5904,12 +5934,13 @@ def _handle_command(command, *, fast_only=False, probe=False):
         return _query(intent, lambda: house.answer(command) or "The house isn't showing, sir.")
 
     if intent == "house_question":
-        return _query(intent, lambda: house.answer_question(command) or "No sensors have reported yet, sir.")
+        return _query(intent, lambda: _remembered(
+            command, house.answer_question(command) or "No sensors have reported yet, sir."))
 
     if intent == "sensor_question":
         # Asked again here rather than carried through the result, which
         # has a fixed set of fields; the boards may have reported since.
-        return _query(intent, lambda: _sensor_answer(command))
+        return _query(intent, lambda: _remembered(command, _sensor_answer(command)))
 
     if intent in _SOCIAL_REPLIES:
         return _query(intent, lambda: social.reply(_SOCIAL_REPLIES[intent]))
@@ -6374,6 +6405,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "get_system_status":
         return _query(intent, describe_system)
+
+    if intent == "status_report":
+        return _query(intent, status_report.report)
 
     if intent == "set_reminder":
         seconds = to_seconds(amount, unit)
