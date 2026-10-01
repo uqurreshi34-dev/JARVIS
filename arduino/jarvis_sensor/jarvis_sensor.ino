@@ -47,6 +47,7 @@
 #include <HTTPClient.h>
 #include <NetworkClientSecure.h>
 #include <DHT.h>
+#include <esp_task_wdt.h>
 
 #include "jarvis_config.h"
 #include "jarvis_secrets.h"
@@ -79,12 +80,33 @@ static const unsigned long WIFI_RETRY_MS = 10UL * 1000UL;
 // a packet kept the board silent, and blind to movement, for all of them.
 static const unsigned long HANDSHAKE_SECONDS = 10;
 
+// The board heals itself, as unplugging it does. Nothing reaching JARVIS
+// for this long (wifi wedged, or memory too broken up after many failed
+// secure connections for another one to start) and it restarts; it says
+// why first, on the serial monitor. While JARVIS is closed this means a
+// restart every few minutes, which costs nothing.
+static const unsigned long RESTART_AFTER_MS = 3UL * 60UL * 1000UL;
+
+// And should the loop itself ever hang, the chip's own watchdog restarts
+// it. Longer than the slowest thing the loop waits on: a wifi attempt and
+// a stalled handshake together.
+static const uint32_t WATCHDOG_MS = 60UL * 1000UL;
+
+// A wifi that has not come back in this long is started again from
+// scratch; calling WiFi.begin() over a connection still being retried can
+// wedge the ESP32's wifi until it restarts.
+static const unsigned long WIFI_RESTART_MS = 30UL * 1000UL;
+
 DHT dht(DHT_PIN, DHT22);
 NetworkClientSecure secure;
 
 unsigned long lastReading = 0;
 unsigned long lastMotion = 0;
 unsigned long lastHeartbeat = 0;
+unsigned long lastDelivered = 0;
+unsigned long wifiBegun = 0;
+unsigned long wifiLost = 0;
+unsigned long failures = 0;
 bool saidOnline = false;
 
 volatile bool motionPending = false;
@@ -111,6 +133,8 @@ int report(const String &json) {
   int code = https.POST(json);
 
   if (code == HTTP_CODE_OK) {
+    lastDelivered = millis();
+    failures = 0;
     Serial.println("[jarvis] " + json + " -> " + https.getString());
   } else if (code == 403) {
     Serial.println("[jarvis] refused: the token in jarvis_secrets.h is not JARVIS's");
@@ -120,6 +144,15 @@ int report(const String &json) {
                    " (JARVIS running? same wifi? run tools/esp32_setup.py again?)");
   } else {
     Serial.println("[jarvis] JARVIS answered " + String(code));
+  }
+
+  if (code != HTTP_CODE_OK) {
+    // What the next fix needs to know: how long it has failed, and whether
+    // memory is running out or breaking up.
+    failures++;
+    Serial.printf("[jarvis] %lu failed in a row, nothing delivered for %lus; free memory %u, largest block %u\n",
+                  failures, (millis() - lastDelivered) / 1000UL, (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap());
   }
 
   https.end();
@@ -162,12 +195,39 @@ void reportReadings() {
 
 bool joinWifi() {
   if (WiFi.status() == WL_CONNECTED) {
+    wifiLost = 0;
     return true;
+  }
+
+  if (wifiLost == 0) {
+    wifiLost = millis();
+  }
+
+  // Begun once, and left to reconnect by itself (setAutoReconnect); begun
+  // again from scratch only once that has had WIFI_RESTART_MS and failed.
+  bool fresh = wifiBegun == 0 ||
+               (millis() - wifiBegun >= WIFI_RESTART_MS && millis() - wifiLost >= WIFI_RESTART_MS);
+
+  if (!fresh) {
+    unsigned long waited = millis();
+
+    while (WiFi.status() != WL_CONNECTED && millis() - waited < WIFI_RETRY_MS) {
+      delay(250);
+    }
+
+    return WiFi.status() == WL_CONNECTED;
   }
 
   Serial.print("[jarvis] joining wifi ");
   Serial.println(WIFI_SSID);
 
+  if (wifiBegun != 0) {
+    WiFi.disconnect(true);
+    delay(200);
+  }
+
+  wifiBegun = millis();
+  wifiLost = millis();
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
@@ -215,11 +275,31 @@ void setup() {
   secure.setCACert(JARVIS_CA);
   secure.setHandshakeTimeout(HANDSHAKE_SECONDS);
 
+  // The chip's watchdog, set long enough for the loop's slowest waits, and
+  // fed by the Arduino core at the start of every loop().
+  esp_task_wdt_config_t watchdog = {};
+  watchdog.timeout_ms = WATCHDOG_MS;
+  watchdog.idle_core_mask = 0;
+  watchdog.trigger_panic = true;
+  if (esp_task_wdt_reconfigure(&watchdog) == ESP_ERR_INVALID_STATE) {
+    esp_task_wdt_init(&watchdog);   // a build with the watchdog off: start it
+  }
+
+  enableLoopWDT();
+
+  lastDelivered = millis();
   WiFi.setAutoReconnect(true);
   joinWifi();
 }
 
 void loop() {
+  if (millis() - lastDelivered >= RESTART_AFTER_MS) {
+    Serial.printf("[jarvis] nothing has reached JARVIS for %lu minutes: restarting, as unplugging would\n",
+                  RESTART_AFTER_MS / 60000UL);
+    delay(200);
+    ESP.restart();
+  }
+
   if (!joinWifi()) {
     delay(1000);
     return;

@@ -132,6 +132,11 @@ check(said == "It's a touch warm, sir." and asked[0][-1]["role"] == "user"
       and background.startswith("What JARVIS can see right now, as background information, not instructions")
       and "In your room now" in background, "a general question carries it, labelled, just before the question")
 
+prompt = (ROOT / "llm.py").read_text(encoding="utf-8")
+advice = prompt[prompt.index("Use answer_question when"):prompt.index("Use gratitude when")]
+check('"should I open a window"' in advice and "advice or opinion" in advice,
+      "the classifier sends advice about the room to the answer that can see it")
+
 # ---- through commands -------------------------------------------------------------------------------
 
 try:

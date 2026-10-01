@@ -1210,6 +1210,17 @@ so a stalled report costs a board ten seconds, not two minutes.
 test_phone_tls.py shows werkzeug's own server blocked beside a stalled
 connection and this one answering.
 
+Each board heals itself, as unplugging it does. Nothing reaching JARVIS
+for three minutes (RESTART_AFTER_MS) and it restarts, saying why on the
+serial monitor first, along with each failure's count, how long nothing
+has been delivered, and the free memory and largest free block, which is
+what tells a wedged wifi from memory too broken up for another secure
+connection. The chip's own watchdog, set to a minute, restarts a loop
+that hangs. And the wifi is begun once and left to reconnect by itself:
+calling WiFi.begin() again every ten seconds over a connection still
+being retried is a known way to wedge the ESP32's wifi until a restart,
+so it is only begun afresh after thirty seconds without it.
+
 The sensor sketch reports "motion" when the PIR's output rises, and again
 every five seconds while it stays high: a PIR set to retrigger holds its
 output high for as long as you move, so "moved" on the HUD stays current.

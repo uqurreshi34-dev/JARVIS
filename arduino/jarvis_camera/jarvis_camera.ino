@@ -32,6 +32,7 @@
 #include <HTTPClient.h>
 #include <NetworkClientSecure.h>
 #include "esp_camera.h"
+#include <esp_task_wdt.h>
 
 #include "jarvis_config.h"
 #include "jarvis_secrets.h"
@@ -66,10 +67,23 @@ static const unsigned long WIFI_RETRY_MS = 10UL * 1000UL;
 // the library's own limit is two minutes of silence.
 static const unsigned long HANDSHAKE_SECONDS = 10;
 
+// The board heals itself, as unplugging it does: nothing reaching JARVIS
+// for this long and it restarts, saying why first. And should the loop
+// ever hang, the chip's watchdog restarts it.
+static const unsigned long RESTART_AFTER_MS = 3UL * 60UL * 1000UL;
+static const uint32_t WATCHDOG_MS = 60UL * 1000UL;
+
+// A wifi that has not come back in this long is started again from scratch;
+// calling WiFi.begin() over a connection still being retried can wedge it.
+static const unsigned long WIFI_RESTART_MS = 30UL * 1000UL;
+
 NetworkClientSecure secure;
 
 unsigned long lastHeartbeat = 0;
 unsigned long lastAsk = 0;
+unsigned long lastDelivered = 0;
+unsigned long wifiBegun = 0;
+unsigned long wifiLost = 0;
 bool saidOnline = false;
 bool cameraReady = false;
 
@@ -96,6 +110,8 @@ int post(const char *path, const char *type, const uint8_t *body, size_t length,
   int code = https.POST(const_cast<uint8_t *>(body), length);
 
   if (code == HTTP_CODE_OK) {
+    lastDelivered = millis();
+
     if (answer) {
       *answer = https.getString();
     }
@@ -223,12 +239,39 @@ bool startCamera() {
 
 bool joinWifi() {
   if (WiFi.status() == WL_CONNECTED) {
+    wifiLost = 0;
     return true;
+  }
+
+  if (wifiLost == 0) {
+    wifiLost = millis();
+  }
+
+  // Begun once and left to reconnect by itself; begun again from scratch
+  // only once that has had WIFI_RESTART_MS and failed.
+  bool fresh = wifiBegun == 0 ||
+               (millis() - wifiBegun >= WIFI_RESTART_MS && millis() - wifiLost >= WIFI_RESTART_MS);
+
+  if (!fresh) {
+    unsigned long waited = millis();
+
+    while (WiFi.status() != WL_CONNECTED && millis() - waited < WIFI_RETRY_MS) {
+      delay(250);
+    }
+
+    return WiFi.status() == WL_CONNECTED;
   }
 
   Serial.print("[jarvis] joining wifi ");
   Serial.println(WIFI_SSID);
 
+  if (wifiBegun != 0) {
+    WiFi.disconnect(true);
+    delay(200);
+  }
+
+  wifiBegun = millis();
+  wifiLost = millis();
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
@@ -264,11 +307,29 @@ void setup() {
   secure.setCACert(JARVIS_CA);
   secure.setHandshakeTimeout(HANDSHAKE_SECONDS);
 
+  esp_task_wdt_config_t watchdog = {};
+  watchdog.timeout_ms = WATCHDOG_MS;
+  watchdog.idle_core_mask = 0;
+  watchdog.trigger_panic = true;
+  if (esp_task_wdt_reconfigure(&watchdog) == ESP_ERR_INVALID_STATE) {
+    esp_task_wdt_init(&watchdog);   // a build with the watchdog off: start it
+  }
+
+  enableLoopWDT();
+
+  lastDelivered = millis();
   WiFi.setAutoReconnect(true);
   joinWifi();
 }
 
 void loop() {
+  if (millis() - lastDelivered >= RESTART_AFTER_MS) {
+    Serial.printf("[jarvis] nothing has reached JARVIS for %lu minutes: restarting, as unplugging would\n",
+                  RESTART_AFTER_MS / 60000UL);
+    delay(200);
+    ESP.restart();
+  }
+
   if (!joinWifi()) {
     delay(1000);
     return;

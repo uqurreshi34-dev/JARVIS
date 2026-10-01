@@ -229,6 +229,19 @@ called = [line for line in sketch.splitlines() if "setInsecure(" in line.split("
 check(not called and "secure.setCACert(JARVIS_CA)" in sketch, "the board checks JARVIS's certificate, never setInsecure")
 
 # Leave a config beside the stand-in headers for a compile check, when asked.
+# Each board heals itself, as unplugging it does: it restarts when nothing has
+# reached JARVIS for minutes, the chip's watchdog restarts a hung loop, and
+# the wifi is begun once and only begun afresh after it has had time to
+# reconnect by itself (WiFi.begin() over a retrying connection can wedge it).
+for sketch in ("jarvis_sensor", "jarvis_camera"):
+    code = (ROOT / "arduino" / sketch / f"{sketch}.ino").read_text(encoding="utf-8")
+    check("ESP.restart()" in code and "RESTART_AFTER_MS" in code and "lastDelivered = millis();" in code,
+          f"{sketch}: restarts itself when nothing reaches JARVIS")
+    check("esp_task_wdt_reconfigure(&watchdog)" in code and "enableLoopWDT();" in code,
+          f"{sketch}: and the chip's watchdog restarts a hung loop")
+    check(code.count("WiFi.begin(WIFI_SSID") == 1 and "WIFI_RESTART_MS" in code and "WiFi.disconnect(true)" in code,
+          f"{sketch}: and wifi is begun once, afresh only after it has had time to come back")
+
 # PlatformIO compiles the sketch as the <name>.ino.cpp it converts it into,
 # so that is what each sketch's build_src_filter must name: naming the .ino
 # matched no file, and the build failed with "undefined reference to setup()".
