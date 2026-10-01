@@ -20,6 +20,8 @@
 //        C3 Super Mini     "ESP32C3 Dev Module", with Tools > USB CDC On Boot
 //                          set to Enabled, or the Serial Monitor stays blank
 //      Give each board its own SENSOR_NAME in jarvis_secrets.h before uploading.
+//      Or PlatformIO, which builds this same file: pio run -e wroom -t upload
+//      (or -e c3 for the Super Mini).
 //
 // The pins are picked for the board it is built for (below), and either
 // can be changed by defining DHT_PIN or PIR_PIN in jarvis_secrets.h.

@@ -29,12 +29,12 @@ import time
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 
-from werkzeug.serving import make_server
+from werkzeug.serving import ThreadedWSGIServer
 from pywebpush import webpush, WebPushException
 
 import phone_tls
 import transcriber
-from actions import location, askfiles
+from actions import location, askfiles, cameras
 from voice import FILLERS, set_phone_active
 
 import speech
@@ -561,6 +561,34 @@ def ensure_certificate():
         return False
 
 
+# How long a connection is given to answer JARVIS's TLS goodbye.
+_GOODBYE_SECONDS = 1.0
+
+
+class _TidyServer(ThreadedWSGIServer):
+    """The phone server, ending each TLS connection the way TLS says to.
+
+    socketserver closes a finished connection by shutting down the TCP
+    socket under the TLS layer, so the other end sees the connection
+    drop without TLS's close_notify. Browsers shrug; a strict client
+    reads that as an error, and the sensor boards' TLS library prints
+    one for every report ("(-76) UNKNOWN ERROR CODE (004C)"). unwrap()
+    sends close_notify first, then the socket is closed as before.
+    """
+
+    def shutdown_request(self, request):
+        if isinstance(request, ssl.SSLSocket):
+            try:
+                request.settimeout(_GOODBYE_SECONDS)
+                request.unwrap()
+            except (OSError, ValueError):
+                # Gone already, or never finished its handshake:
+                # nothing to say goodbye to. ssl.SSLError is an OSError.
+                pass
+
+        super().shutdown_request(request)
+
+
 class PhoneServer:
     """A small web server letting a phone drive the same assistant."""
 
@@ -957,6 +985,36 @@ class PhoneServer:
 
             return jsonify({"ok": True, "spoke": bool(said)}), 200
 
+        @app.post("/camera/wanted")
+        def camera_wanted():
+            """A camera asking whether a picture is wanted. Asked every
+            few seconds, so it answers at once and says only yes or no."""
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            payload = request.get_json(silent=True) or {}
+            return jsonify({"snap": cameras.wanted(payload.get("name"))}), 200
+
+        @app.post("/camera")
+        def camera_picture():
+            """A picture a camera was asked for: a JPEG, kept in memory only.
+
+            The size is checked before the body is read, so a stray upload
+            is refused without being taken in.
+            """
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            if request.content_length is None or request.content_length > cameras.MAX_BYTES:
+                return jsonify({"error": "too large"}), 413
+
+            refused = cameras.store(request.headers.get("X-Jarvis-Camera", ""), request.get_data(cache=False))
+
+            if refused:
+                return jsonify({"error": refused}), 400
+
+            return jsonify({"ok": True}), 200
+
         @app.get("/health")
         def health():
             # Deliberately open: the page polls this to tell "JARVIS
@@ -1321,11 +1379,10 @@ class PhoneServer:
         try:
             # 0.0.0.0 so the phone can reach it over the local network.
             # HTTPS is required by mobile browsers for microphone access.
-            self._server = make_server(
+            self._server = _TidyServer(
                 "0.0.0.0",
                 self.port,
                 self._app,
-                threaded=True,
                 ssl_context=context,
             )
         except OSError as error:

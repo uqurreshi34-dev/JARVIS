@@ -504,6 +504,21 @@ to light it. The file hologram and the house take turns: showing one puts
 the other away. Asking a sensor question ("what's the temperature in the
 room") with the house up lights that room too.
 
+## The camera
+
+An ESP32-CAM named after its room ("my room cam") looks out of that room's
+window on the house plan, and takes a picture only when asked. Nothing is
+recorded: JARVIS keeps the newest picture in memory and nothing on disk.
+
+| Say | Does |
+|---|---|
+| show me the street | asks the camera for a picture and shows it (**free**) |
+| show me my room cam | the same, by the camera's own name |
+| what's happening on the street / what's outside | describes the picture (a model call) |
+| close the camera | puts the picture away |
+
+What a camera looks at is the "looks" of its room's window in house.json.
+
 ## Is he there
 
 | Say | Does |

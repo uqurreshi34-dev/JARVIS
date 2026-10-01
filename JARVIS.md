@@ -1176,6 +1176,21 @@ the issued one. The setup tool connects to the running JARVIS as the board
 will and says whether the board would accept it, rather than trusting the
 files alone.
 
+Each connection ends with TLS's goodbye. socketserver closes a finished
+connection by shutting the TCP socket under the TLS layer, which a strict
+client reads as an error: every board report printed "(-76) UNKNOWN ERROR
+CODE (004C)" though JARVIS had it. phone.py's `_TidyServer` (werkzeug's
+threaded server) unwraps each TLS socket first, sending close_notify and
+giving the other end a second to answer, then closes as before.
+test_phone_tls.py shows werkzeug's own server dropping and this one
+ending cleanly, to a strict client.
+
+The sketch is one file built two ways: the Arduino IDE opens
+`jarvis_sensor.ino`, and PlatformIO builds the same file (`src_dir` is the
+sketch folder, `build_src_filter` names it), with an env for each board:
+`pio run -e wroom` and `pio run -e c3`. PlatformIO's `.pio/`, `.cache/` and
+`compile_commands.json` are made per machine and kept out of git.
+
 JARVIS's certificates carry the key identifiers RFC 5280 asks for (which
 authority signed it, and whose key is whose). Python 3.13 and later check
 strictly by default and refuse a certificate without them ("Missing
@@ -1350,6 +1365,29 @@ can sit inside a room's ("room" inside "front room") and would answer for
 the wrong room; the room's boards answer through sensors.answer, and a
 room with none says so. Only with a house.json of your own, never the
 starter.
+
+### Cameras - `actions/cameras.py`, `arduino/jarvis_camera/`
+An ESP32-CAM (AI Thinker) takes a picture only when asked. It reports
+"online" to `/sensor` like any board, named after its room ("my room cam"),
+so the house plan places it and points its cone out of that room's window;
+a window's "looks" ("street") names what it sees. Every three seconds it
+asks `POST /camera/wanted` whether a picture is wanted, and only when one
+is does it send a JPEG to `POST /camera`, with the token and its name in
+`X-Jarvis-Camera`. JARVIS keeps the newest picture per camera in memory,
+never on disk, and checks the size before reading the body and that it is
+a JPEG. So nothing is captured until asked, and nothing is kept.
+
+"Show me the street" (or the camera's own name, "show me my room cam")
+asks the camera, waits up to twelve seconds for a picture taken after the
+asking, and shows it in the camera panel, free; "what's happening on the
+street" or "what's outside" describes it through the same vision call as
+the PC's webcam. Only cameras that exist are named, so with none online the
+webcam's own commands are untouched; "close the camera" closes either.
+The sketch finds the camera module itself (OV2640 or OV3660), keeps the
+flash LED off, takes VGA from the board's PSRAM, and builds in the Arduino
+IDE (board "AI Thinker ESP32-CAM") or with `pio run -e cam`.
+`tools/esp32_setup.py` writes its headers too, with the wifi copied from
+the sensor's secrets so it is typed once.
 
 ### Who moved - `actions/presence.py`
 A PIR sees movement, not a person, so "welcome back" needs a witness. It
