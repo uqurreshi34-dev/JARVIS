@@ -1359,6 +1359,21 @@ _speakable_chunks starts a reply with its first sentence alone when that
 sentence is long enough to stand alone, unless the whole reply is already
 cached and plays at once.
 
+### His face - `hud_face.py`
+While the HUD's state is speaking, a holographic head rises out of the
+reactor core (inside the third ring, so it never meets the sensor panel
+docked above or the panels beamed beside) and the core dims to the light
+it is projected from; at rest it fades back into the core. Its mouth is
+the same smoothed voice envelope that drives the core and the waveform,
+wide when nearly shut and rounder as it opens; it blinks every few
+seconds, its eyes glance, a brighter scan band passes down it, and it
+flickers faintly and sways. Cheap, as everything on the HUD at thirty
+frames a second must be: the head (glow, contours, meridians, outline,
+brows, nose) is drawn once into an image per colour and size and kept, and
+a frame only lays that down, again inside the scan band, and draws the
+eyes and mouth, about a third of a millisecond. `JARVIS_HUD_FACE=0` turns
+it off.
+
 ---
 
 ### Protocols - `actions/protocols.py`, `actions/chrome_tabs.py`

@@ -1123,6 +1123,11 @@ That's also a useful tell — if a prompt appears, a real commit happened.
 
 Clicking the reactor core in the HUD does the same.
 
+While he speaks, his face rises out of the reactor core: a holographic
+head in the reactor's colour, its mouth moving with his voice, blinking
+and glancing, and it dissolves back into the core when he stops.
+`JARVIS_HUD_FACE=0` in .env turns it off.
+
 ## The log
 
 | Say | Does |
