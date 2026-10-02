@@ -502,6 +502,15 @@ class Hud(QWidget):
 
         return breath
 
+    # The extra turn the rings make as they settle at start-up. Whole turns
+    # for every ring's pattern (three segments, twelve dashes at 0.7 of the
+    # speed, two sweeps at 1.6), so once it is spent nothing jumps.
+    _BOOT_TURN = 1800.0
+
+    def _boot_spin(self, grow):
+        """The rings' rotation during the start-up check: the settling turn, on top of their resting one."""
+        return self._BOOT_TURN * grow + self._spin()
+
     def _spin(self):
         """Degrees of rotation, faster while busy."""
         speed = 26.0 if self._state in (THINKING, LISTENING) else 9.0
@@ -850,9 +859,11 @@ class Hud(QWidget):
 
         painter.restore()
 
-        # Rings grow into place, spinning fast and settling.
+        # Rings grow into place, spinning fast and settling into their
+        # resting turn, the one the HUD keeps after the check, so they never
+        # stand still while he greets you and never jump when it ends.
         grow = ease((elapsed - 0.6) / 1.6)
-        spin = 900.0 * grow
+        spin = self._boot_spin(grow)
 
         if grow > 0:
             for radius in (_R_OUTER, _R_RING2):

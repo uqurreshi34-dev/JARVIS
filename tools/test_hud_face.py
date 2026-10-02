@@ -9,7 +9,9 @@ Checked:
 - he blinks now and then, and his eyes are open between blinks;
 - the head is drawn once and kept, not drawn again every frame; a new
   colour or size draws it afresh;
-- JARVIS_HUD_FACE=0 turns it off, and the HUD draws no face at all.
+- JARVIS_HUD_FACE=0 turns it off, and the HUD draws no face at all;
+- and the start-up check's rings never stand still: they settle into
+  their resting turn and hand over to it without a jump.
 
     python tools/test_hud_face.py
 """
@@ -166,6 +168,19 @@ for _ in range(120):
 check(view._face.shown == 0.0, "and with everything left on but the voice silent, it still goes")
 view._on_state(hud.IDLE)
 view._on_speaking(False)
+
+# The start-up check: the rings settle into their resting turn rather than
+# stopping, so they keep turning while he greets you and do not jump after.
+before = view._boot_spin(1.0)
+
+for _ in range(30):
+    view._tick()
+
+check(view._boot_spin(1.0) != before, "the rings keep turning once the start-up check has settled")
+turn = view._BOOT_TURN
+check(round(turn) % 120 == 0 and round(turn * 0.7) % 30 == 0 and round(turn * 1.6) % 180 == 0
+      and abs(view._boot_spin(1.0) - view._spin() - turn) < 1e-6,
+      "and hand over to their resting turn with no jump in any ring")
 
 os.environ["JARVIS_HUD_FACE"] = "0"
 plain = hud.Hud()
