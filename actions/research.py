@@ -69,17 +69,20 @@ _RESEARCH_WORDS = (
     "find out about",
 )
 
-_REPORT_WORDS = (
-    "report",
-    "write up",
-    "write a report",
-    "save it",
-    "save the",
+# Keeping the result, however it is said: "save it", "saved the findings"
+# (as speech recognition often hears it), "save to the football folder",
+# "store the results", "put it in a file", "write it up". A form of keeping,
+# then what is kept or where. Matched on the normalised words.
+_KEEP_VERBS = r"(?:save|saved|saving|store|stored|storing|put|keep|kept|write|written|writing)"
+_KEEPING = re.compile(
+    rf"\b{_KEEP_VERBS}\b(?:\s+\w+){{0,6}}?\s+"
+    r"(?:it|them|that|this|up|findings|results|research|comparison|answers?|folder|file|document|doc)\b"
 )
+_REPORT_RE = re.compile(r"\b(?:report|reports|write up|writeup)\b")
 
 _FOLDER_RE = re.compile(
-    r"\b(?:save|store|put)\b.*?\b(?:in|inside|into|under|to)\s+"
-    r"(?:the\s+)?([A-Za-z0-9][A-Za-z0-9 _-]{0,79}?)\s+folder\b",
+    rf"\b{_KEEP_VERBS}\b.*?\b(?:in|inside|into|under|to)\s+"
+    r"(?:(?:the|my|our)\s+)?([A-Za-z0-9][A-Za-z0-9 _-]{0,79}?)\s+folder\b",
     re.IGNORECASE,
 )
 
@@ -207,7 +210,7 @@ def is_report_request(text):
 
     return (
         any(word in lowered for word in _RESEARCH_WORDS)
-        and any(word in lowered for word in _REPORT_WORDS)
+        and bool(_REPORT_RE.search(lowered) or _KEEPING.search(lowered))
     )
 
 

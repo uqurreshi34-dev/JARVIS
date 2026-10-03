@@ -827,6 +827,16 @@ post-Tripo segmented models.
 JARVIS can research arbitrary subjects, compare them, synthesise the findings
 and create a source-backed report.
 
+**When it is a report.** is_report_request needs a research word
+("research", "compare", "look into" ...) and either "report" / "write up"
+or a way of keeping the result: a form of save, store, put, keep or write,
+then within a few words what is kept or where (it, the findings, the
+results, a folder, a file). "Saved the findings", as speech recognition
+often hears it, and "save to the football folder" used to miss, and went to
+the multi-step planner, which cannot run a web search as a step; they are
+reports now (tools/test_research_routing.py). The folder is the one named
+after "the", "my" or "our".
+
 **Sources must be about what was searched.** Searches go to Tavily when
 `TAVILY_API_KEY` is set in `.env` (free plan: 1,000 searches a month, no
 card; a report uses up to seven), with its adult-content filter on and each
@@ -1659,13 +1669,22 @@ beam joining them to the HUD.
 
 ### Regression checks
 
-Three small offline tests, no network and no keys:
+Every suite in `tools/` (test_*.py) is a script that exits non-zero when
+anything in it failed, runs offline in a sandboxed JARVIS folder and needs
+no keys. `tools/run_tests.py` runs them all, each in its own Python with the
+panels drawn offscreen, a time limit and no keyboard, and sums up:
 
 ```text
-python tools/test_memory_semantic.py
-python tools/test_routing_regressions.py
-python tools/test_failover_classifier.py
+python tools/run_tests.py
+python tools/run_tests.py routing memory     only suites with these in the name
 ```
+
+GitHub Actions runs exactly this on Windows on every push to the working
+branch (`.github/workflows/tests.yml`), after installing requirements.txt
+and checking every file compiles, with the small Vosk model fetched for
+voice.py and the models the suites download kept between runs. It reads
+the code and nothing else: no secrets. main is only fast-forwarded to a
+branch that passed.
 
 ### Providers and failover
 
@@ -1925,8 +1944,12 @@ voice, Graph credentials, weather fallback, `TAVILY_API_KEY` for research.
 | `voice_lab.py` | which voice and delivery to use |
 | `close_check.py` | why an application will not close |
 | `audio_check.py` | whether cached speech is sound |
-| `speed_test.py` | where the time in a reply goes |
-| `test_console.py` | typed commands, no microphone |
+| `tts_debug.py` | why the neural voice is not playing |
+| `wake_test.py` | how reliably the wake word is heard |
+| `tools/test_console.py` | typed commands, no microphone (a console, not a suite: tools/run_tests.py leaves it out) |
+| `tools/test_type.py` | whether typing lands exactly, into a window you click (manual: it really types, so tools/run_tests.py leaves it out) |
+| "status report" | how quickly he has been answering, among the rest |
+| `tools/build_blender_extension.py` | the Blender bridge, built from `blender_extension/` into `dist/jarvis_bridge.zip` for Install from Disk |
 | `tools/mine_journal.py` | which intents reach the model, and what was said |
 | `tools/rag_eval.py` | how well memory, notes, the log and reports find things, against a saved baseline; `--mine` for your own questions and your reports' citations |
 | `tools/adsb_probe.py` | which aircraft feeds answer, and how hard they can be pushed |

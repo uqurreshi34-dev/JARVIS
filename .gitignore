@@ -21,6 +21,11 @@ build/
 dist/
 installer/output/
 
+# Built Blender bridges: made from blender_extension/ by
+# tools/build_blender_extension.py, never kept in git.
+jarvis_bridge.zip
+blender_extension/**/*.zip
+
 # ESP32 sensor sketch: made by tools/esp32_setup.py, machine-specific or secret
 arduino/*/jarvis_secrets.h
 arduino/*/jarvis_config.h

@@ -67,16 +67,15 @@ check(status_report._boards() == "No sensor board has reported since I started."
 sensors.report({"name": "room", "temperature": 21.0})
 check(status_report._boards() == "1 sensor board reporting, last heard just now.", status_report._boards())
 
-midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-now = time.time()
+# A fixed day, yesterday, so the check never depends on the time it is run.
+midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp() - 86400
 
 for offset in list(range(0, 1800, 60)) + list(range(5400, 6000, 60)):
-    if midnight + offset < now:
-        sensor_history._clock = lambda: midnight + offset
-        sensor_history.record("room", "", {"temperature": 20.0})
+    sensor_history._clock = lambda: midnight + offset
+    sensor_history.record("room", "", {"temperature": 20.0})
 
 sensor_history._clock = time.time
-said = status_report._record(now=max(now, midnight + 6000))
+said = status_report._record(now=midnight + 6000)
 check(said and said.startswith("Today's sensor record has ") and "1 gap" in said, f"today's record and its gap ({said!r})")
 
 check(status_report._replies() is None, "no replies timed yet, so none said")
@@ -111,6 +110,9 @@ check(report.startswith("Status report, sir. 1 sensor board reporting") and "sec
       f"the report, in one ({report[:90]!r})")
 
 # ---- right now ----------------------------------------------------------------------------------
+
+# A reading now, so today has one whatever the hour.
+sensor_history.record("room", "", {"temperature": 20.0})
 
 seen = status_report.right_now()
 check(seen.startswith("It is ") and "In your room now: 21.0 C." in seen and "stayed around 20.0 C" in seen,

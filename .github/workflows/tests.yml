@@ -1,0 +1,85 @@
+# Every test suite in tools/, on Windows as JARVIS runs, on each push to the
+# working branch; main is only ever fast-forwarded to a branch that passed.
+# The same check runs on your PC with: python tools/run_tests.py
+
+name: tests
+
+on:
+  push:
+    branches: [chunk-2-connected-memory]
+  workflow_dispatch:
+
+# Read the code, nothing more: no secrets are needed or given.
+permissions:
+  contents: read
+
+# A newer push makes an older run pointless.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install JARVIS's packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      # Every file compiles: a syntax slip anywhere fails here, plainly.
+      - name: Compile
+        run: python -m compileall -q -x "(\.venv|build|dist)" .
+
+      # voice.py loads a Vosk model at import, kept out of git (model/). The
+      # small English model is enough for the suites, which never listen.
+      - name: Cache the Vosk model
+        id: vosk
+        uses: actions/cache@v4
+        with:
+          path: model
+          key: vosk-model-small-en-us-0.15
+
+      - name: Fetch the Vosk model
+        if: steps.vosk.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip -OutFile vosk.zip
+          Expand-Archive vosk.zip -DestinationPath .
+          Rename-Item vosk-model-small-en-us-0.15 model
+          Remove-Item vosk.zip
+
+      # Models the suites download on first use (the semantic memory encoder,
+      # local Whisper), kept between runs.
+      - name: Cache downloaded models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/huggingface
+            ~/.cache/whisper
+          key: models-${{ hashFiles('requirements.txt') }}
+
+      - name: Run the test suites
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: "1"
+          # Not a key: the providers want one set to start, and no suite calls out.
+          GROQ_API_KEY: not-a-real-key
+        run: python tools/run_tests.py --report test-report.txt
+
+      - name: Keep the full output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: test-report.txt
+          if-no-files-found: ignore

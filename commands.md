@@ -806,6 +806,12 @@ combined with a save request is enough.
 | compare iPhone with Android and save it | researches both, compares them and creates the report |
 | research NVIDIA, compare it with AMD and save it | same |
 | research Lamborghini, compare it with Ferrari, write the report and save it | same |
+| research Manchester City and save the findings in the football folder | the report, in `JARVIS\football\` |
+| research Man City, compare with Liverpool and save to the football folder | same |
+
+Any way of keeping the result counts: save, saved, store, put, keep or write
+it, the findings, the results, or to a folder or file. "Research X" alone
+learns facts about it instead, with no report.
 
 For much better sources, add a free Tavily key to `.env` in the JARVIS
 repo folder: `TAVILY_API_KEY=tvly-...` (tavily.com, 1,000 searches a month,
