@@ -19,6 +19,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+from tools import sandbox  # noqa: E402  (must precede actions imports)
+
+sandbox.activate()
+
 from actions import memory, subject_store  # noqa: E402
 
 

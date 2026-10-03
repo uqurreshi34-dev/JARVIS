@@ -33,6 +33,10 @@ os.environ.setdefault("GEMINI_API_KEY", "semantic-test-key")
 os.environ.setdefault("LLM_PROVIDER", "groq")
 
 
+from tools import sandbox  # noqa: E402  (must precede actions imports)
+
+sandbox.activate()
+
 from actions import memory, semantic_memory  # noqa: E402
 from actions import knowledge  # noqa: E402
 from actions import memory_collection_intelligence  # noqa: E402

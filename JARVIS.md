@@ -1679,6 +1679,14 @@ python tools/run_tests.py
 python tools/run_tests.py routing memory     only suites with these in the name
 ```
 
+Each suite that imports JARVIS's actions or commands activates
+`tools/sandbox.py` first, so none reads or writes your own JARVIS folder:
+files.root is a temporary folder for the run, and so is the folder of the
+usage ledger, which finds its own rather than asking files.root. Two
+suites once leaked: one routed "the room" by your real house.json, and one
+repaired misheard words against your real subjects.txt. A failed suite's
+summary shows every FAIL line and traceback, not only its last lines.
+
 GitHub Actions runs exactly this on Windows on every push to the working
 branch (`.github/workflows/tests.yml`), after installing requirements.txt
 and checking every file compiles, with the small Vosk model fetched for

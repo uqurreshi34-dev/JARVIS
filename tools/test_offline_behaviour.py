@@ -18,6 +18,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+from tools import sandbox  # noqa: E402  (must precede actions imports)
+
+sandbox.activate()
+
 import commands  # noqa: E402
 import speech  # noqa: E402
 
@@ -35,7 +39,9 @@ def _check_local_stays_local(failures):
 
     if not result:
         failures.append("'open netflix' did not resolve at all")
-    elif result.get("intent") != "open_application":
+    # The app where it is installed, the website where it is not (GitHub's
+    # machines have no Netflix app): either way, resolved locally.
+    elif result.get("intent") not in ("open_application", "open_website"):
         failures.append(
             f"'open netflix' resolved to {result.get('intent')!r}"
         )

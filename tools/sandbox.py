@@ -73,6 +73,16 @@ def activate():
         if getattr(module, "root", None) is _real_root:
             module.root = files.root
 
+    # The token ledger finds its folder itself, not through files.root, as it
+    # loads before almost everything; a suite whose code reaches a provider
+    # must not add its pretend calls to your real usage-*.jsonl.
+    try:
+        import usage
+
+        usage._folder = lambda: holder
+    except Exception:
+        pass
+
     atexit.register(_cleanup)
 
     return holder

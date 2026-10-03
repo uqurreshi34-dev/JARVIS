@@ -48,6 +48,21 @@ def suites(directory, wanted=(), skipped=()):
     return [path for path in found if not any(part and part in path.stem for part in skipped)]
 
 
+def why(output):
+    """What a failed suite's output says went wrong: every FAIL line and traceback, then its last lines.
+
+    The last lines alone hid a suite's one FAIL among the dozens of PASS
+    lines printed after it.
+    """
+    lines = [line for line in output.splitlines() if line.strip()]
+    tail = lines[-TAIL_LINES:]
+    failed = [line for line in lines[:-TAIL_LINES]
+              if line.lstrip().startswith(("FAIL", "- ", "Traceback", "AssertionError", "Error"))
+              or "Error:" in line]
+
+    return failed[:40] + (["..."] if failed else []) + tail
+
+
 def run(path, timeout):
     """Run one suite. (passed, seconds, output)."""
     environment = dict(os.environ)
@@ -95,8 +110,7 @@ def main(arguments=None):
 
         if not passed:
             failed.append(path.stem)
-            tail = [line for line in output.splitlines() if line.strip()][-TAIL_LINES:]
-            print("\n".join("      " + line for line in tail), flush=True)
+            print("\n".join("      " + line for line in why(output)), flush=True)
 
     if options.report:
         Path(options.report).write_text("\n".join(report), encoding="utf-8")

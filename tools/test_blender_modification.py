@@ -13,6 +13,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+from tools import sandbox  # noqa: E402  (must precede actions imports)
+
+sandbox.activate()
+
 from actions import blender  # noqa: E402
 
 
@@ -109,11 +113,25 @@ def main():
             "generated Blender script was not sent to the bridge"
         )
 
-    if bridge_mock.call_count != 1:
+    # Two executions, in order: the scene's original is kept first (once,
+    # for "restore original"), then the change itself, unwrapped from the
+    # Markdown fence the model put round it.
+    sent = [str(call.args[0]) if call.args else "" for call in bridge_mock.call_args_list]
+
+    if len(sent) != 2:
         failures.append(
-            f"expected exactly one bridge execution, got "
-            f"{bridge_mock.call_count}"
+            f"expected the original kept, then one change: got "
+            f"{len(sent)} bridge executions"
         )
+    else:
+        if "_jarvis_original_snapshot" not in sent[0]:
+            failures.append("the first execution did not keep the original scene")
+
+        if "obj.scale *= 1.1" not in sent[1] or "```" in sent[1]:
+            failures.append(
+                "the change sent was not the generated script, unwrapped "
+                f"from its fence: {sent[1][:120]!r}"
+            )
 
     if failures:
         print("FAILED")

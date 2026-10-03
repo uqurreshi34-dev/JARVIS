@@ -625,7 +625,10 @@ started = _time_for_connect.monotonic()
 mcp_services.tools()
 took = _time_for_connect.monotonic() - started
 check(mcp_services.summary() == (2, 2), "both services connect")
-check(took < 3.5, f"side by side, not one after the other ({took:.1f}s for two services that take 2s each)")
+# One after the other cannot take under 4.0s: two seconds of waiting each,
+# before anything else. Under that, they connected side by side, on a fast
+# machine or a slow one (Python's own start-up is what varies).
+check(took < 4.0, f"side by side, not one after the other ({took:.1f}s for two services that take 2s each)")
 
 write_config({"test": {"command": sys.executable, "args": [SERVER]}, "gone": {"command": "definitely-not-a-real-program-xyz"}})
 finished = []

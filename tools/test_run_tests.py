@@ -8,6 +8,7 @@ Checked:
 - names choose suites, --skip and JARVIS_TEST_SKIP leave them out;
 - the console and the typing check, which are not suites, are never run;
 - --report keeps every suite's output, in full, non-ASCII included;
+- a FAIL early in a long output is still shown in the summary;
 - and the real tools/ folder: every suite but those two is chosen.
 
     python tools/test_run_tests.py
@@ -82,6 +83,11 @@ finally:
     os.environ.pop("JARVIS_TEST_SKIP")
 
 check(code == 0, "and so does JARVIS_TEST_SKIP")
+
+noisy = "\n".join(["PASS early"] + ["FAIL the one that matters"] + [f"PASS later {n}" for n in range(40)])
+shown = run_tests.why(noisy)
+check("FAIL the one that matters" in shown and shown[-1] == "PASS later 39",
+      "a failure early in a long output is shown, not hidden behind the last lines")
 
 chosen = [path.stem for path in run_tests.suites(ROOT / "tools")]
 check(len(chosen) > 30 and "test_console" not in chosen and "test_type" not in chosen and "test_run_tests" in chosen,

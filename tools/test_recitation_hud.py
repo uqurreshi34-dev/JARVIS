@@ -82,6 +82,10 @@ import actions  # noqa: E402
 sys.modules["actions.quran"] = quran
 actions.quran = quran
 
+from tools import sandbox  # noqa: E402  (must precede actions imports)
+
+sandbox.activate()
+
 from actions import recitation  # noqa: E402
 
 

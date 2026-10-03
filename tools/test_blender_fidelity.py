@@ -19,6 +19,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+from tools import sandbox  # noqa: E402  (must precede actions imports)
+
+sandbox.activate()
+
 from actions import blender, blender_fidelity  # noqa: E402
 
 
@@ -251,17 +255,31 @@ def _check_regression_stop(failures):
             "_bridge_execute",
             return_value={"ok": True},
         ) as execute_mock,
+        # The bridge is up: refinement waits for it before rendering, and
+        # without this the test waited out the full minute and a half.
+        patch.object(
+            blender,
+            "running",
+            return_value=True,
+        ),
     ):
         blender._refine_current_scene("CLASS: character\nbrief")
 
-    if execute_mock.call_count == 0:
+    # Passes are the refinement scripts sent, not the one-off check that
+    # makes the scene renderable first.
+    passes = [
+        call for call in execute_mock.call_args_list
+        if not (call.args and call.args[0] == blender_fidelity._ENSURE_RENDERABLE)
+    ]
+
+    if not passes:
         failures.append(
             "refinement never applied a pass"
         )
 
-    if execute_mock.call_count >= blender_fidelity._MAX_PASSES:
+    if len(passes) >= blender_fidelity._MAX_PASSES:
         failures.append(
-            f"refinement ran {execute_mock.call_count} passes without "
+            f"refinement ran {len(passes)} passes without "
             f"noticing the silhouette got worse"
         )
 

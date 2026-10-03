@@ -41,6 +41,10 @@ from PyQt6.QtCore import QPoint, qInstallMessageHandler  # noqa: E402
 from PyQt6.QtGui import QFont, QFontMetrics, QImage  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
+from tools import sandbox  # noqa: E402  (must precede actions imports)
+
+sandbox.activate()
+
 import hud  # noqa: E402
 import sensor_panel  # noqa: E402
 from actions import sensors  # noqa: E402
