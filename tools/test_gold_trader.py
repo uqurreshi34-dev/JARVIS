@@ -7,7 +7,8 @@ Runs in a sandboxed JARVIS folder. Checked:
 - a fresh candle with a setup opens one trade: the size, the stop $10 and
   target $30 from the price it buys or sells at, attached to the order;
 - the same candle is never acted on twice, and a stale one not at all;
-- one trade at a time, so many a day, standing down after the losses;
+- one trade at a time, so many a day, standing down after losses in a row
+  (a win or a breakeven between them ends the run);
 - no trade into a wide spread, nor on a candle OANDA has not finished;
 - a closed trade is logged once, as OANDA says it closed, and announced;
 - on Friday evening anything open is closed for the weekend;
@@ -152,7 +153,7 @@ def fresh(at):
 check(trader.tick() == "off" and settings_file()["enabled"] is False and settings_file()["units"] == 1,
       "off until switched on; the settings are written the first time, with 1 oz a trade")
 gold_trader.switch(True)
-check(gold_trader.settings()["enabled"] and settings_file()["max_losses_per_day"] == 2, "switched on, the rest kept")
+check(gold_trader.settings()["enabled"] and settings_file()["max_losses_in_a_row"] == 2, "switched on, the rest kept")
 
 # ---- when it looks -------------------------------------------------------------------------------
 
@@ -216,7 +217,7 @@ with open(os.path.join(folder, gold_trader.SETTINGS_NAME), "w", encoding="utf-8"
     json.dump(settings, handle)
 fresh(utc(2026, 10, 5, 11, 15, 20))
 check(trader.tick() == "stood down" and sum("Standing down" in line for line in said) == 1,
-      "two losses today: it stands down, and says so")
+      "two losses in a row today: it stands down, and says so")
 fresh(utc(2026, 10, 5, 11, 30, 20))
 check(trader.tick() == "stood down" and sum("Standing down" in line for line in said) == 1, "once")
 
@@ -255,6 +256,20 @@ with open(os.path.join(folder, gold_trader.SETTINGS_NAME), "w", encoding="utf-8"
     handle.write("{ not json")
 check(gold_trader.settings()["enabled"] is False, "settings that cannot be read: it does not trade")
 
+# ---- losses in a row ------------------------------------------------------------------------------
+
+def closed(minutes, result):
+    return {"state": "CLOSED", "closed": utc(2026, 10, 5, 10, minutes), "result": result}
+
+
+check(gold_trader._losses_in_a_row([closed(0, -10), closed(15, 30), closed(30, -10)]) == 1,
+      "loss, win, loss: one in a row, so it carries on")
+check(gold_trader._losses_in_a_row([closed(0, 30), closed(15, -10), closed(30, -10)]) == 2,
+      "win, loss, loss: two in a row")
+check(gold_trader._losses_in_a_row([closed(0, -10), closed(15, 0.0), closed(30, -10)]) == 1,
+      "a breakeven ends the run")
+check(gold_trader._losses_in_a_row([{"state": "OPEN", "closed": None, "result": 0.0}]) == 0, "open trades do not count")
+
 # ---- the whole -----------------------------------------------------------------------------------
 
 check("4 finished trades, 1 won, +6.50" in gold_trader.status(), f"the status counts the finished trades ({gold_trader.status()!r})")
@@ -276,7 +291,7 @@ gold_trader.settings()
 account.open = []
 gold_trader.switch(True)
 settings = settings_file()
-settings.update(days=["Mon", "Tue", "Wed", "Thu", "Fri"], units=1, max_trades_per_day=50, max_losses_per_day=50)
+settings.update(days=["Mon", "Tue", "Wed", "Thu", "Fri"], units=1, max_trades_per_day=50, max_losses_in_a_row=50)
 with open(os.path.join(folder, gold_trader.SETTINGS_NAME), "w", encoding="utf-8") as handle:
     json.dump(settings, handle)
 
@@ -319,9 +334,10 @@ with open(os.path.join(folder, gold_trader.SETTINGS_NAME), "w", encoding="utf-8"
     json.dump(settings, handle)
 
 with open(os.path.join(folder, gold_trader.SETTINGS_NAME), "w", encoding="utf-8") as handle:
-    json.dump({"enabled": True, "units": 2}, handle)
+    json.dump({"enabled": True, "units": 2, "max_losses_per_day": 2}, handle)
 check(gold_trader.settings()["units"] == 2 and settings_file()["news_minutes_before"] == 30
-      and settings_file()["units"] == 2, "settings added since the file was written appear in it; nothing set is changed")
+      and settings_file()["units"] == 2 and "max_losses_per_day" not in settings_file(),
+      "settings added since the file was written appear in it, retired ones go; nothing set is changed")
 settings["units"] = 1
 with open(os.path.join(folder, gold_trader.SETTINGS_NAME), "w", encoding="utf-8") as handle:
     json.dump(settings, handle)

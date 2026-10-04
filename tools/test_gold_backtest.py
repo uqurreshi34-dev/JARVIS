@@ -292,6 +292,20 @@ check(code == 0 and "your OANDA demo account" in output and "OANDA gold, 800 fif
       and "Spread $0.50" in output,
       "with OANDA, its own candles and the spread as it was in the trading window, not at night")
 
+oanda.Client = History
+printed = io.StringIO()
+
+try:
+    with contextlib.redirect_stdout(printed):
+        code = cli.main(["--source", "oanda", "--days", "30", "--hours", "10", "16"])
+        refused = cli.main(["--source", "oanda", "--hours", "16", "10"])
+finally:
+    oanda.Client = real_client
+
+output = printed.getvalue()
+check(code == 0 and "candles closing 10:00 to 16:00 UK time" in output and refused == 1,
+      "other hours can be tested (--hours 10 16), and backwards hours are refused")
+
 # ---- fetching -------------------------------------------------------------------------------------
 
 import os  # noqa: E402

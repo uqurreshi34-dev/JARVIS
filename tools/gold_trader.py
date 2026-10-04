@@ -55,7 +55,7 @@ def main(argv=None):
         start, end = chosen["session_hours"]
         print(f"{'On' if chosen['enabled'] else 'Off'}. {chosen['units']:g} oz a trade, {', '.join(chosen['days'])}, "
               f"candles closing {start}:00 to {end}:00 UK time, at most {chosen['max_trades_per_day']} trades and "
-              f"{chosen['max_losses_per_day']} losses a day, spread under ${chosen['max_spread']:.2f}, anything open "
+              f"{chosen['max_losses_in_a_row']} losses in a row a day, spread under ${chosen['max_spread']:.2f}, anything open "
               f"closed Friday at {chosen['friday_close'][0]:02d}:{chosen['friday_close'][1]:02d}.")
         print(gold_trader.status().replace(", sir", ""))
         return 0

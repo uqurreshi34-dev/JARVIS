@@ -18,7 +18,7 @@ Trading practice it keeps to:
   even if JARVIS or the PC is off; with breakeven in the chosen rules, the
   stop moves to the entry once the trade is 1 R up;
 - one trade at a time, a fixed size, at most so many trades a day, and it
-  stands down for the day after so many losses;
+  stands down for the day after so many losses in a row;
 - no trade when the spread is wider than usual, nor on a candle that is
   not fresh (JARVIS started late, or the market paused);
 - nothing at weekends, and anything still open on Friday evening is closed
@@ -38,7 +38,7 @@ defaults the first time, and off until you turn it on):
     session_hours        [10, 14]: candles closing 10:00 to 14:00 UK time
     max_spread           the widest spread, in dollars, it will trade into
     max_trades_per_day   3
-    max_losses_per_day   2: after this many it stands down until tomorrow
+    max_losses_in_a_row  2: after this many losses in a row it stands down until tomorrow
     friday_close         "20:00": anything open is closed then, UK time
     news_filter          true: stand aside around high-impact news
     calendar_url, news_currencies, news_impact, news_minutes_before,
@@ -72,7 +72,7 @@ DEFAULTS = {
     "session_hours": [10, 14],
     "max_spread": 1.0,
     "max_trades_per_day": 3,
-    "max_losses_per_day": 2,
+    "max_losses_in_a_row": 2,
     "friday_close": "20:00",
     "news_filter": True,
     "calendar_url": gold_news.CALENDAR_URL,
@@ -122,9 +122,10 @@ def settings():
         _write_settings(DEFAULTS)
 
     # Settings added since the file was written appear in it, with their
-    # defaults, so every one can be seen and changed; nothing set is changed.
-    if path and found and set(DEFAULTS) - set(found):
-        _write_settings(dict(DEFAULTS, **found))
+    # defaults, so every one can be seen and changed, and retired ones go;
+    # nothing set is changed.
+    if path and found and set(DEFAULTS) != set(found):
+        _write_settings({key: found.get(key, value) for key, value in DEFAULTS.items()})
 
     chosen = dict(DEFAULTS)
     chosen.update({key: value for key, value in found.items() if key in DEFAULTS})
@@ -133,7 +134,7 @@ def settings():
         chosen["units"] = min(MOST_UNITS, max(0.0, float(chosen["units"])))
         chosen["max_spread"] = max(0.0, float(chosen["max_spread"]))
         chosen["max_trades_per_day"] = max(0, int(chosen["max_trades_per_day"]))
-        chosen["max_losses_per_day"] = max(0, int(chosen["max_losses_per_day"]))
+        chosen["max_losses_in_a_row"] = max(0, int(chosen["max_losses_in_a_row"]))
         start, end = (int(hour) for hour in chosen["session_hours"])
         chosen["session_hours"] = (start, end)
         hour, minute = (int(part) for part in str(chosen["friday_close"]).split(":"))
@@ -233,6 +234,19 @@ def status():
 
 
 # ---- the trader -------------------------------------------------------------------------------
+
+def _losses_in_a_row(trades):
+    """How many of the latest closed trades in a row lost; a win or a breakeven ends the run."""
+    run = 0
+
+    for trade in sorted((trade for trade in trades if trade["state"] == "CLOSED" and trade["closed"]),
+                        key=lambda trade: trade["closed"], reverse=True):
+        if trade["result"] >= 0:
+            break
+        run += 1
+
+    return run
+
 
 class GoldTrader:
     def __init__(self, client_factory=None, clock=None):
@@ -352,7 +366,7 @@ class GoldTrader:
         if len(today) >= chosen["max_trades_per_day"]:
             return "enough trades today"
 
-        if sum(1 for trade in today if trade["state"] == "CLOSED" and trade["result"] < 0) >= chosen["max_losses_per_day"]:
+        if _losses_in_a_row(today) >= chosen["max_losses_in_a_row"]:
             if self._stood_down != local.date():
                 self._stood_down = local.date()
                 self._say("Standing down from gold for the rest of the day, sir: the loss limit is reached.")

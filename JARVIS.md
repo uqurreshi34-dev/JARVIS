@@ -1757,8 +1757,8 @@ only while fresh. With a setup and no open trade it places one market order
 with the stop and target attached at OANDA, so they hold with JARVIS off,
 tagged `jarvis-gold` so a trade placed by hand is never touched. It keeps
 to a fixed size (capped at 10 oz whatever the settings say), a few trades
-and fewer losses a day before standing down, no trade into a wide spread,
-nothing at weekends, and anything open closed on Friday evening. With
+a day, standing down for the day after two losses in a row, no trade into
+a wide spread, nothing at weekends, and anything open closed on Friday evening. With
 breakeven in the chosen rules it moves the stop to the entry at 1 R.
 `actions/gold_news.py` keeps it out from 30 minutes before to 30 after a
 high-impact US release, read from the free weekly economic calendar (at

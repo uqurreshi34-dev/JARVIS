@@ -6,6 +6,7 @@ is sent anywhere.
 
     python tools/gold_backtest.py                 the last year
     python tools/gold_backtest.py --days 120      a shorter look
+    python tools/gold_backtest.py --hours 10 16   candles closing 10:00 to 16:00 UK instead of 10 to 14
     python tools/gold_backtest.py --trades        and write every trade to gold-backtest-trades.csv here
     python tools/gold_backtest.py --candle "2026-10-02 00:15"
                                                   one candle's prices (UTC), to compare with Fortrade's chart
@@ -74,11 +75,11 @@ def _halves(candles, trades):
     return first, sum(trade.result for trade in trades) - first
 
 
-def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold"):
+def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=SESSION):
     first, last = candles[0][0], candles[-1][0]
     print(f"\n{source}, {len(candles)} fifteen-minute candles, {first:%d %b %Y} to {last:%d %b %Y} (UTC).")
     print(f"Each trade 1 oz (Fortrade's 0.01 lot, OANDA's 1 unit): $1 a dollar of movement. Spread ${spread:.2f}, candles "
-          f"closing {SESSION[0]}:00 to {SESSION[1]}:00 UK time. 'fixed' exits: stop ${STOP_DOLLARS:g}, target "
+          f"closing {session[0]}:00 to {session[1]}:00 UK time. 'fixed' exits: stop ${STOP_DOLLARS:g}, target "
           f"${TARGET_DOLLARS:g}.\n'bands' exits: stop ${WICK_BUFFER:g} past candle 1's wick, target the middle band."
           f"\n'trail' exits: stop {TRAIL_FIRST_STOP:g} ATR away, moved to the entry at {BREAKEVEN_AT_R:g} R, then "
           f"{TRAIL_DISTANCE:g} ATR behind the best price; no fixed target.\n'trend filter': buys only above the "
@@ -89,7 +90,7 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold"):
 
     for rules in VARIANTS:
         mark = "*" if rules == AS_WRITTEN else "+" if rules == CHOSEN else " "
-        trades = backtest(candles, replace(rules, spread=spread), worked_out)
+        trades = backtest(candles, replace(rules, spread=spread, session=session), worked_out)
         summary = summarise(trades)
         early, late = _halves(candles, trades)
         print(f"{mark} {rules.name():48} {summary.trades:6d} {summary.win_rate:4.0%} {summary.net * lot_ounces:8.2f} "
@@ -115,6 +116,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--days", type=int, default=365, help="how many days back to test (default 365)")
     parser.add_argument("--trades", action="store_true", help="write the trader's rules' trades to gold-backtest-trades.csv here")
+    parser.add_argument("--hours", type=int, nargs=2, metavar=("FROM", "TO"), default=list(SESSION),
+                        help="the UK hours candles may close in, e.g. --hours 10 16 (default 10 14)")
     parser.add_argument("--source", choices=("oanda", "dukascopy"),
                         help="whose prices: OANDA's own (the default when OANDA_API_TOKEN is set), or Dukascopy's")
     parser.add_argument("--candle", metavar="'YYYY-MM-DD HH:MM'",
@@ -123,6 +126,11 @@ def main(argv=None):
 
     last = datetime.now(timezone.utc).date() - timedelta(days=1)
     first = last - timedelta(days=max(7, options.days))
+    session = tuple(options.hours)
+
+    if not 0 <= session[0] < session[1] <= 24:
+        print("--hours wants two UK hours, the first before the second, e.g. --hours 10 16.")
+        return 1
 
     try:
         from dotenv import load_dotenv
@@ -149,7 +157,7 @@ def main(argv=None):
 
         # The spread as it really was in the trading window, not at night when it widens.
         spreads = sorted(ask - candle[4] for candle, ask in zip(candles, ask_closes)
-                         if in_session(candle[0] + timedelta(minutes=15)))
+                         if in_session(candle[0] + timedelta(minutes=15), session))
 
         if spreads:
             spread = spreads[len(spreads) // 2]
@@ -176,7 +184,7 @@ def main(argv=None):
         print(f"The prices look wrong (a typical close of {median:.2f}); not testing on them.")
         return 1
 
-    report(candles, spread=spread, source=label)
+    report(candles, spread=spread, source=label, session=session)
 
     if options.candle:
         wanted = datetime.strptime(options.candle, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
@@ -193,7 +201,7 @@ def main(argv=None):
             writer = csv.writer(handle)
             writer.writerow(["side", "opened (UTC)", "entry", "stop", "target", "closed (UTC)", "exit", "result $", "how"])
 
-            for trade in backtest(candles, replace(CHOSEN, spread=spread)):
+            for trade in backtest(candles, replace(CHOSEN, spread=spread, session=session)):
                 writer.writerow([trade.side, f"{trade.opened:%Y-%m-%d %H:%M}", f"{trade.entry:.2f}", f"{trade.stop:.2f}",
                                  f"{trade.target:.2f}", f"{trade.closed:%Y-%m-%d %H:%M}" if trade.closed else "",
                                  f"{trade.exit:.2f}" if trade.exit is not None else "",
