@@ -8,7 +8,9 @@ Runs in a sandboxed JARVIS folder. Checked:
   target $30 from the price it buys or sells at, attached to the order;
 - the same candle is never acted on twice, and a stale one not at all;
 - one trade at a time, so many a day, standing down after losses in a row
-  (a win or a breakeven between them ends the run);
+  (a win or a breakeven between them ends the run); or more at once with
+  max_open_trades, never one against another;
+- a setup that may be forming is said a candle early, once;
 - no trade into a wide spread, nor on a candle OANDA has not finished;
 - a closed trade is logged once, as OANDA says it closed, and announced;
 - on Friday evening anything open is closed for the weekend;
@@ -469,5 +471,49 @@ from tools import gold_trader as cli  # noqa: E402
 check(cli.main(["--set", "max_trades_per_day=null", "risk_percent=1"]) == 0 and settings_file()["risk_percent"] == 1
       and settings_file()["max_trades_per_day"] is None and cli.main(["--set", "nonsense=1"]) == 1,
       "the --set command changes settings, and refuses names that are not settings")
+
+# ---- a setup forming, and more than one trade open --------------------------------------------------
+
+gold_trader.change({"enabled": True, "risk_percent": None, "practice_balance": None, "units": 1, "news_filter": False,
+                    "setups": ["bounce-1:3-be"], "days": ["Mon", "Tue", "Wed", "Thu", "Fri"]})
+account.open, account.bid, account.ask = [], 4150.0, 4150.5
+warned = {"side": "buy"}
+real_forming = gold_strategy.forming
+gold_strategy.forming = lambda index, candles, bands, squeezes, rules, averages=None, fast=None: warned["side"]
+
+try:
+    decision.update(side=None, setup=None)
+    fresh(utc(2026, 10, 19, 9, 15, 20))     # Monday, the 10:15 UK candle just closed
+    check(trader.tick() == "quiet" and said[-1].startswith("Gold, sir: a possible bounce buy on the 10:15 candle")
+          and said[-1].endswith("The 10:30 candle decides."), f"a setup that may be forming is said a candle early ({said[-1]!r})")
+    heard = len(said)
+    trader.tick()
+    check(len(said) == heard, "once a candle")
+    fresh(utc(2026, 10, 19, 13, 0, 20))     # the 14:00 candle: the next would close outside the hours
+    check(trader.tick() == "quiet" and len(said) == heard, "not when the confirming candle would close outside the hours")
+    gold_trader.change({"announce_forming": False})
+    fresh(utc(2026, 10, 19, 10, 0, 20))
+    check(trader.tick() == "quiet" and len(said) == heard, "and not at all with announce_forming off")
+
+    gold_trader.change({"announce_forming": True, "max_open_trades": 2})
+    warned["side"], decision["side"] = None, "buy"
+    fresh(utc(2026, 10, 20, 9, 15, 20))
+    first_buy = trader.tick()
+    fresh(utc(2026, 10, 20, 9, 30, 20))
+    check(first_buy == "buy" and trader.tick() == "buy" and len(account.open) == 2,
+          "with max_open_trades 2, a second buy while the first is open")
+    fresh(utc(2026, 10, 20, 9, 45, 20))
+    check(trader.tick() == "in a trade" and len(account.open) == 2, "but not a third")
+    account.finish(account.open[-1]["id"], 30.0, "target")
+    decision["side"] = "sell"
+    fresh(utc(2026, 10, 20, 10, 0, 20))
+    check(trader.tick() == "other way open" and len(account.open) == 1,
+          "and never a sell against an open buy, which a demo account without hedging would net")
+    gold_trader.change({"max_open_trades": 50})
+    check(gold_trader.settings()["max_open_trades"] == gold_trader.MOST_OPEN, "50 at once is held to the ceiling")
+finally:
+    gold_strategy.forming = real_forming
+    account.open = []
+    gold_trader.change({"max_open_trades": 1})
 
 sys.exit(1 if failures else 0)

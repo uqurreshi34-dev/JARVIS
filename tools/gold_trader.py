@@ -93,9 +93,12 @@ def main(argv=None):
         trades = "every setup" if chosen["max_trades_per_day"] is None else f"at most {chosen['max_trades_per_day']} trades a day"
         losses = ("never standing down" if chosen["max_losses_in_a_row"] is None
                   else f"standing down after {chosen['max_losses_in_a_row']} losses in a row")
+        at_once = ("one trade at a time" if chosen["max_open_trades"] == 1
+                   else f"up to {chosen['max_open_trades']} trades open at once, all the same way")
+        forming = "saying when a setup may be forming" if chosen["announce_forming"] else "quiet until a trade"
         print(f"{'On' if chosen['enabled'] else 'Off'}. {size}, {', '.join(chosen['days'])}, candles closing {start}:00 "
-              f"to {end}:00 UK time, {trades}, {losses}, spread under ${chosen['max_spread']:.2f}, anything open "
-              f"closed Friday at {chosen['friday_close'][0]:02d}:{chosen['friday_close'][1]:02d}.")
+              f"to {end}:00 UK time, {trades}, {at_once}, {losses}, {forming}, spread under ${chosen['max_spread']:.2f}, "
+              f"anything open closed Friday at {chosen['friday_close'][0]:02d}:{chosen['friday_close'][1]:02d}.")
         print(gold_trader.status().replace(", sir", ""))
         return 0
 

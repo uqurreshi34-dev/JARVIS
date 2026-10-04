@@ -19,8 +19,13 @@ Trading practice it keeps to:
 - the stop and target go on with the order, held by OANDA, so they work
   even if JARVIS or the PC is off; with breakeven in the chosen rules, the
   stop moves to the entry once the trade is 1 R up;
-- one trade at a time, a fixed size, at most so many trades a day, and it
-  stands down for the day after so many losses in a row;
+- one trade at a time (or up to max_open_trades, never one against
+  another, as a demo account without hedging nets them), a fixed size, at
+  most so many trades a day, and it stands down for the day after so many
+  losses in a row;
+- with announce_forming, it says when a candle could be the first of a
+  setup, a candle before the trade would come, so a chart watched by hand
+  can be checked against the same rules;
 - no trade when the spread is wider than usual, nor on a candle that is
   not fresh (JARVIS started late, or the market paused);
 - nothing at weekends, and anything still open on Friday evening is closed
@@ -43,6 +48,8 @@ defaults the first time, and off until you turn it on):
     session_hours        [10, 14]: candles closing 10:00 to 14:00 UK time
     max_spread           the widest spread, in dollars, it will trade into
     max_trades_per_day   null: every setup that meets the rules; or a number
+    max_open_trades      1: trades open at once, all the same way (up to MOST_OPEN)
+    announce_forming     true: say when a setup may be forming, a candle early
     max_losses_in_a_row  2: after this many losses in a row it stands down until tomorrow
                          (null: never)
     setups               ["bounce-1:3-be"]: which tested setups to trade, by the backtest's key;
@@ -83,6 +90,8 @@ DEFAULTS = {
     "session_hours": [10, 14],
     "max_spread": 1.0,
     "max_trades_per_day": None,
+    "max_open_trades": 1,
+    "announce_forming": True,
     "setups": ["bounce-1:3-be"],
     "max_losses_in_a_row": 2,
     "friday_close": "20:00",
@@ -97,6 +106,9 @@ DEFAULTS = {
 # A size no setting can exceed: a typing slip in the settings must not
 # become a position fifty times the intended one.
 MOST_UNITS = 10
+
+# Nor so many trades open at once.
+MOST_OPEN = 5
 
 # A candle older than this when JARVIS looks at it is not traded on.
 FRESH_SECONDS = 180
@@ -162,6 +174,8 @@ def _understood(found):
         for name in ("max_trades_per_day", "max_losses_in_a_row"):
             chosen[name] = None if chosen[name] is None else max(1, int(chosen[name]))
 
+        chosen["max_open_trades"] = min(MOST_OPEN, max(1, int(chosen["max_open_trades"])))
+        chosen["announce_forming"] = chosen["announce_forming"] is not False
         chosen["max_spread"] = max(0.0, float(chosen["max_spread"]))
         start, end = (int(hour) for hour in chosen["session_hours"])
         chosen["session_hours"] = (start, end)
@@ -327,6 +341,7 @@ class GoldTrader:
         self._briefed = None
         self._no_calendar = None
         self._entries = {}   # trade id -> (spread at entry), for the log
+        self._looked = (None, None)   # (candle closing time, (candles, indicators) or None)
 
     def set_listener(self, listener):
         self._listener = listener
@@ -424,6 +439,11 @@ class GoldTrader:
 
         if mine:
             self._protect(client, mine)
+
+        if chosen["announce_forming"]:
+            self._forming(client, chosen, closed_at)
+
+        if len(mine) >= chosen["max_open_trades"]:
             return "in a trade"
 
         today = self._today(client, local.date())
@@ -443,22 +463,64 @@ class GoldTrader:
             if standing:
                 return standing
 
-        candles, _asks = client.candles(count=HISTORY)
+        looked = self._look(client, closed_at)
 
-        if not candles or candles[-1][0] + timedelta(minutes=gold_strategy.CANDLE_MINUTES) != closed_at:
+        if looked is None:
             return "no fresh candle"
 
-        bands, rsis, squeezes, atrs, averages, fast = gold_strategy.indicators(candles)
+        candles, (bands, rsis, squeezes, atrs, averages, fast) = looked
         last = len(candles) - 1
 
         # Each kind of setup traded, in the order listed; the first to see one takes it.
         for rules in active_rules(chosen):
             side = gold_strategy.signal(last, candles, bands, rsis, squeezes, rules, averages, fast)
 
+            if side and any((trade["units"] > 0) != (side == "buy") for trade in mine):
+                journal.write("gold", f"{side} skipped", "a trade the other way is open")
+                return "other way open"
+
             if side:
                 return self._open(client, side, chosen, rules, atrs[last])
 
         return "quiet"
+
+    def _look(self, client, closed_at):
+        """(candles, indicators) up to the candle that closed at [closed_at], once per candle; None if OANDA
+        has not finished it."""
+        if self._looked[0] != closed_at:
+            candles, _asks = client.candles(count=HISTORY)
+            fresh = candles and candles[-1][0] + timedelta(minutes=gold_strategy.CANDLE_MINUTES) == closed_at
+            self._looked = (closed_at, (candles, gold_strategy.indicators(candles)) if fresh else None)
+
+        return self._looked[1]
+
+    def _forming(self, client, chosen, closed_at):
+        """Say so when the candle just closed could be the first of a setup the trader trades.
+
+        Only when the confirming candle would still close in the hours. Said
+        whether or not a trade could follow (one open, the news, a stand
+        down), as it is for a chart watched by hand as much as for the trader.
+        """
+        confirms_at = closed_at + timedelta(minutes=gold_strategy.CANDLE_MINUTES)
+
+        if not gold_strategy.in_session(confirms_at, chosen["session_hours"]):
+            return
+
+        looked = self._look(client, closed_at)
+
+        if looked is None:
+            return
+
+        candles, (bands, _rsis, squeezes, _atrs, averages, fast) = looked
+        last = len(candles) - 1
+
+        for rules in active_rules(chosen):
+            side = gold_strategy.forming(last, candles, bands, squeezes, rules, averages, fast)
+
+            if side:
+                self._say(f"Gold, sir: a possible {rules.setup} {side} on the {_uk(closed_at)[-5:]} candle, "
+                          f"closing at {candles[last][4]:.2f}. The {_uk(confirms_at)[-5:]} candle decides.")
+                return
 
     def _news(self, now, local, chosen):
         """"news" or "no calendar" when the trader should stand aside; None when clear.

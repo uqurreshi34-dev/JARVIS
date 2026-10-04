@@ -13,7 +13,8 @@ The rules (a buy; a sell is the mirror image):
 3. RSI (14 candles): as first written, it was below 30 and is back above
    it by candle 2's close; the version that held up is simply not below 30.
 4. Enter as candle 2 closes. Stop $10 below, target $30 above (1:3).
-5. Only on candles closing 10:00 to 14:00 UK time, one trade at a time,
+5. Only on candles closing 10:00 to 14:00 UK time, one trade at a time
+   (or as many as the trader's max_open_trades allows, all the same way),
    none while the bands are squeezed, and -- with the trend filter -- only
    buys above the 200-candle average and sells below it.
 
@@ -450,17 +451,15 @@ def signal(index, candles, bands, rsis, squeezes, rules, averages=None, fast=Non
     if rules.setup == "breakout":
         return _breakout(index, candles, bands, rsis, squeezes, rules, trend)
 
-    _start, open1, high1, low1, close1 = candles[index - 1]
     _start, open2, _high2, _low2, close2 = candles[index]
-    lower, _middle, upper = bands[index - 1]
 
     if rules.squeeze_filter and squeezes[index - 1]:
         return None
 
     recent = [value for value in rsis[max(0, index - RSI_LOOKBACK):index] if value is not None]
+    touched = _band_touch(candles[index - 1], bands[index - 1], rules)
 
-    touched_low = (low1 <= lower) if rules.touch == "wick" else (close1 <= lower)
-    if touched_low and close1 > open1 and close2 > open2:
+    if touched == "buy" and close2 > open2:
         if rules.rsi == "turned":
             turned = any(value < RSI_LOW for value in recent) and rsis[index] >= RSI_LOW
         else:
@@ -469,14 +468,66 @@ def signal(index, candles, bands, rsis, squeezes, rules, averages=None, fast=Non
         if turned and not (rules.trend_filter and close2 <= trend):
             return "buy"
 
-    touched_high = (high1 >= upper) if rules.touch == "wick" else (close1 >= upper)
-    if touched_high and close1 < open1 and close2 < open2:
+    if touched == "sell" and close2 < open2:
         if rules.rsi == "turned":
             turned = any(value > RSI_HIGH for value in recent) and rsis[index] <= RSI_HIGH
         else:
             turned = rsis[index] <= RSI_HIGH
 
         if turned and not (rules.trend_filter and close2 >= trend):
+            return "sell"
+
+    return None
+
+
+def _band_touch(candle, band, rules):
+    """"buy" when [candle] reaches the lower band and closes green, "sell" when it reaches the upper and closes
+    red: a bounce's candle 1. None otherwise."""
+    _start, open_, high, low, close = candle
+    lower, _middle, upper = band
+
+    if ((low <= lower) if rules.touch == "wick" else (close <= lower)) and close > open_:
+        return "buy"
+
+    if ((high >= upper) if rules.touch == "wick" else (close >= upper)) and close < open_:
+        return "sell"
+
+    return None
+
+
+def forming(index, candles, bands, squeezes, rules, averages=None, fast=None):
+    """"buy", "sell" or None: whether the candle at [index] could be candle 1 of [rules]' setup.
+
+    A warning, a candle early: the next candle's close decides whether
+    signal() sees the setup. The bounce: a band touched and the candle
+    closed back the right way, the bands not squeezed, and on the trend's
+    side. The pullback: a dip to the 20-candle average with the trend. A
+    breakout is a single candle, so it gives no warning.
+    """
+    if index < 0 or bands[index] is None:
+        return None
+
+    trend = averages[index] if averages else None
+    close = candles[index][4]
+
+    if rules.setup == "bounce":
+        if rules.squeeze_filter and squeezes[index]:
+            return None
+
+        side = _band_touch(candles[index], bands[index], rules)
+
+        if side and rules.trend_filter and (trend is None or (close <= trend if side == "buy" else close >= trend)):
+            return None
+
+        return side
+
+    if rules.setup == "pullback" and fast and trend is not None and fast[index] is not None:
+        _start, _open, high, low, _close = candles[index]
+
+        if close > trend and fast[index] > trend and low <= fast[index]:
+            return "buy"
+
+        if close < trend and fast[index] < trend and high >= fast[index]:
             return "sell"
 
     return None
@@ -629,24 +680,37 @@ def exits_for(rules, entry, side, atr):
     return entry + distance, entry - reward, distance
 
 
-def backtest(candles, rules=Rules(), worked_out=None):
-    """Every trade [rules] would have taken over [candles] (fifteen-minute, bid), oldest first.
+def backtest(candles, rules=Rules(), worked_out=None, most_open=1):
+    """Every trade [rules] would have taken over [candles] (fifteen-minute, bid), in the order they closed.
 
     [rules] may be several sets of rules, run together as the trader runs
-    them: one trade at a time, the first set to see a setup taking it.
+    them: the first set to see a setup on a candle taking it. At most
+    [most_open] trades are open at once, all the same way: a demo account
+    without hedging nets a sell against an open buy, so the trader never
+    opens one against the other. A candle that begins with every place
+    taken opens nothing, even if a trade closes during it.
     """
     together = list(rules) if isinstance(rules, (list, tuple)) else [rules]
     bands, rsis, squeezes, atrs, averages, fast = worked_out or indicators(candles)
     trades = []
-    open_trade = None
+    open_trades = []
 
     for index, candle in enumerate(candles):
-        if open_trade is not None:
-            middle = bands[index - 1][1] if bands[index - 1] else None
+        full = len(open_trades) >= most_open
 
-            if _settle(open_trade, candle, open_trade.rules, middle, atrs[index - 1]):
-                trades.append(open_trade)
-                open_trade = None
+        if open_trades:
+            middle = bands[index - 1][1] if bands[index - 1] else None
+            still = []
+
+            for trade in open_trades:
+                if _settle(trade, candle, trade.rules, middle, atrs[index - 1]):
+                    trades.append(trade)
+                else:
+                    still.append(trade)
+
+            open_trades = still
+
+        if full:
             continue
 
         closes_at = candle[0] + timedelta(minutes=CANDLE_MINUTES)
@@ -657,10 +721,14 @@ def backtest(candles, rules=Rules(), worked_out=None):
 
             side = signal(index, candles, bands, rsis, squeezes, chosen, averages, fast)
 
-            if side:
-                open_trade = _open(side, index, candles, chosen, atrs, closes_at)
+            if side and any(trade.side != side for trade in open_trades):
+                continue
 
-                if open_trade is not None:
+            if side:
+                opened = _open(side, index, candles, chosen, atrs, closes_at)
+
+                if opened is not None:
+                    open_trades.append(opened)
                     break
 
     return trades

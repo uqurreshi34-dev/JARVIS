@@ -353,7 +353,8 @@ finally:
     oanda.Client = real_client
 
 output = printed.getvalue()
-check(code == 0 and "candles closing 10:00 to 16:00 UK time" in output and refused == 1,
+check(code == 0 and "candles closing 10:00 to 16:00 UK time" in output and refused == 1
+      and "one trade at a time and with up to 3 open at once" in output,
       "other hours can be tested (--hours 10 16), and backwards hours are refused")
 
 # ---- fetching -------------------------------------------------------------------------------------
@@ -430,6 +431,48 @@ except RuntimeError as error:
     stopped = "run it again" in str(error)
 
 check(stopped, "too many days missing: it stops and says to run it again, rather than test on scraps")
+
+
+# ---- a setup forming, a candle early ------------------------------------------------------------
+
+check(gb.forming(touch, made, bands, squeezes, rules) == "buy",
+      "candle 1 alone -- a touch of the lower band, closing green -- is a buy that may be forming")
+check(gb.forming(touch + 1, made, bands, squeezes, rules) is None, "and the confirming candle is not another")
+check(gb.forming(touch, made, bands, [True] * len(made), gb.Rules(session=(0, 24))) is None,
+      "bands squeezed: no warning, as no trade could follow")
+check(gb.forming(touch, made, bands, squeezes, gb.Rules(squeeze_filter=False, trend_filter=True), averages, fast) is None,
+      "a buy below the 200-candle average, with the trend filter: no warning either")
+check(gb.forming(touch, made, bands, squeezes, gb.Rules(setup="breakout"), averages, fast) is None,
+      "a breakout is one candle, so it gives no warning")
+check(all(gb.forming(index, made, bands, squeezes, rules) == "buy"
+          for index in range(len(made) - 1) if gb.signal(index + 1, made, bands, rsis, squeezes, rules) == "buy"),
+      "every buy the strategy takes was warned of a candle before")
+
+# ---- several trades open at once ----------------------------------------------------------------
+
+# Gold flat for a while, then $100 higher, so every buy reaches its target; the setups are placed by hand.
+level = series([4000.0] * 60 + [4100.0] * 5)
+wanted = {30: "buy", 32: "buy", 33: "sell", 34: "buy", 36: "buy"}
+real_signal = gb.signal
+gb.signal = lambda index, *rest: wanted.get(index)
+
+try:
+    one = gb.backtest(level, gb.Rules(session=(0, 24)))
+    three = gb.backtest(level, gb.Rules(session=(0, 24)), most_open=3)
+finally:
+    gb.signal = real_signal
+
+opened_at = [level.index(next(c for c in level if c[0] + timedelta(minutes=15) == t.opened)) for t in three]
+check(len(one) == 1 and one[0].result == 30.0, "one trade at a time: the setups while it is open are missed")
+check(sorted(opened_at) == [30, 32, 34] and all(t.side == "buy" and t.result == 30.0 for t in three),
+      f"up to three open at once: the next two buys are taken too, the fourth is not ({sorted(opened_at)})")
+check(33 not in opened_at, "and a sell is never opened against the open buys, as a demo account without hedging would net them")
+
+check(cli._periods(made, opened, 3) and abs(sum(cli._periods(made, opened, 3)) - sum(t.result for t in opened)) < 1e-9
+      and cli.periods_for(3 * 365) == 3 and cli.periods_for(365) == 2 and cli.periods_for(30) == 2,
+      "results split into a part a year (at least two), every trade counted once")
+check(cli.worth_trading(gb.Summary(trades=90), 1.0, 2.0, 3.0) and not cli.worth_trading(gb.Summary(trades=90), 1.0, -2.0, 3.0),
+      "worth trading over three years: money made in every one of them")
 
 
 # The versions worth trading, run together: those entering on the same candles only differ in how they

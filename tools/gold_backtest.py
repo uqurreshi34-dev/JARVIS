@@ -4,8 +4,10 @@ Runs the rules over months of past 15-minute spot gold, candle by candle as
 if live, and reports what they would have done. Nothing is traded; nothing
 is sent anywhere.
 
-    python tools/gold_backtest.py                 the last year
-    python tools/gold_backtest.py --days 120      a shorter look
+    python tools/gold_backtest.py                 the last three years, judged year by year
+    python tools/gold_backtest.py --days 365      the last year, judged half by half
+    python tools/gold_backtest.py --periods 6     split the period into six parts instead
+    python tools/gold_backtest.py --most-open 2   and compare up to two trades open at once with one
     python tools/gold_backtest.py --hours 10 16   candles closing 10:00 to 16:00 UK instead of 10 to 14
     python tools/gold_backtest.py --trades        and write every trade to gold-backtest-trades.csv here
     python tools/gold_backtest.py --candle "2026-10-02 00:15"
@@ -38,9 +40,17 @@ a trailing stop sized by how lively gold is (ATR), moved to the entry once
 the trade is 1 R up and then following the best price. The row marked * is
 the rules as first written.
 
-Each row is also split into the first and second half of the period. A
-rule found by trying many and keeping the best can look good by luck; one
-that makes money in both halves, separately, is more likely to be real.
+Each row is also split into parts of the period -- one a year, or halves
+for a year or less. A rule found by trying many and keeping the best can
+look good by luck; one that makes money in every part, separately, is more
+likely to be real, and three years of parts say far more than one year's
+two halves.
+
+One trade at a time is what the trader does by default, so a setup that
+comes while a trade is open is missed. The report also runs the trader's
+versions with up to --most-open trades open at once (all the same way, as
+a demo account without hedging nets a sell against a buy), to show what
+the one-at-a-time rule costs or saves.
 
 Costs are counted as on Fortrade: buys pay the spread ($0.80 by default)
 on entry, and a stop or target is judged on the price it would really be
@@ -69,14 +79,29 @@ from actions.gold_strategy import (  # noqa: E402
 )
 
 
+def _periods(candles, trades, count):
+    """Net result of [trades] by the one of [count] equal parts of [candles]' span each opened in."""
+    first = candles[0][0]
+    step = (candles[-1][0] - first) / count
+    nets = [0.0] * count
+
+    for trade in trades:
+        nets[min(count - 1, max(0, int((trade.opened - first) / step)))] += trade.result
+
+    return nets
+
+
 def _halves(candles, trades):
     """Net result of [trades] opened in the first and in the second half of [candles]' span."""
-    middle = candles[0][0] + (candles[-1][0] - candles[0][0]) / 2
-    first = sum(trade.result for trade in trades if trade.opened < middle)
-    return first, sum(trade.result for trade in trades) - first
+    return tuple(_periods(candles, trades, 2))
 
 
-def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=SESSION):
+def periods_for(days):
+    """How many parts to judge [days] in: one a year, and never fewer than two."""
+    return max(2, round(days / 365))
+
+
+def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=SESSION, periods=2, most_open=1):
     first, last = candles[0][0], candles[-1][0]
     print(f"\n{source}, {len(candles)} fifteen-minute candles, {first:%d %b %Y} to {last:%d %b %Y} (UTC).")
     print(f"Each trade 1 oz (Fortrade's 0.01 lot, OANDA's 1 unit): $1 a dollar of movement. Spread ${spread:.2f}, candles "
@@ -87,8 +112,11 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=S
           f"{TREND_LENGTH}-candle average, sells only below it. The squeeze filter is on throughout.\n'ATR' exits: stop "
           f"1.5 ATR away, target 2 or 3 times that. 'pullback': joining the trend at the 20-candle average; "
           f"'breakout': a squeeze breaking out with the trend.\n")
-    print(f"  {'rules':52} {'trades':>6} {'won':>4} {'net $':>8} {'risk $':>6} {'worst run':>9} {'deepest dip $':>13}"
-          f" {'1st half $':>10} {'2nd half $':>10}  key")
+    first_candle = candles[0][0]
+    step = (candles[-1][0] - first_candle) / periods
+    parts = [f"from {first_candle + step * part:%b %y} $" for part in range(periods)]
+    print(f"  {'rules':52} {'trades':>6} {'won':>4} {'net $':>8} {'risk $':>6} {'worst run':>9} {'deepest dip $':>13} "
+          + " ".join(f"{part:>15}" for part in parts) + "  key")
     worked_out = indicators(candles)
     passing = []
 
@@ -96,30 +124,54 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=S
         mark = "*" if rules == AS_WRITTEN else "+" if rules == CHOSEN else " "
         trades = backtest(candles, replace(rules, spread=spread, session=session), worked_out)
         summary = summarise(trades)
-        early, late = _halves(candles, trades)
+        nets = _periods(candles, trades, periods)
 
-        if worth_trading(summary, early, late) and rules.exits in TRADEABLE_EXITS:
+        if worth_trading(summary, *nets) and rules.exits in TRADEABLE_EXITS:
             passing.append((summary.net, rules))
 
         print(f"{mark} {rules.name():52} {summary.trades:6d} {summary.win_rate:4.0%} {summary.net * lot_ounces:8.2f} "
-              f"{summary.average_risk * lot_ounces:6.2f} {summary.worst_run:9d} {summary.deepest * lot_ounces:13.2f}"
-              f" {early * lot_ounces:10.2f} {late * lot_ounces:10.2f}  {rules.key()}")
+              f"{summary.average_risk * lot_ounces:6.2f} {summary.worst_run:9d} {summary.deepest * lot_ounces:13.2f} "
+              + " ".join(f"{net * lot_ounces:15.2f}" for net in nets) + f"  {rules.key()}")
 
     print("\n* the rules as you first wrote them; + the version the trader uses. 'won' is the share of trades that made money; 'risk $' the"
           " average distance to the stop.\n'worst run' is the most losses in a row; 'deepest dip' the furthest the"
-          " running total fell from its best.\nA rule worth trusting makes money in both halves, not just overall:"
-          " one good half is often luck.")
+          " running total fell from its best.\nA rule worth trusting makes money in every part, not just overall:"
+          " one good stretch is often luck.")
     print("Past results are no promise of future ones.")
-    _together(candles, worked_out, passing, spread, session, lot_ounces)
+
+    if most_open > 1:
+        _compare_open(f"The trader's version ({CHOSEN.key()})", candles, worked_out, [CHOSEN], spread, session,
+                      lot_ounces, periods, most_open)
+
+    _together(candles, worked_out, passing, spread, session, lot_ounces, periods, most_open)
 
 
 # What a version must show to be worth trading: enough trades to mean
-# something, and money made in each half of the period on its own.
+# something, and money made in each part of the period on its own.
 MOST_FEW_TRADES = 30
 
+# Compared with one trade at a time unless --most-open says otherwise.
+MOST_OPEN = 3
 
-def worth_trading(summary, early, late):
-    return summary.trades >= MOST_FEW_TRADES and early > 0 and late > 0
+
+def worth_trading(summary, *nets):
+    return summary.trades >= MOST_FEW_TRADES and all(net > 0 for net in nets)
+
+
+def _line(summary, nets, lot_ounces):
+    return (f"{summary.trades} trades, {summary.win_rate:.0%} won, {summary.net * lot_ounces:+.2f} $ ("
+            + ", ".join(f"{net * lot_ounces:+.2f}" for net in nets) + f" by part), worst run {summary.worst_run}, "
+            f"deepest dip {summary.deepest * lot_ounces:.2f} $")
+
+
+def _compare_open(label, candles, worked_out, rules, spread, session, lot_ounces, periods, most_open):
+    """[rules] run one trade at a time and with up to [most_open] open at once, side by side."""
+    chosen = [replace(each, spread=spread, session=session) for each in rules]
+    print(f"\n{label}, one trade at a time and with up to {most_open} open at once (all the same way):")
+
+    for limit in (1, most_open):
+        trades = backtest(candles, chosen, worked_out, most_open=limit)
+        print(f"  at most {limit} open: {_line(summarise(trades), _periods(candles, trades, periods), lot_ounces)}.")
 
 
 def entry(rules):
@@ -140,10 +192,10 @@ def best_per_entry(ranked):
     return kept
 
 
-def _together(candles, worked_out, passing, spread, session, lot_ounces):
+def _together(candles, worked_out, passing, spread, session, lot_ounces, periods=2, most_open=1):
     """The versions worth trading, run together as the trader would: one trade at a time, best first."""
     if not passing:
-        print(f"\nNo version made money in both halves with at least {MOST_FEW_TRADES} trades. Keep the trader's"
+        print(f"\nNo version made money in every part with at least {MOST_FEW_TRADES} trades. Keep the trader's"
               " current setups, or try other hours.")
         return
 
@@ -151,15 +203,15 @@ def _together(candles, worked_out, passing, spread, session, lot_ounces):
     chosen = best_per_entry(ranked)
     trades = backtest(candles, [replace(rules, spread=spread, session=session) for rules in chosen], worked_out)
     summary = summarise(trades)
-    early, late = _halves(candles, trades)
-    print(f"\nWorth trading -- at least {MOST_FEW_TRADES} trades and money made in both halves: "
+    print(f"\nWorth trading -- at least {MOST_FEW_TRADES} trades and money made in every part: "
           f"{', '.join(rules.key() for rules in ranked)}.")
     print("Versions that enter on the same candle only differ in how they leave, and one trade is open at a time,"
           f" so the best exits for each kind of entry: {', '.join(rules.key() for rules in chosen)}.")
-    print(f"Run together, one trade at a time: {summary.trades} trades, {summary.win_rate:.0%} won, "
-          f"{summary.net * lot_ounces:+.2f} $ ({early * lot_ounces:+.2f}, {late * lot_ounces:+.2f} by half), "
-          f"worst run {summary.worst_run}, deepest dip {summary.deepest * lot_ounces:.2f} $.")
+    print(f"Run together, one trade at a time: {_line(summary, _periods(candles, trades, periods), lot_ounces)}.")
     print(f"To trade them all: python tools/gold_trader.py --set setups={','.join(rules.key() for rules in chosen)}")
+
+    if most_open > 1 and chosen != [CHOSEN]:
+        _compare_open("Run together", candles, worked_out, chosen, spread, session, lot_ounces, periods, most_open)
 
 
 def check_candle(candles, when_utc):
@@ -172,7 +224,11 @@ def check_candle(candles, when_utc):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--days", type=int, default=365, help="how many days back to test (default 365)")
+    parser.add_argument("--days", type=int, default=3 * 365, help="how many days back to test (default three years)")
+    parser.add_argument("--periods", type=int,
+                        help="how many parts to judge the period in (default one a year, at least two)")
+    parser.add_argument("--most-open", type=int, default=MOST_OPEN,
+                        help=f"compare one trade at a time with up to this many open at once (default {MOST_OPEN}; 1: no comparison)")
     parser.add_argument("--trades", action="store_true", help="write the trader's rules' trades to gold-backtest-trades.csv here")
     parser.add_argument("--hours", type=int, nargs=2, metavar=("FROM", "TO"), default=list(SESSION),
                         help="the UK hours candles may close in, e.g. --hours 10 16 (default 10 14)")
@@ -188,6 +244,12 @@ def main(argv=None):
 
     if not 0 <= session[0] < session[1] <= 24:
         print("--hours wants two UK hours, the first before the second, e.g. --hours 10 16.")
+        return 1
+
+    periods = options.periods or periods_for(options.days)
+
+    if periods < 2 or options.most_open < 1:
+        print("--periods wants 2 or more, and --most-open 1 or more.")
         return 1
 
     try:
@@ -242,7 +304,7 @@ def main(argv=None):
         print(f"The prices look wrong (a typical close of {median:.2f}); not testing on them.")
         return 1
 
-    report(candles, spread=spread, source=label, session=session)
+    report(candles, spread=spread, source=label, session=session, periods=periods, most_open=options.most_open)
 
     if options.candle:
         wanted = datetime.strptime(options.candle, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)

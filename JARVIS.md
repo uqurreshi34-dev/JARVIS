@@ -1753,9 +1753,14 @@ stop of 1.5 ATR, the target 2 or 3 times that, breakeven at 1 R, so the
 stop is wider on lively days and tighter on quiet ones while the reward
 stays the same multiple of the risk. Every version has a short key
 (`bounce-1:3-be`, `pullback-atr-1:3-be`); the backtest lists those worth
-trading -- at least 30 trades and money made in each half on its own --
+trading -- at least 30 trades and money made in each part on its own --
 runs them together as the trader would, one trade at a time, and prints
-the `--set setups=...` line that trades them. The trader looks for each
+the `--set setups=...` line that trades them. By default it tests three
+years, judged year by year (`--days`, `--periods`; a year or less is
+judged in halves), as one year's 50-odd trades cannot tell an edge from
+luck. It also runs the trader's version, and any set worth trading, with
+up to `--most-open` trades open at once (default 3, all the same way), to
+show what trading one at a time costs or saves. The trader looks for each
 listed setup in order and takes the first it sees; each trade carries its
 key and first stop distance in its comment at OANDA, so breakeven works
 from its own risk across restarts. With `OANDA_API_TOKEN` set, the backtest uses OANDA's own candles
@@ -1779,6 +1784,13 @@ high-impact US release, read from the free weekly economic calendar (at
 most hourly, as data: time, currency, impact; no model); if the calendar
 cannot be read it stands aside rather than assume the coast is clear, and
 the day's first look names the releases in the window.
+With `max_open_trades` above 1 (at most 5) it takes a setup while others
+are open, but never one against an open trade: a demo account without
+hedging would net them. With `announce_forming` (on by default) it says
+when the candle just closed could be the first of a setup it trades -- a
+band touched and closed back, say -- a candle before any trade, whether or
+not one could follow, so a chart watched by hand is checked against the
+same rules (`gold_strategy.forming`).
 The size is fixed (`units`) or, with `risk_percent`, worked out per trade
 so the $10 stop loses no more than that share of the balance, converted to
 the account's currency at OANDA's price and rounded down to what OANDA
@@ -2056,7 +2068,7 @@ voice, Graph credentials, weather fallback, `TAVILY_API_KEY` for research.
 | `audio_check.py` | whether cached speech is sound |
 | `tools/gold_trader.py` | switch the gold trader on or off, its settings and results, or one look now |
 | `tools/oanda_check.py` | whether JARVIS can see your OANDA demo account, OANDA's terms for gold, the spread now and how fresh its candles are |
-| `tools/gold_backtest.py` | how the gold strategy (Bollinger touch, RSI turning back, a confirmation candle, 10:00 to 14:00 UK) would have done over the last year of spot gold from Dukascopy, with fixed $10/$30 exits, exits from the bands, or an ATR trailing stop that moves to breakeven at 1 R, with or without a 200-candle trend filter, every open choice side by side and each split into halves |
+| `tools/gold_backtest.py` | how the gold strategy (Bollinger touch, RSI turning back, a confirmation candle, 10:00 to 14:00 UK) would have done over the last three years of gold (OANDA's, or spot from Dukascopy), with fixed $10/$30 exits, exits from the bands, or an ATR trailing stop that moves to breakeven at 1 R, with or without a 200-candle trend filter, every open choice side by side and each split into a part a year, and one trade at a time against several |
 | `tts_debug.py` | why the neural voice is not playing |
 | `wake_test.py` | how reliably the wake word is heard |
 | `tools/test_console.py` | typed commands, no microphone (a console, not a suite: tools/run_tests.py leaves it out) |
