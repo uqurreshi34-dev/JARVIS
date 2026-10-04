@@ -4,8 +4,8 @@ Runs the rules over months of past 15-minute spot gold, candle by candle as
 if live, and reports what they would have done. Nothing is traded; nothing
 is sent anywhere.
 
-    python tools/gold_backtest.py                 the last 120 days
-    python tools/gold_backtest.py --days 365      a longer look
+    python tools/gold_backtest.py                 the last year
+    python tools/gold_backtest.py --days 120      a shorter look
     python tools/gold_backtest.py --trades        and write every trade to gold-trades.csv here
     python tools/gold_backtest.py --candle "2026-10-02 00:15"
                                                   one candle's prices (UTC), to compare with Fortrade's chart
@@ -27,9 +27,14 @@ The rules (a buy; a sell is the mirror image):
    and none while the bands are squeezed.
 
 Where the rules leave a choice, every combination is run side by side:
-whether a wick touching the band counts or the candle must close beyond
-it, whether RSI must have been extreme at all, and whether the squeeze
-filter is on. The row marked * is the rules as written above.
+whether RSI must have been extreme at all, whether the squeeze filter is
+on, and the exits -- the fixed $10 and $30, or a stop just past candle 1's
+wick with the middle band as the target, which is where a bounce off a
+band naturally heads. The row marked * is the rules as first written.
+
+Each row is also split into the first and second half of the period. A
+rule found by trying many and keeping the best can look good by luck; one
+that makes money in both halves, separately, is more likely to be real.
 
 Costs are counted as on Fortrade: buys pay the spread ($0.80 by default)
 on entry, and a stop or target is judged on the price it would really be
@@ -76,6 +81,9 @@ SQUEEZE_SHARE = 0.20
 
 STOP_DOLLARS = 10.0
 TARGET_DOLLARS = 30.0
+
+# With exits from the bands: how far beyond candle 1's wick the stop sits.
+WICK_BUFFER = 1.0
 SPREAD = 0.80
 
 # UK hours, inclusive of a candle closing at the start, exclusive at the end.
@@ -184,6 +192,12 @@ def minute_candles(first, last, progress=print):
     days = [first + timedelta(days=step) for step in range((last - first).days + 1)]
     days = [day for day in days if day.weekday() != 5]   # gold never trades on a Saturday
     found, missing = {}, {}
+    wanted = sum(1 for day in days if not os.path.exists(os.path.join(folder, f"{day.isoformat()}.bi5")))
+    began = time.monotonic()
+
+    if wanted:
+        progress(f"  {len(days) - wanted} days already here, {wanted} to download. The first time takes a few"
+                 " minutes; Ctrl+C is safe, as every day downloaded is kept.")
 
     with requests.Session() as session, concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
         session.headers["User-Agent"] = "JARVIS gold backtest"
@@ -197,8 +211,8 @@ def minute_candles(first, last, progress=print):
             else:
                 found[day] = decode_day(day, raw)
 
-            if done % 30 == 0:
-                progress(f"  prices: {done} of {len(days)} days")
+            if wanted and (done % 10 == 0 or done == len(days)):
+                progress(f"  prices: {done} of {len(days)} days ({time.monotonic() - began:.0f} s)")
 
     if missing:
         named = ", ".join(f"{day:%d %b} ({why})" for day, why in sorted(missing.items())[:5])
@@ -326,13 +340,14 @@ class Rules:
     touch: str = "wick"          # "wick": the candle reaches the band; "close": it closes beyond it
     rsi: str = "turned"          # "turned": was beyond 30/70 and is back; "not_extreme": simply not beyond now
     squeeze_filter: bool = True
+    exits: str = "fixed"         # "fixed": $10 stop, $30 target; "bands": stop past candle 1's wick, target the middle band
     stop: float = STOP_DOLLARS
     target: float = TARGET_DOLLARS
     spread: float = SPREAD
     session: tuple = SESSION
 
     def name(self):
-        return (f"touch={self.touch:5} rsi={self.rsi:11} squeeze filter={'on ' if self.squeeze_filter else 'off'}")
+        return (f"rsi={self.rsi:11} exits={self.exits:5} squeeze filter={'on ' if self.squeeze_filter else 'off'}")
 
 
 @dataclass
@@ -341,7 +356,7 @@ class Trade:
     opened: datetime
     entry: float
     stop: float
-    target: float
+    target: float                # None: the middle band, wherever it is
     closed: datetime = None
     exit: float = None
     result: float = None
@@ -385,21 +400,28 @@ def signal(index, candles, bands, rsis, squeezes, rules):
     return None
 
 
-def _settle(trade, candle, rules):
-    """Close [trade] if [candle] (bid prices) reaches its stop or target; the stop first if both."""
+def _settle(trade, candle, rules, middle=None):
+    """Close [trade] if [candle] (bid prices) reaches its stop or target; the stop first if both.
+
+    A trade aiming for the middle band aims at [middle], the band as it stood
+    when the candle began, so nothing is known before it could be.
+    """
     start, _open, high, low, _close = candle
     closes_at = start + timedelta(minutes=CANDLE_MINUTES)
+    target = trade.target if trade.target is not None else middle
 
     if trade.side == "buy":
         # A buy is closed by selling, at the bid.
-        hit_stop, hit_target = low <= trade.stop, high >= trade.target
+        hit_stop = low <= trade.stop
+        hit_target = target is not None and high >= target
     else:
         # A sell is closed by buying, at the ask: the bid plus the spread.
-        hit_stop, hit_target = high + rules.spread >= trade.stop, low + rules.spread <= trade.target
+        hit_stop = high + rules.spread >= trade.stop
+        hit_target = target is not None and low + rules.spread <= target
 
     if hit_stop or hit_target:
         trade.closed = closes_at
-        trade.exit = trade.stop if hit_stop else trade.target
+        trade.exit = trade.stop if hit_stop else target
         trade.reason = "stop" if hit_stop else "target"
         trade.result = (trade.exit - trade.entry) if trade.side == "buy" else (trade.entry - trade.exit)
         return True
@@ -422,7 +444,9 @@ def backtest(candles, rules=Rules(), worked_out=None):
 
     for index, candle in enumerate(candles):
         if open_trade is not None:
-            if _settle(open_trade, candle, rules):
+            middle = bands[index - 1][1] if bands[index - 1] else None
+
+            if _settle(open_trade, candle, rules, middle):
                 trades.append(open_trade)
                 open_trade = None
             continue
@@ -434,12 +458,20 @@ def backtest(candles, rules=Rules(), worked_out=None):
 
         side = signal(index, candles, bands, rsis, squeezes, rules)
 
+        touch = candles[index - 1]
+
         if side == "buy":
             entry = candle[4] + rules.spread   # bought at the ask
-            open_trade = Trade("buy", closes_at, entry, entry - rules.stop, entry + rules.target)
+            if rules.exits == "bands":
+                open_trade = Trade("buy", closes_at, entry, touch[3] - WICK_BUFFER, None)
+            else:
+                open_trade = Trade("buy", closes_at, entry, entry - rules.stop, entry + rules.target)
         elif side == "sell":
             entry = candle[4]                  # sold at the bid
-            open_trade = Trade("sell", closes_at, entry, entry + rules.stop, entry - rules.target)
+            if rules.exits == "bands":
+                open_trade = Trade("sell", closes_at, entry, touch[2] + rules.spread + WICK_BUFFER, None)
+            else:
+                open_trade = Trade("sell", closes_at, entry, entry + rules.stop, entry - rules.target)
 
     return trades
 
@@ -451,7 +483,12 @@ class Summary:
     net: float = 0.0
     worst_run: int = 0
     deepest: float = 0.0
+    risked: float = 0.0
     results: list = field(default_factory=list)
+
+    @property
+    def average_risk(self):
+        return self.risked / self.trades if self.trades else 0.0
 
     @property
     def win_rate(self):
@@ -466,6 +503,7 @@ def summarise(trades):
     for trade in trades:
         summary.trades += 1
         summary.net += trade.result
+        summary.risked += abs(trade.entry - trade.stop)
         summary.results.append(trade.result)
 
         if trade.result > 0:
@@ -484,31 +522,45 @@ def summarise(trades):
 
 # ---- the report ------------------------------------------------------------------------------
 
-VARIANTS = [Rules(touch=touch, rsi=rule, squeeze_filter=squeeze)
-            for touch in ("wick", "close") for rule in ("turned", "not_extreme") for squeeze in (True, False)]
+# A close beyond the band barely ever happened (one to four trades in four
+# months), so only a wick reaching it is tried.
+VARIANTS = [Rules(rsi=rule, exits=exits, squeeze_filter=squeeze)
+            for rule in ("turned", "not_extreme") for exits in ("fixed", "bands") for squeeze in (True, False)]
 
 AS_WRITTEN = Rules()
+
+
+def _halves(candles, trades):
+    """Net result of [trades] opened in the first and in the second half of [candles]' span."""
+    middle = candles[0][0] + (candles[-1][0] - candles[0][0]) / 2
+    first = sum(trade.result for trade in trades if trade.opened < middle)
+    return first, sum(trade.result for trade in trades) - first
 
 
 def report(candles, lot_ounces=1.0):
     first, last = candles[0][0], candles[-1][0]
     print(f"\nSpot gold, {len(candles)} fifteen-minute candles, {first:%d %b %Y} to {last:%d %b %Y} (UTC).")
-    print(f"Each trade 0.01 lot ({lot_ounces:g} oz): $1 a dollar of movement. Stop ${STOP_DOLLARS:g}, "
-          f"target ${TARGET_DOLLARS:g}, spread ${SPREAD:.2f}, candles closing {SESSION[0]}:00 to "
-          f"{SESSION[1]}:00 UK time.\n")
-    print(f"  {'rules':54} {'trades':>6} {'won':>5} {'net $':>8} {'worst run':>9} {'deepest dip $':>13}")
+    print(f"Each trade 0.01 lot ({lot_ounces:g} oz): $1 a dollar of movement. Spread ${SPREAD:.2f}, candles "
+          f"closing {SESSION[0]}:00 to {SESSION[1]}:00 UK time. 'fixed' exits: stop ${STOP_DOLLARS:g}, target "
+          f"${TARGET_DOLLARS:g}.\n'bands' exits: stop ${WICK_BUFFER:g} past candle 1's wick, target the middle band.\n")
+    print(f"  {'rules':48} {'trades':>6} {'won':>4} {'net $':>8} {'risk $':>6} {'worst run':>9} {'deepest dip $':>13}"
+          f" {'1st half $':>10} {'2nd half $':>10}")
     worked_out = indicators(candles)
 
     for rules in VARIANTS:
-        summary = summarise(backtest(candles, rules, worked_out))
+        trades = backtest(candles, rules, worked_out)
+        summary = summarise(trades)
+        early, late = _halves(candles, trades)
         mark = "*" if rules == AS_WRITTEN else " "
-        print(f"{mark} {rules.name():54} {summary.trades:6d} {summary.win_rate:5.0%} {summary.net * lot_ounces:8.2f} "
-              f"{summary.worst_run:9d} {summary.deepest * lot_ounces:13.2f}")
+        print(f"{mark} {rules.name():48} {summary.trades:6d} {summary.win_rate:4.0%} {summary.net * lot_ounces:8.2f} "
+              f"{summary.average_risk * lot_ounces:6.2f} {summary.worst_run:9d} {summary.deepest * lot_ounces:13.2f}"
+              f" {early * lot_ounces:10.2f} {late * lot_ounces:10.2f}")
 
-    print("\n* the rules as you wrote them. 'won' is the share of trades that reached the target;"
-          " at 1:3 with this spread, about 27% breaks even.\n'worst run' is the most losses in a row;"
-          " 'deepest dip' the furthest the running total fell from its best.")
-    print("Past results are no promise of future ones, and a few dozen trades is a small sample.")
+    print("\n* the rules as you first wrote them. 'won' is the share of trades that made money; 'risk $' the"
+          " average distance to the stop.\n'worst run' is the most losses in a row; 'deepest dip' the furthest the"
+          " running total fell from its best.\nA rule worth trusting makes money in both halves, not just overall:"
+          " one good half is often luck.")
+    print("Past results are no promise of future ones.")
 
 
 def check_candle(candles, when_utc):
@@ -521,7 +573,7 @@ def check_candle(candles, when_utc):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--days", type=int, default=120, help="how many days back to test (default 120)")
+    parser.add_argument("--days", type=int, default=365, help="how many days back to test (default 365)")
     parser.add_argument("--trades", action="store_true", help="write the as-written rules' trades to gold-trades.csv")
     parser.add_argument("--candle", metavar="'YYYY-MM-DD HH:MM'",
                         help="show the fifteen-minute candle starting then (UTC), to compare with Fortrade's chart")

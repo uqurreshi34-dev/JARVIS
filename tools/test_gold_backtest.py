@@ -177,6 +177,27 @@ check(summary.trades == 6 and summary.wins == 2 and summary.net == 20 and summar
 
 check(len(gb.VARIANTS) == 8 and gb.AS_WRITTEN in gb.VARIANTS, "every combination of the open choices is run")
 
+# ---- exits from the bands -------------------------------------------------------------------------
+
+banded = gb.backtest(made, gb.Rules(squeeze_filter=False, session=(0, 24), exits="bands"))
+first_banded = banded[0] if banded else None
+check(first_banded is not None and first_banded.side == "buy" and first_banded.target is None
+      and abs(first_banded.stop - (3930.0 - gb.WICK_BUFFER)) < 1e-9,
+      "exits from the bands: the stop just past candle 1's wick, the target the middle band")
+check(first_banded is not None and first_banded.reason == "target"
+      and abs(first_banded.exit - gb.bollinger([candle[4] for candle in made])[made.index(
+          next(candle for candle in made if candle[0] + timedelta(minutes=15) == first_banded.closed)) - 1][1]) < 1e-9,
+      "and it closes at the middle band as it stood when that candle began")
+
+aiming = gb.Trade("buy", start, 100.0, 95.0, None)
+check(not gb._settle(aiming, (start, 100, 104, 96, 103), gb.Rules(), middle=105.0)
+      and gb._settle(aiming, (start, 103, 106, 101, 105), gb.Rules(), middle=105.0)
+      and aiming.exit == 105.0 and aiming.result == 5.0, "a trade aiming for the middle band closes when it gets there")
+
+opened = [gb.Trade("buy", made[0][0] + timedelta(hours=hours), 0, 0, 0, result=value)
+          for hours, value in ((1, 10.0), (2, -5.0), (20, 7.0))]
+check(gb._halves(made, opened) == (5.0, 7.0), "each result counted in the half of the period it opened in")
+
 # ---- fetching -------------------------------------------------------------------------------------
 
 import os  # noqa: E402
@@ -218,7 +239,7 @@ class Feed:
 
 
 slept = []
-gb.time = types.SimpleNamespace(sleep=slept.append)
+gb.time = types.SimpleNamespace(sleep=slept.append, monotonic=lambda: 0.0)
 os.environ["LOCALAPPDATA"] = tempfile.mkdtemp()
 said = []
 first_day, last_day = date(2026, 9, 1), date(2026, 9, 30)
@@ -229,6 +250,9 @@ sys.modules["requests"] = types.SimpleNamespace(Session=lambda: feed)
 got = gb.minute_candles(first_day, last_day, progress=said.append)
 check(len(got) == 2 * (len(weekdays) - 1) and slept and sum(url.count("/2026/08/02/") for url in feed.asked) == 3,
       "a day refused twice is asked again, after a wait, and arrives")
+check(any(f"0 days already here, {len(weekdays)} to download" in line and "Ctrl+C is safe" in line for line in said)
+      and any(f"prices: {len(weekdays)} of {len(weekdays)} days" in line for line in said),
+      "it says how much there is to download, that stopping is safe, and how far it has got")
 check(any("1 of" in line and "03 Sep (HTTP 503)" in line for line in said) and any("Testing without them" in line for line in said),
       "a day refused for good is named, and the test goes on without it")
 
