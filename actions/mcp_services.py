@@ -437,7 +437,9 @@ def _on_disk_case(arg):
     "Images\\..." as outside what it was given. So each part is given the
     name the folder really has. Only case changes: a part with no match, or
     two that differ only by case (possible off Windows), leaves [arg] as it
-    was, and anything that is not an absolute path is not touched.
+    was, a part that exists without being listed (a short name such as
+    RUNNER~1) is kept as written, and anything that is not an absolute path
+    is not touched.
     """
     if not isinstance(arg, str) or not os.path.isabs(arg):
         return arg
@@ -453,15 +455,18 @@ def _on_disk_case(arg):
         except OSError:
             return arg
 
+        matches = [entry for entry in entries if entry.casefold() == part.casefold()]
+
         if part in entries:
             name = part
-        else:
-            matches = [entry for entry in entries if entry.casefold() == part.casefold()]
-
-            if len(matches) != 1:
-                return arg
-
+        elif len(matches) == 1:
             name = matches[0]
+        elif not matches and os.path.exists(os.path.join(current, part)):
+            # There but not listed: a short name such as RUNNER~1, which
+            # Windows answers to without listing. Kept as written.
+            name = part
+        else:
+            return arg
 
         current = os.path.join(current, name)
 

@@ -305,7 +305,21 @@ finally:
     sensors.set_recorder(None)
 
 check(folder_organizer.is_protected("sensor-history.sqlite") and folder_organizer.is_protected("sensors.json")
-      and folder_organizer.is_protected("sensor-history.sqlite-journal"), "the folder guard never moves the record")
+      and folder_organizer.is_protected("sensor-history.sqlite-journal")
+      and folder_organizer.is_protected("sensor-history.sqlite-wal")
+      and folder_organizer.is_protected("sensor-history.sqlite-shm"), "the folder guard never moves the record")
+
+# Each report is appended to a log on one open connection, not a fresh
+# database rewrite and two waits for the disk.
+with sensor_history._lock:
+    opened = sensor_history._connect()
+    check(opened is sensor_history._connect() and opened.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+          and opened.execute("PRAGMA synchronous").fetchone()[0] == 1,
+          "the record stays open, write-ahead logged, synced normally")
+
+sensor_history.forget()
+check(not any(os.path.exists(os.path.join(folder, sensor_history.HISTORY_NAME + end)) for end in ("", "-wal", "-shm")),
+      "forgetting closes it and leaves no log behind")
 
 # ---- keeping only so long ------------------------------------------------------------------------
 

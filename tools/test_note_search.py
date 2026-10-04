@@ -147,6 +147,12 @@ else:
 
     check(len(found("the boiler")) == 1, "one clear match is not followed by weak ones")
 
+    # Encoded beside other notes, a note once came out a little different,
+    # enough to cross the minimum; each is now encoded on its own.
+    alone = semantic_memory._encode([NOTES[1][1]])[0]
+    beside = semantic_memory._encode([NOTES[2][1], NOTES[1][1], NOTES[0][1]])[1]
+    check(float(abs(alone - beside).max()) < 1e-5, "a note's meaning does not depend on the notes encoded beside it")
+
 # ---- what is said -----------------------------------------------------------
 
 said = notes.describe_search("the boiler")

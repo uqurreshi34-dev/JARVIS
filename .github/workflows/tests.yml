@@ -27,21 +27,40 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
+        id: python
         with:
           python-version: "3.14"
-          cache: pip
+
+      # The installed packages themselves, kept between runs: installing
+      # them (torch and Whisper above all) took minutes each run, even with
+      # the downloads cached. A new requirements.txt or Python makes a fresh
+      # install, so the cache can never run stale packages.
+      - name: Cache the installed packages
+        id: venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
 
       - name: Install JARVIS's packages
+        if: steps.venv.outputs.cache-hit != 'true'
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m venv .venv
+          .venv\Scripts\python -m pip install --upgrade pip
+          .venv\Scripts\python -m pip install -r requirements.txt
+
+      - name: Use them
+        run: Add-Content $env:GITHUB_PATH "$env:GITHUB_WORKSPACE\.venv\Scripts"
 
       # Every file compiles: a syntax slip anywhere fails here, plainly.
       - name: Compile
         run: python -m compileall -q -x "(\.venv|build|dist)" .
 
-      # voice.py loads a Vosk model at import, kept out of git (model/). The
-      # small English model is enough for the suites, which never listen.
+      # Vosk still listens for the wake word (Whisper transcribes what
+      # follows), and voice.py loads its model at import, kept out of git
+      # (model/). Without it the start-up check's timing of main.py is
+      # skipped. The small English model is enough for the suites, which
+      # never listen.
       - name: Cache the Vosk model
         id: vosk
         uses: actions/cache@v4

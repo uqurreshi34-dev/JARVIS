@@ -254,7 +254,10 @@ def _searchable(items):
 
 # Measured on real command wording with the local model. A command must
 # score at least this, and be nearly as close as the closest command.
-_MINIMUM = 0.35
+# Between the closest true match the benchmark has ("crypto" and "bitcoin
+# price please", 0.376) and the closest false one ("code" and "whats in my
+# clipboard", 0.358), measured with each text encoded on its own.
+_MINIMUM = 0.37
 _MARGIN = 0.12
 
 _SMALL_WORDS = frozenset({"my", "the", "a", "an", "your", "our", "any", "some", "all"})

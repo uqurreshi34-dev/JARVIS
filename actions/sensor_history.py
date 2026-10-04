@@ -48,6 +48,7 @@ nudge_again_hours; never in quiet hours. "say" may use {place}, {Place},
 {limit}, {value} and {duration}.
 """
 
+import atexit
 import io
 import json
 import os
@@ -101,6 +102,8 @@ _clock = time.time
 
 _lock = threading.Lock()
 _pruned_at = None
+_connection = None
+_connection_path = None
 _nudged = {}        # (board, nudge index) -> when it was said
 
 
@@ -215,19 +218,66 @@ def _read_settings(path):
 # ---- the record ------------------------------------------------------------------------------
 
 def _connect():
+    """The record, opened once and kept open. Call with _lock held.
+
+    Opened afresh only when the JARVIS folder changes. Write-ahead logging
+    with normal syncing: each report is appended to the log rather than
+    rewriting the database and its journal and waiting for the disk twice,
+    which on Windows cost a tenth of a second a report. A power cut can lose
+    the last few readings; it can never damage the record.
+    """
+    global _connection, _connection_path
+
     path = _path(HISTORY_NAME)
 
     if not path:
         return None
 
-    connection = sqlite3.connect(path, timeout=5)
+    if _connection is not None and _connection_path == path:
+        return _connection
+
+    _close()
+    connection = sqlite3.connect(path, timeout=5, check_same_thread=False)
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA synchronous=NORMAL")
     connection.execute(
         "CREATE TABLE IF NOT EXISTS readings ("
         " ts REAL NOT NULL, board TEXT NOT NULL,"
         " temperature REAL, humidity REAL, motion INTEGER NOT NULL DEFAULT 0)"
     )
     connection.execute("CREATE INDEX IF NOT EXISTS readings_board_ts ON readings (board, ts)")
+    connection.commit()
+    _connection, _connection_path = connection, path
     return connection
+
+
+def _close():
+    """Close the record, if it is open. Call with _lock held."""
+    global _connection, _connection_path
+
+    if _connection is not None:
+        try:
+            _connection.close()
+        except sqlite3.Error:
+            pass
+
+    _connection, _connection_path = None, None
+
+
+def _close_at_exit():
+    """On the way out, close the record, folding its log back into it.
+
+    Waits only briefly for the lock: a report part way through on a thread
+    that is being torn down must not hold JARVIS open.
+    """
+    if _lock.acquire(timeout=2):
+        try:
+            _close()
+        finally:
+            _lock.release()
+
+
+atexit.register(_close_at_exit)
 
 
 def _rows(sql, parameters=()):
@@ -237,10 +287,7 @@ def _rows(sql, parameters=()):
         if connection is None:
             return []
 
-        try:
-            return connection.execute(sql, parameters).fetchall()
-        finally:
-            connection.close()
+        return connection.execute(sql, parameters).fetchall()
 
 
 def _prune(connection, now, keep_days):
@@ -271,14 +318,11 @@ def record(name, event, readings):
         if connection is None:
             return None
 
-        try:
-            with connection:
-                connection.execute(
-                    "INSERT INTO readings (ts, board, temperature, humidity, motion) VALUES (?, ?, ?, ?, ?)",
-                    (now, name, readings.get("temperature"), readings.get("humidity"), int(motion)))
-                _prune(connection, now, rules["keep_days"])
-        finally:
-            connection.close()
+        with connection:
+            connection.execute(
+                "INSERT INTO readings (ts, board, temperature, humidity, motion) VALUES (?, ?, ?, ?, ?)",
+                (now, name, readings.get("temperature"), readings.get("humidity"), int(motion)))
+            _prune(connection, now, rules["keep_days"])
 
     return _nudge(name, readings, now, rules) if readings else None
 
@@ -293,8 +337,11 @@ def forget():
     path = _path(HISTORY_NAME)
 
     with _lock:
-        if path and os.path.exists(path):
-            os.remove(path)
+        _close()
+
+        for name in (path, f"{path}-wal", f"{path}-shm") if path else ():
+            if os.path.exists(name):
+                os.remove(name)
 
 
 # ---- nudges ----------------------------------------------------------------------------------
@@ -892,17 +939,14 @@ def _given(day, mark=False):
         if connection is None:
             return True
 
-        try:
-            with connection:
-                connection.execute("CREATE TABLE IF NOT EXISTS reports (day TEXT PRIMARY KEY)")
+        with connection:
+            connection.execute("CREATE TABLE IF NOT EXISTS reports (day TEXT PRIMARY KEY)")
 
-                if mark:
-                    connection.execute("INSERT OR IGNORE INTO reports (day) VALUES (?)", (day,))
-                    return True
+            if mark:
+                connection.execute("INSERT OR IGNORE INTO reports (day) VALUES (?)", (day,))
+                return True
 
-                return connection.execute("SELECT 1 FROM reports WHERE day = ?", (day,)).fetchone() is not None
-        finally:
-            connection.close()
+            return connection.execute("SELECT 1 FROM reports WHERE day = ?", (day,)).fetchone() is not None
 
 
 def _range_words(what, rows):

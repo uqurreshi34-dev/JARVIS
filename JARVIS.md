@@ -1300,6 +1300,11 @@ movement in `sensor-history.sqlite` in the JARVIS folder (one table, by
 board and time, cleared of anything older than `keep_days`), and may hand
 back a nudge, which report returns when the report itself has nothing to
 say, so it goes through the same announcement gate as everything else.
+The database is opened once and kept open, write-ahead logged with normal
+syncing, so a report is an append rather than a rewrite and two waits for
+the disk (a tenth of a second a report on Windows); a power cut can lose
+the last few readings but never damage the record. Its `-wal` and `-shm`
+files are protected from the folder guard like the database itself.
 
 A nudge is a reading past a limit for the whole of its minutes with no
 hole in the record (the reading just before the stretch counts, and no
@@ -1690,9 +1695,11 @@ summary shows every FAIL line and traceback, not only its last lines.
 GitHub Actions runs exactly this on Windows on every push to the working
 branch (`.github/workflows/tests.yml`), after installing requirements.txt
 and checking every file compiles, with the small Vosk model fetched for
-voice.py and the models the suites download kept between runs. It reads
-the code and nothing else: no secrets. main is only fast-forwarded to a
-branch that passed.
+voice.py (Vosk still hears the wake word) and the models the suites
+download kept between runs. The installed packages are kept too, in a
+`.venv` cached by Python version and requirements.txt, so a run installs
+only when either changes. It reads the code and nothing else: no secrets.
+main is only fast-forwarded to a branch that passed.
 
 ### Providers and failover
 
@@ -1762,10 +1769,13 @@ being searched, the pieces stop counting alone, so "ask files" does not
 match "ask cousin" (`semantic_memory.shares_words`, used by notes too).
 
 **Meaning vectors are saved, not recomputed** — `actions/vector_store.py`.
-Each text is encoded once, in batches of 64, and kept in
+Each text is encoded once, on its own, and kept in
 `jarvis-vectors.sqlite` in the JARVIS folder, keyed by a hash of the model
 and the text; the text itself is not stored. A different model never
-reuses another's vectors. The log is indexed in the background 30 seconds
+reuses another's vectors. On its own because the model is quantized with
+scales taken from the whole batch: the same note encoded beside different
+notes scored 0.29 to 0.33 against "shopping", either side of the notes
+minimum. The log is indexed in the background 30 seconds
 after start-up, and notes use the same store.
 Commands are read back exactly as speech recognition heard them at the
 time ("what's lying overhead"), because the log is a record, not a

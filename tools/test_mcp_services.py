@@ -905,6 +905,18 @@ for written in (os.path.join(place, "JARVIS", "images"), os.path.join(place, "ja
     check(mcp_services._on_disk_case(written) == real, f"{os.path.basename(written)!r} is passed as the folder's own name")
 
 check(mcp_services._on_disk_case(real) == real, "a name already right is left as it is")
+
+# Windows answers to a short name (RUNNER~1) it never lists; one is made
+# here by hiding a real name from the listing.
+real_listdir = os.listdir
+hidden = os.path.basename(place)
+os.listdir = lambda path=".": [name for name in real_listdir(path) if name != hidden]
+
+try:
+    check(mcp_services._on_disk_case(os.path.join(place, "jarvis", "images")) == real,
+          "a part that is there but not listed, as a short name is, is kept and the rest still found")
+finally:
+    os.listdir = real_listdir
 check(mcp_services._on_disk_case("-y") == "-y" and mcp_services._on_disk_case("@scope/server") == "@scope/server",
       "arguments that are not paths are not touched")
 missing = os.path.join(place, "JARVIS", "Nowhere")

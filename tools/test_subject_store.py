@@ -462,9 +462,9 @@ def _check_scale_leaves_memory_alone(failures):
             "location: London",
         )
 
+        # Six at a time, as learn_subject stores them.
         for index in range(500):
-            for fact in range(6):
-                subject_store.add(f"subject {index}", f"fact {fact}.")
+            subject_store.add_many(f"subject {index}", [f"fact {fact}." for fact in range(6)])
 
         if subject_store.line_count() != 3000:
             failures.append(

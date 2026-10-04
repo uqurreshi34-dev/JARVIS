@@ -21,8 +21,9 @@ _MAX_LENGTH = 128
 _MIN_SEMANTIC_SCORE = 0.38
 
 # Names the vectors this model makes, so saved ones are never mixed with
-# another model's.
-MODEL_ID = f"{_MODEL_REPO}/{_MODEL_FILE}/{_MAX_LENGTH}"
+# another model's. "alone": each text encoded on its own (see _encode);
+# vectors saved from batches are not reused.
+MODEL_ID = f"{_MODEL_REPO}/{_MODEL_FILE}/{_MAX_LENGTH}/alone"
 
 _lock = threading.Lock()
 _model_session = None
@@ -84,70 +85,47 @@ def _model_file(download, filename):
 
 
 def _encode(texts):
-    """Encode texts into normalized sentence vectors."""
+    """Encode texts into normalized sentence vectors, each on its own.
+
+    One at a time, never as a batch: the model is quantized to 8 bits with
+    scales worked out from everything in the batch, so a text encoded beside
+    others came out a little different from the same text alone -- enough
+    to move a note across the minimum depending on which notes happened to
+    be encoded with it. Alone, a text's vector depends on the text only, and
+    with no padding to carry it is no slower.
+    """
     if not texts or not _load_model():
         return None
 
-    encodings = []
+    names = [model_input.name for model_input in _model_session.get_inputs()]
 
-    for text in texts:
-        encoding = _tokenizer.encode(text or "")
-        ids = encoding.ids[:_MAX_LENGTH]
-        attention = encoding.attention_mask[:_MAX_LENGTH]
-        type_ids = encoding.type_ids[:_MAX_LENGTH]
+    return np.stack([_encode_one(text, names) for text in texts])
 
-        if not ids:
-            ids = [0]
-            attention = [0]
-            type_ids = [0]
 
-        encodings.append((ids, attention, type_ids))
+def _encode_one(text, names):
+    encoding = _tokenizer.encode(text or "")
+    ids = encoding.ids[:_MAX_LENGTH] or [0]
+    attention = encoding.attention_mask[:_MAX_LENGTH] if encoding.ids else [0]
+    type_ids = encoding.type_ids[:_MAX_LENGTH] or [0]
 
-    max_length = min(
-        _MAX_LENGTH,
-        max(len(item[0]) for item in encodings),
-    )
-
-    input_ids = np.zeros((len(encodings), max_length), dtype=np.int64)
-    attention_mask = np.zeros_like(input_ids)
-    token_type_ids = np.zeros_like(input_ids)
-
-    for row, (ids, attention, type_ids) in enumerate(encodings):
-        length = min(max_length, len(ids))
-        input_ids[row, :length] = ids[:length]
-        attention_mask[row, :length] = attention[:length]
-        token_type_ids[row, :length] = type_ids[:length]
-
-    inputs = {}
-
-    for model_input in _model_session.get_inputs():
-        name = model_input.name
-
-        if name == "input_ids":
-            inputs[name] = input_ids
-        elif name == "attention_mask":
-            inputs[name] = attention_mask
-        elif name == "token_type_ids":
-            inputs[name] = token_type_ids
-
-    outputs = _model_session.run(None, inputs)
+    given = {
+        "input_ids": np.array([ids], dtype=np.int64),
+        "attention_mask": np.array([attention], dtype=np.int64),
+        "token_type_ids": np.array([type_ids], dtype=np.int64),
+    }
+    outputs = _model_session.run(None, {name: given[name] for name in names if name in given})
     hidden = np.asarray(outputs[0], dtype=np.float32)
 
     if hidden.ndim == 3:
-        mask = attention_mask.astype(np.float32)[..., None]
-        pooled = (hidden * mask).sum(axis=1) / np.clip(
-            mask.sum(axis=1),
-            1e-9,
-            None,
-        )
+        mask = given["attention_mask"].astype(np.float32)[..., None]
+        pooled = (hidden * mask).sum(axis=1) / np.clip(mask.sum(axis=1), 1e-9, None)
     elif hidden.ndim == 2:
         pooled = hidden
     else:
-        raise ValueError(
-            f"unexpected semantic model output shape: {hidden.shape}")
+        raise ValueError(f"unexpected semantic model output shape: {hidden.shape}")
 
-    norms = np.linalg.norm(pooled, axis=1, keepdims=True)
-    return pooled / np.clip(norms, 1e-9, None)
+    vector = pooled[0]
+    return vector / max(float(np.linalg.norm(vector)), 1e-9)
 
 
 def _documents():

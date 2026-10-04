@@ -26,9 +26,9 @@ import numpy as np
 
 FILENAME = "jarvis-vectors.sqlite"
 
-# Texts are encoded in batches this size. One batch pads every text to the
-# longest in it, so thousands at once would need gigabytes; this keeps it
-# to a few megabytes with no measurable loss of speed.
+# Texts are handed to the encoder this many at a time. The encoder takes
+# each one on its own (semantic_memory._encode), so this no longer changes
+# a vector, only how much is asked of it in one call.
 BATCH = 64
 
 # Recently used vectors kept in memory in front of the database.

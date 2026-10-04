@@ -57,7 +57,10 @@ def activate():
 
     from actions import files
 
-    holder = tempfile.mkdtemp(prefix="jarvis-test-")
+    # The folder's own full name: Windows may give the temporary folder in
+    # its short form (C:\Users\RUNNER~1\...), and code that resolves
+    # paths, as the file hologram does, must arrive at the same name.
+    holder = os.path.realpath(tempfile.mkdtemp(prefix="jarvis-test-"))
 
     _real_root = files.root
     _directory = holder
