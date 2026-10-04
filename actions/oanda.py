@@ -20,7 +20,7 @@ logged, never written anywhere.
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 PRACTICE_HOST = "https://api-fxpractice.oanda.com"
@@ -157,6 +157,37 @@ class Client:
             ask_closes.append(float(ask["c"]))
 
         return made[-count:], ask_closes[-count:]
+
+    def history(self, start, end, name=GOLD, granularity="M15", page=5000):
+        """Every finished candle from [start] to [end] (UTC), oldest first: (candles, ask closes), as candles() gives.
+
+        Asked for a page at a time, as OANDA allows at most 5,000 candles a request.
+        """
+        made, ask_closes = [], []
+        since = start
+
+        while since < end:
+            answer = self._get(f"/v3/instruments/{name}/candles",
+                               {"granularity": granularity, "price": "BA", "count": page,
+                                "from": since.strftime("%Y-%m-%dT%H:%M:%S.000000000Z")})
+            found = [candle for candle in answer.get("candles") or [] if candle.get("complete")]
+
+            for candle in found:
+                moment = parse_time(candle["time"])
+
+                if moment >= end or (made and moment <= made[-1][0]):
+                    continue
+
+                bid, ask = candle["bid"], candle["ask"]
+                made.append((moment, float(bid["o"]), float(bid["h"]), float(bid["l"]), float(bid["c"])))
+                ask_closes.append(float(ask["c"]))
+
+            if not found or parse_time(found[-1]["time"]) <= since:
+                break
+
+            since = parse_time(found[-1]["time"]) + timedelta(seconds=1)
+
+        return made, ask_closes
 
 
     # ---- trades ---------------------------------------------------------------------------

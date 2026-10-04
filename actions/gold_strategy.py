@@ -641,7 +641,10 @@ VARIANTS += [Rules(rsi="not_extreme", trend_filter=True, target=target, breakeve
 
 AS_WRITTEN = Rules()
 
-# The version that made money in both halves of the year (59 trades, 32%
-# won): RSI simply not beyond 30/70, fixed $10 stop and $30 target, the
-# trend filter and the squeeze filter on. The trader uses these rules.
-CHOSEN = Rules(rsi="not_extreme", exits="fixed", trend_filter=True)
+# The version the trader uses: RSI simply not beyond 30/70, the trend and
+# squeeze filters on, a $10 stop and $30 target, with the stop moved to the
+# entry once the trade is $10 up. Over the year to October 2026: 59 trades,
+# +$200, and positive in both halves (+$170, +$30) -- the best of the
+# versions that were. Without breakeven: +$160 and +$10. 1:2 and 1:4 lost
+# in the second half.
+CHOSEN = Rules(rsi="not_extreme", exits="fixed", trend_filter=True, breakeven=True)

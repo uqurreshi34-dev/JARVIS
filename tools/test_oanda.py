@@ -17,7 +17,7 @@ No network and no real token. Checked:
 import contextlib
 import io
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -158,6 +158,35 @@ except oanda.OandaError as error:
     said = str(error)
 
 check("OANDA_API_TOKEN" in said, "no token: says which setting is missing")
+
+# ---- a year of history, a page at a time ------------------------------------------------------------
+
+
+class Pages(Oanda):
+    """Two pages of candles, then nothing new: as OANDA answers a long history."""
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        self.asked.append((url, dict(params or {}), dict(headers or {})))
+        since = oanda.parse_time(params["from"])
+        # OANDA starts from the first candle at or after "from", on the quarter hour.
+        aligned = since.replace(minute=since.minute - since.minute % 15, second=0, microsecond=0)
+        first = aligned if aligned == since else aligned + timedelta(minutes=15)
+        times = [first + timedelta(minutes=15 * step) for step in range(3)]
+        times = [moment for moment in times if moment < datetime(2026, 10, 5, 11, 0, tzinfo=timezone.utc)]
+        return Answer(200, {"candles": [candle(moment.strftime("%Y-%m-%dT%H:%M:%S.000000000Z"), 4100.0 + moment.minute)
+                                        for moment in times]})
+
+
+pages = Pages()
+made, asks = oanda.Client(token=TOKEN, account_id="a", session=pages).history(
+    datetime(2026, 10, 5, 10, 0, tzinfo=timezone.utc), datetime(2026, 10, 5, 10, 45, tzinfo=timezone.utc), page=3)
+check([moment.minute for moment, *_ in made] == [0, 15, 30] and len(asks) == 3,
+      "a history stops at its end, every candle once")
+made, asks = oanda.Client(token=TOKEN, account_id="a", session=pages).history(
+    datetime(2026, 10, 5, 10, 0, tzinfo=timezone.utc), datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc), page=3)
+check([moment.strftime("%H:%M") for moment, *_ in made] == ["10:00", "10:15", "10:30", "10:45"]
+      and pages.asked[-1][1]["count"] == 3 and pages.asked[-1][1]["price"] == "BA",
+      "and pages on until OANDA has nothing newer, no candle twice")
 
 # ---- trading -------------------------------------------------------------------------------------
 

@@ -23,6 +23,9 @@ Trading practice it keeps to:
   not fresh (JARVIS started late, or the market paused);
 - nothing at weekends, and anything still open on Friday evening is closed
   rather than carried over the weekend's gap;
+- no new trade within half an hour either side of a high-impact US release
+  (actions/gold_news.py, the economic calendar), and none at all if the
+  calendar cannot be read -- it does not assume the coast is clear;
 - every trade logged (gold-trades.csv in the JARVIS folder, which opens in
   Excel), and the log is only ever added to.
 
@@ -37,6 +40,9 @@ defaults the first time, and off until you turn it on):
     max_trades_per_day   3
     max_losses_per_day   2: after this many it stands down until tomorrow
     friday_close         "20:00": anything open is closed then, UK time
+    news_filter          true: stand aside around high-impact news
+    calendar_url, news_currencies, news_impact, news_minutes_before,
+    news_minutes_after   which news, and how long either side (gold_news.py)
 
     python tools/gold_trader.py --on | --off | --status | --once
 """
@@ -47,7 +53,7 @@ import os
 import threading
 from datetime import datetime, timedelta, timezone
 
-from actions import files, gold_strategy, journal, oanda
+from actions import files, gold_news, gold_strategy, journal, oanda
 
 
 SETTINGS_NAME = "gold-trader.json"
@@ -68,6 +74,12 @@ DEFAULTS = {
     "max_trades_per_day": 3,
     "max_losses_per_day": 2,
     "friday_close": "20:00",
+    "news_filter": True,
+    "calendar_url": gold_news.CALENDAR_URL,
+    "news_currencies": ["USD"],
+    "news_impact": ["High"],
+    "news_minutes_before": 30,
+    "news_minutes_after": 30,
 }
 
 # A size no setting can exceed: a typing slip in the settings must not
@@ -109,6 +121,11 @@ def settings():
     elif path:
         _write_settings(DEFAULTS)
 
+    # Settings added since the file was written appear in it, with their
+    # defaults, so every one can be seen and changed; nothing set is changed.
+    if path and found and set(DEFAULTS) - set(found):
+        _write_settings(dict(DEFAULTS, **found))
+
     chosen = dict(DEFAULTS)
     chosen.update({key: value for key, value in found.items() if key in DEFAULTS})
 
@@ -123,6 +140,12 @@ def settings():
         chosen["friday_close"] = (hour, minute)
         chosen["days"] = [day for day in DAYS if day in set(chosen["days"])]
         chosen["enabled"] = chosen["enabled"] is True
+        chosen["news_filter"] = chosen["news_filter"] is not False
+        chosen["news_minutes_before"] = max(0, int(chosen["news_minutes_before"]))
+        chosen["news_minutes_after"] = max(0, int(chosen["news_minutes_after"]))
+        chosen["news_currencies"] = [str(value) for value in chosen["news_currencies"]]
+        chosen["news_impact"] = [str(value) for value in chosen["news_impact"]]
+        chosen["calendar_url"] = str(chosen["calendar_url"])
     except (TypeError, ValueError):
         print(f"[JARVIS] gold trader: a setting in {SETTINGS_NAME} is not understood; not trading")
         return dict(DEFAULTS, enabled=False, session_hours=(10, 14), friday_close=(20, 0))
@@ -222,6 +245,8 @@ class GoldTrader:
         self._thread = None
         self._last_candle = None
         self._stood_down = None
+        self._briefed = None
+        self._no_calendar = None
         self._entries = {}   # trade id -> (spread at entry), for the log
 
     def set_listener(self, listener):
@@ -333,6 +358,12 @@ class GoldTrader:
                 self._say("Standing down from gold for the rest of the day, sir: the loss limit is reached.")
             return "stood down"
 
+        if chosen["news_filter"]:
+            standing = self._news(now, local, chosen)
+
+            if standing:
+                return standing
+
         candles, _asks = client.candles(count=HISTORY)
 
         if not candles or candles[-1][0] + timedelta(minutes=gold_strategy.CANDLE_MINUTES) != closed_at:
@@ -345,6 +376,44 @@ class GoldTrader:
             return "quiet"
 
         return self._open(client, side, chosen)
+
+    def _news(self, now, local, chosen):
+        """"news" or "no calendar" when the trader should stand aside; None when clear.
+
+        The first look of each day also says which releases fall in the
+        window, so a quiet hour is not a mystery.
+        """
+        try:
+            found = gold_news.events(chosen["calendar_url"])
+        except gold_news.CalendarError as error:
+            if self._no_calendar != local.date():
+                self._no_calendar = local.date()
+                self._say(f"I can't read the economic calendar, sir ({error}), so no new gold trades until I can.")
+            return "no calendar"
+
+        if self._briefed != local.date():
+            self._briefed = local.date()
+            start, end = chosen["session_hours"]
+            offset = local - now
+            day = local.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+            window_start = (day + timedelta(hours=start)).replace(tzinfo=timezone.utc) - offset \
+                - timedelta(minutes=chosen["news_minutes_after"])
+            window_end = (day + timedelta(hours=end)).replace(tzinfo=timezone.utc) - offset \
+                + timedelta(minutes=chosen["news_minutes_before"])
+            ahead = gold_news.today(window_start, window_end, chosen, found)
+
+            if ahead:
+                named = "; ".join(f"{title} at {gold_strategy.uk_time(when):%H:%M}" for when, _currency, _impact, title in ahead)
+                self._say(f"Gold today, sir: {named}. No new gold trades from {chosen['news_minutes_before']} "
+                          f"minutes before each to {chosen['news_minutes_after']} after.")
+
+        event = gold_news.blocking(now, chosen, found)
+
+        if event:
+            journal.write("gold", "standing aside", f"{event[3]} at {gold_strategy.uk_time(event[0]):%H:%M} UK")
+            return "news"
+
+        return None
 
     def _protect(self, client, mine):
         """With breakeven in the rules: once a trade is 1 R up, its stop goes to the entry, at OANDA."""

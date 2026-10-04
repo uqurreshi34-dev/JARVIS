@@ -34,7 +34,7 @@ from tools import sandbox  # noqa: E402  (must precede actions imports)
 
 folder = sandbox.activate()
 
-from actions import gold_strategy, gold_trader  # noqa: E402
+from actions import gold_news, gold_strategy, gold_trader  # noqa: E402
 
 
 failures = 0
@@ -119,6 +119,18 @@ def fake_signal(index, candles, bands, rsis, squeezes, rules, averages=None):
 
 
 gold_strategy.signal = fake_signal
+
+# The economic calendar: none of the network; nothing due unless a check puts it there.
+calendar = {"events": [], "error": None}
+
+
+def fake_events(url):
+    if calendar["error"]:
+        raise gold_news.CalendarError(calendar["error"])
+    return list(calendar["events"])
+
+
+gold_news.events = fake_events
 trader = gold_trader.GoldTrader(client_factory=lambda: account, clock=lambda: now["at"])
 trader.set_listener(said.append)
 
@@ -259,6 +271,61 @@ check(switched, "switching on over unreadable settings refuses, rather than over
 os.remove(os.path.join(folder, gold_trader.SETTINGS_NAME))
 gold_trader.settings()
 
+# ---- the news --------------------------------------------------------------------------------------
+
+account.open = []
+gold_trader.switch(True)
+settings = settings_file()
+settings.update(days=["Mon", "Tue", "Wed", "Thu", "Fri"], units=1, max_trades_per_day=50, max_losses_per_day=50)
+with open(os.path.join(folder, gold_trader.SETTINGS_NAME), "w", encoding="utf-8") as handle:
+    json.dump(settings, handle)
+
+cpi = (utc(2026, 10, 14, 12, 30), "USD", "High", "CPI m/m")   # 13:30 UK
+calendar["events"] = [cpi, (utc(2026, 10, 14, 9, 0), "EUR", "High", "German ZEW"),
+                      (utc(2026, 10, 14, 10, 0), "USD", "Medium", "Business optimism")]
+decision["side"] = "buy"
+orders = len(account.orders)
+fresh(utc(2026, 10, 14, 9, 15, 20))
+check(trader.tick() == "buy" and any(line.startswith("Gold today, sir: CPI m/m at 13:30") for line in said),
+      "the day's first look names the high-impact US release in the window; the euro and the medium one are not news here")
+account.open = []
+fresh(utc(2026, 10, 14, 12, 0, 20))       # 13:00 UK: half an hour before
+check(trader.tick() == "news" and len(account.orders) == orders + 1, "half an hour before it: no new trade")
+fresh(utc(2026, 10, 14, 12, 45, 20))      # 13:45 UK: a quarter of an hour after
+check(trader.tick() == "news", "and for half an hour after")
+fresh(utc(2026, 10, 14, 13, 0, 20))       # 14:00 UK: clear again
+check(trader.tick() == "buy" and sum(line.startswith("Gold today") for line in said) == 1,
+      "then clear again, and the day's news said only once")
+account.open = []
+
+calendar["error"] = "the calendar answered 503"
+fresh(utc(2026, 10, 15, 9, 15, 20))
+check(trader.tick() == "no calendar" and any("can't read the economic calendar" in line for line in said),
+      "the calendar unreadable: it does not assume the coast is clear, and says so")
+fresh(utc(2026, 10, 15, 9, 30, 20))
+check(trader.tick() == "no calendar" and sum("can't read the economic calendar" in line for line in said) == 1, "once a day")
+calendar["error"] = None
+
+settings = settings_file()
+settings["news_filter"] = False
+with open(os.path.join(folder, gold_trader.SETTINGS_NAME), "w", encoding="utf-8") as handle:
+    json.dump(settings, handle)
+calendar["events"] = [(utc(2026, 10, 15, 9, 45), "USD", "High", "Jobless claims")]
+fresh(utc(2026, 10, 15, 9, 45, 20))
+check(trader.tick() == "buy", "with the news filter off, the calendar is not consulted")
+account.open = []
+settings["news_filter"] = True
+with open(os.path.join(folder, gold_trader.SETTINGS_NAME), "w", encoding="utf-8") as handle:
+    json.dump(settings, handle)
+
+with open(os.path.join(folder, gold_trader.SETTINGS_NAME), "w", encoding="utf-8") as handle:
+    json.dump({"enabled": True, "units": 2}, handle)
+check(gold_trader.settings()["units"] == 2 and settings_file()["news_minutes_before"] == 30
+      and settings_file()["units"] == 2, "settings added since the file was written appear in it; nothing set is changed")
+settings["units"] = 1
+with open(os.path.join(folder, gold_trader.SETTINGS_NAME), "w", encoding="utf-8") as handle:
+    json.dump(settings, handle)
+
 moved = []
 account.move_stop = lambda trade_id, price, decimals=2: moved.append((trade_id, price))
 real_chosen = gold_strategy.CHOSEN
@@ -266,7 +333,8 @@ gold_strategy.CHOSEN = gold_strategy.Rules(rsi="not_extreme", trend_filter=True,
 gold_trader.switch(True)
 
 try:
-    account.open = [dict(account.open[-1], stop=4140.5)] if account.open else []
+    account.open = [{"id": "200", "state": "OPEN", "units": 1.0, "price": 4150.0, "opened": now["at"], "closed": None,
+                     "close_price": None, "result": 0.0, "stop": 4140.0, "target": 4170.0, "comment": "", "closing": []}]
     entry = account.open[0]["price"]
     account.bid, account.ask = entry + 5.0, entry + 5.4
     fresh(utc(2026, 10, 13, 9, 15, 20))

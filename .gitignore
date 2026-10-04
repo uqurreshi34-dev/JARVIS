@@ -34,3 +34,5 @@ arduino/*/.pio/
 arduino/*/compile_commands.json
 arduino/*/*.ino.cpp
 arduino/*/.cache/
+# The gold backtest's trade list (python tools/gold_backtest.py --trades).
+gold-backtest-trades.csv

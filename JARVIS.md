@@ -1739,12 +1739,15 @@ are; `tools/test_oanda.py` checks it all against a pretend OANDA.
 
 The strategy lives in `actions/gold_strategy.py`, shared by the backtest
 (`tools/gold_backtest.py`) and the trader, so what is tested is exactly
-what trades. `CHOSEN` is the version the trader uses: the one that made
-money in both halves of a year (RSI not beyond 30/70, the 200-candle trend
-filter, the squeeze filter, $10 stop and $30 target). The backtest also
-runs 1:2 and 1:4 targets, each with and without the stop moved to
-breakeven at 1 R, beside it; `CHOSEN` changes only when another version
-holds up in both halves.
+what trades. `CHOSEN` is the version the trader uses: RSI not beyond
+30/70, the 200-candle trend filter, the squeeze filter, $10 stop and $30
+target, the stop moved to breakeven once the trade is $10 up -- over the
+year to October 2026 the best of those positive in both halves (+$170,
++$30). The backtest runs 1:2 and 1:4 targets and the trailing ATR exit
+beside it; `CHOSEN` changes only when another version holds up in both
+halves. With `OANDA_API_TOKEN` set, the backtest uses OANDA's own candles
+(`Client.history`, paged 5,000 at a time) and the median spread in the
+trading window; otherwise Dukascopy's history, as in CI.
 
 The trader, `actions/gold_trader.py`, runs inside JARVIS (started with the
 other monitors in main.py) and asks no model anything: every decision is
@@ -1757,10 +1760,16 @@ to a fixed size (capped at 10 oz whatever the settings say), a few trades
 and fewer losses a day before standing down, no trade into a wide spread,
 nothing at weekends, and anything open closed on Friday evening. With
 breakeven in the chosen rules it moves the stop to the entry at 1 R.
+`actions/gold_news.py` keeps it out from 30 minutes before to 30 after a
+high-impact US release, read from the free weekly economic calendar (at
+most hourly, as data: time, currency, impact; no model); if the calendar
+cannot be read it stands aside rather than assume the coast is clear, and
+the day's first look names the releases in the window.
 Settings in `gold-trader.json`, off until switched on; every closed trade
 is added to `gold-trades.csv` as OANDA reports it (target, stop or
 closed). `python tools/gold_trader.py --on/--off/--status/--once`;
-`tools/test_gold_trader.py` checks it against a pretend OANDA and clock.
+`tools/test_gold_trader.py` and `tools/test_gold_news.py` check it
+against a pretend OANDA, clock and calendar.
 
 ### Providers and failover
 

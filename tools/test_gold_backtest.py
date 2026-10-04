@@ -22,6 +22,7 @@ Checked:
 """
 
 import lzma
+import math
 import struct
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -259,6 +260,37 @@ check(trailed and trailed[0].trailing and abs(trailed[0].risk - gb.TRAIL_FIRST_S
       and trailed[0].reason == "stop" and trailed[0].result > 20,
       f"a trailing trade starts 1.5 ATR from its entry, rides the rise and keeps most of it "
       f"({trailed[0].result if trailed else None})")
+
+# ---- OANDA's own prices ---------------------------------------------------------------------------
+
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+from actions import oanda  # noqa: E402
+
+walk = series([4000.0 + 5 * math.sin(step / 7.0) for step in range(800)], start=utc(2026, 9, 1, 0, 0))
+
+
+class History:
+    def history(self, start, end):
+        # The ask $0.50 above the bid in the trading window, $3 at night.
+        return walk, [candle[4] + (0.5 if gb.in_session(candle[0] + timedelta(minutes=15)) else 3.0) for candle in walk]
+
+
+real_client = oanda.Client
+oanda.Client = History
+printed = io.StringIO()
+
+try:
+    with contextlib.redirect_stdout(printed):
+        code = cli.main(["--source", "oanda", "--days", "30"])
+finally:
+    oanda.Client = real_client
+
+output = printed.getvalue()
+check(code == 0 and "your OANDA demo account" in output and "OANDA gold, 800 fifteen-minute candles" in output
+      and "Spread $0.50" in output,
+      "with OANDA, its own candles and the spread as it was in the trading window, not at night")
 
 # ---- fetching -------------------------------------------------------------------------------------
 
