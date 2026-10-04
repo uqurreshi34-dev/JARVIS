@@ -59,6 +59,7 @@ class Account:
         self.bid, self.ask = 4140.0, 4140.4
         self.last_candle_start = None
         self.reasons = {}
+        self.currency = "GBP"
 
     def instrument(self):
         return {"name": "XAU_USD", "display_name": "Gold", "minimum_units": 0.1, "unit_decimals": 1,
@@ -69,8 +70,15 @@ class Account:
         chosen = {"OPEN": self.open, "CLOSED": self.closed, "ALL": self.open + self.closed}[state]
         return [dict(trade) for trade in chosen]
 
-    def price(self):
+    def price(self, name="XAU_USD"):
+        if name == "GBP_USD":
+            return 1.2998, 1.3002, None
+        if name != "XAU_USD":
+            raise gold_trader.oanda.OandaError(f"no {name}")
         return self.bid, self.ask, None
+
+    def summary(self):
+        return {"currency": self.currency, "balance": 100000.0, "margin_available": 100000.0, "open_trades": len(self.open)}
 
     def candles(self, count=300):
         start = self.last_candle_start
@@ -153,7 +161,11 @@ def fresh(at):
 check(trader.tick() == "off" and settings_file()["enabled"] is False and settings_file()["units"] == 1,
       "off until switched on; the settings are written the first time, with 1 oz a trade")
 gold_trader.switch(True)
-check(gold_trader.settings()["enabled"] and settings_file()["max_losses_in_a_row"] == 2, "switched on, the rest kept")
+check(gold_trader.settings()["enabled"] and settings_file()["max_losses_in_a_row"] == 2
+      and settings_file()["max_trades_per_day"] is None and settings_file()["risk_percent"] is None,
+      "switched on, the rest kept: every setup taken, two losses in a row the only stop, fixed size")
+# The daily cap is still there for anyone who wants one; tried here at three.
+gold_trader.change({"max_trades_per_day": 3})
 
 # ---- when it looks -------------------------------------------------------------------------------
 
@@ -376,5 +388,49 @@ finally:
 source = (ROOT / "actions" / "gold_trader.py").read_text(encoding="utf-8")
 check(not any(name in source for name in ("import providers", "from providers", "knowledge", "llm")),
       "no language model is asked anything")
+
+# ---- sizing by risk ---------------------------------------------------------------------------------
+
+gold_trader.change({"risk_percent": 1, "practice_balance": 400})
+results = sum(float(row["result"]) for row in gold_trader.logged() if row.get("result"))
+units, words = trader._size(account, gold_trader.settings(), gold_strategy.CHOSEN)
+expected = int((400 + results) * 0.01 * 1.30 / 10 * 10 + 1e-9) / 10
+check(units == expected and words.startswith(", risking ") and words.endswith(" GBP"),
+      f"1% of a practice 400 GBP plus results ({400 + results:.2f}), at $1.30 a pound, $10 stop: {units} oz{words}")
+
+gold_trader.change({"practice_balance": None})
+check(trader._size(account, gold_trader.settings(), gold_strategy.CHOSEN)[0] == gold_trader.MOST_UNITS,
+      "1% of the whole 100,000 demo balance: held to the ceiling")
+
+gold_trader.change({"practice_balance": 20})
+check(trader._size(account, gold_trader.settings(), gold_strategy.CHOSEN) == "too small to size"
+      and "no trade" in said[-1], "an account too small for even OANDA's smallest trade at that risk: no trade, said why")
+
+account.currency = "USD"
+gold_trader.change({"practice_balance": 400})
+check(trader._size(account, gold_trader.settings(), gold_strategy.CHOSEN)[0]
+      == int((400 + results) * 0.01 / 10 * 10 + 1e-9) / 10, "a dollar account needs no conversion")
+account.currency = "JPY"
+real_price = account.price
+account.price = lambda name="XAU_USD": (149.9, 150.1, None) if name == "USD_JPY" else real_price(name)
+check(abs(trader._dollars_per(account, "JPY") - 1 / 150) < 1e-12, "and a currency quoted the other way round is turned over")
+account.price, account.currency = real_price, "GBP"
+
+try:
+    gold_trader.change({"risk_percent": "lots"})
+    refused = False
+except ValueError:
+    refused = True
+
+check(refused and settings_file()["risk_percent"] == 1, "a setting that would not be understood is refused, and nothing changes")
+gold_trader.change({"risk_percent": None, "practice_balance": None, "max_trades_per_day": None, "max_losses_in_a_row": None})
+check(gold_trader.settings()["max_losses_in_a_row"] is None and gold_trader._losses_in_a_row([closed(0, -10), closed(15, -10)]) == 2,
+      "null: no cap on trades, and never standing down")
+
+from tools import gold_trader as cli  # noqa: E402
+
+check(cli.main(["--set", "max_trades_per_day=null", "risk_percent=1"]) == 0 and settings_file()["risk_percent"] == 1
+      and settings_file()["max_trades_per_day"] is None and cli.main(["--set", "nonsense=1"]) == 1,
+      "the --set command changes settings, and refuses names that are not settings")
 
 sys.exit(1 if failures else 0)

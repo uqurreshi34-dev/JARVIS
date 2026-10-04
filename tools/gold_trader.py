@@ -4,12 +4,15 @@
     python tools/gold_trader.py --off       stop (an open trade keeps its stop and target at OANDA)
     python tools/gold_trader.py --status    the settings, and the results so far
     python tools/gold_trader.py --once      one look now, as JARVIS takes every 30 seconds, saying what it decided
+    python tools/gold_trader.py --set risk_percent=1 practice_balance=400 max_trades_per_day=null
+                                            change settings; values as in the file (numbers, true, null)
 
 The trader itself runs inside JARVIS (actions/gold_trader.py); this only
 changes gold-trader.json in the JARVIS folder and reads gold-trades.csv.
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -29,6 +32,7 @@ def main(argv=None):
     which.add_argument("--off", action="store_true")
     which.add_argument("--status", action="store_true")
     which.add_argument("--once", action="store_true")
+    which.add_argument("--set", nargs="+", metavar="NAME=VALUE")
     options = parser.parse_args(argv)
 
     try:
@@ -37,6 +41,30 @@ def main(argv=None):
         load_dotenv(ROOT / ".env")
     except ImportError:
         pass
+
+    if options.set:
+        changes = {}
+
+        for pair in options.set:
+            name, _, text = pair.partition("=")
+
+            if name not in gold_trader.DEFAULTS or not text:
+                print(f"Not a setting: {pair!r}. The settings are: {', '.join(gold_trader.DEFAULTS)}.")
+                return 1
+
+            try:
+                changes[name] = json.loads(text)
+            except ValueError:
+                changes[name] = text
+
+        try:
+            gold_trader.change(changes)
+        except ValueError as error:
+            print(error)
+            return 1
+
+        print("Set: " + ", ".join(f"{name} = {json.dumps(value)}" for name, value in changes.items()) + ".")
+        return 0
 
     if options.on or options.off:
         try:
@@ -53,9 +81,18 @@ def main(argv=None):
     if options.status:
         chosen = gold_trader.settings()
         start, end = chosen["session_hours"]
-        print(f"{'On' if chosen['enabled'] else 'Off'}. {chosen['units']:g} oz a trade, {', '.join(chosen['days'])}, "
-              f"candles closing {start}:00 to {end}:00 UK time, at most {chosen['max_trades_per_day']} trades and "
-              f"{chosen['max_losses_in_a_row']} losses in a row a day, spread under ${chosen['max_spread']:.2f}, anything open "
+        if chosen["risk_percent"]:
+            size = f"each trade risking {chosen['risk_percent']:g}% of " + (
+                f"a practice balance of {chosen['practice_balance']:g} plus its results" if chosen["practice_balance"]
+                else "the account")
+        else:
+            size = f"{chosen['units']:g} oz a trade"
+
+        trades = "every setup" if chosen["max_trades_per_day"] is None else f"at most {chosen['max_trades_per_day']} trades a day"
+        losses = ("never standing down" if chosen["max_losses_in_a_row"] is None
+                  else f"standing down after {chosen['max_losses_in_a_row']} losses in a row")
+        print(f"{'On' if chosen['enabled'] else 'Off'}. {size}, {', '.join(chosen['days'])}, candles closing {start}:00 "
+              f"to {end}:00 UK time, {trades}, {losses}, spread under ${chosen['max_spread']:.2f}, anything open "
               f"closed Friday at {chosen['friday_close'][0]:02d}:{chosen['friday_close'][1]:02d}.")
         print(gold_trader.status().replace(", sir", ""))
         return 0

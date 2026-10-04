@@ -1756,16 +1756,25 @@ the window (10:00 to 14:00 UK, Monday to Friday) is looked at once, and
 only while fresh. With a setup and no open trade it places one market order
 with the stop and target attached at OANDA, so they hold with JARVIS off,
 tagged `jarvis-gold` so a trade placed by hand is never touched. It keeps
-to a fixed size (capped at 10 oz whatever the settings say), a few trades
-a day, standing down for the day after two losses in a row, no trade into
-a wide spread, nothing at weekends, and anything open closed on Friday evening. With
+to its size (capped at 10 oz whatever the settings say), takes every
+setup that meets the rules with no daily cap unless one is set, stands
+down for the day after two losses in a row, trades into no wide spread,
+nothing at weekends, and anything open closed on Friday evening. With
 breakeven in the chosen rules it moves the stop to the entry at 1 R.
 `actions/gold_news.py` keeps it out from 30 minutes before to 30 after a
 high-impact US release, read from the free weekly economic calendar (at
 most hourly, as data: time, currency, impact; no model); if the calendar
 cannot be read it stands aside rather than assume the coast is clear, and
 the day's first look names the releases in the window.
-Settings in `gold-trader.json`, off until switched on; every closed trade
+The size is fixed (`units`) or, with `risk_percent`, worked out per trade
+so the $10 stop loses no more than that share of the balance, converted to
+the account's currency at OANDA's price and rounded down to what OANDA
+allows; `practice_balance` sizes as if the account held that much plus the
+trader's own results, so a small account can be practised on a big demo,
+growing and shrinking as it would. If even OANDA's smallest trade would
+risk more than twice the share, there is no trade. Settings in
+`gold-trader.json` (`python tools/gold_trader.py --set name=value ...`),
+off until switched on; every closed trade
 is added to `gold-trades.csv` as OANDA reports it (target, stop or
 closed). `python tools/gold_trader.py --on/--off/--status/--once`;
 `tools/test_gold_trader.py` and `tools/test_gold_news.py` check it

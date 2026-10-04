@@ -33,12 +33,16 @@ Settings, in gold-trader.json in the JARVIS folder (written with these
 defaults the first time, and off until you turn it on):
 
     enabled              false until you switch it on
-    units                ounces per trade (1 = Fortrade's 0.01 lot)
+    units                ounces per trade (1 = Fortrade's 0.01 lot), when not sized by risk
+    risk_percent         null, or e.g. 1: size each trade so its stop risks this share of the account
+    practice_balance     null, or e.g. 400: size as if the account held this, plus or minus the
+                         trader's own results so far -- a small account practised on a big demo
     days                 the days it trades
     session_hours        [10, 14]: candles closing 10:00 to 14:00 UK time
     max_spread           the widest spread, in dollars, it will trade into
-    max_trades_per_day   3
+    max_trades_per_day   null: every setup that meets the rules; or a number
     max_losses_in_a_row  2: after this many losses in a row it stands down until tomorrow
+                         (null: never)
     friday_close         "20:00": anything open is closed then, UK time
     news_filter          true: stand aside around high-impact news
     calendar_url, news_currencies, news_impact, news_minutes_before,
@@ -49,6 +53,7 @@ defaults the first time, and off until you turn it on):
 
 import csv
 import json
+import math
 import os
 import threading
 from datetime import datetime, timedelta, timezone
@@ -68,10 +73,12 @@ DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 DEFAULTS = {
     "enabled": False,
     "units": 1,
+    "risk_percent": None,
+    "practice_balance": None,
     "days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
     "session_hours": [10, 14],
     "max_spread": 1.0,
-    "max_trades_per_day": 3,
+    "max_trades_per_day": None,
     "max_losses_in_a_row": 2,
     "friday_close": "20:00",
     "news_filter": True,
@@ -127,14 +134,30 @@ def settings():
     if path and found and set(DEFAULTS) != set(found):
         _write_settings({key: found.get(key, value) for key, value in DEFAULTS.items()})
 
+    chosen = _understood(found)
+
+    if chosen is None:
+        print(f"[JARVIS] gold trader: a setting in {SETTINGS_NAME} is not understood; not trading")
+        return dict(DEFAULTS, enabled=False, session_hours=(10, 14), friday_close=(20, 0))
+
+    return chosen
+
+
+def _understood(found):
+    """The settings [found], defaults filled in and each made the type it should be; None if one cannot be."""
     chosen = dict(DEFAULTS)
     chosen.update({key: value for key, value in found.items() if key in DEFAULTS})
 
     try:
         chosen["units"] = min(MOST_UNITS, max(0.0, float(chosen["units"])))
+
+        for name in ("risk_percent", "practice_balance"):
+            chosen[name] = None if chosen[name] is None else max(0.0, float(chosen[name])) or None
+
+        for name in ("max_trades_per_day", "max_losses_in_a_row"):
+            chosen[name] = None if chosen[name] is None else max(1, int(chosen[name]))
+
         chosen["max_spread"] = max(0.0, float(chosen["max_spread"]))
-        chosen["max_trades_per_day"] = max(0, int(chosen["max_trades_per_day"]))
-        chosen["max_losses_in_a_row"] = max(0, int(chosen["max_losses_in_a_row"]))
         start, end = (int(hour) for hour in chosen["session_hours"])
         chosen["session_hours"] = (start, end)
         hour, minute = (int(part) for part in str(chosen["friday_close"]).split(":"))
@@ -148,8 +171,7 @@ def settings():
         chosen["news_impact"] = [str(value) for value in chosen["news_impact"]]
         chosen["calendar_url"] = str(chosen["calendar_url"])
     except (TypeError, ValueError):
-        print(f"[JARVIS] gold trader: a setting in {SETTINGS_NAME} is not understood; not trading")
-        return dict(DEFAULTS, enabled=False, session_hours=(10, 14), friday_close=(20, 0))
+        return None
 
     return chosen
 
@@ -170,6 +192,11 @@ def _write_settings(values):
 
 def switch(on):
     """Turn trading on or off in the settings file, keeping everything else."""
+    change({"enabled": bool(on)})
+
+
+def change(values):
+    """Set [values] in the settings file, keeping everything else; refused if the result would not be understood."""
     path = _path(SETTINGS_NAME)
     current = dict(DEFAULTS)
 
@@ -180,8 +207,13 @@ def switch(on):
         except ValueError as error:
             raise ValueError(f"{SETTINGS_NAME} is not valid JSON ({error}); fix or delete it first") from None
 
-    current["enabled"] = bool(on)
+    previous = dict(current)
+    current.update(values)
     _write_settings(current)
+
+    if _understood(current) is None:
+        _write_settings(previous)
+        raise ValueError(f"that would leave {SETTINGS_NAME} with a setting not understood; nothing changed")
 
 
 # ---- the log ----------------------------------------------------------------------------------
@@ -363,10 +395,10 @@ class GoldTrader:
 
         today = self._today(client, local.date())
 
-        if len(today) >= chosen["max_trades_per_day"]:
+        if chosen["max_trades_per_day"] is not None and len(today) >= chosen["max_trades_per_day"]:
             return "enough trades today"
 
-        if _losses_in_a_row(today) >= chosen["max_losses_in_a_row"]:
+        if chosen["max_losses_in_a_row"] is not None and _losses_in_a_row(today) >= chosen["max_losses_in_a_row"]:
             if self._stood_down != local.date():
                 self._stood_down = local.date()
                 self._say("Standing down from gold for the rest of the day, sir: the loss limit is reached.")
@@ -460,16 +492,18 @@ class GoldTrader:
             journal.write("gold", f"{side} skipped", f"spread ${spread:.2f} over ${chosen['max_spread']:.2f}")
             return "spread too wide"
 
-        units = round(max(self._gold["minimum_units"], chosen["units"]), self._gold["unit_decimals"])
-
-        if units <= 0:
-            return "no size"
-
         rules = gold_strategy.CHOSEN
 
         if rules.exits != "fixed":
             self._say(f"The chosen gold rules exit by '{rules.exits}', which the trader cannot place yet, sir; no trade.")
             return "exits not supported"
+
+        sized = self._size(client, chosen, rules)
+
+        if isinstance(sized, str):
+            return sized
+
+        units, risked = sized
 
         entry = ask if side == "buy" else bid
         stop = entry - rules.stop if side == "buy" else entry + rules.stop
@@ -480,9 +514,61 @@ class GoldTrader:
         self._entries[trade["id"]] = spread
         verb = "Bought" if side == "buy" else "Sold"
         self._say(f"Gold, sir: {verb.lower()} {units:g} ounce{'s' if units != 1 else ''} at {trade['price']:.2f}, "
-                  f"stop {stop:.2f}, target {target:.2f}. Demo account.")
+                  f"stop {stop:.2f}, target {target:.2f}{risked}. Demo account.")
         journal.write("gold", f"{verb} {units:g} oz at {trade['price']:.2f}", f"stop {stop:.2f}, target {target:.2f}")
         return side
+
+    def _size(self, client, chosen, rules):
+        """(units, words on the risk) for the next trade, or a reason not to trade.
+
+        By risk: the stop's distance times the units is to lose no more
+        than risk_percent of the balance -- the real one, or the practice
+        balance plus the trader's own results -- converted from dollars to
+        the account's currency at OANDA's price. Rounded down to what OANDA
+        allows, and within MOST_UNITS. If even OANDA's smallest trade would
+        risk more than twice the share, there is no trade.
+        """
+        decimals, smallest = self._gold["unit_decimals"], self._gold["minimum_units"]
+
+        def down(value):
+            return math.floor(value * 10 ** decimals + 1e-9) / 10 ** decimals
+
+        if not chosen["risk_percent"]:
+            return round(max(smallest, chosen["units"]), decimals), ""
+
+        account = client.summary()
+        currency = account["currency"]
+
+        if chosen["practice_balance"]:
+            balance = chosen["practice_balance"] + sum(float(row["result"]) for row in logged() if row.get("result"))
+        else:
+            balance = account["balance"]
+
+        dollars_per_unit = self._dollars_per(client, currency)
+        allowed = balance * chosen["risk_percent"] / 100
+        units = min(MOST_UNITS, down(allowed * dollars_per_unit / rules.stop))
+
+        if units < smallest:
+            if smallest * rules.stop / dollars_per_unit > 2 * allowed:
+                self._say(f"A gold setup, sir, but even the smallest trade would risk more than twice "
+                          f"{chosen['risk_percent']:g}% of {balance:,.0f} {currency}; no trade.")
+                return "too small to size"
+            units = smallest
+
+        risked = units * rules.stop / dollars_per_unit
+        return units, f", risking {risked:.2f} {currency}"
+
+    def _dollars_per(self, client, currency):
+        """How many dollars one unit of the account's currency buys, at OANDA's mid price."""
+        if currency == "USD":
+            return 1.0
+
+        try:
+            bid, ask, _when = client.price(f"{currency}_USD")
+            return (bid + ask) / 2
+        except oanda.OandaError:
+            bid, ask, _when = client.price(f"USD_{currency}")
+            return 2 / (bid + ask)
 
     def _settle_closed(self, client, how=None):
         """Log, once each, the trades of JARVIS's that have closed, and say how they went."""
