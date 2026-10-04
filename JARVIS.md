@@ -1724,6 +1724,19 @@ download kept between runs. The installed packages are kept too, in a
 only when either changes. It reads the code and nothing else: no secrets.
 main is only fast-forwarded to a branch that passed.
 
+### Gold trading: OANDA demo - `actions/oanda.py`
+OANDA's v20 REST API reaches a demo (practice) account over plain HTTPS
+with a token: no trading terminal, gold from 0.1 units. `actions/oanda.py`
+knows only OANDA's practice server, so no setting can point it at real
+money; that would take a deliberate change to the code. `OANDA_API_TOKEN`
+(and optionally `OANDA_ACCOUNT_ID`) in `.env`; the token goes only in the
+request's Authorization header and is never printed or logged. It reads
+the account, OANDA's own terms for gold (smallest trade, decimal places,
+margin), the price and finished 15-minute candles on the bid with the ask
+alongside. `python tools/oanda_check.py` confirms the connection and how
+fresh the candles are; `tools/test_oanda.py` checks it all against a
+pretend OANDA. The strategy itself is tested by `tools/gold_backtest.py`.
+
 ### Providers and failover
 
 The pool is tried in order: awake providers first, resting ones after, on
@@ -1985,6 +1998,7 @@ voice, Graph credentials, weather fallback, `TAVILY_API_KEY` for research.
 | `voice_lab.py` | which voice and delivery to use |
 | `close_check.py` | why an application will not close |
 | `audio_check.py` | whether cached speech is sound |
+| `tools/oanda_check.py` | whether JARVIS can see your OANDA demo account, OANDA's terms for gold, the spread now and how fresh its candles are |
 | `tools/gold_backtest.py` | how the gold strategy (Bollinger touch, RSI turning back, a confirmation candle, 10:00 to 14:00 UK) would have done over the last year of spot gold from Dukascopy, with fixed $10/$30 exits, exits from the bands, or an ATR trailing stop that moves to breakeven at 1 R, with or without a 200-candle trend filter, every open choice side by side and each split into halves |
 | `tts_debug.py` | why the neural voice is not playing |
 | `wake_test.py` | how reliably the wake word is heard |
