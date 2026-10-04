@@ -69,6 +69,7 @@ from actions import (
 )
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
+from actions.gold_trader import trader as gold_trader
 import phrases
 from actions.markets import market_monitor
 from actions.patterns import pattern_monitor
@@ -626,6 +627,11 @@ class Assistant:
         watcher.set_listener(self._on_alert)
         watcher.start()
 
+        # The gold trader, if switched on and an OANDA demo token is set; it
+        # speaks only when it trades, a trade closes, or it stands down.
+        gold_trader.set_listener(self._on_alert)
+        gold_trader.start()
+
         pattern_monitor.set_due_listener(self._on_pattern_due)
         pattern_monitor.set_suggestion_listener(self._on_pattern_suggestion)
         pattern_monitor.start()
@@ -753,6 +759,7 @@ class Assistant:
         reminder_manager.cancel_all()
         battery_monitor.stop()
         watcher.stop()
+        gold_trader.stop()
         pattern_monitor.stop()
         phone_server.stop()
         folder_guard.folder_guard.stop()

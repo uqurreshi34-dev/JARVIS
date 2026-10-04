@@ -58,13 +58,16 @@ class Client:
     # ---- the wire --------------------------------------------------------------------------
 
     def _get(self, path, params=None):
+        return self._send("get", path, params=params or {})
+
+    def _send(self, method, path, **request):
+        headers = {"Authorization": f"Bearer {self._token}", "Accept-Datetime-Format": "RFC3339"}
+
+        if "json" in request:
+            headers["Content-Type"] = "application/json"
+
         try:
-            response = self._session.get(
-                PRACTICE_HOST + path,
-                params=params or {},
-                headers={"Authorization": f"Bearer {self._token}", "Accept-Datetime-Format": "RFC3339"},
-                timeout=TIMEOUT,
-            )
+            response = getattr(self._session, method)(PRACTICE_HOST + path, headers=headers, timeout=TIMEOUT, **request)
         except Exception as error:
             raise OandaError(f"OANDA could not be reached ({type(error).__name__})") from None
 
@@ -118,6 +121,7 @@ class Client:
             "display_name": details.get("displayName", name),
             "minimum_units": float(details.get("minimumTradeSize", 0)),
             "unit_decimals": int(details.get("tradeUnitsPrecision", 0)),
+            "price_decimals": int(details.get("displayPrecision", 2)),
             "margin_rate": float(details.get("marginRate", 0)),
         }
 
@@ -153,6 +157,98 @@ class Client:
             ask_closes.append(float(ask["c"]))
 
         return made[-count:], ask_closes[-count:]
+
+
+    # ---- trades ---------------------------------------------------------------------------
+
+    def market_order(self, units, stop, target, tag, name=GOLD, price_decimals=2, comment=""):
+        """Buy (units > 0) or sell (units < 0) at the market, the stop and target attached.
+
+        The stop and target are placed with the order, on OANDA's servers,
+        so they hold whether or not JARVIS is running. Returns the opened
+        trade as {"id", "units", "price", "time"}; an order OANDA cancels
+        (the market closed, not enough margin) is an OandaError naming why.
+        """
+        def price(value):
+            return f"{value:.{price_decimals}f}"
+
+        order = {
+            "type": "MARKET",
+            "instrument": name,
+            "units": f"{units:g}",
+            "timeInForce": "FOK",
+            "positionFill": "DEFAULT",
+            "stopLossOnFill": {"price": price(stop), "timeInForce": "GTC"},
+            "takeProfitOnFill": {"price": price(target), "timeInForce": "GTC"},
+            "clientExtensions": {"tag": tag, "comment": comment[:120]},
+            "tradeClientExtensions": {"tag": tag, "comment": comment[:120]},
+        }
+        answer = self._send("post", f"/v3/accounts/{self.account_id()}/orders", json={"order": order})
+        filled = answer.get("orderFillTransaction") or {}
+        opened = filled.get("tradeOpened")
+
+        if not opened:
+            cancelled = answer.get("orderCancelTransaction") or {}
+            raise OandaError(f"the order was not filled ({cancelled.get('reason', 'no reason given').replace('_', ' ').lower()})")
+
+        return {"id": opened["tradeID"], "units": float(opened["units"]), "price": float(opened["price"]),
+                "time": parse_time(filled.get("time"))}
+
+    def trades(self, tag=None, state="OPEN"):
+        """Trades in [state] ("OPEN", "CLOSED", "ALL"), those JARVIS tagged [tag] only if given."""
+        found = self._get(f"/v3/accounts/{self.account_id()}/trades", {"state": state, "count": 50}).get("trades") or []
+        return [_trade(trade) for trade in found
+                if tag is None or (trade.get("clientExtensions") or {}).get("tag") == tag]
+
+    def trade(self, trade_id):
+        return _trade(self._get(f"/v3/accounts/{self.account_id()}/trades/{trade_id}")["trade"])
+
+    def closed_by(self, trade):
+        """What closed a trade: "target", "stop" or "closed" (by hand, or by JARVIS), from OANDA's own record."""
+        if not trade.get("closing"):
+            return "closed"
+
+        reason = self._get(f"/v3/accounts/{self.account_id()}/transactions/{trade['closing'][-1]}") \
+            .get("transaction", {}).get("reason", "")
+        return {"TAKE_PROFIT_ORDER": "target", "STOP_LOSS_ORDER": "stop"}.get(reason, "closed")
+
+    def move_stop(self, trade_id, price, price_decimals=2):
+        """Move an open trade's stop to [price], at OANDA."""
+        self._send("put", f"/v3/accounts/{self.account_id()}/trades/{trade_id}/orders",
+                   json={"stopLoss": {"price": f"{price:.{price_decimals}f}", "timeInForce": "GTC"}})
+
+    def close_trade(self, trade_id):
+        """Close a trade at the market now; its realised result in the account's currency."""
+        answer = self._send("put", f"/v3/accounts/{self.account_id()}/trades/{trade_id}/close", json={"units": "ALL"})
+        filled = answer.get("orderFillTransaction") or {}
+
+        if not filled:
+            cancelled = answer.get("orderCancelTransaction") or {}
+            raise OandaError(f"the trade was not closed ({cancelled.get('reason', 'no reason given').replace('_', ' ').lower()})")
+
+        return float(filled.get("pl", 0))
+
+
+def _trade(trade):
+    """One of OANDA's trades as JARVIS keeps it."""
+    def order_price(name):
+        order = trade.get(name) or {}
+        return float(order["price"]) if order.get("price") else None
+
+    return {
+        "id": trade["id"],
+        "state": trade.get("state", ""),
+        "units": float(trade.get("initialUnits", trade.get("currentUnits", 0))),
+        "price": float(trade.get("price", 0)),
+        "opened": parse_time(trade.get("openTime")),
+        "closed": parse_time(trade.get("closeTime")),
+        "close_price": float(trade["averageClosePrice"]) if trade.get("averageClosePrice") else None,
+        "result": float(trade.get("realizedPL", 0)),
+        "stop": order_price("stopLossOrder"),
+        "target": order_price("takeProfitOrder"),
+        "comment": (trade.get("clientExtensions") or {}).get("comment", ""),
+        "closing": list(trade.get("closingTransactionIDs") or []),
+    }
 
 
 def parse_time(text):

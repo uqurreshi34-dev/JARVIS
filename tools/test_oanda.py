@@ -77,10 +77,21 @@ class Oanda:
                                             "openTradeCount": 0}})
         if path.endswith("/instruments"):
             return Answer(200, {"instruments": [{"name": "XAU_USD", "displayName": "Gold", "minimumTradeSize": "0.1",
-                                                 "tradeUnitsPrecision": 1, "marginRate": "0.05"}]})
+                                                 "tradeUnitsPrecision": 1, "displayPrecision": 3,
+                                                 "marginRate": "0.05"}]})
         if path.endswith("/pricing"):
             return Answer(200, {"prices": [{"time": "2026-10-05T11:02:03.123456789Z",
                                             "bids": [{"price": "4140.28"}], "asks": [{"price": "4140.68"}]}]})
+        if path.endswith("/trades"):
+            return Answer(200, {"trades": [
+                {"id": "7", "state": "CLOSED", "initialUnits": "1.0", "price": "4140.400", "openTime": "2026-10-05T09:45:01Z",
+                 "closeTime": "2026-10-05T11:02:00Z", "averageClosePrice": "4170.400", "realizedPL": "22.3456",
+                 "clientExtensions": {"tag": "jarvis-gold"}, "closingTransactionIDs": ["41"]},
+                {"id": "8", "state": "OPEN", "initialUnits": "-2.0", "price": "4150.000", "openTime": "2026-10-05T12:00:00Z",
+                 "stopLossOrder": {"price": "4160.000"}, "takeProfitOrder": {"price": "4120.000"}},
+            ]})
+        if path.endswith("/transactions/41"):
+            return Answer(200, {"transaction": {"id": "41", "type": "ORDER_FILL", "reason": "TAKE_PROFIT_ORDER"}})
         if "/candles" in path:
             return Answer(200, {"candles": [candle("2026-10-05T10:30:00.000000000Z", 4138.0),
                                             candle("2026-10-05T10:45:00.000000000Z", 4140.0),
@@ -106,7 +117,7 @@ check(all(url.startswith(oanda.PRACTICE_HOST) for url, _params, _headers in serv
 check(client.summary() == {"currency": "GBP", "balance": 10000.0, "margin_available": 10000.0, "open_trades": 0},
       "the account's currency, balance and open trades")
 check(client.instrument() == {"name": "XAU_USD", "display_name": "Gold", "minimum_units": 0.1, "unit_decimals": 1,
-                              "margin_rate": 0.05}, "OANDA's own terms for gold, as it sends them")
+                              "price_decimals": 3, "margin_rate": 0.05}, "OANDA's own terms for gold, as it sends them")
 
 bid, ask, when = client.price()
 check((bid, ask) == (4140.28, 4140.68) and when == datetime(2026, 10, 5, 11, 2, 3, 123456, tzinfo=timezone.utc),
@@ -147,6 +158,63 @@ except oanda.OandaError as error:
     said = str(error)
 
 check("OANDA_API_TOKEN" in said, "no token: says which setting is missing")
+
+# ---- trading -------------------------------------------------------------------------------------
+
+
+class Trading(Oanda):
+    def __init__(self, fill=True):
+        super().__init__()
+        self.sent, self.fill = [], fill
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.sent.append(("post", url, json, dict(headers or {})))
+
+        if not self.fill:
+            return Answer(201, {"orderCancelTransaction": {"reason": "MARKET_HALTED"}})
+
+        return Answer(201, {"orderFillTransaction": {"time": "2026-10-05T09:45:01.5Z",
+                                                     "tradeOpened": {"tradeID": "7", "units": "1.0", "price": "4140.412"}}})
+
+    def put(self, url, json=None, headers=None, timeout=None):
+        self.sent.append(("put", url, json, dict(headers or {})))
+        return Answer(200, {"orderFillTransaction": {"pl": "-3.5000"}} if url.endswith("/close") else {})
+
+
+trading = Trading()
+client = oanda.Client(token=TOKEN, account_id="101-004-1", session=trading)
+opened = client.market_order(-1.0, 4160.0, 4120.0, "jarvis-gold", price_decimals=3, comment="sell on the band")
+method, url, body, headers = trading.sent[-1]
+check(url == oanda.PRACTICE_HOST + "/v3/accounts/101-004-1/orders" and body["order"]["type"] == "MARKET"
+      and body["order"]["units"] == "-1" and body["order"]["stopLossOnFill"]["price"] == "4160.000"
+      and body["order"]["takeProfitOnFill"]["price"] == "4120.000" and body["order"]["timeInForce"] == "FOK"
+      and body["order"]["tradeClientExtensions"]["tag"] == "jarvis-gold",
+      "a market order to the practice server, the stop and target attached at OANDA, tagged as JARVIS's")
+check(opened == {"id": "7", "units": 1.0, "price": 4140.412,
+                 "time": datetime(2026, 10, 5, 9, 45, 1, 500000, tzinfo=timezone.utc)}, "and the trade it opened")
+
+try:
+    oanda.Client(token=TOKEN, account_id="a", session=Trading(fill=False)).market_order(1, 1, 2, "jarvis-gold")
+    said = ""
+except oanda.OandaError as error:
+    said = str(error)
+
+check(said == "the order was not filled (market halted)", f"an order OANDA cancels says why ({said!r})")
+
+mine = client.trades("jarvis-gold", state="ALL")
+check([trade["id"] for trade in mine] == ["7"] and mine[0]["result"] == 22.3456 and mine[0]["close_price"] == 4170.4,
+      "only JARVIS's tagged trades, with their result")
+check(client.closed_by(mine[0]) == "target", "what closed it, from OANDA's own record: the target")
+check(client.closed_by({"closing": []}) == "closed", "and a trade with no closing record is simply closed")
+other = client.trades(state="OPEN")
+check(other[1]["stop"] == 4160.0 and other[1]["target"] == 4120.0 and other[1]["units"] == -2.0,
+      "an open trade's stop and target as OANDA holds them")
+
+client.move_stop("8", 4150.0, 3)
+check(trading.sent[-1][1].endswith("/trades/8/orders") and trading.sent[-1][2] == {"stopLoss": {"price": "4150.000", "timeInForce": "GTC"}},
+      "a stop moved at OANDA")
+check(client.close_trade("8") == -3.5 and trading.sent[-1][2] == {"units": "ALL"}, "and a trade closed, its result back")
+check(all(TOKEN not in str(entry[1]) + str(entry[2]) for entry in trading.sent), "the token never in a URL or a body")
 
 # ---- the check -----------------------------------------------------------------------------------
 

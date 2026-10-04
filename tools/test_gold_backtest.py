@@ -33,7 +33,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools import gold_backtest as gb  # noqa: E402
+from actions import gold_strategy as gb  # noqa: E402
+from tools import gold_backtest as cli  # noqa: E402
 
 
 failures = 0
@@ -175,7 +176,7 @@ summary = gb.summarise([gb.Trade("buy", start, 0, 0, 0, result=value) for value 
 check(summary.trades == 6 and summary.wins == 2 and summary.net == 20 and summary.worst_run == 3
       and summary.deepest == 30, "the summary: trades, wins, net, worst run of losses, deepest dip")
 
-check(len(gb.VARIANTS) == 12 and gb.AS_WRITTEN in gb.VARIANTS, "every combination of the open choices is run")
+check(len(gb.VARIANTS) == 17 and gb.AS_WRITTEN in gb.VARIANTS and gb.CHOSEN in gb.VARIANTS, "every combination of the open choices is run")
 
 # ---- exits from the bands -------------------------------------------------------------------------
 
@@ -196,7 +197,7 @@ check(not gb._settle(aiming, (start, 100, 104, 96, 103), gb.Rules(), middle=105.
 
 opened = [gb.Trade("buy", made[0][0] + timedelta(hours=hours), 0, 0, 0, result=value)
           for hours, value in ((1, 10.0), (2, -5.0), (20, 7.0))]
-check(gb._halves(made, opened) == (5.0, 7.0), "each result counted in the half of the period it opened in")
+check(cli._halves(made, opened) == (5.0, 7.0), "each result counted in the half of the period it opened in")
 
 # ---- the trend filter and the trailing exit -------------------------------------------------------
 
@@ -230,6 +231,16 @@ check(not gb._settle(trailing, (start, 106, 106.2, 103, 104), gb.Rules(), atr=2.
       "and never moves back when the price does")
 check(gb._settle(trailing, (start, 104, 104.5, 102, 103), gb.Rules(), atr=2.0) and trailing.reason == "stop"
       and abs(trailing.result - 2.5) < 1e-9, "the trailing stop takes the profit: $2.50 here")
+
+even = gb.Trade("buy", start, 100.0, 90.0, 130.0, breakeven=True, risk=10.0)
+check(not gb._settle(even, (start, 100, 109, 95, 108), gb.Rules()) and even.stop == 90.0,
+      "breakeven: $9 up of a $10 risk, the stop stays")
+check(not gb._settle(even, (start, 108, 110.5, 104, 109), gb.Rules()) and even.stop == 100.0,
+      "$10 up: the stop is the entry")
+check(gb._settle(even, (start, 109, 109.5, 99, 100), gb.Rules()) and even.result == 0.0 and even.reason == "stop",
+      "and a fall back closes it at no loss")
+check(gb.Rules(target=20.0, breakeven=True).name().startswith("rsi=turned      exits=1:2+BE"),
+      "the targets are named as their ratio to the stop")
 
 to_entry = gb.Trade("buy", start, 100.0, 94.0, None, trailing=True, risk=6.0, best=100.0)
 gb._settle(to_entry, (start, 100, 106, 99, 105), gb.Rules(), atr=4.0)

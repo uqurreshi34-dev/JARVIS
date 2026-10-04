@@ -67,6 +67,9 @@ _PROTECTED_NAMES = frozenset({
     "jarvis-vectors.sqlite",
     # Your own questions for tools/rag_eval.py --mine.
     "rag-questions.txt",
+    # The gold trader's settings and its record of every trade.
+    "gold-trader.json",
+    "gold-trades.csv",
 })
 
 # Files JARVIS names by date: rotated logs and the monthly token ledger.

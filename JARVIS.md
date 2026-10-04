@@ -1733,9 +1733,34 @@ money; that would take a deliberate change to the code. `OANDA_API_TOKEN`
 request's Authorization header and is never printed or logged. It reads
 the account, OANDA's own terms for gold (smallest trade, decimal places,
 margin), the price and finished 15-minute candles on the bid with the ask
-alongside. `python tools/oanda_check.py` confirms the connection and how
-fresh the candles are; `tools/test_oanda.py` checks it all against a
-pretend OANDA. The strategy itself is tested by `tools/gold_backtest.py`.
+alongside, and places, protects and closes trades. `python
+tools/oanda_check.py` confirms the connection and how fresh the candles
+are; `tools/test_oanda.py` checks it all against a pretend OANDA.
+
+The strategy lives in `actions/gold_strategy.py`, shared by the backtest
+(`tools/gold_backtest.py`) and the trader, so what is tested is exactly
+what trades. `CHOSEN` is the version the trader uses: the one that made
+money in both halves of a year (RSI not beyond 30/70, the 200-candle trend
+filter, the squeeze filter, $10 stop and $30 target). The backtest also
+runs 1:2 and 1:4 targets, each with and without the stop moved to
+breakeven at 1 R, beside it; `CHOSEN` changes only when another version
+holds up in both halves.
+
+The trader, `actions/gold_trader.py`, runs inside JARVIS (started with the
+other monitors in main.py) and asks no model anything: every decision is
+arithmetic on OANDA's finished 15-minute candles. Each finished candle in
+the window (10:00 to 14:00 UK, Monday to Friday) is looked at once, and
+only while fresh. With a setup and no open trade it places one market order
+with the stop and target attached at OANDA, so they hold with JARVIS off,
+tagged `jarvis-gold` so a trade placed by hand is never touched. It keeps
+to a fixed size (capped at 10 oz whatever the settings say), a few trades
+and fewer losses a day before standing down, no trade into a wide spread,
+nothing at weekends, and anything open closed on Friday evening. With
+breakeven in the chosen rules it moves the stop to the entry at 1 R.
+Settings in `gold-trader.json`, off until switched on; every closed trade
+is added to `gold-trades.csv` as OANDA reports it (target, stop or
+closed). `python tools/gold_trader.py --on/--off/--status/--once`;
+`tools/test_gold_trader.py` checks it against a pretend OANDA and clock.
 
 ### Providers and failover
 
@@ -1998,6 +2023,7 @@ voice, Graph credentials, weather fallback, `TAVILY_API_KEY` for research.
 | `voice_lab.py` | which voice and delivery to use |
 | `close_check.py` | why an application will not close |
 | `audio_check.py` | whether cached speech is sound |
+| `tools/gold_trader.py` | switch the gold trader on or off, its settings and results, or one look now |
 | `tools/oanda_check.py` | whether JARVIS can see your OANDA demo account, OANDA's terms for gold, the spread now and how fresh its candles are |
 | `tools/gold_backtest.py` | how the gold strategy (Bollinger touch, RSI turning back, a confirmation candle, 10:00 to 14:00 UK) would have done over the last year of spot gold from Dukascopy, with fixed $10/$30 exits, exits from the bands, or an ATR trailing stop that moves to breakeven at 1 R, with or without a 200-candle trend filter, every open choice side by side and each split into halves |
 | `tts_debug.py` | why the neural voice is not playing |
