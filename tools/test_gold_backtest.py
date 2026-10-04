@@ -123,14 +123,14 @@ candle_at(made, touch + 1, 3954.0, 3972.5, 3953.5, 3972.0)   # candle 2: green, 
 confirm_close = made[touch + 1][0] + timedelta(minutes=15)
 
 rules = gb.Rules(squeeze_filter=False, session=(0, 24))
-bands, rsis, squeezes = gb.indicators(made)
+bands, rsis, squeezes, atrs, averages = gb.indicators(made)
 check(made[touch][3] <= bands[touch][0] and min(rsis[touch - 2:touch + 1]) < 30 <= rsis[touch + 1],
       "the made-up prices touch the band, and RSI dips under 30 and comes back")
 check(gb.signal(touch + 1, made, bands, rsis, squeezes, rules) == "buy", "a touch, two green candles, RSI back: buy")
 
 red = list(made)
 candle_at(red, touch + 1, 3954.0, 3954.5, 3950.0, 3951.0)
-check(gb.signal(touch + 1, red, *gb.indicators(red), rules) is None, "a red confirmation candle: nothing")
+check(gb.signal(touch + 1, red, *gb.indicators(red)[:3], rules) is None, "a red confirmation candle: nothing")
 
 check(gb.signal(touch + 1, made, bands, [50.0] * len(rsis), squeezes, rules) is None,
       "RSI never under 30: nothing, as written")
@@ -175,7 +175,7 @@ summary = gb.summarise([gb.Trade("buy", start, 0, 0, 0, result=value) for value 
 check(summary.trades == 6 and summary.wins == 2 and summary.net == 20 and summary.worst_run == 3
       and summary.deepest == 30, "the summary: trades, wins, net, worst run of losses, deepest dip")
 
-check(len(gb.VARIANTS) == 8 and gb.AS_WRITTEN in gb.VARIANTS, "every combination of the open choices is run")
+check(len(gb.VARIANTS) == 12 and gb.AS_WRITTEN in gb.VARIANTS, "every combination of the open choices is run")
 
 # ---- exits from the bands -------------------------------------------------------------------------
 
@@ -197,6 +197,57 @@ check(not gb._settle(aiming, (start, 100, 104, 96, 103), gb.Rules(), middle=105.
 opened = [gb.Trade("buy", made[0][0] + timedelta(hours=hours), 0, 0, 0, result=value)
           for hours, value in ((1, 10.0), (2, -5.0), (20, 7.0))]
 check(gb._halves(made, opened) == (5.0, 7.0), "each result counted in the half of the period it opened in")
+
+# ---- the trend filter and the trailing exit -------------------------------------------------------
+
+steady = [(utc(2026, 7, 1) + timedelta(minutes=15 * index), 100.0, 103.0, 99.0, 101.0) for index in range(20)]
+atr = gb.average_true_range(steady)
+check(atr[12] is None and abs(atr[13] - 4.0) < 1e-9 and abs(atr[19] - 4.0) < 1e-9,
+      "ATR: the true range (here $4, the previous close inside every candle) averaged over 14 candles")
+gappy = steady[:14] + [(steady[14][0], 110.0, 111.0, 109.0, 110.0)]
+check(abs(gb.average_true_range(gappy)[14] - (4.0 * 13 + 10.0) / 14) < 1e-9,
+      "a gap counts: the range from the previous close, $10, not just the candle's own $2")
+average = gb.moving_average([10.0] * 200 + [20.0])
+check(average[198] is None and average[199] == 10.0 and abs(average[200] - (10.0 + (2 / 201) * 10.0)) < 1e-9,
+      "the 200-candle average starts as the plain average, then follows each close")
+
+check(gb.signal(touch + 1, made, bands, rsis, squeezes, gb.Rules(squeeze_filter=False, trend_filter=True),
+                [made[touch + 1][4] + 50.0] * len(made)) is None,
+      "trend filter: a buy below the 200-candle average is not taken")
+check(gb.signal(touch + 1, made, bands, rsis, squeezes, gb.Rules(squeeze_filter=False, trend_filter=True),
+                [made[touch + 1][4] - 50.0] * len(made)) == "buy",
+      "and above it, it is")
+check(gb.signal(touch + 1, made, bands, rsis, squeezes, gb.Rules(squeeze_filter=False, trend_filter=True),
+                [None] * len(made)) is None,
+      "and with no average yet, nothing")
+
+trailing = gb.Trade("buy", start, 100.0, 94.0, None, trailing=True, risk=6.0, best=100.0)
+check(not gb._settle(trailing, (start, 100, 104, 99, 103), gb.Rules(), middle=101.0, atr=2.0) and trailing.stop == 94.0,
+      "trailing: short of 1 R, the stop stays, and the middle band is no target")
+check(not gb._settle(trailing, (start, 103, 106.5, 102, 106), gb.Rules(), atr=2.0) and trailing.stop == 102.5,
+      "past 1 R the stop leaves the entry behind: 2 ATR under the best price, $106.50 - $4")
+check(not gb._settle(trailing, (start, 106, 106.2, 103, 104), gb.Rules(), atr=2.0) and trailing.stop == 102.5,
+      "and never moves back when the price does")
+check(gb._settle(trailing, (start, 104, 104.5, 102, 103), gb.Rules(), atr=2.0) and trailing.reason == "stop"
+      and abs(trailing.result - 2.5) < 1e-9, "the trailing stop takes the profit: $2.50 here")
+
+to_entry = gb.Trade("buy", start, 100.0, 94.0, None, trailing=True, risk=6.0, best=100.0)
+gb._settle(to_entry, (start, 100, 106, 99, 105), gb.Rules(), atr=4.0)
+check(to_entry.stop == 100.0, "at 1 R with a wide ATR the stop goes to the entry: it can no longer lose")
+
+short = gb.Trade("sell", start, 100.0, 106.0, None, trailing=True, risk=6.0, best=100.0)
+gb._settle(short, (start, 100, 101, 92.2, 93), gb.Rules(spread=0.8), atr=2.0)
+check(abs(short.best - 93.0) < 1e-9 and abs(short.stop - 97.0) < 1e-9,
+      "a sell trails from the ask: best $93.00 (bid $92.20 plus the spread), stop 2 ATR above, $97")
+
+# The rise after the buy, then a fall: the trailing stop rides the rise and is caught by the fall.
+falling = made + [(made[-1][0] + timedelta(minutes=15 * step), made[-1][4] - 3 * (step - 1), made[-1][4] - 3 * (step - 1) + 0.2,
+                   made[-1][4] - 3 * step - 0.2, made[-1][4] - 3 * step) for step in range(1, 30)]
+trailed = gb.backtest(falling, gb.Rules(squeeze_filter=False, session=(0, 24), exits="trail"))
+check(trailed and trailed[0].trailing and abs(trailed[0].risk - gb.TRAIL_FIRST_STOP * atrs[touch + 1]) < 1e-9
+      and trailed[0].reason == "stop" and trailed[0].result > 20,
+      f"a trailing trade starts 1.5 ATR from its entry, rides the rise and keeps most of it "
+      f"({trailed[0].result if trailed else None})")
 
 # ---- fetching -------------------------------------------------------------------------------------
 

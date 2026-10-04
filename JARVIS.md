@@ -1985,7 +1985,7 @@ voice, Graph credentials, weather fallback, `TAVILY_API_KEY` for research.
 | `voice_lab.py` | which voice and delivery to use |
 | `close_check.py` | why an application will not close |
 | `audio_check.py` | whether cached speech is sound |
-| `tools/gold_backtest.py` | how the gold strategy (Bollinger touch, RSI turning back, a confirmation candle, 10:00 to 14:00 UK) would have done over the last year of spot gold from Dukascopy, with fixed $10/$30 exits or exits from the bands, every open choice side by side and each split into halves |
+| `tools/gold_backtest.py` | how the gold strategy (Bollinger touch, RSI turning back, a confirmation candle, 10:00 to 14:00 UK) would have done over the last year of spot gold from Dukascopy, with fixed $10/$30 exits, exits from the bands, or an ATR trailing stop that moves to breakeven at 1 R, with or without a 200-candle trend filter, every open choice side by side and each split into halves |
 | `tts_debug.py` | why the neural voice is not playing |
 | `wake_test.py` | how reliably the wake word is heard |
 | `tools/test_console.py` | typed commands, no microphone (a console, not a suite: tools/run_tests.py leaves it out) |

@@ -27,10 +27,13 @@ The rules (a buy; a sell is the mirror image):
    and none while the bands are squeezed.
 
 Where the rules leave a choice, every combination is run side by side:
-whether RSI must have been extreme at all, whether the squeeze filter is
-on, and the exits -- the fixed $10 and $30, or a stop just past candle 1's
-wick with the middle band as the target, which is where a bounce off a
-band naturally heads. The row marked * is the rules as first written.
+whether RSI must have been extreme at all; whether to trade only with the
+bigger trend (buys above the 200-candle average, sells below it); and the
+exits -- the fixed $10 and $30; a stop just past candle 1's wick with the
+middle band as the target, where a bounce off a band naturally heads; or
+a trailing stop sized by how lively gold is (ATR), moved to the entry once
+the trade is 1 R up and then following the best price. The row marked * is
+the rules as first written.
 
 Each row is also split into the first and second half of the period. A
 rule found by trying many and keeping the best can look good by luck; one
@@ -84,6 +87,23 @@ TARGET_DOLLARS = 30.0
 
 # With exits from the bands: how far beyond candle 1's wick the stop sits.
 WICK_BUFFER = 1.0
+
+# The trailing exit, in multiples of the average true range (ATR, 14
+# candles): how far gold normally moves in a candle, so the stop is as wide
+# as the market is lively rather than a fixed $10. The first stop sits 1.5
+# ATR away; once the trade is 1 R in profit (R being that first distance)
+# the stop moves to the entry, so it can no longer lose; after that it
+# follows 2 ATR behind the best price reached, and only ever forward. No
+# fixed target: the trailing stop takes the profit.
+ATR_LENGTH = 14
+TRAIL_FIRST_STOP = 1.5
+BREAKEVEN_AT_R = 1.0
+TRAIL_DISTANCE = 2.0
+
+# The trend filter: buy only above the 200-candle average (about two days of
+# 15-minute candles), sell only below it, so a bounce is taken with the
+# bigger move rather than against it.
+TREND_LENGTH = 200
 SPREAD = 0.80
 
 # UK hours, inclusive of a candle closing at the start, exclusive at the end.
@@ -288,6 +308,39 @@ def bollinger(closes, length=BAND_LENGTH, deviations=BAND_DEVIATIONS):
     return bands
 
 
+def average_true_range(candles, length=ATR_LENGTH):
+    """Wilder's average true range for each candle, None until there are [length] ranges."""
+    values = [None] * len(candles)
+    ranges = []
+
+    for index, (_start, _open, high, low, _close) in enumerate(candles):
+        previous = candles[index - 1][4] if index else None
+        ranges.append(high - low if previous is None else max(high - low, abs(high - previous), abs(low - previous)))
+
+        if index + 1 == length:
+            values[index] = sum(ranges) / length
+        elif index + 1 > length:
+            values[index] = (values[index - 1] * (length - 1) + ranges[-1]) / length
+
+    return values
+
+
+def moving_average(closes, length=TREND_LENGTH):
+    """The exponential moving average of [closes], None until there are [length] of them."""
+    values = [None] * len(closes)
+
+    if len(closes) < length:
+        return values
+
+    values[length - 1] = sum(closes[:length]) / length
+    weight = 2.0 / (length + 1)
+
+    for index in range(length, len(closes)):
+        values[index] = values[index - 1] + weight * (closes[index] - values[index - 1])
+
+    return values
+
+
 def rsi(closes, length=RSI_LENGTH):
     """Wilder's RSI for each close, None until it has [length] changes behind it."""
     values = [None] * len(closes)
@@ -340,14 +393,16 @@ class Rules:
     touch: str = "wick"          # "wick": the candle reaches the band; "close": it closes beyond it
     rsi: str = "turned"          # "turned": was beyond 30/70 and is back; "not_extreme": simply not beyond now
     squeeze_filter: bool = True
-    exits: str = "fixed"         # "fixed": $10 stop, $30 target; "bands": stop past candle 1's wick, target the middle band
+    exits: str = "fixed"         # "fixed": $10 stop, $30 target; "bands": stop past candle 1's wick, target the
+                                 # middle band; "trail": an ATR stop, breakeven at 1 R, then trailing
+    trend_filter: bool = False   # only buy above the 200-candle average, only sell below it
     stop: float = STOP_DOLLARS
     target: float = TARGET_DOLLARS
     spread: float = SPREAD
     session: tuple = SESSION
 
     def name(self):
-        return (f"rsi={self.rsi:11} exits={self.exits:5} squeeze filter={'on ' if self.squeeze_filter else 'off'}")
+        return f"rsi={self.rsi:11} exits={self.exits:5} trend filter={'on ' if self.trend_filter else 'off'}"
 
 
 @dataclass
@@ -356,16 +411,27 @@ class Trade:
     opened: datetime
     entry: float
     stop: float
-    target: float                # None: the middle band, wherever it is
+    target: float                # None: the middle band, or no target at all when trailing
     closed: datetime = None
     exit: float = None
     result: float = None
     reason: str = ""
+    trailing: bool = False
+    risk: float = 0.0            # the first stop's distance, R
+    best: float = None           # the best price reached since the entry
 
 
-def signal(index, candles, bands, rsis, squeezes, rules):
-    """"buy", "sell" or None for the confirmation candle at [index] (candle 1 is index - 1)."""
+def signal(index, candles, bands, rsis, squeezes, rules, averages=None):
+    """"buy", "sell" or None for the confirmation candle at [index] (candle 1 is index - 1).
+
+    [averages], the 200-candle average, is needed only with the trend filter.
+    """
     if index < 1 or bands[index - 1] is None or rsis[index] is None:
+        return None
+
+    trend = averages[index] if averages else None
+
+    if rules.trend_filter and trend is None:
         return None
 
     _start, open1, high1, low1, close1 = candles[index - 1]
@@ -384,7 +450,7 @@ def signal(index, candles, bands, rsis, squeezes, rules):
         else:
             turned = rsis[index] >= RSI_LOW
 
-        if turned:
+        if turned and not (rules.trend_filter and close2 <= trend):
             return "buy"
 
     touched_high = (high1 >= upper) if rules.touch == "wick" else (close1 >= upper)
@@ -394,21 +460,54 @@ def signal(index, candles, bands, rsis, squeezes, rules):
         else:
             turned = rsis[index] <= RSI_HIGH
 
-        if turned:
+        if turned and not (rules.trend_filter and close2 >= trend):
             return "sell"
 
     return None
 
 
-def _settle(trade, candle, rules, middle=None):
+def _trail(trade, candle, rules, atr):
+    """Move a trailing trade's stop after [candle]: to the entry at 1 R, then 2 ATR behind its best price.
+
+    Only ever towards profit. Worked out from the candle just finished, so
+    the new stop applies from the next one.
+    """
+    _start, _open, high, low, _close = candle
+
+    if trade.side == "buy":
+        trade.best = max(trade.best, high)
+        gained = trade.best - trade.entry
+        moved = [trade.stop]
+
+        if gained >= BREAKEVEN_AT_R * trade.risk:
+            moved.append(trade.entry)
+            if atr:
+                moved.append(trade.best - TRAIL_DISTANCE * atr)
+
+        trade.stop = max(moved)
+    else:
+        trade.best = min(trade.best, low + rules.spread)
+        gained = trade.entry - trade.best
+        moved = [trade.stop]
+
+        if gained >= BREAKEVEN_AT_R * trade.risk:
+            moved.append(trade.entry)
+            if atr:
+                moved.append(trade.best + TRAIL_DISTANCE * atr)
+
+        trade.stop = min(moved)
+
+
+def _settle(trade, candle, rules, middle=None, atr=None):
     """Close [trade] if [candle] (bid prices) reaches its stop or target; the stop first if both.
 
     A trade aiming for the middle band aims at [middle], the band as it stood
-    when the candle began, so nothing is known before it could be.
+    when the candle began, so nothing is known before it could be. A
+    trailing trade still open after the candle has its stop moved (_trail).
     """
     start, _open, high, low, _close = candle
     closes_at = start + timedelta(minutes=CANDLE_MINUTES)
-    target = trade.target if trade.target is not None else middle
+    target = trade.target if trade.target is not None or trade.trailing else middle
 
     if trade.side == "buy":
         # A buy is closed by selling, at the bid.
@@ -426,19 +525,22 @@ def _settle(trade, candle, rules, middle=None):
         trade.result = (trade.exit - trade.entry) if trade.side == "buy" else (trade.entry - trade.exit)
         return True
 
+    if trade.trailing:
+        _trail(trade, candle, rules, atr)
+
     return False
 
 
 def indicators(candles):
-    """(bands, rsi, squeezed) for [candles], worked out once for every set of rules."""
+    """(bands, rsi, squeezed, ATR, 200-candle average) for [candles], worked out once for every set of rules."""
     closes = [candle[4] for candle in candles]
     bands = bollinger(closes)
-    return bands, rsi(closes), squeezed(bands)
+    return bands, rsi(closes), squeezed(bands), average_true_range(candles), moving_average(closes)
 
 
 def backtest(candles, rules=Rules(), worked_out=None):
     """Every trade [rules] would have taken over [candles] (fifteen-minute, bid), oldest first."""
-    bands, rsis, squeezes = worked_out or indicators(candles)
+    bands, rsis, squeezes, atrs, averages = worked_out or indicators(candles)
     trades = []
     open_trade = None
 
@@ -446,7 +548,7 @@ def backtest(candles, rules=Rules(), worked_out=None):
         if open_trade is not None:
             middle = bands[index - 1][1] if bands[index - 1] else None
 
-            if _settle(open_trade, candle, rules, middle):
+            if _settle(open_trade, candle, rules, middle, atrs[index - 1]):
                 trades.append(open_trade)
                 open_trade = None
             continue
@@ -456,11 +558,19 @@ def backtest(candles, rules=Rules(), worked_out=None):
         if not in_session(closes_at, rules.session):
             continue
 
-        side = signal(index, candles, bands, rsis, squeezes, rules)
+        side = signal(index, candles, bands, rsis, squeezes, rules, averages)
 
         touch = candles[index - 1]
 
-        if side == "buy":
+        if side and rules.exits == "trail":
+            if not atrs[index]:
+                continue
+
+            distance = TRAIL_FIRST_STOP * atrs[index]
+            entry = candle[4] + rules.spread if side == "buy" else candle[4]
+            stop = entry - distance if side == "buy" else entry + distance
+            open_trade = Trade(side, closes_at, entry, stop, None, trailing=True, risk=distance, best=entry)
+        elif side == "buy":
             entry = candle[4] + rules.spread   # bought at the ask
             if rules.exits == "bands":
                 open_trade = Trade("buy", closes_at, entry, touch[3] - WICK_BUFFER, None)
@@ -524,8 +634,9 @@ def summarise(trades):
 
 # A close beyond the band barely ever happened (one to four trades in four
 # months), so only a wick reaching it is tried.
-VARIANTS = [Rules(rsi=rule, exits=exits, squeeze_filter=squeeze)
-            for rule in ("turned", "not_extreme") for exits in ("fixed", "bands") for squeeze in (True, False)]
+# The squeeze filter is always on: off, every version did worse.
+VARIANTS = [Rules(rsi=rule, exits=exits, trend_filter=trend)
+            for rule in ("turned", "not_extreme") for exits in ("fixed", "bands", "trail") for trend in (False, True)]
 
 AS_WRITTEN = Rules()
 
@@ -542,7 +653,10 @@ def report(candles, lot_ounces=1.0):
     print(f"\nSpot gold, {len(candles)} fifteen-minute candles, {first:%d %b %Y} to {last:%d %b %Y} (UTC).")
     print(f"Each trade 0.01 lot ({lot_ounces:g} oz): $1 a dollar of movement. Spread ${SPREAD:.2f}, candles "
           f"closing {SESSION[0]}:00 to {SESSION[1]}:00 UK time. 'fixed' exits: stop ${STOP_DOLLARS:g}, target "
-          f"${TARGET_DOLLARS:g}.\n'bands' exits: stop ${WICK_BUFFER:g} past candle 1's wick, target the middle band.\n")
+          f"${TARGET_DOLLARS:g}.\n'bands' exits: stop ${WICK_BUFFER:g} past candle 1's wick, target the middle band."
+          f"\n'trail' exits: stop {TRAIL_FIRST_STOP:g} ATR away, moved to the entry at {BREAKEVEN_AT_R:g} R, then "
+          f"{TRAIL_DISTANCE:g} ATR behind the best price; no fixed target.\n'trend filter': buys only above the "
+          f"{TREND_LENGTH}-candle average, sells only below it. The squeeze filter is on throughout.\n")
     print(f"  {'rules':48} {'trades':>6} {'won':>4} {'net $':>8} {'risk $':>6} {'worst run':>9} {'deepest dip $':>13}"
           f" {'1st half $':>10} {'2nd half $':>10}")
     worked_out = indicators(candles)
