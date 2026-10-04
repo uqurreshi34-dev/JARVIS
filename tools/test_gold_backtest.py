@@ -431,4 +431,15 @@ except RuntimeError as error:
 
 check(stopped, "too many days missing: it stops and says to run it again, rather than test on scraps")
 
+
+# The versions worth trading, run together: those entering on the same candles only differ in how they
+# leave, so only the best of each kind of entry is kept (the others would never get a trade).
+ranked = [gb.REGISTRY[key] for key in ("bounce-atr-1:3-be", "bounce-1:3-be", "bounce-1:2")]
+kept = cli.best_per_entry(ranked)
+check([rules.key() for rules in kept] == ["bounce-atr-1:3-be"],
+      f"bounce versions differing only in exits: just the best is kept ({[rules.key() for rules in kept]})")
+mixed_kinds = [gb.REGISTRY[key] for key in ("bounce-1:3-be", "pullback-atr-1:3-be", "bounce-1:2", "breakout-1:3-be")]
+check([rules.key() for rules in cli.best_per_entry(mixed_kinds)] == ["bounce-1:3-be", "pullback-atr-1:3-be", "breakout-1:3-be"],
+      "different kinds of entry are each kept, best first")
+
 sys.exit(1 if failures else 0)

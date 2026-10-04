@@ -122,6 +122,24 @@ def worth_trading(summary, early, late):
     return summary.trades >= MOST_FEW_TRADES and early > 0 and late > 0
 
 
+def entry(rules):
+    """What decides when a version enters; versions alike in this differ only in their exits."""
+    return (rules.setup, rules.rsi, rules.touch, rules.trend_filter, rules.squeeze_filter)
+
+
+def best_per_entry(ranked):
+    """From versions ranked best first, the first of each kind of entry."""
+    seen = set()
+    kept = []
+
+    for rules in ranked:
+        if entry(rules) not in seen:
+            seen.add(entry(rules))
+            kept.append(rules)
+
+    return kept
+
+
 def _together(candles, worked_out, passing, spread, session, lot_ounces):
     """The versions worth trading, run together as the trader would: one trade at a time, best first."""
     if not passing:
@@ -129,12 +147,15 @@ def _together(candles, worked_out, passing, spread, session, lot_ounces):
               " current setups, or try other hours.")
         return
 
-    chosen = [rules for _net, rules in sorted(passing, key=lambda pair: -pair[0])]
+    ranked = [rules for _net, rules in sorted(passing, key=lambda pair: -pair[0])]
+    chosen = best_per_entry(ranked)
     trades = backtest(candles, [replace(rules, spread=spread, session=session) for rules in chosen], worked_out)
     summary = summarise(trades)
     early, late = _halves(candles, trades)
     print(f"\nWorth trading -- at least {MOST_FEW_TRADES} trades and money made in both halves: "
-          f"{', '.join(rules.key() for rules in chosen)}.")
+          f"{', '.join(rules.key() for rules in ranked)}.")
+    print("Versions that enter on the same candle only differ in how they leave, and one trade is open at a time,"
+          f" so the best exits for each kind of entry: {', '.join(rules.key() for rules in chosen)}.")
     print(f"Run together, one trade at a time: {summary.trades} trades, {summary.win_rate:.0%} won, "
           f"{summary.net * lot_ounces:+.2f} $ ({early * lot_ounces:+.2f}, {late * lot_ounces:+.2f} by half), "
           f"worst run {summary.worst_run}, deepest dip {summary.deepest * lot_ounces:.2f} $.")

@@ -157,6 +157,13 @@ class Assistant:
         # own thread while its "Initiating..." may still be playing.
         self._voice_lock = threading.Lock()
 
+        # While an announcement is being spoken, standby or listening asked
+        # for from elsewhere -- the follow-up window expiring on the voice
+        # thread, say -- waits until it has finished, so the HUD shows him
+        # speaking, and what he says, for as long as he says it.
+        self._announcing = False
+        self._after_announcement = None
+
     def stop(self):
         self._stop.set()
 
@@ -225,6 +232,10 @@ class Assistant:
         if state in (IDLE, LISTENING) and recitation.owns_hud():
             state = RECITING
 
+        if state in (IDLE, LISTENING) and self._announcing:
+            self._after_announcement = state
+            return
+
         self._current_state = state
         self._hud.state_changed.emit(state)
 
@@ -255,11 +266,25 @@ class Assistant:
             self._interaction_open = True
 
     def _speak_alert_locked(self, text):
-        """Speak one alert while holding the announcement lock."""
+        """Speak one alert while holding the announcement lock.
+
+        The HUD is set when the voice is actually free, not before waiting
+        for it, and holds speaking until the alert has been said; then it
+        returns to whatever state was asked for meanwhile, or was before.
+        """
         phone_server.announce(text)
-        self._reply(text)
-        self._state(SPEAKING)
-        speak(text)
+
+        with self._voice_lock:
+            self._after_announcement = self._current_state
+            self._reply(text)
+            self._state(SPEAKING)
+            self._announcing = True
+
+            try:
+                speak(text)
+            finally:
+                self._announcing = False
+                self._state(self._after_announcement or IDLE)
 
     def _flush_alerts_locked(self):
         """Speak queued alerts in order, without allowing races between them."""
@@ -402,15 +427,13 @@ class Assistant:
 
                 return
 
-            previous = self._current_state
-
             # Held for the phone as well as said aloud. Every unprompted
             # announcement passes through here -- battery, disk, market
             # alerts, pattern runs, the morning diary -- so this one line
             # covers all of them. Still spoken to the room regardless,
-            # since being at the desk is still the normal case.
+            # since being at the desk is still the normal case. The state
+            # it leaves the HUD in is decided there, once it has spoken.
             self._speak_alert_locked(text)
-            self._state(previous)
 
     def _on_sensor(self, payload):
         """A board on the wifi has reported. Returns what was said.
