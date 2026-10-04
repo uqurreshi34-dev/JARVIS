@@ -5,6 +5,7 @@
     python tools/gold_trader.py --status    the settings, and the results so far
     python tools/gold_trader.py --once      one look now, as JARVIS takes every 30 seconds, saying what it decided
     python tools/gold_trader.py --set risk_percent=1 practice_balance=400 max_trades_per_day=null
+    python tools/gold_trader.py --set setups=bounce-1:3-be,pullback-atr-1:3-be
                                             change settings; values as in the file (numbers, true, null)
 
 The trader itself runs inside JARVIS (actions/gold_trader.py); this only
@@ -55,7 +56,8 @@ def main(argv=None):
             try:
                 changes[name] = json.loads(text)
             except ValueError:
-                changes[name] = text
+                # A list may be given plainly: setups=bounce-1:3-be,pullback-atr-1:3-be
+                changes[name] = text.split(",") if isinstance(gold_trader.DEFAULTS[name], list) else text
 
         try:
             gold_trader.change(changes)

@@ -125,7 +125,7 @@ candle_at(made, touch + 1, 3954.0, 3972.5, 3953.5, 3972.0)   # candle 2: green, 
 confirm_close = made[touch + 1][0] + timedelta(minutes=15)
 
 rules = gb.Rules(squeeze_filter=False, session=(0, 24))
-bands, rsis, squeezes, atrs, averages = gb.indicators(made)
+bands, rsis, squeezes, atrs, averages, fast = gb.indicators(made)
 check(made[touch][3] <= bands[touch][0] and min(rsis[touch - 2:touch + 1]) < 30 <= rsis[touch + 1],
       "the made-up prices touch the band, and RSI dips under 30 and comes back")
 check(gb.signal(touch + 1, made, bands, rsis, squeezes, rules) == "buy", "a touch, two green candles, RSI back: buy")
@@ -177,7 +177,8 @@ summary = gb.summarise([gb.Trade("buy", start, 0, 0, 0, result=value) for value 
 check(summary.trades == 6 and summary.wins == 2 and summary.net == 20 and summary.worst_run == 3
       and summary.deepest == 30, "the summary: trades, wins, net, worst run of losses, deepest dip")
 
-check(len(gb.VARIANTS) == 17 and gb.AS_WRITTEN in gb.VARIANTS and gb.CHOSEN in gb.VARIANTS, "every combination of the open choices is run")
+check(len(gb.VARIANTS) == 25 and len(gb.REGISTRY) == 25 and gb.AS_WRITTEN in gb.VARIANTS and gb.CHOSEN in gb.VARIANTS
+      and gb.REGISTRY["bounce-1:3-be"] == gb.CHOSEN, "every combination of the open choices is run")
 
 # ---- exits from the bands -------------------------------------------------------------------------
 
@@ -260,6 +261,55 @@ check(trailed and trailed[0].trailing and abs(trailed[0].risk - gb.TRAIL_FIRST_S
       and trailed[0].reason == "stop" and trailed[0].result > 20,
       f"a trailing trade starts 1.5 ATR from its entry, rides the rise and keeps most of it "
       f"({trailed[0].result if trailed else None})")
+
+# ---- the other setups, ATR exits, several together ------------------------------------------------
+
+def plain(start, prices):
+    return series(prices, start=start)
+
+
+uptrend = [4000.0]
+for step in range(259):
+    uptrend.append(uptrend[-1] + (1.5 if step % 2 else -1.0))   # up, with dips: RSI in the middle
+dip = plain(utc(2026, 7, 1, 0, 0), uptrend + [uptrend[-1] - 2.0, uptrend[-1] + 2.0])
+w = gb.indicators(dip)
+last = len(dip) - 1
+pullback = gb.Rules(setup="pullback", trend_filter=True, exits="atr", breakeven=True)
+candle_at(dip, last - 1, dip[last - 1][1], dip[last - 1][1] + 0.1, w[5][last - 1] - 0.5, dip[last - 1][4])
+candle_at(dip, last, dip[last - 1][4], uptrend[-1] + 2.2, dip[last - 1][4] - 0.1, uptrend[-1] + 2.0)
+w = gb.indicators(dip)
+check(w[4][last] < dip[last][4] and w[5][last - 1] > w[4][last - 1] and dip[last - 1][3] <= w[5][last - 1],
+      "made-up prices: a steady uptrend, candle 1 dipping to the 20-candle average")
+check(40 <= w[1][last] <= 70 and gb.signal(last, dip, w[0], w[1], w[2], pullback, w[4], w[5]) == "buy",
+      f"a pullback: candle 2 closes green above candle 1 and the average, in the uptrend -- buy (RSI {w[1][last]:.0f})")
+check(gb.signal(last, dip, w[0], w[1], w[2], pullback, [99999.0] * len(dip), w[5]) is None,
+      "but not below the 200-candle average")
+
+flat = [4000.0 + (0.5 if step % 2 else -0.5) for step in range(300)]
+burst = plain(utc(2026, 7, 1, 0, 0), flat + [4000.0, 4003.2])
+wb = gb.indicators(burst)
+breakout = gb.Rules(setup="breakout", trend_filter=False, exits="atr", ratio=2.0, breakeven=True)
+check(wb[2][len(burst) - 2] and gb.signal(len(burst) - 1, burst, wb[0], wb[1], wb[2], breakout, wb[4], wb[5]) == "buy",
+      "a breakout: squeezed on candle 1, candle 2 closes green above the upper band -- buy")
+check(gb.signal(len(burst) - 1, burst, wb[0], wb[1], [False] * len(burst), breakout, wb[4], wb[5]) is None,
+      "and with no squeeze before it, a big candle is not a breakout")
+
+atr_rules = gb.Rules(exits="atr", ratio=3.0, breakeven=True)
+check(gb.exits_for(atr_rules, 100.0, "buy", 4.0) == (94.0, 118.0, 6.0) and gb.exits_for(atr_rules, 100.0, "sell", 4.0)
+      == (106.0, 82.0, 6.0) and gb.exits_for(atr_rules, 100.0, "buy", None) is None,
+      "ATR exits: stop 1.5 ATR away, target three times the stop; none without an ATR")
+check(gb.exits_for(gb.CHOSEN, 100.0, "buy", 4.0) == (90.0, 130.0, 10.0), "fixed exits: $10 and $30, whatever the ATR")
+
+alone = gb.backtest(made, gb.Rules(squeeze_filter=False, session=(0, 24)))
+both = gb.backtest(made, [gb.Rules(setup="pullback", session=(0, 24)), gb.Rules(squeeze_filter=False, session=(0, 24))])
+check(len(both) >= len(alone) and all(trade.rules is not None for trade in both),
+      "several setups run together, one trade at a time, each trade knowing the rules that opened it")
+check(gb.CHOSEN.key() == "bounce-1:3-be" and gb.Rules(setup="pullback", trend_filter=True, exits="atr", ratio=2.0,
+                                                       breakeven=True).key() == "pullback-atr-1:2-be",
+      "each version has a short, stable key")
+check(cli.worth_trading(gb.Summary(trades=40), 1.0, 2.0) and not cli.worth_trading(gb.Summary(trades=20), 1.0, 2.0)
+      and not cli.worth_trading(gb.Summary(trades=40), -1.0, 2.0),
+      "worth trading: at least 30 trades and money made in both halves")
 
 # ---- OANDA's own prices ---------------------------------------------------------------------------
 

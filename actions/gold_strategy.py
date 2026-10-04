@@ -77,6 +77,15 @@ TRAIL_DISTANCE = 2.0
 # 15-minute candles), sell only below it, so a bounce is taken with the
 # bigger move rather than against it.
 TREND_LENGTH = 200
+
+# The pullback setup's average: in a trend, price dipping back to the
+# 20-candle average and turning is the classic place to join it.
+FAST_LENGTH = 20
+
+# Exits sized by ATR: the stop this many ATRs from the entry, the target a
+# fixed multiple of the stop, so a lively day gets a wider stop and a quiet
+# one a tighter, and the reward stays the same multiple of the risk.
+ATR_STOP = 1.5
 SPREAD = 0.80
 
 # UK hours, inclusive of a candle closing at the start, exclusive at the end.
@@ -363,25 +372,44 @@ def squeezed(bands, window=SQUEEZE_WINDOW, share=SQUEEZE_SHARE):
 
 @dataclass(frozen=True)
 class Rules:
+    setup: str = "bounce"        # "bounce": off a band, against the move; "pullback": back to the 20-candle
+                                 # average, with the trend; "breakout": out of a squeeze, with the trend
     touch: str = "wick"          # "wick": the candle reaches the band; "close": it closes beyond it
     rsi: str = "turned"          # "turned": was beyond 30/70 and is back; "not_extreme": simply not beyond now
     squeeze_filter: bool = True
-    exits: str = "fixed"         # "fixed": $10 stop, $30 target; "bands": stop past candle 1's wick, target the
-                                 # middle band; "trail": an ATR stop, breakeven at 1 R, then trailing
+    exits: str = "fixed"         # "fixed": $10 stop, $30 target; "atr": a stop of 1.5 ATR, the target [ratio] times
+                                 # it; "bands": stop past candle 1's wick, target the middle band; "trail": an
+                                 # ATR stop, breakeven at 1 R, then trailing
     trend_filter: bool = False   # only buy above the 200-candle average, only sell below it
     breakeven: bool = False      # fixed exits: the stop moves to the entry once the trade is 1 R up
     stop: float = STOP_DOLLARS
     target: float = TARGET_DOLLARS
+    ratio: float = 3.0           # "atr" exits: the target as a multiple of the stop
     spread: float = SPREAD
     session: tuple = SESSION
 
+    def _exits(self):
+        if self.exits == "fixed":
+            return f"1:{self.target / self.stop:g}" + ("+BE" if self.breakeven else "")
+
+        if self.exits == "atr":
+            return f"ATR 1:{self.ratio:g}" + ("+BE" if self.breakeven else "")
+
+        return self.exits
+
     def name(self):
-        exits = self.exits
+        entry = f"rsi={self.rsi:11}" if self.setup == "bounce" else f"{self.setup:15}"
+        return f"{entry} exits={self._exits():10} trend filter={'on ' if self.trend_filter else 'off'}"
 
-        if exits == "fixed":
-            exits = f"1:{self.target / self.stop:g}" + ("+BE" if self.breakeven else "")
+    def atr_stop_distance(self, atr):
+        return ATR_STOP * atr
 
-        return f"rsi={self.rsi:11} exits={exits:7} trend filter={'on ' if self.trend_filter else 'off'}"
+    def key(self):
+        """A short, stable name for these rules, as gold-trader.json lists the setups to trade."""
+        exits = self._exits().lower().replace(" ", "-").replace("+be", "-be")
+        trend = "" if self.trend_filter else "-no-trend"
+        rsi = "" if self.setup != "bounce" or self.rsi == "not_extreme" else "-rsi-turned"
+        return f"{self.setup}-{exits}{trend}{rsi}"
 
 
 @dataclass
@@ -399,12 +427,14 @@ class Trade:
     breakeven: bool = False      # the stop goes to the entry at 1 R, and stays
     risk: float = 0.0            # the first stop's distance, R
     best: float = None           # the best price reached since the entry
+    rules: object = None         # the rules that opened it, when several are run together
 
 
-def signal(index, candles, bands, rsis, squeezes, rules, averages=None):
+def signal(index, candles, bands, rsis, squeezes, rules, averages=None, fast=None):
     """"buy", "sell" or None for the confirmation candle at [index] (candle 1 is index - 1).
 
-    [averages], the 200-candle average, is needed only with the trend filter.
+    [averages], the 200-candle average, is needed only with the trend
+    filter; [fast], the 20-candle average, only for the pullback setup.
     """
     if index < 1 or bands[index - 1] is None or rsis[index] is None:
         return None
@@ -413,6 +443,12 @@ def signal(index, candles, bands, rsis, squeezes, rules, averages=None):
 
     if rules.trend_filter and trend is None:
         return None
+
+    if rules.setup == "pullback":
+        return _pullback(index, candles, rsis, trend, fast)
+
+    if rules.setup == "breakout":
+        return _breakout(index, candles, bands, rsis, squeezes, rules, trend)
 
     _start, open1, high1, low1, close1 = candles[index - 1]
     _start, open2, _high2, _low2, close2 = candles[index]
@@ -442,6 +478,48 @@ def signal(index, candles, bands, rsis, squeezes, rules, averages=None):
 
         if turned and not (rules.trend_filter and close2 >= trend):
             return "sell"
+
+    return None
+
+
+def _pullback(index, candles, rsis, trend, fast):
+    """Joining a trend after a dip: the trend up (price and the 20-candle average both above the 200),
+    candle 1 dips to the 20-candle average, candle 2 closes green above it and above candle 1's high,
+    RSI between 40 and 70 -- momentum with the trend, not yet stretched. A sell is the mirror image."""
+    if not fast or trend is None or fast[index - 1] is None:
+        return None
+
+    _start, _open1, high1, low1, _close1 = candles[index - 1]
+    _start, open2, _high2, _low2, close2 = candles[index]
+    average = fast[index - 1]
+
+    if close2 > trend and average > trend and low1 <= average and close2 > open2 and close2 > max(average, high1) \
+            and 40.0 <= rsis[index] <= 70.0:
+        return "buy"
+
+    if close2 < trend and average < trend and high1 >= average and close2 < open2 and close2 < min(average, low1) \
+            and 30.0 <= rsis[index] <= 60.0:
+        return "sell"
+
+    return None
+
+
+def _breakout(index, candles, bands, rsis, squeezes, rules, trend):
+    """A squeeze ending: the bands were in their narrowest fifth on candle 1, and candle 2 closes beyond
+    one of them, in the trend's direction, without RSI already stretched past 80 or 20."""
+    if not squeezes[index - 1] or bands[index] is None:
+        return None
+
+    _start, open2, _high2, _low2, close2 = candles[index]
+    lower, _middle, upper = bands[index]
+    with_trend_up = not rules.trend_filter or close2 > trend
+    with_trend_down = not rules.trend_filter or close2 < trend
+
+    if close2 > upper and close2 > open2 and with_trend_up and rsis[index] < 80.0:
+        return "buy"
+
+    if close2 < lower and close2 < open2 and with_trend_down and rsis[index] > 20.0:
+        return "sell"
 
     return None
 
@@ -524,15 +602,41 @@ def _to_breakeven(trade, candle, rules):
 
 
 def indicators(candles):
-    """(bands, rsi, squeezed, ATR, 200-candle average) for [candles], worked out once for every set of rules."""
+    """(bands, rsi, squeezed, ATR, 200- and 20-candle averages) for [candles], worked out once for every set of rules."""
     closes = [candle[4] for candle in candles]
     bands = bollinger(closes)
-    return bands, rsi(closes), squeezed(bands), average_true_range(candles), moving_average(closes)
+    return (bands, rsi(closes), squeezed(bands), average_true_range(candles), moving_average(closes),
+            moving_average(closes, FAST_LENGTH))
+
+
+def exits_for(rules, entry, side, atr):
+    """(stop, target, risk) for a trade entered at [entry]: the stop and target prices, and the stop's distance.
+
+    None when the exits need an ATR that is not there yet. Used alike by the
+    backtest and the trader, so both place exactly the same levels.
+    """
+    if rules.exits == "atr":
+        if not atr:
+            return None
+        distance = rules.atr_stop_distance(atr)
+        reward = distance * rules.ratio
+    else:
+        distance, reward = rules.stop, rules.target
+
+    if side == "buy":
+        return entry - distance, entry + reward, distance
+
+    return entry + distance, entry - reward, distance
 
 
 def backtest(candles, rules=Rules(), worked_out=None):
-    """Every trade [rules] would have taken over [candles] (fifteen-minute, bid), oldest first."""
-    bands, rsis, squeezes, atrs, averages = worked_out or indicators(candles)
+    """Every trade [rules] would have taken over [candles] (fifteen-minute, bid), oldest first.
+
+    [rules] may be several sets of rules, run together as the trader runs
+    them: one trade at a time, the first set to see a setup taking it.
+    """
+    together = list(rules) if isinstance(rules, (list, tuple)) else [rules]
+    bands, rsis, squeezes, atrs, averages, fast = worked_out or indicators(candles)
     trades = []
     open_trade = None
 
@@ -540,44 +644,52 @@ def backtest(candles, rules=Rules(), worked_out=None):
         if open_trade is not None:
             middle = bands[index - 1][1] if bands[index - 1] else None
 
-            if _settle(open_trade, candle, rules, middle, atrs[index - 1]):
+            if _settle(open_trade, candle, open_trade.rules, middle, atrs[index - 1]):
                 trades.append(open_trade)
                 open_trade = None
             continue
 
         closes_at = candle[0] + timedelta(minutes=CANDLE_MINUTES)
 
-        if not in_session(closes_at, rules.session):
-            continue
-
-        side = signal(index, candles, bands, rsis, squeezes, rules, averages)
-
-        touch = candles[index - 1]
-
-        if side and rules.exits == "trail":
-            if not atrs[index]:
+        for chosen in together:
+            if not in_session(closes_at, chosen.session):
                 continue
 
-            distance = TRAIL_FIRST_STOP * atrs[index]
-            entry = candle[4] + rules.spread if side == "buy" else candle[4]
-            stop = entry - distance if side == "buy" else entry + distance
-            open_trade = Trade(side, closes_at, entry, stop, None, trailing=True, risk=distance, best=entry)
-        elif side == "buy":
-            entry = candle[4] + rules.spread   # bought at the ask
-            if rules.exits == "bands":
-                open_trade = Trade("buy", closes_at, entry, touch[3] - WICK_BUFFER, None)
-            else:
-                open_trade = Trade("buy", closes_at, entry, entry - rules.stop, entry + rules.target,
-                                   breakeven=rules.breakeven, risk=rules.stop)
-        elif side == "sell":
-            entry = candle[4]                  # sold at the bid
-            if rules.exits == "bands":
-                open_trade = Trade("sell", closes_at, entry, touch[2] + rules.spread + WICK_BUFFER, None)
-            else:
-                open_trade = Trade("sell", closes_at, entry, entry + rules.stop, entry - rules.target,
-                                   breakeven=rules.breakeven, risk=rules.stop)
+            side = signal(index, candles, bands, rsis, squeezes, chosen, averages, fast)
+
+            if side:
+                open_trade = _open(side, index, candles, chosen, atrs, closes_at)
+
+                if open_trade is not None:
+                    break
 
     return trades
+
+
+def _open(side, index, candles, rules, atrs, closes_at):
+    """The trade [rules] open on [side] at the close of candle [index], or None if it cannot be sized yet."""
+    candle, touch = candles[index], candles[index - 1]
+    entry = candle[4] + rules.spread if side == "buy" else candle[4]   # bought at the ask, sold at the bid
+
+    if rules.exits == "trail":
+        if not atrs[index]:
+            return None
+
+        distance = TRAIL_FIRST_STOP * atrs[index]
+        stop = entry - distance if side == "buy" else entry + distance
+        return Trade(side, closes_at, entry, stop, None, trailing=True, risk=distance, best=entry, rules=rules)
+
+    if rules.exits == "bands":
+        stop = touch[3] - WICK_BUFFER if side == "buy" else touch[2] + rules.spread + WICK_BUFFER
+        return Trade(side, closes_at, entry, stop, None, rules=rules)
+
+    levels = exits_for(rules, entry, side, atrs[index])
+
+    if levels is None:
+        return None
+
+    stop, target, distance = levels
+    return Trade(side, closes_at, entry, stop, target, breakeven=rules.breakeven, risk=distance, rules=rules)
 
 
 @dataclass
@@ -638,6 +750,23 @@ VARIANTS = [Rules(rsi=rule, exits=exits, trend_filter=trend)
 # then lose.
 VARIANTS += [Rules(rsi="not_extreme", trend_filter=True, target=target, breakeven=breakeven)
              for target in (20.0, 30.0, 40.0) for breakeven in (False, True) if (target, breakeven) != (30.0, False)]
+
+# Stops sized by ATR, the target 2 or 3 times the stop, breakeven at 1 R --
+# for the bounce, and for the two other kinds of setup, which find their
+# chances where the bounce does not: joining a trend on a pullback, and a
+# squeeze breaking out. Each is tested on its own, and kept only on its own
+# merits.
+VARIANTS += [Rules(rsi="not_extreme", trend_filter=True, exits="atr", ratio=ratio, breakeven=True)
+             for ratio in (2.0, 3.0)]
+VARIANTS += [Rules(setup=setup, trend_filter=True, exits=exits, ratio=ratio, breakeven=True)
+             for setup in ("pullback", "breakout")
+             for exits, ratio in (("fixed", 3.0), ("atr", 2.0), ("atr", 3.0))]
+
+# The exits the trader can place at OANDA; the others are tested only.
+TRADEABLE_EXITS = ("fixed", "atr")
+
+# Every version by its key, as gold-trader.json names the ones to trade.
+REGISTRY = {rules.key(): rules for rules in VARIANTS}
 
 AS_WRITTEN = Rules()
 

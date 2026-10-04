@@ -63,7 +63,8 @@ if str(ROOT) not in sys.path:
 
 from actions.gold_strategy import (  # noqa: E402
     AS_WRITTEN, BREAKEVEN_AT_R, CHOSEN, SESSION, SPREAD, STOP_DOLLARS, TARGET_DOLLARS, TRAIL_DISTANCE,
-    TRAIL_FIRST_STOP, TREND_LENGTH, VARIANTS, WICK_BUFFER, backtest, fifteen_minute, in_session, indicators,
+    TRADEABLE_EXITS, TRAIL_FIRST_STOP, TREND_LENGTH, VARIANTS, WICK_BUFFER, backtest, fifteen_minute, in_session,
+    indicators,
     minute_candles, summarise,
 )
 
@@ -83,25 +84,61 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=S
           f"${TARGET_DOLLARS:g}.\n'bands' exits: stop ${WICK_BUFFER:g} past candle 1's wick, target the middle band."
           f"\n'trail' exits: stop {TRAIL_FIRST_STOP:g} ATR away, moved to the entry at {BREAKEVEN_AT_R:g} R, then "
           f"{TRAIL_DISTANCE:g} ATR behind the best price; no fixed target.\n'trend filter': buys only above the "
-          f"{TREND_LENGTH}-candle average, sells only below it. The squeeze filter is on throughout.\n")
-    print(f"  {'rules':48} {'trades':>6} {'won':>4} {'net $':>8} {'risk $':>6} {'worst run':>9} {'deepest dip $':>13}"
-          f" {'1st half $':>10} {'2nd half $':>10}")
+          f"{TREND_LENGTH}-candle average, sells only below it. The squeeze filter is on throughout.\n'ATR' exits: stop "
+          f"1.5 ATR away, target 2 or 3 times that. 'pullback': joining the trend at the 20-candle average; "
+          f"'breakout': a squeeze breaking out with the trend.\n")
+    print(f"  {'rules':52} {'trades':>6} {'won':>4} {'net $':>8} {'risk $':>6} {'worst run':>9} {'deepest dip $':>13}"
+          f" {'1st half $':>10} {'2nd half $':>10}  key")
     worked_out = indicators(candles)
+    passing = []
 
     for rules in VARIANTS:
         mark = "*" if rules == AS_WRITTEN else "+" if rules == CHOSEN else " "
         trades = backtest(candles, replace(rules, spread=spread, session=session), worked_out)
         summary = summarise(trades)
         early, late = _halves(candles, trades)
-        print(f"{mark} {rules.name():48} {summary.trades:6d} {summary.win_rate:4.0%} {summary.net * lot_ounces:8.2f} "
+
+        if worth_trading(summary, early, late) and rules.exits in TRADEABLE_EXITS:
+            passing.append((summary.net, rules))
+
+        print(f"{mark} {rules.name():52} {summary.trades:6d} {summary.win_rate:4.0%} {summary.net * lot_ounces:8.2f} "
               f"{summary.average_risk * lot_ounces:6.2f} {summary.worst_run:9d} {summary.deepest * lot_ounces:13.2f}"
-              f" {early * lot_ounces:10.2f} {late * lot_ounces:10.2f}")
+              f" {early * lot_ounces:10.2f} {late * lot_ounces:10.2f}  {rules.key()}")
 
     print("\n* the rules as you first wrote them; + the version the trader uses. 'won' is the share of trades that made money; 'risk $' the"
           " average distance to the stop.\n'worst run' is the most losses in a row; 'deepest dip' the furthest the"
           " running total fell from its best.\nA rule worth trusting makes money in both halves, not just overall:"
           " one good half is often luck.")
     print("Past results are no promise of future ones.")
+    _together(candles, worked_out, passing, spread, session, lot_ounces)
+
+
+# What a version must show to be worth trading: enough trades to mean
+# something, and money made in each half of the period on its own.
+MOST_FEW_TRADES = 30
+
+
+def worth_trading(summary, early, late):
+    return summary.trades >= MOST_FEW_TRADES and early > 0 and late > 0
+
+
+def _together(candles, worked_out, passing, spread, session, lot_ounces):
+    """The versions worth trading, run together as the trader would: one trade at a time, best first."""
+    if not passing:
+        print(f"\nNo version made money in both halves with at least {MOST_FEW_TRADES} trades. Keep the trader's"
+              " current setups, or try other hours.")
+        return
+
+    chosen = [rules for _net, rules in sorted(passing, key=lambda pair: -pair[0])]
+    trades = backtest(candles, [replace(rules, spread=spread, session=session) for rules in chosen], worked_out)
+    summary = summarise(trades)
+    early, late = _halves(candles, trades)
+    print(f"\nWorth trading -- at least {MOST_FEW_TRADES} trades and money made in both halves: "
+          f"{', '.join(rules.key() for rules in chosen)}.")
+    print(f"Run together, one trade at a time: {summary.trades} trades, {summary.win_rate:.0%} won, "
+          f"{summary.net * lot_ounces:+.2f} $ ({early * lot_ounces:+.2f}, {late * lot_ounces:+.2f} by half), "
+          f"worst run {summary.worst_run}, deepest dip {summary.deepest * lot_ounces:.2f} $.")
+    print(f"To trade them all: python tools/gold_trader.py --set setups={','.join(rules.key() for rules in chosen)}")
 
 
 def check_candle(candles, when_utc):

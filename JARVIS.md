@@ -1745,7 +1745,20 @@ target, the stop moved to breakeven once the trade is $10 up -- over the
 year to October 2026 the best of those positive in both halves (+$170,
 +$30). The backtest runs 1:2 and 1:4 targets and the trailing ATR exit
 beside it; `CHOSEN` changes only when another version holds up in both
-halves. With `OANDA_API_TOKEN` set, the backtest uses OANDA's own candles
+halves. Beside the bounce there are two other kinds of setup, each
+tested on its own: a pullback (in a trend, price dips to the 20-candle
+average and turns back with it) and a breakout (a squeeze ending with a
+close beyond a band, with the trend). Exits may also be sized by ATR: a
+stop of 1.5 ATR, the target 2 or 3 times that, breakeven at 1 R, so the
+stop is wider on lively days and tighter on quiet ones while the reward
+stays the same multiple of the risk. Every version has a short key
+(`bounce-1:3-be`, `pullback-atr-1:3-be`); the backtest lists those worth
+trading -- at least 30 trades and money made in each half on its own --
+runs them together as the trader would, one trade at a time, and prints
+the `--set setups=...` line that trades them. The trader looks for each
+listed setup in order and takes the first it sees; each trade carries its
+key and first stop distance in its comment at OANDA, so breakeven works
+from its own risk across restarts. With `OANDA_API_TOKEN` set, the backtest uses OANDA's own candles
 (`Client.history`, paged 5,000 at a time) and the median spread in the
 trading window; otherwise Dukascopy's history, as in CI.
 

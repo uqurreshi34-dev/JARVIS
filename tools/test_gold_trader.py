@@ -122,9 +122,9 @@ decision = {"side": None}
 seen = {}
 
 
-def fake_signal(index, candles, bands, rsis, squeezes, rules, averages=None):
+def fake_signal(index, candles, bands, rsis, squeezes, rules, averages=None, fast=None):
     seen.update(index=index, count=len(candles), rules=rules, averages=averages is not None)
-    return decision["side"]
+    return decision["side"] if decision.get("setup") in (None, rules.setup) else None
 
 
 gold_strategy.signal = fake_signal
@@ -192,7 +192,7 @@ fresh(utc(2026, 10, 5, 9, 45, 20))
 check(trader.tick() == "buy" and account.orders[-1] == {"units": 1.0, "stop": 4130.4, "target": 4170.4,
                                                          "tag": gold_trader.TAG, "decimals": 3},
       "a setup: buy 1 oz at the ask, stop $10 below and target $30 above it, attached, tagged as JARVIS's")
-check(said and said[-1].startswith("Gold, sir: bought 1 ounce at 4140.40, stop 4130.40, target 4170.40")
+check(said and said[-1].startswith("Gold, sir, a bounce: bought 1 ounce at 4140.40, stop 4130.40, target 4170.40")
       and "Demo account" in said[-1], f"and it says so ({said[-1] if said else None!r})")
 
 fresh(utc(2026, 10, 5, 10, 0, 20))
@@ -378,13 +378,50 @@ try:
     check(len(moved) == 1, "and only once")
 
     account.open = []
-    gold_strategy.CHOSEN = gold_strategy.Rules(rsi="not_extreme", trend_filter=True, exits="trail")
-    orders = len(account.orders)
-    fresh(utc(2026, 10, 13, 10, 0, 20))
-    check(trader.tick() == "exits not supported" and len(account.orders) == orders,
-          "rules whose exits the trader cannot place: no trade, and it says why")
 finally:
     gold_strategy.CHOSEN = real_chosen
+
+# ---- several setups, ATR stops ----------------------------------------------------------------------
+
+try:
+    gold_trader.change({"setups": ["bounce-trail"]})
+    refused = False
+except ValueError:
+    refused = True
+
+check(refused, "a setup whose exits the trader cannot place at OANDA is refused in the settings")
+
+try:
+    gold_trader.change({"setups": ["no-such-setup"]})
+    refused = False
+except ValueError:
+    refused = True
+
+check(refused, "and so is a setup the backtest does not know")
+
+gold_trader.change({"setups": ["bounce-1:3-be", "pullback-atr-1:3-be"], "max_trades_per_day": None,
+                    "max_losses_in_a_row": None})
+decision.update(side="buy", setup="pullback")
+account.open, account.bid, account.ask = [], 4100.0, 4100.4
+orders = len(account.orders)
+fresh(utc(2026, 10, 16, 9, 15, 20))
+check(trader.tick() == "buy" and len(account.orders) == orders + 1 and "a pullback" in said[-1],
+      "with two setups listed, the second takes a setup the first does not see")
+order = account.orders[-1]
+check(abs((4100.4 - order["stop"]) - 1.5 * 2.0) < 1e-9 and abs((order["target"] - 4100.4) - 3 * 1.5 * 2.0) < 1e-9,
+      f"an ATR stop: 1.5 ATR ($2 here) below, the target three times that above ({order['stop']}, {order['target']})")
+check(account.open[-1]["comment"] == "pullback-atr-1:3-be risk=3.00", "the trade carries its setup and risk at OANDA")
+
+moved = []
+account.move_stop = lambda trade_id, price, decimals=2: moved.append((trade_id, price))
+account.bid, account.ask = 4103.5, 4103.9
+fresh(utc(2026, 10, 16, 9, 30, 20))
+trader.tick()
+check(moved == [(account.open[-1]["id"], 4100.4)], "its own risk, $3, decides breakeven: $3.10 up, the stop goes to the entry")
+account.open, decision["setup"] = [], None
+gold_trader.change({"setups": ["bounce-1:3-be"]})
+
+
 source = (ROOT / "actions" / "gold_trader.py").read_text(encoding="utf-8")
 check(not any(name in source for name in ("import providers", "from providers", "knowledge", "llm")),
       "no language model is asked anything")
@@ -393,22 +430,22 @@ check(not any(name in source for name in ("import providers", "from providers", 
 
 gold_trader.change({"risk_percent": 1, "practice_balance": 400})
 results = sum(float(row["result"]) for row in gold_trader.logged() if row.get("result"))
-units, words = trader._size(account, gold_trader.settings(), gold_strategy.CHOSEN)
+units, words = trader._size(account, gold_trader.settings(), 10.0)
 expected = int((400 + results) * 0.01 * 1.30 / 10 * 10 + 1e-9) / 10
 check(units == expected and words.startswith(", risking ") and words.endswith(" GBP"),
       f"1% of a practice 400 GBP plus results ({400 + results:.2f}), at $1.30 a pound, $10 stop: {units} oz{words}")
 
 gold_trader.change({"practice_balance": None})
-check(trader._size(account, gold_trader.settings(), gold_strategy.CHOSEN)[0] == gold_trader.MOST_UNITS,
+check(trader._size(account, gold_trader.settings(), 10.0)[0] == gold_trader.MOST_UNITS,
       "1% of the whole 100,000 demo balance: held to the ceiling")
 
 gold_trader.change({"practice_balance": 20})
-check(trader._size(account, gold_trader.settings(), gold_strategy.CHOSEN) == "too small to size"
+check(trader._size(account, gold_trader.settings(), 10.0) == "too small to size"
       and "no trade" in said[-1], "an account too small for even OANDA's smallest trade at that risk: no trade, said why")
 
 account.currency = "USD"
 gold_trader.change({"practice_balance": 400})
-check(trader._size(account, gold_trader.settings(), gold_strategy.CHOSEN)[0]
+check(trader._size(account, gold_trader.settings(), 10.0)[0]
       == int((400 + results) * 0.01 / 10 * 10 + 1e-9) / 10, "a dollar account needs no conversion")
 account.currency = "JPY"
 real_price = account.price

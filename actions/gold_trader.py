@@ -1,10 +1,12 @@
 """JARVIS's gold trader: the tested strategy, on an OANDA demo account, on its own.
 
 Every fifteen minutes in the trading window it reads OANDA's finished
-candles, works out the trend and the setup exactly as the backtest does
-(actions/gold_strategy.py, the version that held up in both halves of the
-year), and either does nothing -- most of the time -- or places one trade
-with its stop and target attached on OANDA's servers. Every trade is
+candles, works out the trend and looks for each kind of setup it has been
+told to trade (the "setups" setting: a bounce off a band, a pullback to the
+20-candle average, a squeeze breaking out), exactly as the backtest does
+(actions/gold_strategy.py), and either does nothing or places one trade
+with its stop and target attached on OANDA's servers -- fixed, or sized by
+how lively gold is (ATR). Every trade is
 announced and logged, with its result when it closes.
 
 No model is asked anything: each decision is arithmetic on the candles, so
@@ -43,6 +45,8 @@ defaults the first time, and off until you turn it on):
     max_trades_per_day   null: every setup that meets the rules; or a number
     max_losses_in_a_row  2: after this many losses in a row it stands down until tomorrow
                          (null: never)
+    setups               ["bounce-1:3-be"]: which tested setups to trade, by the backtest's key;
+                         the backtest names those worth trading
     friday_close         "20:00": anything open is closed then, UK time
     news_filter          true: stand aside around high-impact news
     calendar_url, news_currencies, news_impact, news_minutes_before,
@@ -79,6 +83,7 @@ DEFAULTS = {
     "session_hours": [10, 14],
     "max_spread": 1.0,
     "max_trades_per_day": None,
+    "setups": ["bounce-1:3-be"],
     "max_losses_in_a_row": 2,
     "friday_close": "20:00",
     "news_filter": True,
@@ -170,7 +175,14 @@ def _understood(found):
         chosen["news_currencies"] = [str(value) for value in chosen["news_currencies"]]
         chosen["news_impact"] = [str(value) for value in chosen["news_impact"]]
         chosen["calendar_url"] = str(chosen["calendar_url"])
-    except (TypeError, ValueError):
+        setups = chosen["setups"]
+        chosen["setups"] = [str(key).strip() for key in (setups.split(",") if isinstance(setups, str) else setups)]
+
+        if not chosen["setups"] or any(gold_strategy.REGISTRY.get(key) is None
+                                       or gold_strategy.REGISTRY[key].exits not in gold_strategy.TRADEABLE_EXITS
+                                       for key in chosen["setups"]):
+            return None
+    except (TypeError, ValueError, AttributeError):
         return None
 
     return chosen
@@ -266,6 +278,27 @@ def status():
 
 
 # ---- the trader -------------------------------------------------------------------------------
+
+def active_rules(chosen):
+    """The rules of each setup the settings list, in their order."""
+    return [gold_strategy.REGISTRY[key] for key in chosen["setups"]]
+
+
+def _from_comment(comment):
+    """(rules key, first stop distance) from a trade's comment at OANDA, or (None, None)."""
+    key, risk = None, None
+
+    for part in str(comment or "").split():
+        if part.startswith("risk="):
+            try:
+                risk = float(part[5:])
+            except ValueError:
+                pass
+        elif part in gold_strategy.REGISTRY:
+            key = part
+
+    return key, risk
+
 
 def _losses_in_a_row(trades):
     """How many of the latest closed trades in a row lost; a win or a breakeven ends the run."""
@@ -415,13 +448,17 @@ class GoldTrader:
         if not candles or candles[-1][0] + timedelta(minutes=gold_strategy.CANDLE_MINUTES) != closed_at:
             return "no fresh candle"
 
-        bands, rsis, squeezes, _atrs, averages = gold_strategy.indicators(candles)
-        side = gold_strategy.signal(len(candles) - 1, candles, bands, rsis, squeezes, gold_strategy.CHOSEN, averages)
+        bands, rsis, squeezes, atrs, averages, fast = gold_strategy.indicators(candles)
+        last = len(candles) - 1
 
-        if not side:
-            return "quiet"
+        # Each kind of setup traded, in the order listed; the first to see one takes it.
+        for rules in active_rules(chosen):
+            side = gold_strategy.signal(last, candles, bands, rsis, squeezes, rules, averages, fast)
 
-        return self._open(client, side, chosen)
+            if side:
+                return self._open(client, side, chosen, rules, atrs[last])
+
+        return "quiet"
 
     def _news(self, now, local, chosen):
         """"news" or "no calendar" when the trader should stand aside; None when clear.
@@ -462,29 +499,36 @@ class GoldTrader:
         return None
 
     def _protect(self, client, mine):
-        """With breakeven in the rules: once a trade is 1 R up, its stop goes to the entry, at OANDA."""
-        rules = gold_strategy.CHOSEN
+        """With breakeven in a trade's rules: once it is 1 R up, its stop goes to the entry, at OANDA.
 
-        if not rules.breakeven:
-            return
-
-        bid, ask, _when = client.price()
+        Each trade carries its rules' key and its first stop distance in its
+        comment at OANDA, so this holds across restarts of JARVIS.
+        """
+        prices = None
 
         for trade in mine:
+            key, risk = _from_comment(trade.get("comment", ""))
+            rules = gold_strategy.REGISTRY.get(key, gold_strategy.CHOSEN)
+
+            if not rules.breakeven:
+                continue
+
+            risk = risk or rules.stop
+            bid, ask, _when = prices = prices or client.price()
             buying = trade["units"] > 0
             gained = (bid - trade["price"]) if buying else (trade["price"] - ask)
             already = trade["stop"] is not None and (trade["stop"] >= trade["price"] if buying else trade["stop"] <= trade["price"])
 
-            if gained >= rules.stop and not already:
+            if gained >= risk and not already:
                 client.move_stop(trade["id"], trade["price"], self._gold["price_decimals"])
-                self._say(f"The gold trade is {rules.stop:g} dollars up, sir: its stop is now at the entry, "
+                self._say(f"The gold trade is {risk:.2f} dollars up, sir: its stop is now at the entry, "
                           f"{trade['price']:.2f}, so it can no longer lose.")
 
     def _today(self, client, today):
         return [trade for trade in client.trades(TAG, state="ALL")
                 if trade["opened"] and gold_strategy.uk_time(trade["opened"]).date() == today]
 
-    def _open(self, client, side, chosen):
+    def _open(self, client, side, chosen, rules, atr):
         bid, ask, _when = client.price()
         spread = ask - bid
 
@@ -492,33 +536,35 @@ class GoldTrader:
             journal.write("gold", f"{side} skipped", f"spread ${spread:.2f} over ${chosen['max_spread']:.2f}")
             return "spread too wide"
 
-        rules = gold_strategy.CHOSEN
-
-        if rules.exits != "fixed":
-            self._say(f"The chosen gold rules exit by '{rules.exits}', which the trader cannot place yet, sir; no trade.")
+        if rules.exits not in gold_strategy.TRADEABLE_EXITS:
+            self._say(f"The gold rules {rules.key()} exit by '{rules.exits}', which the trader cannot place, sir; no trade.")
             return "exits not supported"
 
-        sized = self._size(client, chosen, rules)
+        entry = ask if side == "buy" else bid
+        levels = gold_strategy.exits_for(rules, entry, side, atr)
+
+        if levels is None:
+            return "no ATR yet"
+
+        stop, target, distance = levels
+        sized = self._size(client, chosen, distance)
 
         if isinstance(sized, str):
             return sized
 
         units, risked = sized
-
-        entry = ask if side == "buy" else bid
-        stop = entry - rules.stop if side == "buy" else entry + rules.stop
-        target = entry + rules.target if side == "buy" else entry - rules.target
         trade = client.market_order(units if side == "buy" else -units, stop, target, TAG,
                                     price_decimals=self._gold["price_decimals"],
-                                    comment=f"{side} on the band, trend and RSI")
+                                    comment=f"{rules.key()} risk={distance:.2f}")
         self._entries[trade["id"]] = spread
         verb = "Bought" if side == "buy" else "Sold"
-        self._say(f"Gold, sir: {verb.lower()} {units:g} ounce{'s' if units != 1 else ''} at {trade['price']:.2f}, "
+        self._say(f"Gold, sir, a {rules.setup}: {verb.lower()} {units:g} ounce{'s' if units != 1 else ''} at {trade['price']:.2f}, "
                   f"stop {stop:.2f}, target {target:.2f}{risked}. Demo account.")
-        journal.write("gold", f"{verb} {units:g} oz at {trade['price']:.2f}", f"stop {stop:.2f}, target {target:.2f}")
+        journal.write("gold", f"{verb} {units:g} oz at {trade['price']:.2f} ({rules.key()})",
+                      f"stop {stop:.2f}, target {target:.2f}")
         return side
 
-    def _size(self, client, chosen, rules):
+    def _size(self, client, chosen, distance):
         """(units, words on the risk) for the next trade, or a reason not to trade.
 
         By risk: the stop's distance times the units is to lose no more
@@ -546,16 +592,16 @@ class GoldTrader:
 
         dollars_per_unit = self._dollars_per(client, currency)
         allowed = balance * chosen["risk_percent"] / 100
-        units = min(MOST_UNITS, down(allowed * dollars_per_unit / rules.stop))
+        units = min(MOST_UNITS, down(allowed * dollars_per_unit / distance))
 
         if units < smallest:
-            if smallest * rules.stop / dollars_per_unit > 2 * allowed:
+            if smallest * distance / dollars_per_unit > 2 * allowed:
                 self._say(f"A gold setup, sir, but even the smallest trade would risk more than twice "
                           f"{chosen['risk_percent']:g}% of {balance:,.0f} {currency}; no trade.")
                 return "too small to size"
             units = smallest
 
-        risked = units * rules.stop / dollars_per_unit
+        risked = units * distance / dollars_per_unit
         return units, f", risking {risked:.2f} {currency}"
 
     def _dollars_per(self, client, currency):
