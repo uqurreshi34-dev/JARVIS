@@ -1036,7 +1036,16 @@ output to `mcp-servers.log` in the JARVIS folder, never to JARVIS's own:
 the installed JARVIS.exe has no console, and a server handed a console
 that is not there failed to start from the .exe while the same one worked
 from `python main.py`. A failure is reported as itself ("FileNotFoundError:
-... npx"), not as the wrapper "unhandled errors in a TaskGroup".
+... npx"), not as the wrapper "unhandled errors in a TaskGroup". Each
+program's lines go into the log marked with its service's name
+("[tradingview] ..."), and its last lines are kept, so a program that stops
+at once is reported in its own words: "Connection closed; it said: error:
+Failed to spawn: `tradingview-mcp`; cause: An Application Control policy
+has blocked this file", which is Windows' Smart App Control refusing the
+program uv built. TradingView is started through the python.org Python
+3.12 instead (`uvx --python <it> --from tradingview-mcp-server python -m
+tradingview_mcp.server`): signed, so allowed, and the server needs 3.10 to
+3.13.
 `pythonw tools/check_services_no_console.py` connects to each such service
 as the .exe would, with no console, and says how each one fared.
 `mcp-servers.log`, the check's `mcp-check.txt` and copies of `mcp.json`
@@ -1149,6 +1158,20 @@ Windows UI Automation. Describes the active window, clicks a named control,
 types into whatever has focus, and reads the text being written. Typing
 goes via the clipboard so special characters cannot be interpreted as key
 combinations.
+
+The window looked at is the one in front, never one of JARVIS's own: the
+HUD takes the foreground whenever it is touched, so with the HUD or a
+panel in front, the highest real application window beneath it is used
+instead (`screen_vision.target_window`, which UI Automation uses too). Its
+box is the window as seen (DWM's frame bounds), not with the invisible
+border that put a strip of the taskbar into every capture. The window is
+asked to draw itself (`PrintWindow` with its full content) rather than
+copied off the screen: copied, Chrome and anything else drawn by the
+graphics card came back black, with the HUD on top. A black result falls
+back to the screen copy, and one black both ways is not sent at all. A
+vision click goes only to that window, and only when nothing lies over the
+point. `tools/test_screen_vision.py` checks all of it with a stand-in for
+Windows.
 
 The screen-control layer also has a visual fallback. When UI Automation cannot
 find a visible target, `actions/screen_vision.py` captures the active window

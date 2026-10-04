@@ -127,12 +127,16 @@ def available():
 
 
 def _foreground_window():
-    """The window currently in focus, wrapped for UI Automation."""
+    """The window he is working in, wrapped for UI Automation."""
     if not _AVAILABLE:
         return None
 
     try:
-        hwnd = win32gui.GetForegroundWindow()
+        # JARVIS's own HUD takes the foreground whenever it is touched; the
+        # window meant is the application beneath it (screen_vision).
+        from actions import screen_vision
+
+        hwnd = screen_vision.target_window()
 
         if not hwnd:
             return None

@@ -70,6 +70,7 @@ fails to start costs a printed line, not a broken JARVIS.
 """
 
 import asyncio
+import collections
 import hashlib
 import json
 import os
@@ -124,6 +125,7 @@ class _Server:
         self.tools = []       # agent tool dicts, read-only
         self.actions = []     # agent tool dicts that change something
         self.error = None
+        self.said = None      # its error output, while it runs (_ErrorOutput)
         self._stop = None
         self._ready = None
         self.retry_at = 0.0   # monotonic time a failed service may be tried again
@@ -388,8 +390,11 @@ def _start_loop():
     return _loop
 
 
-def _transport(entry):
-    """What mcp.Client should connect to: a URL, a transport, or a command."""
+def _transport(entry, errlog=None):
+    """What mcp.Client should connect to: a URL, a transport, or a command.
+
+    A program's error output goes to [errlog], or straight to mcp-servers.log.
+    """
     from mcp.client.stdio import StdioServerParameters
 
     entry = _expand(entry)
@@ -425,7 +430,7 @@ def _transport(entry):
         cwd=entry.get("cwd"),
     )
 
-    return stdio_client(parameters, errlog=_server_log())
+    return stdio_client(parameters, errlog=errlog or _server_log())
 
 
 def _on_disk_case(arg):
@@ -474,6 +479,7 @@ def _on_disk_case(arg):
 
 
 _server_log_file = None
+_server_log_lock = threading.Lock()
 
 
 def _server_log():
@@ -485,6 +491,57 @@ def _server_log():
                                 encoding="utf-8", errors="replace", buffering=1)
 
     return _server_log_file
+
+
+# How many of a program's last lines are kept to explain why it stopped.
+LAST_LINES = 20
+
+
+class _ErrorOutput:
+    """One program's error output: into mcp-servers.log, its last lines kept.
+
+    Each line goes into the shared log marked with the service's name, so
+    the log says which program said what, and the last lines are kept so a
+    program that stops at once is reported in its own words ("An Application
+    Control policy has blocked this file") rather than as "Connection closed".
+    The program writes into a pipe that a thread reads as it goes; a reader
+    that stopped would leave the program stuck writing, so a line that
+    cannot be logged is dropped and the reading goes on.
+    """
+
+    def __init__(self, name):
+        self.name = name
+        self.lines = collections.deque(maxlen=LAST_LINES)
+        read_end, write_end = os.pipe()
+        self.writer = os.fdopen(write_end, "w", encoding="utf-8", errors="replace")
+        self._reader = threading.Thread(target=self._copy, args=(read_end,), name=f"mcp-errors-{name}", daemon=True)
+        self._reader.start()
+
+    def _copy(self, read_end):
+        with os.fdopen(read_end, "r", encoding="utf-8", errors="replace") as source:
+            for line in source:
+                line = line.rstrip()
+                self.lines.append(line)
+
+                try:
+                    with _server_log_lock:
+                        _server_log().write(f"[{self.name}] {line}\n")
+                except Exception:
+                    pass
+
+    def close(self, wait=1.0):
+        """Stop listening: the pipe closed on this side, what is left read for up to [wait] seconds."""
+        try:
+            self.writer.close()
+        except Exception:
+            pass
+
+        self._reader.join(wait)
+
+    def last_words(self):
+        """Its last two lines that say anything, as one, or ""."""
+        said = [line.strip() for line in list(self.lines) if line.strip()]
+        return "; ".join(said[-2:])[:300]
 
 
 def _first_cause(error):
@@ -505,7 +562,10 @@ async def _hold(server):
         # answer in time".
         from mcp import Client
 
-        target = _transport(server.entry)
+        if not server.entry.get("url"):
+            server.said = _ErrorOutput(server.name)
+
+        target = _transport(server.entry, server.said.writer if server.said else None)
 
         async with Client(target, read_timeout_seconds=CALL_SECONDS) as client:
             listed = []
@@ -536,6 +596,14 @@ async def _hold(server):
         server.error = f"{type(cause).__name__}: {cause}" if str(cause) else type(cause).__name__
     finally:
         server.client = None
+
+        if server.said is not None:
+            server.said.close()
+            said = server.said.last_words()
+
+            if server.error and said:
+                server.error = f"{server.error}; it said: {said}"
+
         server._ready.set()
 
 

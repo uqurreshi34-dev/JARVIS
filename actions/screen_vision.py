@@ -9,10 +9,12 @@ One request produces one screenshot and one vision-model call. There is no
 second classification call, no OCR pass, and no screenshot saved to disk.
 """
 
+import colorsys
+import ctypes
 import io
 import json
+import os
 import time
-import colorsys
 
 try:
     import win32gui
@@ -166,32 +168,138 @@ _CLICK_PROMPT = (
 )
 
 
-def _active_window_box():
-    """Return (box, title, class_name) for the foreground window."""
-    if win32gui is None:
-        return None, None, None
+# The windows JARVIS looks past: the taskbar and the desktop behind
+# everything. Its own windows (the HUD and every panel) are known by the
+# process that owns them, not by name.
+_SHELL_CLASSES = frozenset({"shell_traywnd", "shell_secondarytraywnd", "progman", "workerw"})
+
+# How far down the stack of windows to look for the one he is looking at.
+_STACK_LIMIT = 400
+
+# A window this small is a tooltip or a floating widget, not what he means.
+_SMALLEST = (160, 120)
+
+_GW_HWNDNEXT = 2
+_GWL_EXSTYLE = -20
+_WS_EX_TOOLWINDOW = 0x00000080
+_DWMWA_EXTENDED_FRAME_BOUNDS = 9
+_DWMWA_CLOAKED = 14
+_PW_RENDERFULLCONTENT = 0x00000002
+
+
+def _window_process(hwnd):
+    """The process id that owns [hwnd], or None."""
+    try:
+        pid = ctypes.c_ulong()
+        ctypes.windll.user32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(pid))
+        return pid.value
+    except Exception:
+        return None
+
+
+def _cloaked(hwnd):
+    """True for a window Windows keeps hidden though it says it is visible (another desktop, a suspended app)."""
+    try:
+        value = ctypes.c_int(0)
+        ctypes.windll.dwmapi.DwmGetWindowAttribute(
+            ctypes.c_void_p(hwnd), _DWMWA_CLOAKED, ctypes.byref(value), ctypes.sizeof(value))
+        return bool(value.value)
+    except Exception:
+        return False
+
+
+def _frame(hwnd):
+    """The window's visible edges on screen, (left, top, right, bottom).
+
+    GetWindowRect includes a border Windows draws invisibly around most
+    windows, which put a strip of the taskbar or the window behind into
+    every capture; the frame bounds are the window as seen.
+    """
+    rect = (ctypes.c_long * 4)()
 
     try:
+        if ctypes.windll.dwmapi.DwmGetWindowAttribute(
+                ctypes.c_void_p(hwnd), _DWMWA_EXTENDED_FRAME_BOUNDS, ctypes.byref(rect), ctypes.sizeof(rect)) == 0:
+            return tuple(rect)
+    except Exception:
+        pass
+
+    return tuple(win32gui.GetWindowRect(hwnd))
+
+
+def _looked_at(hwnd, own, foreground=False):
+    """Whether [hwnd] is a window he could mean by "my screen".
+
+    The foreground window counts unless it is JARVIS's own or the shell's;
+    beneath it, only a real application's window does, not a tooltip, a
+    floating toolbar or an untitled helper.
+    """
+    if not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd) or _window_process(hwnd) == own:
+        return False
+
+    if win32gui.GetClassName(hwnd).strip().casefold() in _SHELL_CLASSES:
+        return False
+
+    if foreground:
+        return True
+
+    if win32gui.GetWindowLong(hwnd, _GWL_EXSTYLE) & _WS_EX_TOOLWINDOW:
+        return False
+
+    if not win32gui.GetWindowText(hwnd).strip():
+        return False
+
+    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+
+    return right - left >= _SMALLEST[0] and bottom - top >= _SMALLEST[1] and not _cloaked(hwnd)
+
+
+def _target_window():
+    """The window he is looking at: (hwnd, box, title, class_name), or Nones.
+
+    The foreground window, unless it is one of JARVIS's own -- the HUD
+    takes the foreground whenever it is touched -- in which case the
+    highest window beneath it that is a real application's. JARVIS never
+    describes or clicks its own overlay.
+    """
+    if win32gui is None:
+        return None, None, None, None
+
+    try:
+        own = os.getpid()
         hwnd = win32gui.GetForegroundWindow()
+        foreground = hwnd
 
-        if not hwnd:
-            return None, None, None
+        for _ in range(_STACK_LIMIT):
+            if not hwnd:
+                return None, None, None, None
 
-        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-        title = win32gui.GetWindowText(hwnd).strip()
-        class_name = win32gui.GetClassName(hwnd).strip()
+            if _looked_at(hwnd, own, foreground=hwnd == foreground):
+                left, top, right, bottom = _frame(hwnd)
 
-        if right <= left or bottom <= top:
-            return None, title, class_name
+                if right <= left or bottom <= top:
+                    return None, None, None, None
 
-        return (left, top, right, bottom), title, class_name
+                return (hwnd, (left, top, right, bottom), win32gui.GetWindowText(hwnd).strip(),
+                        win32gui.GetClassName(hwnd).strip())
+
+            hwnd = win32gui.GetWindow(hwnd, _GW_HWNDNEXT)
 
     except Exception as error:
-        print(
-            "[JARVIS] could not identify the active window for vision: "
-            f"{error}"
-        )
-        return None, None, None
+        print(f"[JARVIS] could not identify the window to look at: {error}")
+
+    return None, None, None, None
+
+
+def target_window():
+    """The handle of the window he is looking at, or None (see _target_window)."""
+    return _target_window()[0]
+
+
+def _active_window_box():
+    """Return (box, title, class_name) for the window he is looking at."""
+    _hwnd, box, title, class_name = _target_window()
+    return box, title, class_name
 
 
 def _visual_app(title, class_name):
@@ -229,18 +337,112 @@ def should_use_visual(title, class_name, local_description):
     )
 
 
+_gdi = None
+
+
+def _gdi_calls():
+    """user32 and gdi32 with their handle types declared, so none is cut to 32 bits."""
+    global _gdi
+
+    if _gdi is None:
+        from ctypes import wintypes
+
+        user32, gdi32 = ctypes.WinDLL("user32"), ctypes.WinDLL("gdi32")
+        handle = wintypes.HANDLE
+
+        for function, arguments, result in (
+            (user32.GetWindowDC, (wintypes.HWND,), wintypes.HDC),
+            (user32.ReleaseDC, (wintypes.HWND, wintypes.HDC), ctypes.c_int),
+            (user32.PrintWindow, (wintypes.HWND, wintypes.HDC, wintypes.UINT), wintypes.BOOL),
+            (gdi32.CreateCompatibleDC, (wintypes.HDC,), wintypes.HDC),
+            (gdi32.CreateCompatibleBitmap, (wintypes.HDC, ctypes.c_int, ctypes.c_int), wintypes.HBITMAP),
+            (gdi32.SelectObject, (wintypes.HDC, handle), handle),
+            (gdi32.DeleteObject, (handle,), wintypes.BOOL),
+            (gdi32.DeleteDC, (wintypes.HDC,), wintypes.BOOL),
+            (gdi32.GetDIBits, (wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, wintypes.UINT,
+                               ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT), ctypes.c_int),
+        ):
+            function.argtypes, function.restype = arguments, result
+
+        _gdi = user32, gdi32
+
+    return _gdi
+
+
+def _window_image(hwnd, box):
+    """[hwnd] as it draws itself, cropped to [box], or None.
+
+    Asked of the window itself (PrintWindow, with its full content), not
+    copied off the screen. Off the screen, Chrome and other programs that
+    draw with the graphics card came back black, and anything on top --
+    JARVIS's own HUD above all -- came with them.
+    """
+    user32, gdi32 = _gdi_calls()
+    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+    width, height = right - left, bottom - top
+
+    if width <= 0 or height <= 0:
+        return None
+
+    window_dc = user32.GetWindowDC(hwnd)
+    memory_dc = gdi32.CreateCompatibleDC(window_dc)
+    bitmap = gdi32.CreateCompatibleBitmap(window_dc, width, height)
+    previous = gdi32.SelectObject(memory_dc, bitmap)
+
+    try:
+        if not user32.PrintWindow(hwnd, memory_dc, _PW_RENDERFULLCONTENT):
+            return None
+
+        # A BITMAPINFO asking for 32-bit rows, top row first (the height
+        # negative), with room for the colour table it does not use.
+        info = (ctypes.c_uint32 * 11)(40, width, (-height) & 0xFFFFFFFF, 1 | (32 << 16))
+        pixels = ctypes.create_string_buffer(width * height * 4)
+
+        if gdi32.GetDIBits(memory_dc, bitmap, 0, height, pixels, ctypes.byref(info), 0) != height:
+            return None
+
+        image = Image.frombuffer("RGB", (width, height), pixels, "raw", "BGRX", 0, 1)
+        return image.crop((box[0] - left, box[1] - top, box[2] - left, box[3] - top))
+    finally:
+        gdi32.SelectObject(memory_dc, previous)
+        gdi32.DeleteObject(bitmap)
+        gdi32.DeleteDC(memory_dc)
+        user32.ReleaseDC(hwnd, window_dc)
+
+
+def _blank(image):
+    """True for a capture with nothing drawn in it: black, near enough, throughout.
+
+    Strictly nothing: a dark page or a terminal of black with a little text
+    is not blank.
+    """
+    return image.convert("L").getextrema()[1] <= 8
+
+
 def capture_active_window():
-    """Capture only the foreground window and return JPEG bytes."""
+    """Capture the window he is looking at and return JPEG bytes, or None."""
     if ImageGrab is None or Image is None:
         return None
 
-    box, _, _ = _active_window_box()
+    hwnd, box, _, _ = _target_window()
 
     if not box:
         return None
 
+    image = None
+
     try:
-        image = ImageGrab.grab(bbox=box, all_screens=True)
+        image = _window_image(hwnd, box)
+    except Exception as error:
+        print(f"[JARVIS] window capture failed, using the screen: {error}")
+
+    try:
+        if image is None or _blank(image):
+            image = ImageGrab.grab(bbox=box, all_screens=True)
+
+        if _blank(image):
+            print("[JARVIS] screen vision: the window came back blank")
+            return None
 
         if image.width > SEND_WIDTH:
             height = round(image.height * SEND_WIDTH / image.width)
@@ -382,7 +584,7 @@ def _parse_click_response(answer):
 
 def locate_target(wanted):
     """Return (x, y, label, confidence, hwnd), or None, using one vision call."""
-    box, title, class_name = _active_window_box()
+    hwnd, box, title, class_name = _target_window()
 
     if not box:
         print("[JARVIS] vision click: no foreground window to look at")
@@ -474,9 +676,7 @@ def locate_target(wanted):
             f"confidence {confidence:.3f}"
         )
 
-        return click_x, click_y, label, confidence, (
-            win32gui.GetForegroundWindow()
-        )
+        return click_x, click_y, label, confidence, hwnd
 
     # Every candidate was rejected. Said out loud, because otherwise
     # this is indistinguishable from vision never having run at all --
@@ -502,8 +702,10 @@ class _VisionClickTarget:
         if win32gui is None:
             return False
 
+        # Still the window he is looking at: the foreground one, or the one
+        # beneath JARVIS's own HUD when the HUD has the foreground.
         try:
-            return win32gui.GetForegroundWindow() == self.hwnd
+            return _target_window()[0] == self.hwnd
         except Exception:
             return False
 
@@ -512,7 +714,12 @@ class _VisionClickTarget:
 
     def click_input(self):
         if not self.exists():
-            raise RuntimeError("the vision target is no longer foreground")
+            raise RuntimeError("the vision target is no longer the window in front")
+
+        # And the point itself belongs to that window, so a click never
+        # lands on the HUD or anything else lying over it.
+        if win32gui.GetAncestor(win32gui.WindowFromPoint((self.x, self.y)), 2) != self.hwnd:
+            raise RuntimeError("something else is covering the vision target")
 
         from pywinauto import mouse
 

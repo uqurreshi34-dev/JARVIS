@@ -877,7 +877,21 @@ check("mcp_test_upper" in offered, "with no console at all (the .exe), a server 
 mcp_services.close()
 
 with open(server_log, encoding="utf-8") as handle:
-    check("test server starting" in handle.read(), "and what it says on its error output is kept in mcp-servers.log")
+    check("[test] test server starting" in handle.read(),
+          "and what it says on its error output is kept in mcp-servers.log, marked with its name")
+
+# A program that stops at once is reported in its own words, not as the
+# bare "Connection closed" the client sees.
+write_config({"test": {"command": sys.executable, "args": [SERVER],
+                       "env": {"REFUSE": "An Application Control policy has blocked this file. (os error 4551)"}}})
+mcp_services.tools()
+status = " ".join(mcp_services.status())
+check("it said: error: Failed to spawn: `jarvis-test`; cause: An Application Control policy has blocked this file."
+      in status, f"a program that stops at once says why, in its own words ({status[-160:]!r})")
+mcp_services.close()
+
+with open(server_log, encoding="utf-8") as handle:
+    check("[test]   cause: An Application Control policy" in handle.read(), "and the log says which program said it")
 
 wrapped = BaseExceptionGroup("unhandled errors in a TaskGroup", [OSError(6, "The handle is invalid")])
 cause = mcp_services._first_cause(BaseExceptionGroup("outer", [wrapped]))

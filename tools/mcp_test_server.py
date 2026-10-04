@@ -22,6 +22,14 @@ if os.environ.get("CHATTER"):
     import sys
     print(os.environ["CHATTER"], file=sys.stderr, flush=True)
 
+# A program that cannot start says why on its error output and stops, as uv
+# does when Windows blocks the program it was asked to run.
+if os.environ.get("REFUSE"):
+    import sys
+    print("error: Failed to spawn: `jarvis-test`", file=sys.stderr, flush=True)
+    print(f"  cause: {os.environ['REFUSE']}", file=sys.stderr, flush=True)
+    sys.exit(1)
+
 READ_ONLY = ToolAnnotations(read_only_hint=True)
 
 
