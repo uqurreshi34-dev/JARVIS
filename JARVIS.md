@@ -1822,6 +1822,26 @@ closed). `python tools/gold_trader.py --on/--off/--status/--once`;
 `tools/test_gold_trader.py` and `tools/test_gold_news.py` check it
 against a pretend OANDA, clock and calendar.
 
+The same backtest runs on silver, or any instrument OANDA prices, with
+`--instrument XAG_USD` (OANDA's prices only): there only the exits sized by
+ATR are run, as the fixed $10 stops and targets are gold's dollars, and
+nothing is marked as the trader's, which trades gold.
+
+A second, slow strategy is tested beside it: a daily trend-follower,
+`actions/trend_strategy.py` (time-series momentum, the strategy with the
+longest record behind it): buy on a close above the last 20, 55 or 100
+days' high, sell (or not, with buys only) on a close below their low; a
+first stop of 2 ATR held at the broker; out on a close beyond half as many
+days' opposite extreme, or a stop trailing 3 ATR behind the best close.
+Trades last weeks, so they are held over weekends, and the backtest charges
+financing for every day held (5% a year by default, `--financing`). A day
+opening beyond the stop is filled at its open, not the stop.
+`tools/trend_backtest.py` runs the twelve versions over fifteen years of
+OANDA's daily candles (`--instrument`, `--years`, `--periods`), in R --
+risking 1% a trade, 1 R is about 1% of the account -- and keeps only those
+with at least 20 trades and money made in each of five parts. No trader is
+built for it until one does; `tools/test_trend_backtest.py` checks it.
+
 ### Providers and failover
 
 The pool is tried in order: awake providers first, resting ones after, on
@@ -2085,6 +2105,7 @@ voice, Graph credentials, weather fallback, `TAVILY_API_KEY` for research.
 | `audio_check.py` | whether cached speech is sound |
 | `tools/gold_trader.py` | switch the gold trader on or off, its settings and results, or one look now |
 | `tools/oanda_check.py` | whether JARVIS can see your OANDA demo account, OANDA's terms for gold, the spread now and how fresh its candles are |
+| `tools/trend_backtest.py` | how a slow daily trend-follower (a 20, 55 or 100-day breakout, out on the opposite channel or a 3 ATR trail, both ways or buys only) would have done over fifteen years of OANDA's daily prices, gold or silver, financing charged, in R and judged in five parts |
 | `tools/gold_backtest.py` | how the gold strategy (Bollinger touch, RSI turning back, a confirmation candle, 10:00 to 14:00 UK) would have done over the last three years of gold (OANDA's, or spot from Dukascopy), with fixed $10/$30 exits, exits from the bands, or an ATR trailing stop that moves to breakeven at 1 R, with or without a 200-candle trend filter, every open choice side by side and each split into a part a year, and one trade at a time against several |
 | `tts_debug.py` | why the neural voice is not playing |
 | `wake_test.py` | how reliably the wake word is heard |

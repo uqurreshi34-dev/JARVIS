@@ -187,7 +187,7 @@ summary = gb.summarise([gb.Trade("buy", start, 0, 0, 0, result=value) for value 
 check(summary.trades == 6 and summary.wins == 2 and summary.net == 20 and summary.worst_run == 3
       and summary.deepest == 30, "the summary: trades, wins, net, worst run of losses, deepest dip")
 
-check(len(gb.VARIANTS) == 38 and len(gb.REGISTRY) == 38 and "orb-1:3" in gb.REGISTRY and "orb-atr-1:2-no-trend" in gb.REGISTRY and
+check(len(gb.VARIANTS) == 40 and len(gb.REGISTRY) == 40 and "pullback-atr-1:3" in gb.REGISTRY and "orb-1:3" in gb.REGISTRY and "orb-atr-1:2-no-trend" in gb.REGISTRY and
       {"pullback-1:1.5", "pullback-1:2", "pullback-1:3", "pullback-1:3-be", "pullback-1:4", "pullback-1:4-be"}
       <= set(gb.REGISTRY) and gb.AS_WRITTEN in gb.VARIANTS and gb.CHOSEN in gb.VARIANTS
       and gb.REGISTRY["bounce-1:3-be"] == gb.CHOSEN, "every combination of the open choices is run")
@@ -334,7 +334,8 @@ walk = series([4000.0 + 5 * math.sin(step / 7.0) for step in range(800)], start=
 
 
 class History:
-    def history(self, start, end):
+    def history(self, start, end, name="XAU_USD"):
+        History.asked = name
         # The ask $0.50 above the bid in the trading window, $3 at night.
         return walk, [candle[4] + (0.5 if gb.in_session(candle[0] + timedelta(minutes=15)) else 3.0) for candle in walk]
 
@@ -382,6 +383,22 @@ finally:
 
 check(zone_code == 0 and "candles closing 8:00 to 12:00 New York time" in zoned.getvalue(),
       "hours can be set on New York's clock (--zone new_york)")
+oanda.Client = History
+silver = io.StringIO()
+
+try:
+    with contextlib.redirect_stdout(silver):
+        silver_code = cli.main(["--source", "oanda", "--days", "30", "--instrument", "xag_usd"])
+        no_feed = cli.main(["--source", "dukascopy", "--instrument", "XAG_USD"])
+        bad_name = cli.main(["--source", "oanda", "--instrument", "silver"])
+finally:
+    oanda.Client = real_client
+
+rows = [line for line in silver.getvalue().splitlines() if line[:2] in ("  ", "+ ", "* ") and "exits=" in line]
+check(silver_code == 0 and History.asked == "XAG_USD" and "OANDA XAG_USD" in silver.getvalue() and rows
+      and all("exits=ATR" in line or "exits=trail" in line for line in rows) and not any(line.startswith("+ ") for line in rows),
+      "silver: OANDA's XAG_USD prices, only the exits sized by ATR, and nothing marked as the gold trader's")
+check(no_feed == 1 and bad_name == 1, "and refused without OANDA's prices, or with a name OANDA would not know")
 check(code == 0 and "candles closing 10:00 to 16:00 UK time" in output and refused == 1
       and "one trade at a time and with up to 3 open at once" in output,
       "other hours can be tested (--hours 10 16), and backwards hours are refused")

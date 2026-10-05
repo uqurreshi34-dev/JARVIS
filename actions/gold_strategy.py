@@ -930,6 +930,10 @@ VARIANTS += [Rules(setup="pullback", trend_filter=True, target=target, breakeven
 # paying less -- whether that makes more, after the spread, is measured.
 VARIANTS += [Rules(setup="pullback", trend_filter=True, target=target) for target in (20.0, 15.0)]
 
+# The pullback with stops sized by ATR and no breakeven: the form that means the same on any instrument
+# (silver among them), where gold's $10 does not.
+VARIANTS += [Rules(setup="pullback", trend_filter=True, exits="atr", ratio=ratio) for ratio in (2.0, 3.0)]
+
 # The New York opening-range breakout: a different moment from the pullback, so trades the pullback does not
 # take. With and without the trend filter, fixed $10 stops at 1:2 and 1:3 and stops sized by ATR, and no
 # breakeven, which cost the other setups here.

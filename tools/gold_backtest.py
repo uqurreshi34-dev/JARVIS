@@ -8,6 +8,9 @@ is sent anywhere.
     python tools/gold_backtest.py --days 365      the last year, judged half by half
     python tools/gold_backtest.py --periods 6     split the period into six parts instead
     python tools/gold_backtest.py --most-open 2   and compare up to two trades open at once with one
+    python tools/gold_backtest.py --instrument XAG_USD --zone new_york --hours 8 12
+                                                  the same setups on silver (OANDA's prices only), judged
+                                                  on the exits sized by ATR, as the dollar stops are gold's
     python tools/gold_backtest.py --hours 10 16   candles closing 10:00 to 16:00 UK instead of 10 to 14
     python tools/gold_backtest.py --zone new_york --hours 8 12
                                                   hours on New York's clock: 13:00 to 17:00 UK, following
@@ -63,6 +66,7 @@ is assumed: a backtest that guesses in its own favour flatters itself.
 
 import argparse
 import csv
+import re
 import sys
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -112,11 +116,27 @@ def traded_setups():
     return gold_trader.traded_rules()
 
 
+GOLD = "XAU_USD"
+
+# The exits that mean the same on any instrument: sized by how lively it is (ATR), not by gold's dollars.
+SCALED_EXITS = ("atr", "trail")
+
+
+def variants_for(instrument):
+    """The versions worth running on [instrument]: all of them on gold, whose dollars the fixed stops and
+    targets are set in; elsewhere only those whose exits are sized by ATR."""
+    return VARIANTS if instrument == GOLD else [rules for rules in VARIANTS if rules.exits in SCALED_EXITS]
+
+
 def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=SESSION, periods=2, most_open=1,
-           zone="uk", traded=(CHOSEN,)):
+           zone="uk", traded=(CHOSEN,), instrument=GOLD):
     first, last = candles[0][0], candles[-1][0]
     print(f"\n{source}, {len(candles)} fifteen-minute candles, {first:%d %b %Y} to {last:%d %b %Y} (UTC).")
-    print(f"Each trade 1 oz (Fortrade's 0.01 lot, OANDA's 1 unit): $1 a dollar of movement. Spread ${spread:.2f}, candles "
+
+    unit = ("Each trade 1 oz (Fortrade's 0.01 lot, OANDA's 1 unit): $1 a dollar of movement." if instrument == GOLD
+            else f"Each trade 1 unit of {instrument}: $1 a dollar of movement. Only the exits sized by ATR are run, as"
+                 " the fixed stops and targets are in gold's dollars.")
+    print(f"{unit} Spread ${spread:.2f}, candles "
           f"closing {session[0]}:00 to {session[1]}:00 {ZONE_NAMES[zone]} time. 'fixed' exits: stop ${STOP_DOLLARS:g}, target "
           f"${TARGET_DOLLARS:g}.\n'bands' exits: stop ${WICK_BUFFER:g} past candle 1's wick, target the middle band."
           f"\n'trail' exits: stop {TRAIL_FIRST_STOP:g} ATR away, moved to the entry at {BREAKEVEN_AT_R:g} R, then "
@@ -132,7 +152,7 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=S
     worked_out = indicators(candles)
     passing = []
 
-    for rules in VARIANTS:
+    for rules in variants_for(instrument):
         mark = "+" if rules in traded else "*" if rules == AS_WRITTEN else " "
         trades = backtest(candles, replace(rules, spread=spread, session=session, zone=zone), worked_out)
         summary = summarise(trades)
@@ -151,7 +171,7 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=S
           " one good stretch is often luck.")
     print("Past results are no promise of future ones.")
 
-    if most_open > 1:
+    if most_open > 1 and traded:
         _compare_open(f"What the trader trades ({', '.join(rules.key() for rules in traded)})", candles, worked_out,
                       list(traded), spread, session, lot_ounces, periods, most_open, zone)
 
@@ -252,6 +272,8 @@ def main(argv=None):
                         help="the hours candles may close in, on --zone's clock, e.g. --hours 10 16 (default 10 14)")
     parser.add_argument("--zone", choices=sorted(ZONES), default="uk",
                         help="whose clock --hours are in: uk (default) or new_york")
+    parser.add_argument("--instrument", default=GOLD, type=str.upper,
+                        help="OANDA's name for what to test, e.g. XAG_USD for silver (default XAU_USD, gold)")
     parser.add_argument("--source", choices=("oanda", "dukascopy"),
                         help="whose prices: OANDA's own (the default when OANDA_API_TOKEN is set), or Dukascopy's")
     parser.add_argument("--candle", metavar="'YYYY-MM-DD HH:MM'",
@@ -281,16 +303,27 @@ def main(argv=None):
 
     from actions import oanda
 
+    instrument = options.instrument
+
+    if not re.fullmatch(r"[A-Z0-9]{2,10}_[A-Z]{3}", instrument):
+        print(f"--instrument wants OANDA's name for it, such as XAU_USD or XAG_USD, not {instrument!r}.")
+        return 1
+
     source = options.source or ("oanda" if oanda.configured() else "dukascopy")
     spread = SPREAD
 
+    if instrument != GOLD and source != "oanda":
+        print(f"{instrument} is tested on OANDA's own prices only: set OANDA_API_TOKEN in .env.")
+        return 1
+
     if source == "oanda":
-        print(f"Gold (XAU/USD) from your OANDA demo account, {first} to {last}: the prices the trader trades on...")
+        named = "Gold (XAU/USD)" if instrument == GOLD else instrument
+        print(f"{named} from your OANDA demo account, {first} to {last}: the prices the trader trades on...")
 
         try:
             start = datetime(first.year, first.month, first.day, tzinfo=timezone.utc)
             end = datetime(last.year, last.month, last.day, tzinfo=timezone.utc) + timedelta(days=1)
-            candles, ask_closes = oanda.Client().history(start, end)
+            candles, ask_closes = oanda.Client().history(start, end, name=instrument)
         except oanda.OandaError as error:
             print(f"OANDA: {error}.")
             return 1
@@ -302,7 +335,7 @@ def main(argv=None):
         if spreads:
             spread = spreads[len(spreads) // 2]
 
-        label = "OANDA gold"
+        label = "OANDA gold" if instrument == GOLD else f"OANDA {instrument}"
     else:
         print(f"Spot gold from Dukascopy, {first} to {last} (downloaded once, then kept)...")
 
@@ -320,13 +353,15 @@ def main(argv=None):
 
     median = sorted(candle[4] for candle in candles)[len(candles) // 2]
 
-    if not 300 <= median <= 30000:
+    # A check on the scale of gold's prices; another instrument's come straight from OANDA, as traded.
+    if instrument == GOLD and not 300 <= median <= 30000:
         print(f"The prices look wrong (a typical close of {median:.2f}); not testing on them.")
         return 1
 
-    traded = traded_setups()
+    # The trader trades gold; on anything else there is nothing of its to mark.
+    traded = traded_setups() if instrument == GOLD else []
     report(candles, spread=spread, source=label, session=session, periods=periods, most_open=options.most_open,
-           zone=options.zone, traded=traded)
+           zone=options.zone, traded=traded, instrument=instrument)
 
     if options.candle:
         wanted = datetime.strptime(options.candle, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
@@ -338,7 +373,7 @@ def main(argv=None):
         else:
             print(f"\nNo candle starts at {options.candle} UTC in these prices.")
 
-    if options.trades:
+    if options.trades and traded:
         with open("gold-backtest-trades.csv", "w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
             writer.writerow(["side", "opened (UTC)", "entry", "stop", "target", "closed (UTC)", "exit", "result $", "how"])
