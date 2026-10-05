@@ -70,6 +70,9 @@ _PROTECTED_NAMES = frozenset({
     # The gold trader's settings and its record of every trade.
     "gold-trader.json",
     "gold-trades.csv",
+    # The trend trader's settings and its record of every trade.
+    "trend-trader.json",
+    "trend-trades.csv",
 })
 
 # Files JARVIS names by date: rotated logs and the monthly token ledger.
