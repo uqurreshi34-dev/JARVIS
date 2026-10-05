@@ -70,6 +70,7 @@ from actions import (
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
 from actions.gold_trader import trader as gold_trader
+from actions.trend_trader import trader as trend_trader
 import phrases
 from actions.markets import market_monitor
 from actions.patterns import pattern_monitor
@@ -655,6 +656,11 @@ class Assistant:
         gold_trader.set_listener(self._on_alert)
         gold_trader.start()
 
+        # The daily trend trader, on its own settings and its own trades at OANDA; it speaks only when it
+        # trades, moves a stop, or a trade closes.
+        trend_trader.set_listener(self._on_alert)
+        trend_trader.start()
+
         pattern_monitor.set_due_listener(self._on_pattern_due)
         pattern_monitor.set_suggestion_listener(self._on_pattern_suggestion)
         pattern_monitor.start()
@@ -783,6 +789,7 @@ class Assistant:
         battery_monitor.stop()
         watcher.stop()
         gold_trader.stop()
+        trend_trader.stop()
         pattern_monitor.stop()
         phone_server.stop()
         folder_guard.folder_guard.stop()

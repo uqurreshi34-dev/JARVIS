@@ -210,10 +210,13 @@ class Client:
             "timeInForce": "FOK",
             "positionFill": "DEFAULT",
             "stopLossOnFill": {"price": price(stop), "timeInForce": "GTC"},
-            "takeProfitOnFill": {"price": price(target), "timeInForce": "GTC"},
             "clientExtensions": {"tag": tag, "comment": comment[:120]},
             "tradeClientExtensions": {"tag": tag, "comment": comment[:120]},
         }
+
+        # A trade that rides a trend has no target: its stop, moved behind it, takes the profit.
+        if target is not None:
+            order["takeProfitOnFill"] = {"price": price(target), "timeInForce": "GTC"}
         answer = self._send("post", f"/v3/accounts/{self.account_id()}/orders", json={"order": order})
         filled = answer.get("orderFillTransaction") or {}
         opened = filled.get("tradeOpened")
@@ -268,6 +271,7 @@ def _trade(trade):
 
     return {
         "id": trade["id"],
+        "instrument": trade.get("instrument", ""),
         "state": trade.get("state", ""),
         "units": float(trade.get("initialUnits", trade.get("currentUnits", 0))),
         "price": float(trade.get("price", 0)),

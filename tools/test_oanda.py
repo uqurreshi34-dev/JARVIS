@@ -222,6 +222,12 @@ check(url == oanda.PRACTICE_HOST + "/v3/accounts/101-004-1/orders" and body["ord
 check(opened == {"id": "7", "units": 1.0, "price": 4140.412,
                  "time": datetime(2026, 10, 5, 9, 45, 1, 500000, tzinfo=timezone.utc)}, "and the trade it opened")
 
+client.market_order(0.01, 30200.0, None, "jarvis-trend", name="NAS100_USD", price_decimals=1)
+method, url, body, headers = trading.sent[-1]
+check(body["order"]["instrument"] == "NAS100_USD" and body["order"]["stopLossOnFill"]["price"] == "30200.0"
+      and "takeProfitOnFill" not in body["order"] and body["order"]["units"] == "0.01",
+      "an order with no target: only its stop goes on at OANDA, for a trade a moving stop will close")
+
 try:
     oanda.Client(token=TOKEN, account_id="a", session=Trading(fill=False)).market_order(1, 1, 2, "jarvis-gold")
     said = ""
