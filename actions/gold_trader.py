@@ -211,6 +211,23 @@ def _understood(found):
     return chosen
 
 
+def traded_rules():
+    """The rules of the setups gold-trader.json lists, read without writing anything (the backtest marks them).
+
+    The strategy's CHOSEN when the file is missing, unreadable or not
+    understood -- as the trader would not trade then either.
+    """
+    path = _path(SETTINGS_NAME)
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            chosen = _understood(json.load(handle))
+    except (OSError, TypeError, ValueError, AttributeError):
+        chosen = None
+
+    return active_rules(chosen) if chosen else [gold_strategy.CHOSEN]
+
+
 def _write_settings(values):
     path = _path(SETTINGS_NAME)
 

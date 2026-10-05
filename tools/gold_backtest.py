@@ -104,8 +104,16 @@ def periods_for(days):
     return max(2, round(days / 365))
 
 
+def traded_setups():
+    """The rules of the setups the trader is set to trade (gold-trader.json), read without changing anything;
+    the strategy's CHOSEN when there are none to read."""
+    from actions import gold_trader
+
+    return gold_trader.traded_rules()
+
+
 def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=SESSION, periods=2, most_open=1,
-           zone="uk"):
+           zone="uk", traded=(CHOSEN,)):
     first, last = candles[0][0], candles[-1][0]
     print(f"\n{source}, {len(candles)} fifteen-minute candles, {first:%d %b %Y} to {last:%d %b %Y} (UTC).")
     print(f"Each trade 1 oz (Fortrade's 0.01 lot, OANDA's 1 unit): $1 a dollar of movement. Spread ${spread:.2f}, candles "
@@ -125,7 +133,7 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=S
     passing = []
 
     for rules in VARIANTS:
-        mark = "*" if rules == AS_WRITTEN else "+" if rules == CHOSEN else " "
+        mark = "+" if rules in traded else "*" if rules == AS_WRITTEN else " "
         trades = backtest(candles, replace(rules, spread=spread, session=session, zone=zone), worked_out)
         summary = summarise(trades)
         nets = _periods(candles, trades, periods)
@@ -137,17 +145,17 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=S
               f"{summary.average_risk * lot_ounces:6.2f} {summary.worst_run:9d} {summary.deepest * lot_ounces:13.2f} "
               + " ".join(f"{net * lot_ounces:15.2f}" for net in nets) + f"  {rules.key()}")
 
-    print("\n* the rules as you first wrote them; + the version the trader uses. 'won' is the share of trades that made money; 'risk $' the"
+    print("\n* the rules as you first wrote them; + what the trader is set to trade (gold-trader.json). 'won' is the share of trades that made money; 'risk $' the"
           " average distance to the stop.\n'worst run' is the most losses in a row; 'deepest dip' the furthest the"
           " running total fell from its best.\nA rule worth trusting makes money in every part, not just overall:"
           " one good stretch is often luck.")
     print("Past results are no promise of future ones.")
 
     if most_open > 1:
-        _compare_open(f"The trader's version ({CHOSEN.key()})", candles, worked_out, [CHOSEN], spread, session,
-                      lot_ounces, periods, most_open, zone)
+        _compare_open(f"What the trader trades ({', '.join(rules.key() for rules in traded)})", candles, worked_out,
+                      list(traded), spread, session, lot_ounces, periods, most_open, zone)
 
-    _together(candles, worked_out, passing, spread, session, lot_ounces, periods, most_open, zone)
+    _together(candles, worked_out, passing, spread, session, lot_ounces, periods, most_open, zone, traded)
 
 
 # What a version must show to be worth trading: enough trades to mean
@@ -196,7 +204,8 @@ def best_per_entry(ranked):
     return kept
 
 
-def _together(candles, worked_out, passing, spread, session, lot_ounces, periods=2, most_open=1, zone="uk"):
+def _together(candles, worked_out, passing, spread, session, lot_ounces, periods=2, most_open=1, zone="uk",
+              traded=(CHOSEN,)):
     """The versions worth trading, run together as the trader would: one trade at a time, best first."""
     if not passing:
         print(f"\nNo version made money in every part with at least {MOST_FEW_TRADES} trades. Keep the trader's"
@@ -212,9 +221,12 @@ def _together(candles, worked_out, passing, spread, session, lot_ounces, periods
     print("Versions that enter on the same candle only differ in how they leave, and one trade is open at a time,"
           f" so the best exits for each kind of entry: {', '.join(rules.key() for rules in chosen)}.")
     print(f"Run together, one trade at a time: {_line(summary, _periods(candles, trades, periods), lot_ounces)}.")
-    print(f"To trade them all: python tools/gold_trader.py --set setups={','.join(rules.key() for rules in chosen)}")
+    if chosen == list(traded):
+        print("The trader is already set to trade exactly these.")
+    else:
+        print(f"To trade them all: python tools/gold_trader.py --set setups={','.join(rules.key() for rules in chosen)}")
 
-    if most_open > 1 and chosen != [CHOSEN]:
+    if most_open > 1 and chosen != list(traded):
         _compare_open("Run together", candles, worked_out, chosen, spread, session, lot_ounces, periods, most_open,
                       zone)
 
@@ -234,7 +246,8 @@ def main(argv=None):
                         help="how many parts to judge the period in (default one a year, at least two)")
     parser.add_argument("--most-open", type=int, default=MOST_OPEN,
                         help=f"compare one trade at a time with up to this many open at once (default {MOST_OPEN}; 1: no comparison)")
-    parser.add_argument("--trades", action="store_true", help="write the trader's rules' trades to gold-backtest-trades.csv here")
+    parser.add_argument("--trades", action="store_true",
+                        help="write the trades of the setups the trader is set to trade to gold-backtest-trades.csv here")
     parser.add_argument("--hours", type=int, nargs=2, metavar=("FROM", "TO"), default=list(SESSION),
                         help="the hours candles may close in, on --zone's clock, e.g. --hours 10 16 (default 10 14)")
     parser.add_argument("--zone", choices=sorted(ZONES), default="uk",
@@ -311,8 +324,9 @@ def main(argv=None):
         print(f"The prices look wrong (a typical close of {median:.2f}); not testing on them.")
         return 1
 
+    traded = traded_setups()
     report(candles, spread=spread, source=label, session=session, periods=periods, most_open=options.most_open,
-           zone=options.zone)
+           zone=options.zone, traded=traded)
 
     if options.candle:
         wanted = datetime.strptime(options.candle, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
@@ -329,13 +343,14 @@ def main(argv=None):
             writer = csv.writer(handle)
             writer.writerow(["side", "opened (UTC)", "entry", "stop", "target", "closed (UTC)", "exit", "result $", "how"])
 
-            for trade in backtest(candles, replace(CHOSEN, spread=spread, session=session, zone=options.zone)):
+            for trade in backtest(candles, [replace(rules, spread=spread, session=session, zone=options.zone)
+                                            for rules in traded]):
                 writer.writerow([trade.side, f"{trade.opened:%Y-%m-%d %H:%M}", f"{trade.entry:.2f}", f"{trade.stop:.2f}",
                                  f"{trade.target:.2f}", f"{trade.closed:%Y-%m-%d %H:%M}" if trade.closed else "",
                                  f"{trade.exit:.2f}" if trade.exit is not None else "",
                                  f"{trade.result:.2f}" if trade.result is not None else "", trade.reason])
 
-        print("Every trade of the trader's rules is in gold-backtest-trades.csv.")
+        print(f"Every trade of {', '.join(rules.key() for rules in traded)} is in gold-backtest-trades.csv.")
 
     return 0
 

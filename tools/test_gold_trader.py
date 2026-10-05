@@ -548,4 +548,17 @@ fresh(utc(2026, 10, 27, 12, 15, 20))    # 12:15 UK, 08:15 New York
 check(trader.tick() == "quiet", "and 12:15 UK is inside: the window follows New York")
 gold_trader.change({"session_zone": "uk", "session_hours": [10, 14], "announce_forming": True})
 
+# ---- what the backtest marks as traded ---------------------------------------------------------------
+
+gold_trader.change({"setups": ["pullback-1:3", "bounce-1:4"]})
+check([rules.key() for rules in gold_trader.traded_rules()] == ["pullback-1:3", "bounce-1:4"],
+      "the setups the settings list, in order, for the backtest to mark")
+with open(os.path.join(folder, gold_trader.SETTINGS_NAME), "w", encoding="utf-8") as handle:
+    handle.write("[1, 2]")
+check(gold_trader.traded_rules() == [gold_strategy.CHOSEN], "settings not understood: the strategy's chosen rules")
+os.remove(os.path.join(folder, gold_trader.SETTINGS_NAME))
+check(gold_trader.traded_rules() == [gold_strategy.CHOSEN]
+      and not os.path.exists(os.path.join(folder, gold_trader.SETTINGS_NAME)),
+      "and no settings at all: the chosen rules, and no file is written by asking")
+
 sys.exit(1 if failures else 0)

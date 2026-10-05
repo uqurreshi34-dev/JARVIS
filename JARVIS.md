@@ -1766,7 +1766,10 @@ listed setup in order and takes the first it sees; each trade carries its
 key and first stop distance in its comment at OANDA, so breakeven works
 from its own risk across restarts. With `OANDA_API_TOKEN` set, the backtest uses OANDA's own candles
 (`Client.history`, paged 5,000 at a time) and the median spread in the
-trading window; otherwise Dukascopy's history, as in CI.
+trading window; otherwise Dukascopy's history, as in CI. The rows marked +
+are what `gold-trader.json` is set to trade (`gold_trader.traded_rules`,
+read without writing anything; `CHOSEN` when there are no settings), and
+those are what `--trades` writes out and `--most-open` compares.
 
 The trader, `actions/gold_trader.py`, runs inside JARVIS (started with the
 other monitors in main.py) and asks no model anything: every decision is

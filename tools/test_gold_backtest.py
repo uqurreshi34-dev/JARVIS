@@ -338,6 +338,8 @@ class History:
         return walk, [candle[4] + (0.5 if gb.in_session(candle[0] + timedelta(minutes=15)) else 3.0) for candle in walk]
 
 
+# What the trader is set to trade, as gold-trader.json would say: the pullback, without breakeven.
+cli.traded_setups = lambda: [gb.REGISTRY["pullback-1:3"]]
 real_client = oanda.Client
 oanda.Client = History
 printed = io.StringIO()
@@ -349,6 +351,10 @@ finally:
     oanda.Client = real_client
 
 output = printed.getvalue()
+marked = [line for line in output.splitlines() if line.startswith("+ ")]
+check(len(marked) == 1 and marked[0].rstrip().endswith("pullback-1:3")
+      and "What the trader trades (pullback-1:3)" in output,
+      "the rows marked + are what the trader is set to trade, and those are what is compared with several open")
 check(code == 0 and "your OANDA demo account" in output and "OANDA gold, 800 fifteen-minute candles" in output
       and "Spread $0.50" in output,
       "with OANDA, its own candles and the spread as it was in the trading window, not at night")
