@@ -187,7 +187,8 @@ summary = gb.summarise([gb.Trade("buy", start, 0, 0, 0, result=value) for value 
 check(summary.trades == 6 and summary.wins == 2 and summary.net == 20 and summary.worst_run == 3
       and summary.deepest == 30, "the summary: trades, wins, net, worst run of losses, deepest dip")
 
-check(len(gb.VARIANTS) == 25 and len(gb.REGISTRY) == 25 and gb.AS_WRITTEN in gb.VARIANTS and gb.CHOSEN in gb.VARIANTS
+check(len(gb.VARIANTS) == 28 and len(gb.REGISTRY) == 28 and
+      {"pullback-1:3", "pullback-1:3-be", "pullback-1:4", "pullback-1:4-be"} <= set(gb.REGISTRY) and gb.AS_WRITTEN in gb.VARIANTS and gb.CHOSEN in gb.VARIANTS
       and gb.REGISTRY["bounce-1:3-be"] == gb.CHOSEN, "every combination of the open choices is run")
 
 # ---- exits from the bands -------------------------------------------------------------------------

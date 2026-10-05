@@ -852,6 +852,14 @@ VARIANTS += [Rules(setup=setup, trend_filter=True, exits=exits, ratio=ratio, bre
              for setup in ("pullback", "breakout")
              for exits, ratio in (("fixed", 3.0), ("atr", 2.0), ("atr", 3.0))]
 
+# The pullback with fixed exits, with and without breakeven, at 1:3 and 1:4:
+# breakeven saves the trades that go 1 R up and then all the way to the
+# stop, but costs those that come back to the entry before going on to the
+# target -- which wins depends on the setup (for the bounce it lost), so it
+# is measured, not assumed.
+VARIANTS += [Rules(setup="pullback", trend_filter=True, target=target, breakeven=breakeven)
+             for target in (30.0, 40.0) for breakeven in (False, True) if (target, breakeven) != (30.0, True)]
+
 # The exits the trader can place at OANDA; the others are tested only.
 TRADEABLE_EXITS = ("fixed", "atr")
 
