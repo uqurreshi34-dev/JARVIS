@@ -1747,8 +1747,8 @@ year to October 2026 the best of those positive in both halves (+$170,
 beside it; `CHOSEN` changes only when another version holds up in both
 halves. Beside the bounce there are two other kinds of setup, each
 tested on its own: a pullback (in a trend, price dips to the 20-candle
-average and turns back with it; tested at 1:3 and 1:4, with and without
-breakeven, as breakeven helped some setups and hurt the bounce) and a breakout (a squeeze ending with a
+average and turns back with it; tested at 1:1.5, 1:2, 1:3 and 1:4, with and
+without breakeven, as breakeven helped some setups and hurt the bounce) and a breakout (a squeeze ending with a
 close beyond a band, with the trend). Exits may also be sized by ATR: a
 stop of 1.5 ATR, the target 2 or 3 times that, breakeven at 1 R, so the
 stop is wider on lively days and tighter on quiet ones while the reward

@@ -860,6 +860,10 @@ VARIANTS += [Rules(setup=setup, trend_filter=True, exits=exits, ratio=ratio, bre
 VARIANTS += [Rules(setup="pullback", trend_filter=True, target=target, breakeven=breakeven)
              for target in (30.0, 40.0) for breakeven in (False, True) if (target, breakeven) != (30.0, True)]
 
+# And nearer targets for the same $10 stop, 1:2 and 1:1.5, without breakeven: hit more often, each win
+# paying less -- whether that makes more, after the spread, is measured.
+VARIANTS += [Rules(setup="pullback", trend_filter=True, target=target) for target in (20.0, 15.0)]
+
 # The exits the trader can place at OANDA; the others are tested only.
 TRADEABLE_EXITS = ("fixed", "atr")
 
