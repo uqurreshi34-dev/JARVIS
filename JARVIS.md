@@ -1751,7 +1751,14 @@ average and turns back with it; tested at 1:1.5, 1:2, 1:3 and 1:4, with and
 without breakeven, as breakeven helped some setups and hurt the bounce), the
 New York opening-range breakout (`orb`: the high and low of 9:30 to 10:00 New
 York time, and the day's first close beyond them, in its own colour; with and
-without the trend filter, fixed or ATR exits; `gold_strategy.opening_range`)
+without the trend filter, fixed or ATR exits; `gold_strategy.opening_range`),
+horizontal lines on the four-hour chart (`range`: a bounce off the floor or
+ceiling of the last 30 or 60 four-hour candles; `retest`: after a four-hour
+close beyond one, the first fifteen-minute candle to come back to the line
+and close the breakout's way; `gold_strategy.levels`, the four-hour candles
+built on the UTC clock, so they differ a little from OANDA's chart, which
+starts its at 17:00 New York; the trader asks for as many candles as the
+box needs, `history_needed`)
 and a breakout (a squeeze ending with a
 close beyond a band, with the trend). Exits may also be sized by ATR: a
 stop of 1.5 ATR, the target 2 or 3 times that, breakeven at 1 R, so the

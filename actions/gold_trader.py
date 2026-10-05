@@ -535,7 +535,8 @@ class GoldTrader:
         """(candles, indicators) up to the candle that closed at [closed_at], once per candle; None if OANDA
         has not finished it."""
         if self._looked[0] != closed_at:
-            candles, _asks = client.candles(count=HISTORY)
+            wanted = max([HISTORY] + [gold_strategy.history_needed(rules) for rules in active_rules(settings())])
+            candles, _asks = client.candles(count=wanted)
             fresh = candles and candles[-1][0] + timedelta(minutes=gold_strategy.CANDLE_MINUTES) == closed_at
             self._looked = (closed_at, (candles, gold_strategy.indicators(candles)) if fresh else None)
 

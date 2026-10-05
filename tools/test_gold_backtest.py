@@ -187,7 +187,7 @@ summary = gb.summarise([gb.Trade("buy", start, 0, 0, 0, result=value) for value 
 check(summary.trades == 6 and summary.wins == 2 and summary.net == 20 and summary.worst_run == 3
       and summary.deepest == 30, "the summary: trades, wins, net, worst run of losses, deepest dip")
 
-check(len(gb.VARIANTS) == 40 and len(gb.REGISTRY) == 40 and "pullback-atr-1:3" in gb.REGISTRY and "orb-1:3" in gb.REGISTRY and "orb-atr-1:2-no-trend" in gb.REGISTRY and
+check(len(gb.VARIANTS) == 52 and len(gb.REGISTRY) == 52 and "range30-1:3" in gb.REGISTRY and "retest60-atr-1:3" in gb.REGISTRY and "pullback-atr-1:3" in gb.REGISTRY and "orb-1:3" in gb.REGISTRY and "orb-atr-1:2-no-trend" in gb.REGISTRY and
       {"pullback-1:1.5", "pullback-1:2", "pullback-1:3", "pullback-1:3-be", "pullback-1:4", "pullback-1:4-be"}
       <= set(gb.REGISTRY) and gb.AS_WRITTEN in gb.VARIANTS and gb.CHOSEN in gb.VARIANTS
       and gb.REGISTRY["bounce-1:3-be"] == gb.CHOSEN, "every combination of the open choices is run")
@@ -533,6 +533,44 @@ winter = day_at(utc(2026, 12, 7, 0, 0), [4000.0] * 96)     # New York is UTC-5 i
 check(gb.opening_range(next(i for i, c in enumerate(winter) if c[0] == utc(2026, 12, 7, 15, 0)), winter) is not None
       and gb.opening_range(next(i for i, c in enumerate(winter) if c[0] == utc(2026, 12, 7, 14, 15)), winter) is None,
       "in winter the range is an hour later in UTC: still 9:30 to 10:00 New York")
+
+# ---- floors, ceilings and retests -----------------------------------------------------------------
+
+def quarter_hours(start, prices):
+    """Fifteen-minute candles from (open, high, low, close) tuples."""
+    return [(start + timedelta(minutes=15 * step), *price) for step, price in enumerate(prices)]
+
+
+# Two four-hour candles (32 fifteen-minute ones) of a range, 4000 to 4060; then a candle dipping to the floor
+# and closing green -- a bounce -- one reaching the ceiling and closing red, and one doing neither.
+flat = [(4030.0, 4031.0, 4029.0, 4030.0)] * 32
+flat[3] = (4030.0, 4060.0, 4029.0, 4031.0)
+flat[20] = (4030.0, 4031.0, 4000.0, 4029.0)
+after = [(4010.0, 4012.0, 4001.0, 4011.0), (4050.0, 4059.0, 4045.0, 4048.0), (4030.0, 4031.0, 4029.0, 4030.5)]
+ranged = quarter_hours(utc(2026, 10, 6, 0, 0), flat + after)
+found = gb.levels(ranged, 2)
+check(found["box"][32] == (4000.0, 4060.0) and found["box"][31] is None,
+      "the box is the floor and ceiling of the last two finished four-hour candles, known only once they have closed")
+check(found["range"][32:35] == ["buy", "sell", None],
+      "near the floor, closing green above it: a buy; near the ceiling, closing red below it: a sell; elsewhere nothing")
+narrow = quarter_hours(utc(2026, 10, 6, 0, 0), [(4030.0, 4031.0, 4029.0, 4030.0)] * 32 + after)
+check(gb.levels(narrow, 2)["range"][32] is None, "a range too narrow for a target to fit gives no bounce")
+
+# A breakout: the third four-hour candle closes at 4080, above the 4060 ceiling; the retest comes later.
+breaking = flat + [(4030.0, 4045.0, 4029.0, 4040.0)] * 15 + [(4040.0, 4081.0, 4039.0, 4080.0)]
+back = [(4080.0, 4082.0, 4070.0, 4075.0), (4061.0, 4067.0, 4059.0, 4066.0), (4064.0, 4070.0, 4061.0, 4069.0)]
+retested = quarter_hours(utc(2026, 10, 6, 0, 0), breaking + back)
+signals = gb.levels(retested, 2)["retest"]
+check(signals[47] is None and signals[48] is None and signals[49] == "buy" and signals[50] is None,
+      "after a four-hour close above the ceiling: no trade on the breakout itself; the first return to the line,"
+      " closing green above it, buys; once only")
+failed = quarter_hours(utc(2026, 10, 6, 0, 0), breaking + [(4080.0, 4081.0, 4040.0, 4045.0),
+                                                           (4045.0, 4066.0, 4044.0, 4062.0)])
+check(gb.levels(failed, 2)["retest"][49] is None, "a close a stop's width back inside the range calls the breakout off")
+check(gb.signal(49, retested, *gb.indicators(retested)[:3], gb.Rules(setup="retest", box=2, session=(0, 24))) == "buy",
+      "and signal() gives the same, for the backtest and the trader alike")
+check(gb.history_needed(gb.REGISTRY["range60-1:3"]) > 60 * 16 and gb.history_needed(gb.CHOSEN) == 300,
+      "the trader asks OANDA for enough candles for a ten-day box")
 
 # ---- several trades open at once ----------------------------------------------------------------
 

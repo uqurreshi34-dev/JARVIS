@@ -396,7 +396,9 @@ def squeezed(bands, window=SQUEEZE_WINDOW, share=SQUEEZE_SHARE):
 class Rules:
     setup: str = "bounce"        # "bounce": off a band, against the move; "pullback": back to the 20-candle
                                  # average, with the trend; "breakout": out of a squeeze, with the trend;
-                                 # "orb": the first close beyond the New York opening range
+                                 # "orb": the first close beyond the New York opening range;
+                                 # "range": a bounce off the floor or ceiling of the last [box] four-hour
+                                 # candles; "retest": after a four-hour close beyond one, the first return to it
     touch: str = "wick"          # "wick": the candle reaches the band; "close": it closes beyond it
     rsi: str = "turned"          # "turned": was beyond 30/70 and is back; "not_extreme": simply not beyond now
     squeeze_filter: bool = True
@@ -411,6 +413,7 @@ class Rules:
     spread: float = SPREAD
     session: tuple = SESSION
     zone: str = "uk"             # whose clock [session] is in (ZONES)
+    box: int = 0                 # "range" and "retest": how many four-hour candles the floor and ceiling span
 
     def _exits(self):
         if self.exits == "fixed":
@@ -422,7 +425,13 @@ class Rules:
         return self.exits
 
     def name(self):
-        entry = f"rsi={self.rsi:11}" if self.setup == "bounce" else f"{self.setup:15}"
+        if self.setup == "bounce":
+            entry = f"rsi={self.rsi:11}"
+        elif self.box:
+            entry = f"{self.setup + ' ' + str(self.box) + 'x4h':15}"
+        else:
+            entry = f"{self.setup:15}"
+
         return f"{entry} exits={self._exits():10} trend filter={'on ' if self.trend_filter else 'off'}"
 
     def atr_stop_distance(self, atr):
@@ -431,6 +440,9 @@ class Rules:
     def key(self):
         """A short, stable name for these rules, as gold-trader.json lists the setups to trade."""
         exits = self._exits().lower().replace(" ", "-").replace("+be", "-be")
+        if self.box:
+            return f"{self.setup}{self.box}-{exits}"
+
         trend = "" if self.trend_filter else "-no-trend"
         rsi = "" if self.setup != "bounce" or self.rsi == "not_extreme" else "-rsi-turned"
         return f"{self.setup}-{exits}{trend}{rsi}"
@@ -476,6 +488,9 @@ def signal(index, candles, bands, rsis, squeezes, rules, averages=None, fast=Non
 
     if rules.setup == "orb":
         return _opening_range_break(index, candles, rules, trend)
+
+    if rules.setup in ("range", "retest"):
+        return levels(candles, rules.box)[rules.setup][index]
 
     _start, open2, _high2, _low2, close2 = candles[index]
 
@@ -641,6 +656,117 @@ def _opening_range_break(index, candles, rules, trend):
         return "sell"
 
     return None
+
+
+# Floors and ceilings: the lowest low and highest high of the last [box] four-hour candles, the lines a
+# trader draws on the four-hour chart, made a rule so they can be tested. Four-hour candles are built from
+# the fifteen-minute ones on the UTC clock (00:00, 04:00, ...).
+BLOCK_HOURS = 4
+
+# How near the line a fifteen-minute candle must reach to count as touching it.
+TOUCH_DOLLARS = 2.0
+
+# A bounce needs room inside the range for its target: the range at least this many stops wide.
+RANGE_ROOM = 4.0
+
+# How long after a four-hour close beyond a line its retest is still waited for.
+RETEST_HOURS = 24
+
+_LEVELS = {}
+
+
+def _blocks(candles):
+    """The four-hour candles: (first index, last index, high, low, close) of each, in order."""
+    blocks = []
+
+    for index, (start, _open, high, low, close) in enumerate(candles):
+        key = (start.date(), start.hour // BLOCK_HOURS)
+
+        if blocks and blocks[-1][0] == key:
+            _key, first, _last, top, bottom, _close = blocks[-1]
+            blocks[-1] = (key, first, index, max(top, high), min(bottom, low), close)
+        else:
+            blocks.append((key, index, index, high, low, close))
+
+    return [block[1:] for block in blocks]
+
+
+def levels(candles, box, stop=STOP_DOLLARS):
+    """For each fifteen-minute candle, the side a "range" bounce and a "retest" would take on its close, or None.
+
+    {"range": [...], "retest": [...], "box": [(floor, ceiling) or None, ...]}, worked out once for each
+    candles list and [box]. Only four-hour candles already finished count, so nothing is known before it
+    could be.
+
+    Range: a candle reaching the floor (within TOUCH_DOLLARS) and closing green above it is a buy; one
+    reaching the ceiling and closing red below it a sell -- when the range is wide enough for a target.
+
+    Retest: a four-hour close above the ceiling (or below the floor) of the [box] before it arms that line
+    for RETEST_HOURS. The first fifteen-minute candle to come back to it and close the breakout's way --
+    green above it after a break up, red below it after a break down -- is the trade; one closing a stop's
+    width back through it, or a four-hour close back inside, disarms it.
+    """
+    signature = (id(candles), len(candles), candles[0][0] if candles else None, box, stop)
+
+    if signature in _LEVELS:
+        return _LEVELS[signature]
+
+    count = len(candles)
+    ranges, retests, boxes = [None] * count, [None] * count, [None] * count
+    blocks = _blocks(candles)
+    armed = None   # (side, line, index from which it may trade, index after which it expires)
+
+    for number, (first, last, _high, _low, close) in enumerate(blocks):
+        if number < box:
+            continue
+
+        window = blocks[number - box:number]
+        ceiling = max(block[2] for block in window)
+        floor = min(block[3] for block in window)
+
+        for index in range(first, last + 1):
+            _start, open_, high, low, shut = candles[index]
+            boxes[index] = (floor, ceiling)
+
+            if ceiling - floor >= RANGE_ROOM * stop:
+                if low <= floor + TOUCH_DOLLARS and shut > floor and shut > open_:
+                    ranges[index] = "buy"
+                elif high >= ceiling - TOUCH_DOLLARS and shut < ceiling and shut < open_:
+                    ranges[index] = "sell"
+
+            if armed and armed[2] <= index <= armed[3]:
+                side, line = armed[0], armed[1]
+
+                if side == "buy" and low <= line + TOUCH_DOLLARS and shut > line and shut > open_:
+                    retests[index], armed = "buy", None
+                elif side == "sell" and high >= line - TOUCH_DOLLARS and shut < line and shut < open_:
+                    retests[index], armed = "sell", None
+                elif (side == "buy" and shut < line - stop) or (side == "sell" and shut > line + stop):
+                    armed = None
+
+        # This four-hour candle has closed: a close beyond its range arms the retest; back inside disarms it.
+        expires = last + RETEST_HOURS * 60 // CANDLE_MINUTES
+
+        if close > ceiling:
+            armed = ("buy", ceiling, last + 1, expires)
+        elif close < floor:
+            armed = ("sell", floor, last + 1, expires)
+        elif armed and ((armed[0] == "buy" and close < armed[1]) or (armed[0] == "sell" and close > armed[1])):
+            armed = None
+
+    found = {"range": ranges, "retest": retests, "box": boxes}
+
+    if len(_LEVELS) > 64:
+        _LEVELS.clear()
+
+    _LEVELS[signature] = found
+    return found
+
+
+def history_needed(rules):
+    """How many fifteen-minute candles [rules] need behind the latest to decide: enough for every indicator,
+    and for "range" and "retest" a whole [box] of four-hour candles more."""
+    return max(300, (rules.box + 2) * BLOCK_HOURS * 60 // CANDLE_MINUTES + 50)
 
 
 def _breakout(index, candles, bands, rsis, squeezes, rules, trend):
@@ -941,6 +1067,13 @@ VARIANTS += [Rules(setup="orb", trend_filter=trend, target=target) for trend in 
              for target in (20.0, 30.0)]
 VARIANTS += [Rules(setup="orb", trend_filter=trend, exits="atr", ratio=ratio) for trend in (True, False)
              for ratio in (2.0, 3.0)]
+
+# Horizontal lines on the four-hour chart: the floor and ceiling of the last 30 four-hour candles (five
+# days) or 60 (ten), traded as a bounce inside the range or as the retest after a break out of it; fixed
+# $10 stops at 1:2 and 1:3, and stops sized by ATR at 1:3. No trend filter: the lines are the setup.
+VARIANTS += [Rules(setup=setup, box=box, target=target) for setup in ("range", "retest") for box in (30, 60)
+             for target in (20.0, 30.0)]
+VARIANTS += [Rules(setup=setup, box=box, exits="atr", ratio=3.0) for setup in ("range", "retest") for box in (30, 60)]
 
 # The exits the trader can place at OANDA; the others are tested only.
 TRADEABLE_EXITS = ("fixed", "atr")
