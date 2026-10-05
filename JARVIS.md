@@ -1797,7 +1797,9 @@ hedging would net them. With `announce_forming` (on by default) it says
 when the candle just closed could be the first of a setup it trades -- a
 band touched and closed back, say -- a candle before any trade, whether or
 not one could follow, so a chart watched by hand is checked against the
-same rules (`gold_strategy.forming`).
+same rules (`gold_strategy.forming`). It is said once the candle has been
+decided, and not at all on a candle that has just opened a trade, so the
+trade is never announced beside an early warning that reads against it.
 The size is fixed (`units`) or, with `risk_percent`, worked out per trade
 so the $10 stop loses no more than that share of the balance, converted to
 the account's currency at OANDA's price and rounded down to what OANDA

@@ -25,7 +25,8 @@ Trading practice it keeps to:
   losses in a row;
 - with announce_forming, it says when a candle could be the first of a
   setup, a candle before the trade would come, so a chart watched by hand
-  can be checked against the same rules;
+  can be checked against the same rules -- though not on a candle that has
+  just opened a trade, which says only the trade;
 - no trade when the spread is wider than usual, nor on a candle that is
   not fresh (JARVIS started late, or the market paused);
 - nothing at weekends, and anything still open on Friday evening is closed
@@ -350,6 +351,7 @@ class GoldTrader:
         self._no_calendar = None
         self._entries = {}   # trade id -> (spread at entry), for the log
         self._looked = (None, None)   # (candle closing time, (candles, indicators) or None)
+        self._forming_due = None      # (client, settings, candle closing time) to look at once decided
 
     def set_listener(self, listener):
         self._listener = listener
@@ -402,8 +404,28 @@ class GoldTrader:
 
     # ---- each look ------------------------------------------------------------------------
 
+    # What tick() returns when it has opened a trade.
+    OPENED = ("buy", "sell")
+
     def tick(self):
-        """One look: settle what has closed, close for the weekend if due, and maybe trade. Returns what it did."""
+        """One look: settle what has closed, close for the weekend if due, and maybe trade. Returns what it did.
+
+        A setup that may be forming is said only once the candle's decision
+        is made, and not on a candle that has just opened a trade: that
+        candle has been acted on, and a second, early warning beside the
+        trade would read as a contradiction of it.
+        """
+        self._forming_due = None
+        decided = self._decide()
+        due, self._forming_due = self._forming_due, None
+
+        if due and decided not in self.OPENED:
+            self._forming(*due)
+
+        return decided
+
+    def _decide(self):
+        """tick()'s look, without the warning of a setup forming; returns what it did."""
         chosen = settings()
 
         if not chosen["enabled"]:
@@ -449,7 +471,7 @@ class GoldTrader:
             self._protect(client, mine)
 
         if chosen["announce_forming"]:
-            self._forming(client, chosen, closed_at)
+            self._forming_due = (client, chosen, closed_at)
 
         if len(mine) >= chosen["max_open_trades"]:
             return "in a trade"
@@ -505,9 +527,10 @@ class GoldTrader:
     def _forming(self, client, chosen, closed_at):
         """Say so when the candle just closed could be the first of a setup the trader trades.
 
-        Only when the confirming candle would still close in the hours. Said
-        whether or not a trade could follow (one open, the news, a stand
-        down), as it is for a chart watched by hand as much as for the trader.
+        Only when the confirming candle would still close in the hours, and
+        never on a candle that opened a trade (tick). Otherwise said whether
+        or not a trade could follow (one open, the news, a stand down), as it
+        is for a chart watched by hand as much as for the trader.
         """
         confirms_at = closed_at + timedelta(minutes=gold_strategy.CANDLE_MINUTES)
 

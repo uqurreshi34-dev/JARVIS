@@ -10,7 +10,8 @@ Runs in a sandboxed JARVIS folder. Checked:
 - one trade at a time, so many a day, standing down after losses in a row
   (a win or a breakeven between them ends the run); or more at once with
   max_open_trades, never one against another;
-- a setup that may be forming is said a candle early, once;
+- a setup that may be forming is said a candle early, once, and not on a
+  candle that has just opened a trade;
 - no trade into a wide spread, nor on a candle OANDA has not finished;
 - a closed trade is logged once, as OANDA says it closed, and announced;
 - on Friday evening anything open is closed for the weekend;
@@ -491,6 +492,16 @@ try:
     check(len(said) == heard, "once a candle")
     fresh(utc(2026, 10, 19, 13, 0, 20))     # the 14:00 candle: the next would close outside the hours
     check(trader.tick() == "quiet" and len(said) == heard, "not when the confirming candle would close outside the hours")
+    decision["side"] = "buy"
+    fresh(utc(2026, 10, 19, 9, 30, 20))     # a setup confirmed, and another may be forming on the same candle
+    check(trader.tick() == "buy" and len(said) == heard + 1 and said[-1].startswith("Gold, sir, a bounce: bought"),
+          "a candle that opens a trade says only the trade, not a possible setup beside it")
+    heard = len(said)
+    fresh(utc(2026, 10, 19, 9, 45, 20))     # in that trade: a setup forming is still said, after the look
+    check(trader.tick() == "in a trade" and len(said) == heard + 1 and "a possible bounce buy" in said[-1],
+          "while a trade is open, a setup forming is still said")
+    heard = len(said)
+    account.open, decision["side"] = [], None
     gold_trader.change({"announce_forming": False})
     fresh(utc(2026, 10, 19, 10, 0, 20))
     check(trader.tick() == "quiet" and len(said) == heard, "and not at all with announce_forming off")
