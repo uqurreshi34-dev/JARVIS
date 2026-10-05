@@ -1748,7 +1748,11 @@ beside it; `CHOSEN` changes only when another version holds up in both
 halves. Beside the bounce there are two other kinds of setup, each
 tested on its own: a pullback (in a trend, price dips to the 20-candle
 average and turns back with it; tested at 1:1.5, 1:2, 1:3 and 1:4, with and
-without breakeven, as breakeven helped some setups and hurt the bounce) and a breakout (a squeeze ending with a
+without breakeven, as breakeven helped some setups and hurt the bounce), the
+New York opening-range breakout (`orb`: the high and low of 9:30 to 10:00 New
+York time, and the day's first close beyond them, in its own colour; with and
+without the trend filter, fixed or ATR exits; `gold_strategy.opening_range`)
+and a breakout (a squeeze ending with a
 close beyond a band, with the trend). Exits may also be sized by ATR: a
 stop of 1.5 ATR, the target 2 or 3 times that, breakeven at 1 R, so the
 stop is wider on lively days and tighter on quiet ones while the reward

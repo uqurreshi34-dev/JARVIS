@@ -395,7 +395,8 @@ def squeezed(bands, window=SQUEEZE_WINDOW, share=SQUEEZE_SHARE):
 @dataclass(frozen=True)
 class Rules:
     setup: str = "bounce"        # "bounce": off a band, against the move; "pullback": back to the 20-candle
-                                 # average, with the trend; "breakout": out of a squeeze, with the trend
+                                 # average, with the trend; "breakout": out of a squeeze, with the trend;
+                                 # "orb": the first close beyond the New York opening range
     touch: str = "wick"          # "wick": the candle reaches the band; "close": it closes beyond it
     rsi: str = "turned"          # "turned": was beyond 30/70 and is back; "not_extreme": simply not beyond now
     squeeze_filter: bool = True
@@ -472,6 +473,9 @@ def signal(index, candles, bands, rsis, squeezes, rules, averages=None, fast=Non
 
     if rules.setup == "breakout":
         return _breakout(index, candles, bands, rsis, squeezes, rules, trend)
+
+    if rules.setup == "orb":
+        return _opening_range_break(index, candles, rules, trend)
 
     _start, open2, _high2, _low2, close2 = candles[index]
 
@@ -572,6 +576,68 @@ def _pullback(index, candles, rsis, trend, fast):
 
     if close2 < trend and average < trend and high1 >= average and close2 < open2 and close2 < min(average, low1) \
             and 30.0 <= rsis[index] <= 60.0:
+        return "sell"
+
+    return None
+
+
+# The opening range: the first half hour of the New York stock market, 9:30 to 10:00 New York time, when
+# gold's busiest stretch of the day begins. Its high and low are where the day's first real move breaks out.
+ORB_OPEN = (9, 30)
+ORB_MINUTES = 30
+
+# How far back to look for the day's range: a whole day of fifteen-minute candles.
+ORB_LOOKBACK = 24 * 60 // CANDLE_MINUTES
+
+
+def opening_range(index, candles):
+    """(high, low, broken) of the New York opening range on the day of the candle at [index], from the
+    candles before it; None if the range is not yet complete (the candle is inside it, or one is missing).
+
+    [broken]: whether a candle after the range, and before [index], already closed beyond it -- only the
+    first close beyond the range is a breakout.
+    """
+    local = new_york_time(candles[index][0])
+    opens = local.replace(hour=ORB_OPEN[0], minute=ORB_OPEN[1], second=0, microsecond=0)
+    formed = opens + timedelta(minutes=ORB_MINUTES)
+
+    if local < formed:
+        return None
+
+    inside, after = [], []
+
+    for earlier in range(index - 1, max(-1, index - 1 - ORB_LOOKBACK), -1):
+        start = new_york_time(candles[earlier][0])
+
+        if start.date() != local.date() or start < opens:
+            break
+
+        (inside if start < formed else after).append(candles[earlier])
+
+    if len(inside) != ORB_MINUTES // CANDLE_MINUTES:
+        return None
+
+    high = max(candle[2] for candle in inside)
+    low = min(candle[3] for candle in inside)
+    broken = any(candle[4] > high or candle[4] < low for candle in after)
+    return high, low, broken
+
+
+def _opening_range_break(index, candles, rules, trend):
+    """The first candle of the day to close beyond the New York opening range, in its own colour -- above
+    the range and green, a buy; below it and red, a sell -- and with the trend filter, only the trend's way."""
+    found = opening_range(index, candles)
+
+    if found is None or found[2]:
+        return None
+
+    high, low, _broken = found
+    _start, open_, _high, _low, close = candles[index]
+
+    if close > high and close > open_ and not (rules.trend_filter and close <= trend):
+        return "buy"
+
+    if close < low and close < open_ and not (rules.trend_filter and close >= trend):
         return "sell"
 
     return None
@@ -863,6 +929,14 @@ VARIANTS += [Rules(setup="pullback", trend_filter=True, target=target, breakeven
 # And nearer targets for the same $10 stop, 1:2 and 1:1.5, without breakeven: hit more often, each win
 # paying less -- whether that makes more, after the spread, is measured.
 VARIANTS += [Rules(setup="pullback", trend_filter=True, target=target) for target in (20.0, 15.0)]
+
+# The New York opening-range breakout: a different moment from the pullback, so trades the pullback does not
+# take. With and without the trend filter, fixed $10 stops at 1:2 and 1:3 and stops sized by ATR, and no
+# breakeven, which cost the other setups here.
+VARIANTS += [Rules(setup="orb", trend_filter=trend, target=target) for trend in (True, False)
+             for target in (20.0, 30.0)]
+VARIANTS += [Rules(setup="orb", trend_filter=trend, exits="atr", ratio=ratio) for trend in (True, False)
+             for ratio in (2.0, 3.0)]
 
 # The exits the trader can place at OANDA; the others are tested only.
 TRADEABLE_EXITS = ("fixed", "atr")

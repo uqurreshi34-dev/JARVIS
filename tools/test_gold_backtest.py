@@ -187,7 +187,7 @@ summary = gb.summarise([gb.Trade("buy", start, 0, 0, 0, result=value) for value 
 check(summary.trades == 6 and summary.wins == 2 and summary.net == 20 and summary.worst_run == 3
       and summary.deepest == 30, "the summary: trades, wins, net, worst run of losses, deepest dip")
 
-check(len(gb.VARIANTS) == 30 and len(gb.REGISTRY) == 30 and
+check(len(gb.VARIANTS) == 38 and len(gb.REGISTRY) == 38 and "orb-1:3" in gb.REGISTRY and "orb-atr-1:2-no-trend" in gb.REGISTRY and
       {"pullback-1:1.5", "pullback-1:2", "pullback-1:3", "pullback-1:3-be", "pullback-1:4", "pullback-1:4-be"}
       <= set(gb.REGISTRY) and gb.AS_WRITTEN in gb.VARIANTS and gb.CHOSEN in gb.VARIANTS
       and gb.REGISTRY["bounce-1:3-be"] == gb.CHOSEN, "every combination of the open choices is run")
@@ -476,6 +476,46 @@ check(gb.forming(touch, made, bands, squeezes, gb.Rules(setup="breakout"), avera
 check(all(gb.forming(index, made, bands, squeezes, rules) == "buy"
           for index in range(len(made) - 1) if gb.signal(index + 1, made, bands, rsis, squeezes, rules) == "buy"),
       "every buy the strategy takes was warned of a candle before")
+
+# ---- the New York opening-range breakout ---------------------------------------------------------
+
+def day_at(start, closes):
+    """Candles from [start] (UTC), opening at the last close, each a dollar either side; changed after."""
+    made, previous = [], closes[0]
+    for step, close in enumerate(closes):
+        made.append((start + timedelta(minutes=15 * step), previous, max(previous, close) + 0.2,
+                     min(previous, close) - 0.2, close))
+        previous = close
+    return made
+
+
+ny = day_at(utc(2026, 10, 6, 0, 0), [4000.0] * 96)          # a quiet day; New York is UTC-4 in October
+at = {candle[0]: index for index, candle in enumerate(ny)}
+range_first, range_second = at[utc(2026, 10, 6, 13, 30)], at[utc(2026, 10, 6, 13, 45)]   # 9:30 and 9:45 New York
+ny[range_first] = (ny[range_first][0], 4000.0, 4005.0, 3996.0, 4002.0)
+ny[range_second] = (ny[range_second][0], 4002.0, 4004.0, 3995.0, 3998.0)
+inside, breaks, again = at[utc(2026, 10, 6, 14, 0)], at[utc(2026, 10, 6, 14, 15)], at[utc(2026, 10, 6, 14, 30)]
+ny[inside] = (ny[inside][0], 3998.0, 4004.5, 3997.0, 4004.0)
+ny[breaks] = (ny[breaks][0], 4003.0, 4009.0, 4002.0, 4008.0)
+ny[again] = (ny[again][0], 4008.0, 4011.0, 4007.0, 4010.0)
+orb = gb.Rules(setup="orb", trend_filter=False, session=(0, 24))
+worked = gb.indicators(ny)
+check(gb.opening_range(range_second, ny) is None and gb.opening_range(inside, ny)[:2] == (4005.0, 3995.0),
+      "the opening range is 9:30 to 10:00 New York, high 4005 and low 3995, known only once it has closed")
+check(gb.signal(inside, ny, *worked[:3], orb) is None and gb.signal(breaks, ny, *worked[:3], orb) == "buy",
+      "a close inside the range is nothing; the first green close above it is a buy")
+check(gb.signal(again, ny, *worked[:3], orb) is None, "and only the first: the next close above it is not another")
+red = list(ny)
+red[breaks] = (red[breaks][0], 3996.0, 3997.0, 3990.0, 3991.0)
+check(gb.signal(breaks, red, *gb.indicators(red)[:3], orb) == "sell", "a red close below the range is a sell")
+check(gb.signal(breaks, ny, *worked[:3], gb.Rules(setup="orb", trend_filter=True, session=(0, 24)),
+                [4100.0] * len(ny), worked[5]) is None,
+      "with the trend filter, no buy below the 200-candle average")
+check(gb.forming(inside, ny, worked[0], worked[2], orb) is None, "a breakout is one candle, so it gives no warning")
+winter = day_at(utc(2026, 12, 7, 0, 0), [4000.0] * 96)     # New York is UTC-5 in December
+check(gb.opening_range(next(i for i, c in enumerate(winter) if c[0] == utc(2026, 12, 7, 15, 0)), winter) is not None
+      and gb.opening_range(next(i for i, c in enumerate(winter) if c[0] == utc(2026, 12, 7, 14, 15)), winter) is None,
+      "in winter the range is an hour later in UTC: still 9:30 to 10:00 New York")
 
 # ---- several trades open at once ----------------------------------------------------------------
 
