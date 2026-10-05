@@ -45,7 +45,11 @@ defaults the first time, and off until you turn it on):
     practice_balance     null, or e.g. 400: size as if the account held this, plus or minus the
                          trader's own results so far -- a small account practised on a big demo
     days                 the days it trades
-    session_hours        [10, 14]: candles closing 10:00 to 14:00 UK time
+    session_hours        [10, 14]: candles closing 10:00 to 14:00, on session_zone's clock
+    session_zone         "uk", or "new_york": whose clock session_hours are in; New York's
+                         follows the US session through the weeks when only one country
+                         has changed its clocks (e.g. [8, 12] New York is 13:00-17:00 UK,
+                         and 12:00-16:00 UK in late October and late March)
     max_spread           the widest spread, in dollars, it will trade into
     max_trades_per_day   null: every setup that meets the rules; or a number
     max_open_trades      1: trades open at once, all the same way (up to MOST_OPEN)
@@ -88,6 +92,7 @@ DEFAULTS = {
     "practice_balance": None,
     "days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
     "session_hours": [10, 14],
+    "session_zone": "uk",
     "max_spread": 1.0,
     "max_trades_per_day": None,
     "max_open_trades": 1,
@@ -179,6 +184,9 @@ def _understood(found):
         chosen["max_spread"] = max(0.0, float(chosen["max_spread"]))
         start, end = (int(hour) for hour in chosen["session_hours"])
         chosen["session_hours"] = (start, end)
+
+        if chosen["session_zone"] not in gold_strategy.ZONES or not 0 <= start < end <= 24:
+            return None
         hour, minute = (int(part) for part in str(chosen["friday_close"]).split(":"))
         chosen["friday_close"] = (hour, minute)
         chosen["days"] = [day for day in DAYS if day in set(chosen["days"])]
@@ -434,7 +442,7 @@ class GoldTrader:
         if (now - closed_at).total_seconds() > FRESH_SECONDS:
             return "stale"
 
-        if not gold_strategy.in_session(closed_at, chosen["session_hours"]):
+        if not gold_strategy.in_session(closed_at, chosen["session_hours"], chosen["session_zone"]):
             return "outside hours"
 
         if mine:
@@ -503,7 +511,7 @@ class GoldTrader:
         """
         confirms_at = closed_at + timedelta(minutes=gold_strategy.CANDLE_MINUTES)
 
-        if not gold_strategy.in_session(confirms_at, chosen["session_hours"]):
+        if not gold_strategy.in_session(confirms_at, chosen["session_hours"], chosen["session_zone"]):
             return
 
         looked = self._look(client, closed_at)
@@ -539,8 +547,9 @@ class GoldTrader:
         if self._briefed != local.date():
             self._briefed = local.date()
             start, end = chosen["session_hours"]
-            offset = local - now
-            day = local.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+            zoned = gold_strategy.ZONES[chosen["session_zone"]](now)
+            offset = zoned - now
+            day = zoned.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
             window_start = (day + timedelta(hours=start)).replace(tzinfo=timezone.utc) - offset \
                 - timedelta(minutes=chosen["news_minutes_after"])
             window_end = (day + timedelta(hours=end)).replace(tzinfo=timezone.utc) - offset \

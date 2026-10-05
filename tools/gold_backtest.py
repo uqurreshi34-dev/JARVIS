@@ -9,6 +9,9 @@ is sent anywhere.
     python tools/gold_backtest.py --periods 6     split the period into six parts instead
     python tools/gold_backtest.py --most-open 2   and compare up to two trades open at once with one
     python tools/gold_backtest.py --hours 10 16   candles closing 10:00 to 16:00 UK instead of 10 to 14
+    python tools/gold_backtest.py --zone new_york --hours 8 12
+                                                  hours on New York's clock: 13:00 to 17:00 UK, following
+                                                  the US session when only one country's clocks have changed
     python tools/gold_backtest.py --trades        and write every trade to gold-backtest-trades.csv here
     python tools/gold_backtest.py --candle "2026-10-02 00:15"
                                                   one candle's prices (UTC), to compare with Fortrade's chart
@@ -73,7 +76,7 @@ if str(ROOT) not in sys.path:
 
 from actions.gold_strategy import (  # noqa: E402
     AS_WRITTEN, BREAKEVEN_AT_R, CHOSEN, SESSION, SPREAD, STOP_DOLLARS, TARGET_DOLLARS, TRAIL_DISTANCE,
-    TRADEABLE_EXITS, TRAIL_FIRST_STOP, TREND_LENGTH, VARIANTS, WICK_BUFFER, backtest, fifteen_minute, in_session,
+    TRADEABLE_EXITS, TRAIL_FIRST_STOP, TREND_LENGTH, VARIANTS, WICK_BUFFER, ZONE_NAMES, ZONES, backtest, fifteen_minute, in_session,
     indicators,
     minute_candles, summarise,
 )
@@ -101,11 +104,12 @@ def periods_for(days):
     return max(2, round(days / 365))
 
 
-def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=SESSION, periods=2, most_open=1):
+def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=SESSION, periods=2, most_open=1,
+           zone="uk"):
     first, last = candles[0][0], candles[-1][0]
     print(f"\n{source}, {len(candles)} fifteen-minute candles, {first:%d %b %Y} to {last:%d %b %Y} (UTC).")
     print(f"Each trade 1 oz (Fortrade's 0.01 lot, OANDA's 1 unit): $1 a dollar of movement. Spread ${spread:.2f}, candles "
-          f"closing {session[0]}:00 to {session[1]}:00 UK time. 'fixed' exits: stop ${STOP_DOLLARS:g}, target "
+          f"closing {session[0]}:00 to {session[1]}:00 {ZONE_NAMES[zone]} time. 'fixed' exits: stop ${STOP_DOLLARS:g}, target "
           f"${TARGET_DOLLARS:g}.\n'bands' exits: stop ${WICK_BUFFER:g} past candle 1's wick, target the middle band."
           f"\n'trail' exits: stop {TRAIL_FIRST_STOP:g} ATR away, moved to the entry at {BREAKEVEN_AT_R:g} R, then "
           f"{TRAIL_DISTANCE:g} ATR behind the best price; no fixed target.\n'trend filter': buys only above the "
@@ -122,7 +126,7 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=S
 
     for rules in VARIANTS:
         mark = "*" if rules == AS_WRITTEN else "+" if rules == CHOSEN else " "
-        trades = backtest(candles, replace(rules, spread=spread, session=session), worked_out)
+        trades = backtest(candles, replace(rules, spread=spread, session=session, zone=zone), worked_out)
         summary = summarise(trades)
         nets = _periods(candles, trades, periods)
 
@@ -141,9 +145,9 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=S
 
     if most_open > 1:
         _compare_open(f"The trader's version ({CHOSEN.key()})", candles, worked_out, [CHOSEN], spread, session,
-                      lot_ounces, periods, most_open)
+                      lot_ounces, periods, most_open, zone)
 
-    _together(candles, worked_out, passing, spread, session, lot_ounces, periods, most_open)
+    _together(candles, worked_out, passing, spread, session, lot_ounces, periods, most_open, zone)
 
 
 # What a version must show to be worth trading: enough trades to mean
@@ -164,9 +168,9 @@ def _line(summary, nets, lot_ounces):
             f"deepest dip {summary.deepest * lot_ounces:.2f} $")
 
 
-def _compare_open(label, candles, worked_out, rules, spread, session, lot_ounces, periods, most_open):
+def _compare_open(label, candles, worked_out, rules, spread, session, lot_ounces, periods, most_open, zone="uk"):
     """[rules] run one trade at a time and with up to [most_open] open at once, side by side."""
-    chosen = [replace(each, spread=spread, session=session) for each in rules]
+    chosen = [replace(each, spread=spread, session=session, zone=zone) for each in rules]
     print(f"\n{label}, one trade at a time and with up to {most_open} open at once (all the same way):")
 
     for limit in (1, most_open):
@@ -192,7 +196,7 @@ def best_per_entry(ranked):
     return kept
 
 
-def _together(candles, worked_out, passing, spread, session, lot_ounces, periods=2, most_open=1):
+def _together(candles, worked_out, passing, spread, session, lot_ounces, periods=2, most_open=1, zone="uk"):
     """The versions worth trading, run together as the trader would: one trade at a time, best first."""
     if not passing:
         print(f"\nNo version made money in every part with at least {MOST_FEW_TRADES} trades. Keep the trader's"
@@ -201,7 +205,7 @@ def _together(candles, worked_out, passing, spread, session, lot_ounces, periods
 
     ranked = [rules for _net, rules in sorted(passing, key=lambda pair: -pair[0])]
     chosen = best_per_entry(ranked)
-    trades = backtest(candles, [replace(rules, spread=spread, session=session) for rules in chosen], worked_out)
+    trades = backtest(candles, [replace(rules, spread=spread, session=session, zone=zone) for rules in chosen], worked_out)
     summary = summarise(trades)
     print(f"\nWorth trading -- at least {MOST_FEW_TRADES} trades and money made in every part: "
           f"{', '.join(rules.key() for rules in ranked)}.")
@@ -211,7 +215,8 @@ def _together(candles, worked_out, passing, spread, session, lot_ounces, periods
     print(f"To trade them all: python tools/gold_trader.py --set setups={','.join(rules.key() for rules in chosen)}")
 
     if most_open > 1 and chosen != [CHOSEN]:
-        _compare_open("Run together", candles, worked_out, chosen, spread, session, lot_ounces, periods, most_open)
+        _compare_open("Run together", candles, worked_out, chosen, spread, session, lot_ounces, periods, most_open,
+                      zone)
 
 
 def check_candle(candles, when_utc):
@@ -231,7 +236,9 @@ def main(argv=None):
                         help=f"compare one trade at a time with up to this many open at once (default {MOST_OPEN}; 1: no comparison)")
     parser.add_argument("--trades", action="store_true", help="write the trader's rules' trades to gold-backtest-trades.csv here")
     parser.add_argument("--hours", type=int, nargs=2, metavar=("FROM", "TO"), default=list(SESSION),
-                        help="the UK hours candles may close in, e.g. --hours 10 16 (default 10 14)")
+                        help="the hours candles may close in, on --zone's clock, e.g. --hours 10 16 (default 10 14)")
+    parser.add_argument("--zone", choices=sorted(ZONES), default="uk",
+                        help="whose clock --hours are in: uk (default) or new_york")
     parser.add_argument("--source", choices=("oanda", "dukascopy"),
                         help="whose prices: OANDA's own (the default when OANDA_API_TOKEN is set), or Dukascopy's")
     parser.add_argument("--candle", metavar="'YYYY-MM-DD HH:MM'",
@@ -277,7 +284,7 @@ def main(argv=None):
 
         # The spread as it really was in the trading window, not at night when it widens.
         spreads = sorted(ask - candle[4] for candle, ask in zip(candles, ask_closes)
-                         if in_session(candle[0] + timedelta(minutes=15), session))
+                         if in_session(candle[0] + timedelta(minutes=15), session, options.zone))
 
         if spreads:
             spread = spreads[len(spreads) // 2]
@@ -304,7 +311,8 @@ def main(argv=None):
         print(f"The prices look wrong (a typical close of {median:.2f}); not testing on them.")
         return 1
 
-    report(candles, spread=spread, source=label, session=session, periods=periods, most_open=options.most_open)
+    report(candles, spread=spread, source=label, session=session, periods=periods, most_open=options.most_open,
+           zone=options.zone)
 
     if options.candle:
         wanted = datetime.strptime(options.candle, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
@@ -321,7 +329,7 @@ def main(argv=None):
             writer = csv.writer(handle)
             writer.writerow(["side", "opened (UTC)", "entry", "stop", "target", "closed (UTC)", "exit", "result $", "how"])
 
-            for trade in backtest(candles, replace(CHOSEN, spread=spread, session=session)):
+            for trade in backtest(candles, replace(CHOSEN, spread=spread, session=session, zone=options.zone)):
                 writer.writerow([trade.side, f"{trade.opened:%Y-%m-%d %H:%M}", f"{trade.entry:.2f}", f"{trade.stop:.2f}",
                                  f"{trade.target:.2f}", f"{trade.closed:%Y-%m-%d %H:%M}" if trade.closed else "",
                                  f"{trade.exit:.2f}" if trade.exit is not None else "",

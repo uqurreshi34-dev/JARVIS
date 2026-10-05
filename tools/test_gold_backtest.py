@@ -82,6 +82,16 @@ check(gb.in_session(utc(2026, 7, 1, 9, 15)) and not gb.in_session(utc(2026, 7, 1
       and gb.in_session(utc(2026, 12, 1, 13, 45)) and not gb.in_session(utc(2026, 12, 1, 9, 45)),
       "10:00 to 14:00 UK is the right hours of UTC either side of the clock change")
 
+check(gb.new_york_time(utc(2026, 10, 5, 12, 0)).hour == 8 and gb.new_york_time(utc(2026, 12, 1, 13, 0)).hour == 8
+      and gb.new_york_time(utc(2026, 11, 1, 5, 59)).hour == 1 and gb.new_york_time(utc(2026, 11, 1, 6, 0)).hour == 1
+      and gb.new_york_time(utc(2026, 3, 8, 7, 0)).hour == 3,
+      "New York time: UTC-4 from the second Sunday of March to the first of November, UTC-5 otherwise")
+check(gb.in_session(utc(2026, 10, 5, 12, 15), (8, 12), "new_york") and not gb.in_session(utc(2026, 10, 5, 16, 15), (8, 12), "new_york")
+      and gb.in_session(utc(2026, 10, 26, 12, 15), (8, 12), "new_york") and not gb.in_session(utc(2026, 10, 26, 11, 15), (8, 12), "new_york")
+      and not gb.in_session(utc(2026, 10, 26, 16, 15), (8, 12), "new_york")
+      and gb.in_session(utc(2026, 11, 2, 13, 15), (8, 12), "new_york") and not gb.in_session(utc(2026, 11, 2, 12, 15), (8, 12), "new_york"),
+      "8:00 to 12:00 New York is 13:00 to 17:00 UK, 12:00 to 16:00 UK in the week between the clock changes")
+
 # ---- the indicators -----------------------------------------------------------------------------
 
 flat = gb.bollinger([5.0] * 20)
@@ -353,6 +363,17 @@ finally:
     oanda.Client = real_client
 
 output = printed.getvalue()
+oanda.Client = History
+zoned = io.StringIO()
+
+try:
+    with contextlib.redirect_stdout(zoned):
+        zone_code = cli.main(["--source", "oanda", "--days", "30", "--zone", "new_york", "--hours", "8", "12"])
+finally:
+    oanda.Client = real_client
+
+check(zone_code == 0 and "candles closing 8:00 to 12:00 New York time" in zoned.getvalue(),
+      "hours can be set on New York's clock (--zone new_york)")
 check(code == 0 and "candles closing 10:00 to 16:00 UK time" in output and refused == 1
       and "one trade at a time and with up to 3 open at once" in output,
       "other hours can be tested (--hours 10 16), and backwards hours are refused")

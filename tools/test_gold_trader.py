@@ -516,4 +516,25 @@ finally:
     account.open = []
     gold_trader.change({"max_open_trades": 1})
 
+# ---- hours on New York's clock ----------------------------------------------------------------------
+
+try:
+    gold_trader.change({"session_zone": "tokyo"})
+    refused = False
+except ValueError:
+    refused = True
+
+check(refused, "a clock the trader does not know is refused")
+gold_trader.change({"session_zone": "new_york", "session_hours": [8, 12], "announce_forming": False})
+decision.update(side=None, setup=None)
+fresh(utc(2026, 10, 19, 9, 15, 20))     # 10:15 UK, 05:15 New York
+check(trader.tick() == "outside hours", "New York hours 8 to 12: 10:15 UK is outside them")
+fresh(utc(2026, 10, 19, 12, 15, 20))    # 13:15 UK, 08:15 New York
+check(trader.tick() == "quiet", "and 13:15 UK, 08:15 New York, is inside")
+fresh(utc(2026, 10, 27, 11, 15, 20))    # 11:15 UK and 07:15 New York, after the UK's clocks went back
+check(trader.tick() == "outside hours", "after the UK's clocks go back, 11:15 UK is still before 8:00 New York")
+fresh(utc(2026, 10, 27, 12, 15, 20))    # 12:15 UK, 08:15 New York
+check(trader.tick() == "quiet", "and 12:15 UK is inside: the window follows New York")
+gold_trader.change({"session_zone": "uk", "session_hours": [10, 14], "announce_forming": True})
+
 sys.exit(1 if failures else 0)

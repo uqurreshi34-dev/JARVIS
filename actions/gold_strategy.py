@@ -261,9 +261,30 @@ def uk_time(utc):
     return utc + timedelta(hours=1 if starts <= utc < ends else 0)
 
 
-def in_session(close_utc, session=SESSION):
-    """Whether a candle closing at [close_utc] closes within the UK trading hours."""
-    local = uk_time(close_utc)
+def _nth_sunday(year, month, nth):
+    first = date(year, month, 1)
+    return first + timedelta(days=(6 - first.weekday()) % 7 + 7 * (nth - 1))
+
+
+def new_york_time(utc):
+    """[utc] as New York clock time: daylight time (UTC-4) from 2:00 local on the second Sunday of March to
+    2:00 local on the first Sunday of November, otherwise UTC-5. Worked out, not looked up, as Windows
+    Python has no time zone database without an extra package."""
+    starts = datetime.combine(_nth_sunday(utc.year, 3, 2), datetime.min.time(), timezone.utc) + timedelta(hours=7)
+    ends = datetime.combine(_nth_sunday(utc.year, 11, 1), datetime.min.time(), timezone.utc) + timedelta(hours=6)
+    return utc - timedelta(hours=4 if starts <= utc < ends else 5)
+
+
+# The clocks the trading hours can be set in: the UK's, or New York's, so a window tied to the US session
+# follows it through the weeks each spring and autumn when one country has changed its clocks and the other
+# has not.
+ZONES = {"uk": uk_time, "new_york": new_york_time}
+ZONE_NAMES = {"uk": "UK", "new_york": "New York"}
+
+
+def in_session(close_utc, session=SESSION, zone="uk"):
+    """Whether a candle closing at [close_utc] closes within the trading hours, on [zone]'s clock."""
+    local = ZONES[zone](close_utc)
     minutes = local.hour * 60 + local.minute
     return session[0] * 60 <= minutes <= session[1] * 60
 
@@ -388,6 +409,7 @@ class Rules:
     ratio: float = 3.0           # "atr" exits: the target as a multiple of the stop
     spread: float = SPREAD
     session: tuple = SESSION
+    zone: str = "uk"             # whose clock [session] is in (ZONES)
 
     def _exits(self):
         if self.exits == "fixed":
@@ -716,7 +738,7 @@ def backtest(candles, rules=Rules(), worked_out=None, most_open=1):
         closes_at = candle[0] + timedelta(minutes=CANDLE_MINUTES)
 
         for chosen in together:
-            if not in_session(closes_at, chosen.session):
+            if not in_session(closes_at, chosen.session, chosen.zone):
                 continue
 
             side = signal(index, candles, bands, rsis, squeezes, chosen, averages, fast)

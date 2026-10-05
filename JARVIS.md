@@ -1784,6 +1784,13 @@ high-impact US release, read from the free weekly economic calendar (at
 most hourly, as data: time, currency, impact; no model); if the calendar
 cannot be read it stands aside rather than assume the coast is clear, and
 the day's first look names the releases in the window.
+The hours can be set on New York's clock (`session_zone`: `new_york`,
+with `session_hours` in New York hours; the backtest's `--zone new_york`),
+so a window tied to the US session -- [8, 12] New York, 13:00 to 17:00 UK --
+follows it through the week or so each spring and autumn when only one
+country has changed its clocks. New York time is worked out from the US
+rules (`gold_strategy.new_york_time`), as Windows Python has no time zone
+database without an extra package.
 With `max_open_trades` above 1 (at most 5) it takes a setup while others
 are open, but never one against an open trade: a demo account without
 hedging would net them. With `announce_forming` (on by default) it says

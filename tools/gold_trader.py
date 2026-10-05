@@ -97,7 +97,7 @@ def main(argv=None):
                    else f"up to {chosen['max_open_trades']} trades open at once, all the same way")
         forming = "saying when a setup may be forming" if chosen["announce_forming"] else "quiet until a trade"
         print(f"{'On' if chosen['enabled'] else 'Off'}. {size}, {', '.join(chosen['days'])}, candles closing {start}:00 "
-              f"to {end}:00 UK time, {trades}, {at_once}, {losses}, {forming}, spread under ${chosen['max_spread']:.2f}, "
+              f"to {end}:00 {gold_trader.gold_strategy.ZONE_NAMES[chosen['session_zone']]} time, {trades}, {at_once}, {losses}, {forming}, spread under ${chosen['max_spread']:.2f}, "
               f"anything open closed Friday at {chosen['friday_close'][0]:02d}:{chosen['friday_close'][1]:02d}.")
         print(gold_trader.status().replace(", sir", ""))
         return 0
