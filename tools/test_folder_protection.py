@@ -73,7 +73,7 @@ def stores():
             if (
                 isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
-                and re.fullmatch(r"[\w.\-]+\.(?:txt|json|jsonl|sqlite|db|log)", node.value)
+                and re.fullmatch(r"[\w.\-]+\.(?:txt|json|jsonl|sqlite|db|log|onnx)", node.value)
                 and node.value not in NOT_IN_THE_FOLDER
             ):
                 found.setdefault(node.value, set()).add(path.name)

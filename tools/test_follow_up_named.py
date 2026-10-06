@@ -29,6 +29,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# voice.py reads the voiceprint from the JARVIS folder: a temporary one, never yours.
+from tools import sandbox  # noqa: E402  (must precede actions imports)
+
+sandbox.activate()
+
 sys.modules["sounddevice"] = MagicMock(name="sounddevice")
 sys.modules["vosk"] = types.SimpleNamespace(KaldiRecognizer=MagicMock(), Model=MagicMock())
 sys.modules["speech"] = types.SimpleNamespace(is_speaking=lambda: False, speech_epoch=lambda: 0)

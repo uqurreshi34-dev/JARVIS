@@ -10,6 +10,7 @@ import numpy as np
 import sounddevice as sd
 from vosk import KaldiRecognizer, Model
 
+import speaker
 import transcriber
 from speech import is_speaking, speech_epoch
 
@@ -106,6 +107,10 @@ model = Model(MODEL_PATH)
 engine = transcriber.build_engine(model, BLOCK_SIZE)
 
 print(f"[JARVIS] speech engine: {engine.name}")
+
+# Only your voice is acted on, once enrolled (speaker.py): a video, a phone
+# on speaker or a friend saying "Jarvis" is dropped before it is transcribed.
+engine.gate = speaker.gate()
 
 _armed_until = 0.0
 _phone_active = threading.Event()
