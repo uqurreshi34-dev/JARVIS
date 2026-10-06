@@ -113,6 +113,24 @@ command, named, printed = hear("what did you eat today", "jarvis open chrome")
 check(command == "open chrome" and named and '[ignored] "what did you eat today"' in printed,
       "talk not meant for him is ignored, outside a follow-up")
 
+# The wake grammar hears "jarvis" in "oh yeah"; the transcript has nothing like it, so he is not woken.
+class Waker:
+    def AcceptWaveform(self, data):
+        return True
+
+    def Result(self):
+        return '{"text": "jarvis"}'
+
+    def Reset(self):
+        pass
+
+
+voice._make_wake_recognizer = lambda: Waker()
+command, named, printed = hear("oh yeah", "jarvis open chrome")
+check(command == "open chrome" and '[ignored] "oh yeah"' in printed and "Woken" not in printed,
+      "'oh yeah' heard as the name by the wake grammar does not wake him")
+voice._make_wake_recognizer = lambda: None
+
 # ---- main.py's rules, read from its source (it needs the desktop to import) ------------------------
 
 source = (ROOT / "main.py").read_text(encoding="utf-8")

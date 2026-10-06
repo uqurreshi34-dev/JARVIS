@@ -1385,7 +1385,10 @@ reminders), answering "Say my name first for that one, sir" instead; and a
 command not understood ends the turn there (`_close_turn`), with no window
 left open and anything queued behind it (a gold trade, a battery warning)
 said at once. Every wake is printed with what was heard (`[wake] woken by
-"..."`), so a false one shows its cause. `tools/test_follow_up_named.py`.
+"..."`), so a false one shows its cause. The wake grammar can only answer
+"jarvis" or nothing, so it heard the name in "oh yeah"; its hit now counts
+only when the transcript has something like the name in it
+(`_strip_wake` returns None otherwise), so "oh yeah" no longer wakes him. `tools/test_follow_up_named.py`.
 
 ### Status report - `actions/status_report.py`
 "Status report" is JARVIS on himself, with no model call: connected

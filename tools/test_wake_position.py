@@ -10,7 +10,8 @@ models stood in for, so nothing is heard or loaded:
 - "Jarvis, ..." and "hey Jarvis ..." are him being called, and the rest is
   the command;
 - "jarvis" further in is part of the command, kept whole;
-- a mention inside the sentence is not taken for the wake grammar's hit.
+- a mention inside the sentence is not taken for the wake grammar's hit;
+- nor is a hit on speech with nothing like the name in it ("oh yeah").
 
     python tools/test_wake_position.py
 """
@@ -79,5 +80,13 @@ said = "open a github issue on jarvis called mark2"
 addressed, remainder = voice._split_wake(said)
 command = remainder if addressed and remainder else said
 check(command == said, f"a follow-up naming the repo is heard whole: {command!r}")
+
+# The wake grammar can only answer "jarvis", so it hears the name in "oh yeah". Only a transcript with
+# something like the name in it may wake him; one with nothing like it is ignored.
+for said in ("oh yeah", "ah yeah", "yeah", "all right then", "thank you"):
+    check(voice._strip_wake(said) is None, f"the grammar's hit on {said!r} is not taken: nothing sounds like the name")
+
+check(voice._strip_wake("charvis open chrome") == "open chrome", "a name mis-spelt by the transcript still wakes him")
+check(voice._strip_wake("charvis") == "", "and alone, wakes him to listen")
 
 sys.exit(1 if failures else 0)

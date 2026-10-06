@@ -325,7 +325,13 @@ def _mentions_wake(text):
 
 
 def _strip_wake(text):
-    """Remove the wake word when grammar confirmed it but spelling differs."""
+    """Remove the wake word when grammar confirmed it but spelling differs.
+
+    None when nothing in the transcript sounds like the name at all. The
+    wake grammar can only ever answer "jarvis" or nothing, so it hears the
+    name in sounds that are not it -- "oh yeah", "ah yeah" -- and only the
+    transcript can say whether the name was really there.
+    """
     addressed, remainder = _split_wake(text)
 
     if addressed:
@@ -334,7 +340,8 @@ def _strip_wake(text):
     tokens = text.split()
 
     if len(tokens) < 2:
-        return ""
+        word = tokens[0] if tokens else ""
+        return "" if SequenceMatcher(None, word, WAKE_WORD).ratio() >= WAKE_STRIP_RATIO else None
 
     best = None
     best_score = 0.0
@@ -359,7 +366,7 @@ def _strip_wake(text):
         start, end = best
         return " ".join(tokens[:start] + tokens[end:]).strip()
 
-    return text
+    return None
 
 
 def _armed():
@@ -571,9 +578,13 @@ def listen():
             # The grammar hearing "jarvis" is explained by a mention inside
             # the sentence, which is not him being called.
             if wake_pending and not addressed and not _mentions_wake(text):
-                remainder = _strip_wake(text)
-                addressed = True
-                print(f'[wake] grammar matched on "{text}"')
+                stripped = _strip_wake(text)
+
+                if stripped is None:
+                    print(f'[ignored] "{text}" (the wake grammar heard the name; nothing said sounds like it)')
+                else:
+                    remainder, addressed = stripped, True
+                    print(f'[wake] grammar matched on "{text}"')
 
             wake_pending = False
 
