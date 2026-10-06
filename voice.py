@@ -122,6 +122,11 @@ _status_listener = None
 _level_listener = None
 _follow_up_expired_listener = None
 _follow_up_answered = False
+
+# Whether the last command returned by listen() came with his name -- said in
+# it, or just before ("Jarvis." ... "what's the time") -- or only inside a
+# follow-up window, where anything said in the room is taken as meant for him.
+_last_named = True
 _last_status = None
 
 # Readings reported per audio block, so the waveform is smooth.
@@ -159,6 +164,11 @@ def _notify_follow_up_expired():
             print(
                 f"[JARVIS] follow-up expiry listener error: {error}"
             )
+
+
+def last_was_named():
+    """True if the last command listen() returned was addressed to JARVIS by name; False for a bare follow-up."""
+    return _last_named
 
 
 def consume_follow_up_answer():
@@ -440,6 +450,9 @@ def listen():
     epoch = speech_epoch()
     wake_pending = False
 
+    # His name heard alone ("Jarvis." -- "Yes, sir?"): the next bare command is named too.
+    woken_by_name = False
+
     # Whisper transcribes only after you stop talking, which can take a few
     # seconds. Judging the follow-up window when the text finally arrives
     # would let it expire mid-transcription, so freeze it when speech starts.
@@ -535,7 +548,7 @@ def listen():
                 return text
 
             if armed_at_start or _armed():
-                global _follow_up_answered
+                global _follow_up_answered, _last_named
 
                 if follow_up_started:
                     _follow_up_answered = True
@@ -546,6 +559,7 @@ def listen():
 
                 addressed, remainder = _split_wake(text)
                 command = remainder if addressed and remainder else text
+                _last_named = addressed or woken_by_name
 
                 print(f"You said: {command}")
                 _report_status()
@@ -567,10 +581,15 @@ def listen():
                 print(f'[ignored] "{text}" (no wake word)')
                 continue
 
+            # What woke him, as heard: a name he answers to that was not meant for him shows here.
+            print(f'[wake] woken by "{text}"')
+
             if remainder:
+                _last_named = True
                 print(f"You said: {remainder}")
                 return remainder
 
+            woken_by_name = True
             print("Woken. Awaiting command...")
 
             if ACKNOWLEDGE_WAKE and _wake_listener:

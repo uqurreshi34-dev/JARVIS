@@ -3,6 +3,7 @@ from voice import (
     arm_follow_up,
     consume_follow_up_answer,
     disarm,
+    last_was_named,
     listen,
     set_follow_up_expired_listener,
     set_level_listener,
@@ -111,6 +112,20 @@ ACTION_TIMEOUT = 8.0
 # word every time.
 FOLLOW_UP = True
 
+# How many follow-ups in a row may come without his name. A conversation in
+# the room -- friends, a phone call, a video -- otherwise chains on for ever,
+# each overheard sentence answered and opening the next window. After this
+# many, his name is needed again.
+FOLLOW_UP_TURNS = 2
+
+# What a follow-up without his name may not do: change what JARVIS keeps about
+# you. A sentence overheard in a conversation must not become a memory, a note
+# or a diary entry; said with his name, these work as always.
+NAMED_ONLY_INTENTS = frozenset({
+    "remember", "forget", "learn_subject", "make_note", "remove_note", "clear_notes",
+    "add_event", "remove_event", "clear_calendar", "set_reminder", "cancel_reminders",
+})
+
 
 def _greeting():
     """Good morning, afternoon, or evening, using your name if it is known.
@@ -153,6 +168,8 @@ class Assistant:
         # never touched; only what JARVIS was going to say is dropped.
         self._turn_stopped = threading.Event()
         self._in_turn = False
+        # Follow-ups in a row without his name (FOLLOW_UP_TURNS).
+        self._unnamed_turns = 0
 
         # One voice at a time: a protocol's {"say"} steps run on the action's
         # own thread while its "Initiating..." may still be playing.
@@ -298,6 +315,13 @@ class Assistant:
         with self._alert_lock:
             self._interaction_open = False
             self._flush_alerts_locked()
+
+    def _close_turn(self):
+        """End a turn with nothing more to listen for: standby, and queued announcements said."""
+        disarm()
+        self._in_turn = False
+        self._end_interaction()
+        self._state(IDLE)
 
     def _open_follow_up(self):
         """Open a fresh follow-up window atomically with the alert gate."""
@@ -689,9 +713,12 @@ class Assistant:
             try:
                 command = listen()
                 follow_up_answered = consume_follow_up_answer()
+                named = last_was_named()
             except Exception as error:
                 print(f"[JARVIS] listener error: {error}")
                 continue
+
+            self._unnamed_turns = 0 if named else self._unnamed_turns + 1
 
             _heard_at = time.monotonic()
 
@@ -728,10 +755,20 @@ class Assistant:
             except Exception as error:
                 print(f"[JARVIS] command error: {error}")
                 self._say(phrases.pick("wrong"))
+                self._close_turn()
                 continue
 
             if not result:
+                # Not understood: likely not meant for him. The turn ends here -- no follow-up window, and
+                # anything that queued behind it (a gold trade, a battery warning) is said now.
                 self._say(phrases.pick("unknown"))
+                self._close_turn()
+                continue
+
+            if not named and result.get("intent") in NAMED_ONLY_INTENTS:
+                print(f"[JARVIS] {result.get('intent')} needs his name in a follow-up; not done")
+                self._say(phrases.pick("name_first"))
+                self._close_turn()
                 continue
 
             _handled_at = time.monotonic()
@@ -774,11 +811,14 @@ class Assistant:
                 # follow-up. Queued announcements are read out as normal.
                 disarm()
                 self._end_interaction()
-            elif follow_up_answered:
-                self._finish_answered_follow_up()
-            elif FOLLOW_UP:
-                self._open_follow_up()
+            elif FOLLOW_UP and self._unnamed_turns < FOLLOW_UP_TURNS:
+                if follow_up_answered:
+                    self._finish_answered_follow_up()
+                else:
+                    self._open_follow_up()
             else:
+                # Out of follow-ups without his name, or follow-ups off: his name is needed again.
+                disarm()
                 self._end_interaction()
 
             self._in_turn = False

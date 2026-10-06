@@ -110,6 +110,11 @@ POOLS = {
         "That's beyond me for now, sir.",
         "I'm not equipped for that yet, sir.",
     ),
+    # A follow-up without his name asked to change what he keeps about you.
+    "name_first": (
+        "Say my name first for that one, sir.",
+        "For that, sir, address me by name.",
+    ),
     "failed": (
         "That didn't work, sir.",
         "I'm afraid that failed, sir.",

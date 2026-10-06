@@ -276,7 +276,7 @@ def _load_main():
     voice = types.ModuleType("voice")
 
     for name in (
-        "arm_follow_up", "consume_follow_up_answer", "disarm", "listen",
+        "arm_follow_up", "consume_follow_up_answer", "disarm", "last_was_named", "listen",
         "set_follow_up_expired_listener", "set_level_listener",
         "set_status_listener", "set_wake_listener",
     ):

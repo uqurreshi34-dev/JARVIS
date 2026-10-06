@@ -1373,6 +1373,20 @@ low, or the small words around them; a question complete in itself is
 asked as it is; and handle_command ends the context after any command
 that is not a sensor question.
 
+### Follow-up windows without his name - `voice.py`, `main.py`
+After an answer JARVIS listens for FOLLOW_UP_SECONDS for a command without
+his name. In a room where people are talking that used to chain on: every
+overheard sentence was answered and opened the next window. Now
+`voice.last_was_named()` says whether a command came with his name (said in
+it, or alone just before); main.py allows FOLLOW_UP_TURNS (2) follow-ups in
+a row without it, then needs the name again; a follow-up without it may not
+do NAMED_ONLY_INTENTS (remembering, forgetting, notes, the diary,
+reminders), answering "Say my name first for that one, sir" instead; and a
+command not understood ends the turn there (`_close_turn`), with no window
+left open and anything queued behind it (a gold trade, a battery warning)
+said at once. Every wake is printed with what was heard (`[wake] woken by
+"..."`), so a false one shows its cause. `tools/test_follow_up_named.py`.
+
 ### Status report - `actions/status_report.py`
 "Status report" is JARVIS on himself, with no model call: connected
 services up and down (mcp_services.configured and connected), the boards
