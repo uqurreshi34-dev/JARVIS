@@ -228,9 +228,10 @@ class Client:
         return {"id": opened["tradeID"], "units": float(opened["units"]), "price": float(opened["price"]),
                 "time": parse_time(filled.get("time"))}
 
-    def trades(self, tag=None, state="OPEN"):
-        """Trades in [state] ("OPEN", "CLOSED", "ALL"), those JARVIS tagged [tag] only if given."""
-        found = self._get(f"/v3/accounts/{self.account_id()}/trades", {"state": state, "count": 50}).get("trades") or []
+    def trades(self, tag=None, state="OPEN", count=50):
+        """The latest [count] trades (at most 500) in [state] ("OPEN", "CLOSED", "ALL"), those tagged [tag] only if given."""
+        found = self._get(f"/v3/accounts/{self.account_id()}/trades",
+                          {"state": state, "count": max(1, min(int(count), 500))}).get("trades") or []
         return [_trade(trade) for trade in found
                 if tag is None or (trade.get("clientExtensions") or {}).get("tag") == tag]
 
@@ -282,6 +283,8 @@ def _trade(trade):
         "stop": order_price("stopLossOrder"),
         "target": order_price("takeProfitOrder"),
         "comment": (trade.get("clientExtensions") or {}).get("comment", ""),
+        # Who placed it: JARVIS's traders tag theirs; a trade placed by hand has no tag.
+        "tag": (trade.get("clientExtensions") or {}).get("tag", ""),
         "closing": list(trade.get("closingTransactionIDs") or []),
     }
 

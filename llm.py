@@ -445,6 +445,9 @@ Use get_time when the user asks for the current time or today's date.
 Use get_weather when the user asks about the weather, temperature, or forecast.
 Use get_system_status when the user asks how the machine, PC, or system is
 doing, or about CPU, memory, disk space, or battery.
+Use trading_record when the user asks how their own trading or trades are
+going, for their trading record or trade journal, or how the gold trader
+has done.
 For these, leave both "application" and "website" null.
 
 Use answer_question when the user asks a general knowledge or factual
@@ -598,6 +601,7 @@ _SCHEMA = {
                 "get_time",
                 "get_weather",
                 "get_system_status",
+                "trading_record",
                 "answer_question",
                 "unknown",
             ],

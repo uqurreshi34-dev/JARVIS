@@ -73,6 +73,8 @@ _PROTECTED_NAMES = frozenset({
     # The trend trader's settings and its record of every trade.
     "trend-trader.json",
     "trend-trades.csv",
+    # Your own trades, as JARVIS records them (actions/trade_journal.py).
+    "manual-trades.csv",
     # Your voiceprint, and the model that compares voices with it (speaker.py);
     # moved, JARVIS answers nobody until it is put back.
     "voiceprint.json",

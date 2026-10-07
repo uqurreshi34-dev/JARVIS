@@ -76,6 +76,7 @@ from actions import (
     tasks,
     project_setup,
     protocols,
+    trade_journal,
     tradingview,
     tripo,
 )
@@ -278,6 +279,10 @@ _FAST_PHRASES = (
       "whats your status", "what is your status",
       "how are your systems", "status check"),
      "status_report"),
+    (("how are my trades going", "hows my trading", "how is my trading",
+      "how are my trades doing", "my trade journal", "read my trade journal",
+      "how am i doing with my trades", "whats my trading record"),
+     "trading_record"),
     (("whats on my clipboard", "what is on my clipboard",
       "read my clipboard", "check my clipboard"), "read_clipboard"),
     (("show me the news", "whats the news", "what is the news",
@@ -6408,6 +6413,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "status_report":
         return _query(intent, status_report.report)
+
+    if intent == "trading_record":
+        return _query(intent, trade_journal.report)
 
     if intent == "set_reminder":
         seconds = to_seconds(amount, unit)

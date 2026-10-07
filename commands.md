@@ -80,6 +80,7 @@ stays on the PC.
 | what's the weather like | forecast for wherever you've said you are |
 | how's my system | CPU, memory, disk, battery |
 | status report | JARVIS himself: which connected services are up, the sensor boards, today's sensor record and its gaps, how quickly he has been answering, and the last day's model calls with the share read from the cache (also "run diagnostics", "run a self check") |
+| how are my trades going | Your own trades at OANDA, the ones placed by hand: how many, won and lost, the result overall and in R, how many reached the target or the stop; then the gold trader's record. Kept in manual-trades.csv (also "how's my trading", "read my trade journal") |
 | how much battery do I have | battery only |
 | take a screenshot | saves to your JARVIS folder |
 | minimise everything | clears the desktop |

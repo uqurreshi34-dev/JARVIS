@@ -1912,6 +1912,20 @@ forward behind the best close, the channel exit closes it at the market.
 `python tools/trend_trader.py --on/--off/--status/--once/--set name=value`;
 `tools/test_trend_trader.py` checks it against a pretend OANDA and clock.
 
+### Your own trades - `actions/trade_journal.py`, `tools/trade_journal.py`
+Trades placed by hand on the OANDA demo account -- on the website or the
+phone -- are judged by their record, not one result. Every closed trade
+that JARVIS's traders did not place (theirs carry a tag, `_trade` now
+reports it; a hand-placed one has none) is copied once into
+manual-trades.csv: entry, stop, target, exit, result, how it closed as
+OANDA records it, and R -- the result in the trade's own risk, entry to
+stop, so -1 R is a full stop-out whatever the size. A trade marked
+`counted: no` stays in the file and out of the numbers. "How are my trades
+going" brings it up to date and says the count, wins, money, average R and
+how many reached the target or the stop, warning until there are
+ENOUGH_TRADES (30), then the gold trader's record; `python
+tools/trade_journal.py` lists every trade. `tools/test_trade_journal.py`.
+
 ### Providers and failover
 
 The pool is tried in order: awake providers first, resting ones after, on
