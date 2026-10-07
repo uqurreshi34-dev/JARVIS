@@ -15,7 +15,11 @@ cannot tell you from a video. Checked, with the speaker model stood in for
 - the voiceprint is checked when read, and a different model's refused;
 - the model is used only if its SHA-256 is the one expected, and a download
   that is not is thrown away;
+- you, let through, and near misses go in jarvis-log.txt with their scores;
+  clear misses (a video) do not, or they would fill it;
 - enrolling saves the averaged voiceprint and says how your own clips score;
+  --add records more clips and adds them to the ones you have (an older
+  voiceprint counting as its clips); --report reads the scores back;
   --on, --off and --threshold change only what they say;
 - the listener takes a dropped utterance as nothing heard, so a wake-word
   hit on someone else's voice does not wake him for the next thing said;
@@ -124,6 +128,15 @@ passed, printed = quietly(broken, np.zeros(SECOND))
 check(not passed and "failed" in printed, "a check that fails drops the utterance")
 check(not quietly(speaker.Closed("no model"), np.zeros(SECOND))[0], "a check that cannot run drops everything")
 
+from actions import journal  # noqa: E402
+
+near = speaker.Gate(unit(1.0, 0.0), 0.5, Model({3 * SECOND: unit(0.42, np.sqrt(1 - 0.42 ** 2))}))
+passed, _printed = quietly(near, np.zeros(3 * SECOND))
+logged = [line for line in journal.recent(50) if f" {speaker.JOURNAL_KIND} " in line]
+check(not passed and len(logged) == 2 and "yours: sounds 0.98 like you, 0.50 needed, 1.0s" in logged[0]
+      and "near miss: sounds 0.42 like you, 0.50 needed, 3.0s" in logged[1] and logged[1].endswith("-> ignored"),
+      "you, and a near miss, are logged with their scores; another voice, far off, is not")
+
 # ---- whether there is a check ------------------------------------------------------------------------
 
 path = speaker.voiceprint_path()
@@ -221,6 +234,54 @@ code, printed = quietly(enroll_voice.enrol, Model({SECOND: unit(1.0, 0.0), SECON
 check(code == 0 and "may miss you" in printed, "clips unlike each other: told he may miss you")
 code, printed = quietly(enroll_voice.enrol, Model(), [np.zeros(10)] * 4, 0.5)
 check(code == 1 and "Nothing saved" in printed, "too few usable clips: nothing saved")
+
+# --add: more clips, recorded where he missed you, added to the ones you have.
+kept = speaker.load_voiceprint()
+recorded = iter([np.zeros(SECOND + 10 + step) for step in range(4)])
+more = {SECOND + 10 + step: unit(0.5, 1.0, 0.1 * step) for step in range(4)}
+real = (speaker.download_model, speaker.Model, enroll_voice.record)
+speaker.download_model, speaker.Model = (lambda report=print: None), (lambda: Model(more))
+enroll_voice.record = lambda seconds, prompt: next(recorded)
+
+try:
+    code, printed = quietly(enroll_voice.main, ["--add", "--clips", "4"])
+finally:
+    speaker.download_model, speaker.Model, enroll_voice.record = real
+
+added = speaker.load_voiceprint()
+everything = list(kept["clip_vectors"]) + list(more.values())
+check(code == 0 and added["clips"] == 7 and len(added["clip_vectors"]) == 7 and added["threshold"] == kept["threshold"]
+      and np.allclose(added["voiceprint"], speaker.centroid(everything), atol=1e-5) and "3 of them from before" in printed,
+      "--add: the new clips join the ones you have, at the same threshold")
+
+legacy = json.load(open(path, encoding="utf-8"))
+legacy.pop("clip_vectors")
+write(dict(legacy, clips=2))
+old = speaker.load_voiceprint()
+recorded = iter([np.zeros(SECOND + 10 + step) for step in range(3)])
+speaker.download_model, speaker.Model = (lambda report=print: None), (lambda: Model(more))
+enroll_voice.record = lambda seconds, prompt: next(recorded)
+
+try:
+    code, printed = quietly(enroll_voice.main, ["--add", "--clips", "3"])
+finally:
+    speaker.download_model, speaker.Model, enroll_voice.record = real
+
+check(code == 0 and speaker.load_voiceprint()["clips"] == 5
+      and np.allclose(speaker.load_voiceprint()["voiceprint"],
+                      speaker.centroid([old["voiceprint"]] * 2 + list(more.values())[:3]), atol=1e-5),
+      "--add to a voiceprint saved before clips were kept: it counts as its clips")
+
+code, printed = quietly(enroll_voice.report, [
+    "2026-10-07 11:01:02  voice            yours: sounds 0.61 like you, 0.50 needed, 2.1s  -> heard",
+    "2026-10-07 11:02:03  command          'what time is it' -> get_time (local)",
+    "2026-10-07 11:03:04  voice            near miss: sounds 0.44 like you, 0.50 needed, 1.2s  -> ignored",
+    "2026-10-07 11:04:05  voice            yours: sounds 0.72 like you, 0.50 needed, 3.0s  -> heard",
+])
+check(code == 0 and "2 times, scoring 0.61 to 0.72" in printed and "2026-10-07 11:03  0.44" in printed
+      and f"{speaker.SAFE_THRESHOLD:.2f}" in printed, "--report: how you scored, and the near misses, from the log")
+check("Nothing in jarvis-log.txt yet" in quietly(enroll_voice.report, [])[1], "--report with nothing logged says so")
+write(dict(legacy, clips=3))
 
 check(quietly(enroll_voice.main, ["--off"])[0] == 0 and speaker.load_voiceprint()["enabled"] is False
       and speaker.load_voiceprint()["clips"] == 3, "--off switches the check off, keeping the voiceprint")

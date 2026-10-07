@@ -54,7 +54,18 @@ VOICEPRINT_NAME = "voiceprint.json"
 # 0.45; a voiceprint averaged over several clips raises your own scores.
 DEFAULT_THRESHOLD = 0.5
 LOWEST_THRESHOLD = 0.2
+
+# Below this, other people's voices scored as high as some of your own in
+# testing: the lowest threshold worth suggesting.
+SAFE_THRESHOLD = 0.4
 HIGHEST_THRESHOLD = 0.95
+
+# Every time your voice is let through, and every miss this close below the
+# threshold, goes in jarvis-log.txt with its score, so the threshold can be
+# set from evidence (python tools/enroll_voice.py --report). Clear misses --
+# a video, someone across the room -- are left out, or they would fill it.
+NEAR_MISS = 0.15
+JOURNAL_KIND = "voice"
 
 # The model's features: Kaldi filterbanks, as WeSpeaker computes them.
 _FRAME = 400          # 25 ms
@@ -237,6 +248,16 @@ def load_voiceprint():
         raise ValueError(f"{VOICEPRINT_NAME} was made with a different voice model; enrol again with"
                          " python tools/enroll_voice.py")
 
+    clips = saved.get("clip_vectors")
+
+    if clips is not None:
+        clips = np.asarray(clips, dtype=np.float64)
+
+        if clips.ndim != 2 or clips.shape[1] != 256 or not np.isfinite(clips).all():
+            raise ValueError(f"{VOICEPRINT_NAME} has clips JARVIS does not understand; enrol again with"
+                             " python tools/enroll_voice.py")
+
+    saved["clip_vectors"] = clips
     saved["voiceprint"] = vector / np.linalg.norm(vector)
     saved.setdefault("enabled", True)
     saved["threshold"] = float(threshold)
@@ -260,6 +281,9 @@ def save_voiceprint(changes, replace=False):
 
     if isinstance(saved.get("voiceprint"), np.ndarray):
         saved["voiceprint"] = [round(float(value), 6) for value in saved["voiceprint"]]
+
+    if saved.get("clip_vectors") is not None:
+        saved["clip_vectors"] = [[round(float(value), 6) for value in vector] for vector in saved["clip_vectors"]]
 
     saved["updated"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     handle, temporary = tempfile.mkstemp(prefix="voiceprint-", suffix=".part", dir=os.path.dirname(path))
@@ -300,11 +324,25 @@ class Gate:
             print("[ignored] too short to tell whose voice it is")
             return False
 
+        seconds = len(audio) / SAMPLE_RATE
+
         if score < self.threshold:
             print(f"[ignored] not your voice (sounds {score:.2f} like you; {self.threshold:.2f} needed)")
+
+            if score >= self.threshold - NEAR_MISS:
+                _record(f"near miss: sounds {score:.2f} like you, {self.threshold:.2f} needed, {seconds:.1f}s", "ignored")
+
             return False
 
+        _record(f"yours: sounds {score:.2f} like you, {self.threshold:.2f} needed, {seconds:.1f}s", "heard")
         return True
+
+
+def _record(detail, outcome):
+    from actions import journal
+
+    journal.write(JOURNAL_KIND, detail, outcome)
+
 
 
 class Closed:

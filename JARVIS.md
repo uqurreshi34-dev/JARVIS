@@ -1408,8 +1408,14 @@ you; 0.50 needed)`. That covers waking, follow-ups and yes/no answers
 alike. No voiceprint, or `--off`: anyone is answered, as before, and
 start-up says so. A voiceprint that cannot be used or a model that will not
 load: nobody is, until it is fixed or switched off. `--check` scores a
-clip (play the video at it); `--threshold` raises or lowers the bar. The
-phone app is not checked: it is paired to you already. `tools/test_voice_check.py`.
+clip (play the video at it); `--threshold` raises or lowers the bar. Every
+time your voice is let through, and every miss within NEAR_MISS (0.15) of
+the threshold, is logged in jarvis-log.txt with its score (`voice  yours:
+sounds 0.61 like you`); clear misses are not, or a video would fill the log.
+`--report` reads those back, so the threshold is set from how you actually
+score; `--add` records more clips -- where, or when, he missed you -- and
+adds them to the ones kept in voiceprint.json. The phone app is not
+checked: it is paired to you already. `tools/test_voice_check.py`.
 
 ### Status report - `actions/status_report.py`
 "Status report" is JARVIS on himself, with no model call: connected
