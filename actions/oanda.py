@@ -99,13 +99,17 @@ class Client:
         return self._account
 
     def summary(self):
-        """{"currency", "balance", "margin_available", "open_trades"} of the account."""
+        """{"currency", "balance", "margin_available", "open_trades", "realized"} of the account.
+
+        "realized" is what closed trades have made or lost on it, all told -- OANDA's own Realized P/L.
+        """
         account = self._get(f"/v3/accounts/{self.account_id()}/summary")["account"]
         return {
             "currency": account.get("currency", ""),
             "balance": float(account.get("balance", 0)),
             "margin_available": float(account.get("marginAvailable", 0)),
             "open_trades": int(account.get("openTradeCount", 0)),
+            "realized": float(account.get("pl", 0)),
         }
 
     def instrument(self, name=GOLD):

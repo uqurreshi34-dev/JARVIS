@@ -20,7 +20,9 @@ A trade that should not count -- placed by mistake, say -- stays in the
 file with "counted" changed to "no". Deleting its row would only bring it
 back on the next look.
 
-    "how are my trades going"         spoken, with the gold trader's record too
+    "how are my trades going"         the account's money from closed trades, OANDA's own figure, split
+                                      into the gold trader's and yours; then your strategy, judged on the
+                                      trades you have not marked out; then the gold trader's record
     python tools/trade_journal.py     the same, with every trade listed
 """
 
@@ -41,6 +43,9 @@ OWN_TAGS = frozenset({gold_trader.TAG, trend_trader.TAG})
 
 # How far back OANDA is asked: its most recent closed trades, up to its own limit.
 LOOK_BACK = 500
+
+# A gap this size between OANDA's figure and the logs' is said (financing, a trade from before the logs); smaller is rounding.
+OTHER_AT_LEAST = 0.05
 
 # Fewer finished trades than this and the numbers are said with a warning: too few to judge a strategy by.
 ENOUGH_TRADES = 30
@@ -128,22 +133,51 @@ def sync(client=None):
     return len(new)
 
 
-def summary(currency=""):
-    """How your own trades have gone, in a sentence or three."""
+def _counted(row):
+    return row.get("counted", "yes").strip().casefold() != "no"
+
+
+def _total(logged):
+    return sum(float(row["result"]) for row in logged if row.get("result"))
+
+
+def money(realized=None, currency=""):
+    """Where the account's money from closed trades came from, the parts adding up to OANDA's own figure.
+
+    [realized] is OANDA's Realized P/L for the account; without it (OANDA out of reach), the logs alone.
+    Your own trades count here in full, marked or not: a trade left out of judging the strategy still
+    made or lost that money.
+    """
+    unit = f" {currency}" if currency else ""
+    parts = [("the gold trader", _total(gold_trader.logged())), ("your own trades", _total(rows()))]
+    trend = trend_trader.logged()
+
+    if trend:
+        parts.append(("the trend trader", _total(trend)))
+
+    listed = ", ".join(f"{name} {value:+.2f}" for name, value in parts)
+
+    if realized is None:
+        return f"From the logs, sir: {listed}{unit}."
+
+    other = realized - sum(value for _name, value in parts)
+    rest = f", and {other:+.2f} from anything else, such as financing" if abs(other) >= OTHER_AT_LEAST else ""
+    return f"Closed trades have made {realized:+.2f}{unit} on the account, sir: {listed}{rest}."
+
+
+def summary():
+    """How your own strategy is doing, judged on the trades you have not marked out: wins, R, how they closed."""
     kept = rows()
-    counted = [row for row in kept if row.get("counted", "yes").strip().casefold() != "no"]
+    counted = [row for row in kept if _counted(row)]
     left_out = len(kept) - len(counted)
-    aside = f" ({left_out} left out, as you marked them)" if left_out else ""
+    aside = f", leaving out the {left_out} you marked" if left_out else ""
 
     if not counted:
-        return f"You have no finished trades of your own in the journal yet, sir{aside}."
+        return f"There are no finished trades of your own to judge your strategy by yet{aside}."
 
-    results = [float(row["result"]) for row in counted]
-    wins = sum(1 for value in results if value > 0)
-    money = f"{sum(results):+.2f}{' ' + currency if currency else ''}"
-    said = [f"{len(counted)} finished trade{'s' if len(counted) != 1 else ''} of your own{aside}, sir: "
-            f"{wins} won, {len(counted) - wins} lost, {money} overall."]
-
+    wins = sum(1 for row in counted if float(row["result"]) > 0)
+    said = [f"Judging your strategy{aside}: {len(counted)} trade{'s' if len(counted) != 1 else ''}, {wins} won,"
+            f" {len(counted) - wins} lost."]
     measured = [float(row["R"]) for row in counted if row.get("R")]
 
     if measured:
@@ -164,23 +198,31 @@ def summary(currency=""):
                 f" closed by hand.")
 
     if len(counted) < ENOUGH_TRADES:
-        said.append(f"That's too few to judge the strategy by: about {ENOUGH_TRADES - len(counted)} more before the"
-                    f" numbers mean much.")
+        said.append(f"That's too few to judge it by: about {ENOUGH_TRADES - len(counted)} more before the numbers"
+                    f" mean much.")
 
     return " ".join(said)
 
 
+def _bot_record():
+    logged = [row for row in gold_trader.logged() if row.get("result")]
+    state = "on" if gold_trader.settings()["enabled"] else "off"
+    wins = sum(1 for row in logged if float(row["result"]) > 0)
+    return f"The gold trader is {state}: {len(logged)} finished trade{'s' if len(logged) != 1 else ''}, {wins} won."
+
+
 def report():
-    """For JARVIS to say: your own trades, brought up to date, then the gold trader's record."""
-    currency, stale = "", ""
+    """For JARVIS to say: the account's money from closed trades and where it came from, then each record."""
+    realized, currency, stale = None, "", ""
 
     if oanda.configured():
         try:
             client = oanda.Client()
             sync(client)
-            currency = client.summary().get("currency", "")
+            account = client.summary()
+            realized, currency = account["realized"], account.get("currency", "")
         except oanda.OandaError as error:
             print(f"[JARVIS] trade journal: {error}")
-            stale = " OANDA couldn't be reached, so trades closed since I last looked aren't in it yet."
+            stale = " OANDA couldn't be reached, so trades closed since I last looked aren't counted yet."
 
-    return f"{summary(currency)}{stale} {gold_trader.status()}"
+    return f"{money(realized, currency)}{stale} {summary()} {_bot_record()}"

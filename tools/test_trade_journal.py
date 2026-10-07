@@ -11,8 +11,10 @@ sandboxed JARVIS folder:
   trade with no stop has none;
 - a trade marked "counted: no" stays in the file but out of the numbers,
   and is not copied in again;
-- the spoken summary gives the count, wins, money and R, how many reached
-  the target or the stop, and warns while there are too few to judge by;
+- what is said starts with the account's own figure from OANDA, split into
+  the gold trader's and yours so the parts add up to it; then your strategy,
+  judged without the trades you marked -- wins, R, how they closed, and a
+  warning while there are too few; then the gold trader's record;
 - OANDA's trades say who placed them, and are asked for up to its limit;
 - "how are my trades going" reaches it, by phrase and through the model;
   the journal is never tidied away.
@@ -82,7 +84,7 @@ class Account:
         return {"26": "stop", "19": "stop"}.get(trade["id"], "closed")
 
     def summary(self):
-        return {"currency": "GBP"}
+        return {"currency": "GBP", "realized": 0.0}
 
 
 account = Account()
@@ -105,12 +107,12 @@ check(trade_journal.sync(account) == 0 and len(trade_journal.rows()) == 2, "each
 check(trade_journal.r_multiple("buy", 100.0, 90.0, 130.0) == 3.0 and trade_journal.r_multiple("sell", 100.0, 110.0, 70.0) == 3.0
       and trade_journal.r_multiple("buy", 100.0, None, 130.0) is None, "R: a 1:3 target either way is +3 R; no stop, no R")
 
-# ---- the summary ------------------------------------------------------------------------------------
+# ---- your strategy, judged ----------------------------------------------------------------------------
 
-said = trade_journal.summary("GBP")
-check("2 finished trades of your own, sir: 0 won, 2 lost, -5.30 GBP overall" in said and "losers -1.0 R" in said
+said = trade_journal.summary()
+check("Judging your strategy: 2 trades, 0 won, 2 lost." in said and "losers -1.0 R" in said and "GBP" not in said
       and "0 reached the target, 2 the stop, and 0 were closed by hand" in said and "28 more" in said,
-      f"said: count, wins, money, R, how they closed, and too few to judge yet ({said})")
+      f"your strategy: count, wins, R, how they closed, too few yet -- and no money, which the account line gives ({said})")
 
 # The accidental one, marked out by hand in the file.
 with open(trade_journal.path(), newline="", encoding="utf-8") as handle:
@@ -123,27 +125,42 @@ with open(trade_journal.path(), "w", newline="", encoding="utf-8") as handle:
     writer.writeheader()
     writer.writerows(marked)
 
-said = trade_journal.summary("GBP")
-check("1 finished trade of your own (1 left out, as you marked them)" in said and "-4.99 GBP" in said
-      and trade_journal.sync(account) == 0, "a trade marked 'counted: no' stays out of the numbers, and is not copied back")
-
-account.closed.insert(0, trade(30, 0.2, 4100.0, None, None, utc(2026, 10, 8, 14, 0), 4112.0, 1.8))
-trade_journal.sync(account)
 said = trade_journal.summary()
-check(trade_journal.rows()[-1]["R"] == "" and "1 were closed by hand" in said and "2 finished trades" in said,
-      "a trade with no stop is counted in money, not in R, and closed by hand")
+check("Judging your strategy, leaving out the 1 you marked: 1 trade, 0 won, 1 lost." in said
+      and trade_journal.sync(account) == 0, "a trade marked 'counted: no' stays out of the judging, and is not copied back")
 
-# ---- spoken, with the gold trader's record ------------------------------------------------------------
+# ---- the money: OANDA's own figure, and where it came from ----------------------------------------------
+
+# The gold trader's two trades of 5 and 6 October, as its log has them.
+for number, result in (("5", "29.25"), ("13", "-10.70")):
+    gold_trader._log({"trade": number, "result": result, "how": "target" if result[0] != "-" else "stop"})
+
+said = trade_journal.money(13.26, "GBP")
+check(said == "Closed trades have made +13.26 GBP on the account, sir: the gold trader +18.55, your own trades -5.30.",
+      f"the account's +13.26 first, split into the gold trader's +18.55 and your -5.30, the marked one included ({said})")
+said = trade_journal.money(15.26, "GBP")
+check(said.endswith(", and +2.01 from anything else, such as financing."),
+      "a gap between OANDA's figure and the logs is said, not hidden; a penny of rounding is not")
+check(trade_journal.money(None) == "From the logs, sir: the gold trader +18.55, your own trades -5.30.",
+      "OANDA out of reach: the logs' figures, without an account total to claim")
+
+
+class Reached(Account):
+    def summary(self):
+        return {"currency": "GBP", "realized": 13.26}
+
 
 real = (oanda.configured, oanda.Client)
-oanda.configured, oanda.Client = (lambda: True), (lambda: account)
+oanda.configured, oanda.Client = (lambda: True), (lambda: Reached())
 
 try:
     spoken = trade_journal.report()
 finally:
     oanda.configured, oanda.Client = real
 
-check(spoken.startswith(trade_journal.summary("GBP")) and "gold trader" in spoken, "spoken: yours, then the gold trader's")
+check(spoken.startswith("Closed trades have made +13.26 GBP on the account, sir:") and "Judging your strategy" in spoken
+      and spoken.endswith("The gold trader is off: 2 finished trades, 1 won.") and spoken.count("+18.55") == 1,
+      f"spoken: the account, then your strategy, then the gold trader's record -- each figure once ({spoken})")
 
 
 class Down(Account):
@@ -159,7 +176,14 @@ try:
 finally:
     oanda.configured, oanda.Client = real
 
-check("couldn't be reached" in spoken and "2 finished trades" in spoken, "OANDA out of reach: the journal as it is, and saying so")
+check(spoken.startswith("From the logs") and "couldn't be reached" in spoken,
+      "OANDA out of reach: the journal as it is, and saying so")
+
+account.closed.insert(0, trade(30, 0.2, 4100.0, None, None, utc(2026, 10, 8, 14, 0), 4112.0, 1.8))
+trade_journal.sync(account)
+said = trade_journal.summary()
+check(trade_journal.rows()[-1]["R"] == "" and "1 were closed by hand" in said and "2 trades" in said,
+      "a trade with no stop is judged, but not in R, and closed by hand")
 
 printed = io.StringIO()
 

@@ -74,7 +74,7 @@ class Oanda:
             return Answer(200, {"accounts": [{"id": "101-004-1234567-001"}, {"id": "101-004-1234567-002"}]})
         if path.endswith("/summary"):
             return Answer(200, {"account": {"currency": "GBP", "balance": "10000.0000", "marginAvailable": "10000",
-                                            "openTradeCount": 0}})
+                                            "openTradeCount": 0, "pl": "13.2600"}})
         if path.endswith("/instruments"):
             return Answer(200, {"instruments": [{"name": "XAU_USD", "displayName": "Gold", "minimumTradeSize": "0.1",
                                                  "tradeUnitsPrecision": 1, "displayPrecision": 3,
@@ -114,8 +114,9 @@ check(all(url.startswith(oanda.PRACTICE_HOST) for url, _params, _headers in serv
       and all(TOKEN not in url and TOKEN not in str(params) for url, params, _headers in server.asked),
       "every request goes to the practice server, the token only in the Authorization header")
 
-check(client.summary() == {"currency": "GBP", "balance": 10000.0, "margin_available": 10000.0, "open_trades": 0},
-      "the account's currency, balance and open trades")
+check(client.summary() == {"currency": "GBP", "balance": 10000.0, "margin_available": 10000.0, "open_trades": 0,
+                           "realized": 13.26},
+      "the account's currency, balance, open trades, and what closed trades have made on it")
 check(client.instrument() == {"name": "XAU_USD", "display_name": "Gold", "minimum_units": 0.1, "unit_decimals": 1,
                               "price_decimals": 3, "margin_rate": 0.05}, "OANDA's own terms for gold, as it sends them")
 

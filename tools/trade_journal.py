@@ -24,7 +24,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--offline", action="store_true", help="do not ask OANDA for newly closed trades")
     options = parser.parse_args(argv)
-    currency = ""
+    realized, currency = None, ""
 
     if not options.offline:
         try:
@@ -40,7 +40,8 @@ def main(argv=None):
             try:
                 client = oanda.Client()
                 added = trade_journal.sync(client)
-                currency = client.summary().get("currency", "")
+                account = client.summary()
+                realized, currency = account["realized"], account.get("currency", "")
                 print(f"{added} newly closed trade{'s' if added != 1 else ''} of your own added from OANDA.")
             except oanda.OandaError as error:
                 print(f"OANDA: {error}. Showing the journal as it is.")
@@ -58,7 +59,8 @@ def main(argv=None):
 
         print()
 
-    print(trade_journal.summary(currency).replace(", sir", "").replace(" sir", ""))
+    print(trade_journal.money(realized, currency).replace(", sir", "").replace(" sir", ""))
+    print(trade_journal.summary())
     return 0
 
 
