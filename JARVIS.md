@@ -1196,6 +1196,12 @@ queue behind whatever JARVIS is already saying rather than talking over
 him. A pattern fires at most once a day, never repeatedly across the
 several checks that fall inside its due window.
 
+An announcement's words stay on the HUD while it is said and after: the
+listening loop wipes only the last turn's words before listening again
+(`_clear_last_turn`, taken with the voice, so nothing is wiped part-way
+through), and a command heard replaces them. At start-up a Bitcoin move
+used to flash up and be wiped mid-sentence. `tools/test_announcement_hud.py`.
+
 ### Reminders — `actions/reminders.py`
 Spoken timers that announce themselves when due.
 

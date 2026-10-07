@@ -182,6 +182,11 @@ class Assistant:
         self._announcing = False
         self._after_announcement = None
 
+        # Whether the HUD's words are an announcement's rather than a turn's.
+        # Listening again wipes the last turn's words, not an announcement's:
+        # a Bitcoin move said at start-up flashed up and was wiped mid-sentence.
+        self._alert_on_hud = False
+
     def stop(self):
         self._stop.set()
 
@@ -272,12 +277,34 @@ class Assistant:
             return
 
         with self._voice_lock:
+            self._alert_on_hud = False
             self._reply(text)
             self._state(SPEAKING)
             speak(text)
 
         if self._turn_stopped.is_set():
             self._state(IDLE)
+
+    def _clear_last_turn(self):
+        """Before listening, wipe the last turn's words from the HUD.
+
+        An announcement's words stay until a command replaces them. Taken
+        with the voice, so one being said is never wiped part-way through.
+        """
+        with self._voice_lock:
+            if self._alert_on_hud:
+                return
+
+            self._heard("")
+            self._reply("")
+
+    def _show_command(self, command):
+        """A command heard: it replaces whatever the HUD showed, an announcement included."""
+        if self._alert_on_hud:
+            self._alert_on_hud = False
+            self._reply("")
+
+        self._heard(command)
 
     def _begin_interaction(self):
         with self._alert_lock:
@@ -294,6 +321,7 @@ class Assistant:
 
         with self._voice_lock:
             self._after_announcement = self._current_state
+            self._alert_on_hud = True
             self._reply(text)
             self._state(SPEAKING)
             self._announcing = True
@@ -701,8 +729,7 @@ class Assistant:
         while not self._stop.is_set():
             # The HUD state is driven by voice.set_status_listener, which
             # fires when the follow-up window actually opens or expires.
-            self._heard("")
-            self._reply("")
+            self._clear_last_turn()
 
             # A new turn starts unstopped.
             self._in_turn = False
@@ -728,7 +755,7 @@ class Assistant:
             if not command:
                 continue
 
-            self._heard(command)
+            self._show_command(command)
 
             if command.lower().strip() == "quit":
                 self._say("Shutting down.")

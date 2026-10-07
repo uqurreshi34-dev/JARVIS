@@ -10,7 +10,10 @@ listening simulated:
   it has been said, then takes effect;
 - an announcement that comes while something else is being said waits for
   the voice before taking the HUD, so its words are not shown over another's;
-- with nothing asked for meanwhile, the HUD goes back to how it was.
+- with nothing asked for meanwhile, the HUD goes back to how it was;
+- listening again wipes the last turn's words but not an announcement's,
+  even one starting as the listener does (at start-up, a Bitcoin move
+  flashed up and was wiped mid-sentence); a command then replaces them.
 
     python tools/test_announcement_hud.py
 """
@@ -150,5 +153,33 @@ check(shown_while_greeting == "Good evening. JARVIS is online.",
       "an announcement waits for the voice: the greeting's words stay while the greeting is said")
 check([text for _what, text in order] == ["Good evening. JARVIS is online.", "Bitcoin is down 0.1 percent, sir."]
       and hud.last("reply") == "Bitcoin is down 0.1 percent, sir.", "then it takes the HUD and is said")
+
+# Start-up: the listener comes round while the announcement is being said.
+hud.told.clear()
+cleared = threading.Event()
+
+
+def wiped_meanwhile(text):
+    if text.startswith("Bitcoin"):
+        threading.Thread(target=lambda: (assistant._clear_last_turn(), cleared.set())).start()
+        time.sleep(0.2)
+        during.update(reply=hud.last("reply"))
+
+
+with patch.object(main, "speak", side_effect=wiped_meanwhile), patch.object(main, "phone_server", MagicMock()):
+    assistant._on_alert("Bitcoin is down 0.4 percent since 11:13, sir.")
+
+cleared.wait(5)
+check(during["reply"] == "Bitcoin is down 0.4 percent since 11:13, sir."
+      and hud.last("reply") == "Bitcoin is down 0.4 percent since 11:13, sir.",
+      "the listener coming round does not wipe an announcement, during or after it")
+assistant._show_command("what time is it")
+check(hud.last("reply") == "" and assistant._alert_on_hud is False, "a command heard replaces the announcement's words")
+
+with patch.object(main, "speak"):
+    assistant._say("It's ten past two, sir.")
+
+assistant._clear_last_turn()
+check(hud.last("reply") == "", "and a turn's own words are wiped when he listens again, as before")
 
 sys.exit(1 if failures else 0)
