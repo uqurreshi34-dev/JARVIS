@@ -1949,19 +1949,21 @@ tools/trade_journal.py` lists every trade. `tools/test_trade_journal.py`.
 "Shall I buy or sell gold" -- or silver, oil, copper, natural gas, any market
 named in trade-plan.json's `markets` (spoken name to OANDA instrument, so any
 OANDA market can be added) -- is answered with the rules, not a guess. JARVIS
-reads that market's four-hour candles and draws the lines as a trader does:
-resistance through the two most recent highs above the price that are
-within `merge_atr` (0.5) ATR of each other, support through the two most
-recent such lows below it. A high is a candle higher than the
-`swing_strength` (3) either side that stands out -- price rose `peak_atr`
-(2.5) ATR to reach it and fell as far from it, each within `peak_candles`
-(12) candles -- so the wobbles inside a range are not highs. Older pairs
-make the further lines, for targets. Measured in ATRs, the rule is the same
-for every market. Checked on OANDA gold's four-hour candles of 8 October
-2026: resistance 4,223.5 (the highs of 30 Sep and 2 Oct) and support 4,107.2
-(the lows of 28 Sep and 6 Oct), where a trader drew 4,229 and 4,114 by eye;
-at 2 ATR, two lower highs inside the range (1 and 6 Oct) were taken
-instead. The chart rings the peaks behind
+reads that market's four-hour candles and draws the lines as a trader does,
+one rule for every market: going back from now, the two most recent highs
+within `merge_atr` (0.5) ATR of each other, with no candle closing above the
+higher of them in between (price resisted there), make resistance; the two
+most recent such lows make support, whether the price is still between them
+or has since broken through (then the line is named broken). Only highs and
+lows from the last `lookback_candles` (60, about two weeks) count. A high is
+a candle higher than the `swing_strength` (3) either side that stands out --
+price rose `peak_atr` (2) ATR to reach it and fell as far from it, each within
+`peak_candles` (12) candles -- so the wobbles inside a range are not highs; a
+single high or low is not a line. Older pairs make the further lines, for
+targets. Checked on OANDA's four-hour candles of 8 October 2026: gold
+resistance 4,223.5 (30 Sep and 2 Oct) and support 4,107.2 (28 Sep and 6 Oct),
+where a trader drew 4,229 and 4,114; silver resistance 61.956 and support
+60.118 (30 Sep and 6 Oct), broken on 7 Oct. The chart rings the peaks behind
 support and resistance, and `python tools/trade_plan.py gold` prints every
 line with its peaks' dates (`--save` keeps the candles too), to check
 against your own chart. The candle still forming is drawn hollow

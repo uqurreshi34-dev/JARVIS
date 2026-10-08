@@ -238,8 +238,12 @@ class _Page(QWidget):
         def middle(index):
             return rect.left() + (index + 0.5) * step
 
+        def kind_of(line):
+            # A line made of highs is resistance, of lows support -- wherever the price is now.
+            return line.get("kind") or ("high" if line["price"] > plan["price"] else "low")
+
         def colour_of(line):
-            return _AMBER if line["yours"] else (_LOSS if line["price"] > plan["price"] else _GAIN)
+            return _AMBER if line["yours"] else (_LOSS if kind_of(line) == "high" else _GAIN)
 
         # Every line the words name: support, resistance, and each plan's own line.
         named = {plan.get("support"), plan.get("resistance")} | {plan[side]["line"] for side in ("buy", "sell")
@@ -335,7 +339,9 @@ class _Page(QWidget):
             if not low <= line["price"] <= high:
                 continue
 
-            name = "yours" if line["yours"] else ("RESISTANCE" if line["price"] > plan["price"] else "SUPPORT")
+            broken = (kind_of(line) == "high") == (line["price"] < plan["price"])
+            name = "yours" if line["yours"] else ("RESISTANCE" if kind_of(line) == "high" else "SUPPORT") + (
+                " (broken)" if broken else "")
             # Short, so it finds a clear place on the line; the rings show the peaks it runs through.
             text = f"{name} {_price(line['price'], d)}" + (f" ({plan['lines_from']})" if plan.get("lines_from") else "")
             painter.setFont(_font(8, bold=True))
@@ -344,11 +350,11 @@ class _Page(QWidget):
             # label covers no recent candle and no ringed peak.
             wide = QFontMetrics(painter.font()).horizontalAdvance(text) + 12
             rings = [middle(shown_at[when]) for when, _price in line.get("swings") or [] if when in shown_at]
-            top = y - 17 if line["price"] > plan["price"] else y + 3
-            label = QRectF(rect.right() - wide - 4, top, wide, 15)
+            sides = [y - 17, y + 3] if line["price"] > plan["price"] else [y + 3, y - 17]
+            label = QRectF(rect.right() - wide - 4, sides[0], wide, 15)
 
-            def clear(left):
-                """Whether a label at [left] covers no ringed peak and no candle."""
+            def clear(left, top):
+                """Whether a label at [left], [top] covers no ringed peak and no candle."""
                 if any(left - 8 <= ring <= left + wide + 8 for ring in rings):
                     return False
 
@@ -360,15 +366,14 @@ class _Page(QWidget):
 
                 return True
 
-            # The first place along the line, from the right, that covers nothing; the right end if none does.
-            left = rect.right() - wide - 4
+            # The first place along the line, from the right, that covers nothing -- on the side away from the
+            # price first, then the other; the right end if nowhere does.
+            places = [(left, top) for top in sides
+                      for left in range(int(rect.right() - wide - 4), int(rect.left() + 4) - 1, -12)]
+            found_place = next(((left, top) for left, top in places if clear(left, top)), None)
 
-            while left >= rect.left() + 4:
-                if clear(left):
-                    label = QRectF(left, top, wide, 15)
-                    break
-
-                left -= 12
+            if found_place:
+                label = QRectF(found_place[0], found_place[1], wide, 15)
             painter.fillRect(label, _BACKDROP)
             painter.setPen(QPen(colour_of(line), 1))
             painter.drawRect(label)
@@ -630,13 +635,15 @@ class _Page(QWidget):
     def _working(self, painter, y, width):
         chosen = self.plan["settings"]
         rows = [
-            ("Lines", f"Resistance runs through the two most recent highs above the price that are within"
-                      f" {chosen['merge_atr']:g} ATR of each other; support through the two most recent such lows"
-                      f" below it. A high is a candle higher than the {chosen['swing_strength']} either side that"
-                      f" stands out: price rose at least {chosen.get('peak_atr', 0):g} ATR to reach it and fell as"
-                      f" far from it, each within {chosen.get('peak_candles', 0)} candles -- a wobble in a range is"
-                      f" not a high. Your own lines (amber) come from trade-plan.json, under"
-                      f" {self.plan['symbol']}."),
+            ("Lines", f"Resistance runs through the two most recent highs within {chosen['merge_atr']:g} ATR of"
+                      f" each other with no candle closing above them in between -- price was resisted there;"
+                      f" support through the two most recent such lows. Only the last"
+                      f" {chosen.get('lookback_candles', 0)} candles count, and a line the price has since crossed"
+                      f" is marked broken. A high is a candle higher than the {chosen['swing_strength']} either side"
+                      f" that stands out: price rose at least {chosen.get('peak_atr', 0):g} ATR to reach it and fell"
+                      f" as far from it, each within {chosen.get('peak_candles', 0)} candles -- a wobble in a range"
+                      f" is not a high, and one high alone is not a line. Your own lines (amber) come from"
+                      f" trade-plan.json, under {self.plan['symbol']}."),
             ("ATR (14)", f"{_price(self.plan['atr'], self.plan['decimals'])}: how far {self.plan['instrument']}"
                          f" typically moves in one {self.plan['timeframe']}"
                          f" candle. The stop sits {chosen['stop_atr']:g} ATR beyond the retest, so ordinary noise"

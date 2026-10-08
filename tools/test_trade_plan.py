@@ -103,9 +103,24 @@ drawn = tp.plan(real, real[-1][4], chosen, GOLD)
 check(abs(drawn["resistance"] - 4223.5) < 1 and abs(drawn["support"] - 4107.2) < 1,
       f"on real gold: resistance {drawn['resistance']:,.1f} and support {drawn['support']:,.1f}, where a trader drew"
       f" 4,229 and 4,114")
-lower = tp.plan(real, real[-1][4], dict(chosen, peak_atr=2.0), GOLD)
-check(abs(lower["resistance"] - drawn["resistance"]) > 20,
-      f"and a smaller peak would have taken two lower highs inside the range instead ({lower['resistance']:,.1f})")
+check(all(line["touches"] == 2 and len(line["swings"]) == 2 for line in drawn["levels"]),
+      "each line runs through a pair of highs or of lows")
+# Two highs on 1 and 6 Oct (4,193 and 4,184) are close together, but price closed far above them on 2 Oct, in
+# between: it did not hold there, so they are no line.
+check(not any(4180 < line["price"] < 4200 for line in drawn["levels"]),
+      "two highs with a close above them in between are no line: price did not hold there")
+
+# Silver the same day: its range floor of 30 Sep and 6 Oct (60.12) broken on 7 Oct, the top at 61.96.
+with open(ROOT / "tools" / "fixtures" / "silver-4h-2026-10-08.csv", encoding="utf-8") as handle:
+    silver = [(datetime.strptime("2026 " + row["start (UK)"], "%Y %d %b %H:%M").replace(tzinfo=timezone.utc),
+               float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]))
+              for row in csv.DictReader(handle)]
+
+argent = tp.plan(silver, silver[-1][4], chosen, {"name": "Silver", "instrument": "XAG_USD", "decimals": 5})
+check(abs(argent["support"] - 60.118) < 0.01 and abs(argent["resistance"] - 61.956) < 0.01
+      and "has broken below its support at 60.11775" in argent["headline"] and argent["sell"] is None
+      and "no line below the price" in argent["headline"],
+      f"silver: the broken range floor is still drawn as the support it was, and said so ({argent['headline'][:90]})")
 
 # Resistance as a trader draws it: the most recent two highs close together above the price -- not merely
 # the nearest line. Here an older pair sits nearer; the newer pair, further up, is the resistance.
@@ -113,10 +128,10 @@ older = {"price": 4150.0, "kind": "high", "touches": 2, "yours": False, "last": 
 newer = {"price": 4229.0, "kind": "high", "touches": 2, "yours": False, "last": 90, "swings": []}
 floor_ = {"price": 4100.0, "kind": "low", "touches": 2, "yours": False, "last": 80, "swings": []}
 above_low = {"price": 4140.0, "kind": "low", "touches": 2, "yours": False, "last": 95, "swings": []}
-check(tp.chart_lines.latest([older, newer, floor_, above_low], 4125.0, "above") is newer
-      and tp.chart_lines.latest([older, newer, floor_, above_low], 4125.0, "below") is floor_,
-      "resistance: the most recent pair of highs above the price; support: of lows below it -- never a pair of"
-      " lows as resistance")
+check(tp.chart_lines.latest([older, newer, floor_, above_low], "high") is newer
+      and tp.chart_lines.latest([older, newer, floor_, above_low], "low") is above_low,
+      "resistance: the most recent pair of highs; support: the most recent pair of lows -- never a pair of lows as"
+      " resistance")
 check(all(len(line["swings"]) == line["touches"] and all(when > 0 for when, _price in line["swings"]) for line in lines),
       "every line carries the swings that made it, by time, for the chart to ring")
 # A shallow wobble mid-range: highs and lows a few dollars apart, never moving an ATR from them.
@@ -203,7 +218,8 @@ failed = base + [(4050, 4062, 4048, 4060), (4060, ceiling + 6, 4058, ceiling + 4
 check(tp.plan(made(failed), 4072, chosen, GOLD)["buy"]["stage"] == "break", "a break that closed back inside is no break")
 
 top = tp.plan(made(broken), ceiling + 18, chosen, GOLD)
-check(top["resistance"] is None and "no line above" in top["headline"], "above every line: said, not invented")
+check("has broken above its resistance at" in top["headline"] and top["resistance"] == ceiling,
+      "above the resistance: said that it has broken it, the line still drawn")
 
 # The same rules on a market priced in single figures: lines, figures and words to its own decimals.
 gas_rows = [(o / 1000, h / 1000, l / 1000, c / 1000) for o, h, l, c in zigzag(low=3010, high=3090, wick=2)]
@@ -219,7 +235,8 @@ def named_lines_drawn(found):
     drawn = {line["price"] for line in found["levels"]}
     named = [found.get("support"), found.get("resistance")] + [found[side]["line"] for side in ("buy", "sell")
                                                                if found.get(side)]
-    in_words = all(f"{value:,.{found['decimals']}f}" in found["headline"] for value in named[:2] if value)
+    in_words = found["verdict"] != "wait" or all(f"{value:,.{found['decimals']}f}" in found["headline"]
+                                                 for value in named[:2] if value)
     return all(value in drawn for value in named if value is not None) and in_words
 
 
@@ -228,8 +245,9 @@ plans = [tp.plan(made(rows), rows_price, chosen, GOLD) for rows, rows_price in
 plans.append(tp.plan(real, real[-1][4], chosen, GOLD))
 check(all(named_lines_drawn(found) for found in plans),
       "every line the words name is drawn, and the support and resistance named are the ones drawn")
-check(plans[0]["support"] == plans[0]["buy"]["line"] and plans[0]["buy"]["stage"] == "retest",
-      "a line broken upward and awaiting its retest is named the support")
+check(plans[0]["resistance"] == plans[0]["buy"]["line"] and plans[0]["buy"]["stage"] == "retest"
+      and "has broken above its resistance" in plans[0]["headline"],
+      "a resistance broken upward and awaiting its retest is said to be broken, and the plan waits on that line")
 
 # ---- reading OANDA ------------------------------------------------------------------------------
 
@@ -422,8 +440,9 @@ check("peaks" in printed.getvalue() and "(support)" in printed.getvalue() and "1
       "tools/trade_plan.py prints every line with the peaks that made it, and both pages' verdicts")
 saved = tp.files.root()
 cli.save(both)
-check(os.path.exists(os.path.join(saved, "trade-plan-candles.csv"))
-      and len(open(os.path.join(saved, "trade-plan-candles.csv"), encoding="utf-8").read().splitlines())
+kept = os.path.join(saved, f"trade-plan-candles-{both['symbol']}.csv")
+check(os.path.exists(kept) and folder_organizer.is_protected(os.path.basename(kept))
+      and len(open(kept, encoding="utf-8").read().splitlines())
       == len(both["read_candles"]) + 1, "--save keeps every candle the lines came from, to check them against")
 
 panel._on_plan(tp.read("shall i buy or sell gold", Oanda(range_candles, entry_broken=True)))

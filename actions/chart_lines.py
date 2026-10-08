@@ -7,11 +7,10 @@ Shared by the trade plan (actions/trade_plan.py), the gold backtest and the gold
                 that stands out: price rose at least [prominence] to reach it within [window] candles
                 before, and fell at least that far from it within [window] after (a trough: the lowest,
                 fallen to and risen from). What a trader calls "a high" -- not every wobble.
-    a line      peaks of one kind (highs, or lows) all within [merge] of each other, at their average;
-                it needs [touches] of them: two highs close together make a resistance line, two lows
-                a support line. Each line keeps its kind and the time of its latest peak, so the chart
-                can take, as traders do, the most recent pair of highs above the price as resistance
-                and the most recent pair of lows below it as support.
+    a line      two highs within [merge] of each other, with no close above them in between -- price
+                came up, was turned back, and was turned back again at the same price: resistance.
+                Two lows the same way: support. The most recent such pair is the line in use, as a
+                trader takes the two latest highs that line up.
                 Your own lines are lines whatever the chart says, and keep their own price.
     room        how far a trade can go before the first line in its way, less a [buffer] -- price
                 often turns just short of a line, so a target is not asked to touch it
@@ -55,47 +54,66 @@ def swings(candles, strength, prominence=0.0, window=None):
     return [(index, price) for index, price, _kind in peaks(candles, strength, prominence, window)]
 
 
-def levels(candles, merge, strength, touches, yours=(), prominence=0.0, window=None):
-    """The lines, lowest first: [{"price", "kind", "touches", "yours", "last", "swings"}] -- "kind" "high"
-    (resistance's) or "low" (support's), None for your own; "last" the index of the latest peak; "swings"
-    [(index, price)] of every one, so a chart can mark where price turned."""
-    groups = [{"prices": [], "swings": [], "yours": True, "kind": None, "price": float(level)} for level in yours]
+def levels(candles, merge, strength, touches=2, yours=(), prominence=0.0, window=None, lookback=None):
+    """The lines, lowest first: [{"price", "kind", "touches", "yours", "last", "swings"}].
 
-    def fits(group, price):
-        # Every swing in a line lies within [merge] of every other: a line cannot creep, swing by swing,
-        # further than that from where it started.
-        spread = group["prices"] + [price] + ([group["price"]] if group["yours"] else [])
-        return max(spread) - min(spread) <= merge
+    As a trader draws them. Going back from now, each high (of the last [lookback] candles, all if None)
+    is paired with the next earlier high within [merge] of it that price has respected -- no candle closed
+    above the higher of the two between them. The pair is a resistance line, at their average; a pair of
+    lows the same way, with no close below between them, is a support line. Each high or low makes one
+    line at most, so the most recent pair comes first. "kind" is "high" (resistance) or "low" (support),
+    None for your own lines; "last" the index of the later peak; "swings" [(index, price)] of both, so a
+    chart can ring them. [touches] is kept for callers: a line is always at least two peaks.
+    """
+    found = [{"price": float(level), "kind": None, "touches": 0, "yours": True, "last": -1, "swings": []}
+             for level in yours]
+    first = max(0, len(candles) - lookback) if lookback else 0
 
-    for index, price, kind in sorted(peaks(candles, strength, prominence, window), key=lambda peak: peak[1]):
-        near = min((group for group in groups if group["kind"] in (None, kind) and fits(group, price)),
-                   key=lambda group: abs(group["price"] - price), default=None)
+    for kind in ("high", "low"):
+        recent = sorted(((index, price) for index, price, which in peaks(candles, strength, prominence, window)
+                         if which == kind and index >= first), reverse=True)
+        used = set()
 
-        if near is not None:
-            near["prices"].append(price)
-            near["swings"].append((index, price))
+        for later, (index, price) in enumerate(recent):
+            if later in used:
+                continue
 
-            if not near["yours"]:
-                near["price"] = sum(near["prices"]) / len(near["prices"])
-        else:
-            groups.append({"prices": [price], "swings": [(index, price)], "yours": False, "kind": kind,
-                           "price": price})
+            for earlier in range(later + 1, len(recent)):
+                then, before = recent[earlier]
 
-    return sorted(({"price": round(group["price"], 6), "kind": group["kind"], "touches": len(group["swings"]),
-                    "yours": group["yours"],
-                    "last": max((index for index, _price in group["swings"]), default=-1),
-                    "swings": sorted(group["swings"])} for group in groups
-                   if group["yours"] or len(group["swings"]) >= touches), key=lambda line: line["price"])
+                if earlier in used or abs(price - before) > merge:
+                    continue
+
+                between = candles[then + 1:index]
+                held = (all(candle[4] < max(price, before) for candle in between) if kind == "high"
+                        else all(candle[4] > min(price, before) for candle in between))
+
+                if held:
+                    used.update((later, earlier))
+                    pair = [(then, before), (index, price)]
+                    same = next((line for line in found if line["kind"] == kind
+                                 and all(abs(other - value) <= merge for _i, other in line["swings"]
+                                         for _j, value in pair)), None)
+
+                    # The same level met again: one line with more touches, not two lines on top of each other.
+                    if same:
+                        same["swings"] = sorted(same["swings"] + pair)
+                        same["touches"] = len(same["swings"])
+                        same["last"] = max(same["last"], index)
+                        same["price"] = round(sum(value for _i, value in same["swings"]) / same["touches"], 6)
+                    else:
+                        found.append({"price": round((price + before) / 2, 6), "kind": kind, "touches": 2,
+                                      "yours": False, "last": index, "swings": pair})
+                    break
+
+    return sorted(found, key=lambda line: line["price"])
 
 
-def latest(lines, price, side):
-    """The resistance ("above") or support ("below") as traders draw it: of the lines that side of [price]
-    made of highs (resistance) or lows (support), the one whose latest peak is the most recent -- the last
-    two highs close together, not merely the nearest line. Your own lines count either way. None if none."""
-    kind = "high" if side == "above" else "low"
-    beyond = [line for line in lines if (line["price"] > price if side == "above" else line["price"] < price)
-              and line.get("kind") in (kind, None)]
-    return max(beyond, key=lambda line: (line["last"], -abs(line["price"] - price)), default=None)
+def latest(lines, kind):
+    """The resistance ("high") or support ("low") as a trader draws it: the line through the most recent
+    pair of that kind, wherever the price is now -- a support price has since broken through is still the
+    support it was, and is drawn. None if there is none."""
+    return max((line for line in lines if line.get("kind") == kind), key=lambda line: line["last"], default=None)
 
 
 def room(side, entry, lines, buffer):

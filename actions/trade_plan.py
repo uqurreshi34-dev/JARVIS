@@ -47,7 +47,7 @@ Settings in trade-plan.json in the JARVIS folder:
                          lines above (null: none); entry_candles, entry_shown_candles,
                          entry_retest_candles as for the chart's own
     granularity, utc_candles, mid_prices, candles, shown_candles, swing_strength, merge_atr, min_touches, peak_atr,
-    peak_candles,
+    peak_candles, lookback_candles,
     stop_atr, target_buffer_atr, min_reward, fallback_reward, retest_candles,
     touch_atr, rsi_high, rsi_low
 """
@@ -96,10 +96,14 @@ DEFAULTS = {
     "min_touches": 2,
     # A high counts only when it stands out, as a trader sees one: price rose at least this many ATRs to
     # reach it and fell at least as far from it, each within peak_candles candles (a low: the mirror).
-    # Wobbles in a range are not highs. In ATRs, so one rule fits every market: on gold's four-hour chart
-    # of 8 October 2026 (ATR $30) it drew resistance at 4,223.5 through the highs of 30 Sep and 2 Oct, and
-    # support at 4,107.2 through the lows of 28 Sep and 6 Oct -- the lines a trader drew by eye.
-    "peak_atr": 2.5,
+    # Wobbles in a range are not highs. Resistance is the two most recent highs within merge_atr of each
+    # other with no close above them in between; support the mirror. In ATRs, so one rule fits every
+    # market: on gold's four-hour chart of 8 October 2026 it drew 4,223.5 and 4,107.2, where a trader drew
+    # 4,229 and 4,114 by eye.
+    "peak_atr": 2.0,
+    # How far back the highs and lows are looked for: about two weeks of four-hour candles. A trader takes
+    # the latest that line up, and lines older than this have had their time.
+    "lookback_candles": 60,
     "peak_candles": 12,
     # Your own lines, by OANDA's name for the market: always drawn and used.
     "your_levels": {},
@@ -203,7 +207,7 @@ def settings():
 def levels(candles, atr, chosen, yours=()):
     """The lines, lowest first, as actions/chart_lines.py finds them with these settings."""
     found = chart_lines.levels(candles, chosen["merge_atr"] * atr, chosen["swing_strength"], chosen["min_touches"],
-                               yours, chosen["peak_atr"] * atr, chosen["peak_candles"])
+                               yours, chosen["peak_atr"] * atr, chosen["peak_candles"], chosen["lookback_candles"])
 
     # Where price turned, by time rather than by place in this list, so any chart can mark them.
     return [dict(line, swings=[[_ms(candles[index][0]), price] for index, price in line["swings"]])
@@ -353,11 +357,12 @@ def side_plan(side, line, candles, atr, rsis, lines, chosen, broke=None, decimal
     }
 
 
-def _choose_line(side, price, lines, candles, chosen, waiting=None):
-    """The line a [side] plan trades: one broken recently and holding, else the one to break -- [waiting],
-    the resistance (for a buy) or support (for a sell), when there is one."""
+def _choose_line(side, price, named, candles, chosen):
+    """The line a [side] plan trades, of the [named] ones -- the support and resistance drawn: one broken
+    recently and holding, else the nearest one still to break (above the price for a buy, below for a
+    sell). Only the lines drawn and named, so the plan never waits on a line the chart does not show."""
     window = chosen["retest_candles"]
-    behind = [line for line in lines if not _beyond(line["price"], price, side) or line["price"] == price]
+    behind = [line for line in named if not _beyond(line["price"], price, side) or line["price"] == price]
     behind.sort(key=lambda line: abs(line["price"] - price))
 
     for line in behind:
@@ -366,10 +371,7 @@ def _choose_line(side, price, lines, candles, chosen, waiting=None):
         if broke is not None:
             return line, broke
 
-    if waiting:
-        return waiting, None
-
-    ahead = [line for line in lines if _beyond(line["price"], price, side)]
+    ahead = [line for line in named if _beyond(line["price"], price, side)]
     return (min(ahead, key=lambda line: abs(line["price"] - price)), None) if ahead else (None, None)
 
 
@@ -419,13 +421,14 @@ def plan(candles, price, chosen, market, live=True, lines=None, line_atr=None, l
         # Their swings were on the other chart's candles: no index here.
         lines = [dict(line, last=-1) for line in lines]
 
-    resistance = chart_lines.latest(lines, price, "above")
-    support = chart_lines.latest(lines, price, "below")
+    resistance = chart_lines.latest(lines, "high")
+    support = chart_lines.latest(lines, "low")
+    named = [line for line in (support, resistance) if line]
 
     plans = {}
 
     for side in ("buy", "sell"):
-        line, broke = _choose_line(side, price, lines, candles, chosen, resistance if side == "buy" else support)
+        line, broke = _choose_line(side, price, named, candles, chosen)
         plans[side] = side_plan(side, line, candles, atr, rsis, lines, chosen, broke, d, line_atr) if line else None
 
         # A setup that has been and gone is history: the plan is for the next line to break, with the
@@ -446,20 +449,6 @@ def plan(candles, price, chosen, market, live=True, lines=None, line_atr=None, l
                 plans[side]["passed"] = passed
             else:
                 plans[side + "_passed"] = passed
-
-    # Words and chart name the same lines. A line a plan has broken through and waits to retest is now
-    # the support (broken up through) or the resistance (broken down through), so it is named as such.
-    for side, name in (("buy", "support"), ("sell", "resistance")):
-        waiting = plans[side]
-
-        if waiting and waiting["stage"] in ("retest", "confirm", "ready"):
-            broken = next((line for line in lines if line["price"] == waiting["line"]), None)
-
-            if broken and (broken["price"] < price if side == "buy" else broken["price"] > price):
-                if name == "support":
-                    support = broken
-                else:
-                    resistance = broken
 
     verdict, headline = _verdict(plans, price, support, resistance, chosen, market)
     step = timedelta(seconds=GRANULARITY_SECONDS[chosen["granularity"]])
@@ -551,17 +540,29 @@ def _verdict(plans, price, support, resistance, chosen, market):
         return side, (f"{side.title()} setup confirmed at {found['line']:,.{d}f}: in near {found['entry']:,.{d}f}, stop"
                       f" {found['stop']:,.{d}f}, target {found['target']:,.{d}f}, {found['ratio']:.2f} : 1.")
 
-    if support and resistance:
-        where = f"between support {support['price']:,.{d}f} and resistance {resistance['price']:,.{d}f}"
-    elif support:
-        where = f"above support {support['price']:,.{d}f}, with no line above it in the candles read"
-    elif resistance:
-        where = f"below resistance {resistance['price']:,.{d}f}, with no line under it in the candles read"
-    else:
-        where = f"at {price:,.{d}f}, with no line either side in the candles read"
+    name = market["name"]
+    s_text = f"{support['price']:,.{d}f}" if support else None
+    r_text = f"{resistance['price']:,.{d}f}" if resistance else None
 
-    waits = [f"{side.title()} plan: wait for {_waiting_for(plans[side])}." for side in ("buy", "sell") if plans[side]]
-    return "wait", " ".join([f"Nothing to do yet: {market['name']} is {where}."] + waits)
+    if support and resistance and support["price"] < price < resistance["price"]:
+        where = f"{name} is between support {s_text} and resistance {r_text}."
+    elif support and price < support["price"]:
+        where = f"{name} has broken below its support at {s_text}" + (
+            f", with resistance at {r_text} above that." if resistance and resistance["price"] > support["price"] else ".")
+    elif resistance and price > resistance["price"]:
+        where = f"{name} has broken above its resistance at {r_text}" + (
+            f", with support at {s_text} below that." if support and support["price"] < resistance["price"] else ".")
+    elif support:
+        where = f"{name} is above support {s_text}; no resistance: no two recent highs line up."
+    elif resistance:
+        where = f"{name} is below resistance {r_text}; no support: no two recent lows line up."
+    else:
+        where = f"{name} is at {price:,.{d}f}; no two recent highs or lows line up, so there are no lines to trade."
+
+    waits = [f"{side.title()} plan: wait for {_waiting_for(plans[side])}." if plans[side] else
+             f"{side.title()} plan: none -- no line {'above' if side == 'buy' else 'below'} the price to break."
+             for side in ("buy", "sell") if plans[side] or support or resistance]
+    return "wait", " ".join([f"Nothing to do yet: {where}"] + waits)
 
 
 # ---- reading and showing --------------------------------------------------------------------------

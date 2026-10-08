@@ -3,8 +3,9 @@ what each page says -- to check the lines against your own chart.
 
     python tools/trade_plan.py gold
     python tools/trade_plan.py "crude oil"
-    python tools/trade_plan.py gold --save     and keep the four-hour candles in trade-plan-candles.csv in
-                                               the JARVIS folder, to check the lines against
+    python tools/trade_plan.py gold --save     and keep the four-hour candles in the JARVIS folder, one
+                                               file a market (trade-plan-candles-XAU_USD.csv), to check
+                                               the lines against
 
 Read-only: OANDA's candles and price, nothing placed. Settings in trade-plan.json in the JARVIS folder.
 """
@@ -55,7 +56,7 @@ def save(found):
 
     from actions import files
 
-    path = os.path.join(files.root(), "trade-plan-candles.csv")
+    path = os.path.join(files.root(), f"trade-plan-candles-{found['symbol']}.csv")
 
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
