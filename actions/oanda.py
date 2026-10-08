@@ -141,15 +141,21 @@ class Client:
         quote = prices[0]
         return float(quote["bids"][0]["price"]), float(quote["asks"][0]["price"]), parse_time(quote.get("time"))
 
-    def candles(self, name=GOLD, granularity="M15", count=300):
+    def candles(self, name=GOLD, granularity="M15", count=300, align_utc=False):
         """The last [count] finished candles, oldest first, as (start, open, high, low, close) on the bid.
 
         Bid prices, as the backtest uses, with the ask's close alongside in
         a second list: (candles, ask closes). The candle still forming is
-        left out.
+        left out. [align_utc]: hourly and longer candles start on UTC's
+        hours (a four-hour candle at 00:00, 04:00 ...), as TradingView draws
+        them, rather than from OANDA's day, which begins at 17:00 New York.
         """
-        answer = self._get(f"/v3/instruments/{name}/candles",
-                           {"granularity": granularity, "count": count + 1, "price": "BA"})
+        asked = {"granularity": granularity, "count": count + 1, "price": "BA"}
+
+        if align_utc:
+            asked.update({"dailyAlignment": 0, "alignmentTimezone": "UTC"})
+
+        answer = self._get(f"/v3/instruments/{name}/candles", asked)
         made, ask_closes = [], []
 
         for candle in answer.get("candles") or []:

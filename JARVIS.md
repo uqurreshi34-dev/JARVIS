@@ -1788,6 +1788,19 @@ alongside, and places, protects and closes trades. `python
 tools/oanda_check.py` confirms the connection and how fresh the candles
 are; `tools/test_oanda.py` checks it all against a pretend OANDA.
 
+The room rule (`room` in the rules, keys ending `-room2`): a trade aimed
+through a four-hour line has to break it first -- in October 2026 a
+pullback sold ten dollars above a floor that had held all day, with its
+$30 target beyond it, and was stopped out in five minutes. With the rule,
+a trade needs at least that many R of clear space before the first line in
+its way, less 0.2 of the four-hour ATR. The lines are
+`actions/chart_lines.py`'s, the same the trade plan draws, from the last
+200 finished four-hour candles on UTC's hours; the backtest builds them
+from its fifteen-minute candles and knows only those finished by each
+moment, and the trader reads OANDA's four-hour candles once per candle. It
+is a row in the backtest beside the same rules without it, and trades only
+when gold-trader.json names it, so it is chosen on its results.
+
 The strategy lives in `actions/gold_strategy.py`, shared by the backtest
 (`tools/gold_backtest.py`) and the trader, so what is tested is exactly
 what trades. `CHOSEN` is the version the trader uses: RSI not beyond

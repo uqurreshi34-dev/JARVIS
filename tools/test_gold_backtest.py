@@ -187,7 +187,7 @@ summary = gb.summarise([gb.Trade("buy", start, 0, 0, 0, result=value) for value 
 check(summary.trades == 6 and summary.wins == 2 and summary.net == 20 and summary.worst_run == 3
       and summary.deepest == 30, "the summary: trades, wins, net, worst run of losses, deepest dip")
 
-check(len(gb.VARIANTS) == 52 and len(gb.REGISTRY) == 52 and "range30-1:3" in gb.REGISTRY and "retest60-atr-1:3" in gb.REGISTRY and "pullback-atr-1:3" in gb.REGISTRY and "orb-1:3" in gb.REGISTRY and "orb-atr-1:2-no-trend" in gb.REGISTRY and
+check(len(gb.VARIANTS) == 56 and len(gb.REGISTRY) == 56 and "pullback-1:3-room2" in gb.REGISTRY and "range30-1:3" in gb.REGISTRY and "retest60-atr-1:3" in gb.REGISTRY and "pullback-atr-1:3" in gb.REGISTRY and "orb-1:3" in gb.REGISTRY and "orb-atr-1:2-no-trend" in gb.REGISTRY and
       {"pullback-1:1.5", "pullback-1:2", "pullback-1:3", "pullback-1:3-be", "pullback-1:4", "pullback-1:4-be"}
       <= set(gb.REGISTRY) and gb.AS_WRITTEN in gb.VARIANTS and gb.CHOSEN in gb.VARIANTS
       and gb.REGISTRY["bounce-1:3-be"] == gb.CHOSEN, "every combination of the open choices is run")

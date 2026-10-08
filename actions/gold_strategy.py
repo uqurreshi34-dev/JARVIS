@@ -22,6 +22,7 @@ Also here: Dukascopy's free spot gold history for the backtest, UK time,
 and the indicators (Bollinger bands, RSI, ATR, the moving average).
 """
 
+import bisect
 import concurrent.futures
 import lzma
 import math
@@ -93,6 +94,19 @@ SPREAD = 0.80
 SESSION = (10, 14)
 
 CANDLE_MINUTES = 15
+
+# Room to the next line. A trade whose target sits beyond a support or resistance line on the four-hour
+# chart asks price to break that line first: selling ten dollars above a floor that has held all day, say.
+# With [room] in the rules, a trade needs at least that many R of clear space before the first line in its
+# way, less a share of the four-hour ATR (price often turns just short of a line). The lines are
+# actions/chart_lines.py's, from the last LINE_CANDLES finished four-hour candles on UTC's hours -- what
+# the trade plan draws -- so nothing is known before it could be.
+LINE_HOURS = 4
+LINE_CANDLES = 200
+LINE_STRENGTH = 3
+LINE_MERGE_ATR = 0.5
+LINE_TOUCHES = 2
+LINE_BUFFER_ATR = 0.2
 
 
 # ---- the prices ------------------------------------------------------------------------------
@@ -414,6 +428,7 @@ class Rules:
     session: tuple = SESSION
     zone: str = "uk"             # whose clock [session] is in (ZONES)
     box: int = 0                 # "range" and "retest": how many four-hour candles the floor and ceiling span
+    room: float = 0.0            # > 0: at least this many R of clear space before the first four-hour line
 
     def _exits(self):
         if self.exits == "fixed":
@@ -432,7 +447,8 @@ class Rules:
         else:
             entry = f"{self.setup:15}"
 
-        return f"{entry} exits={self._exits():10} trend filter={'on ' if self.trend_filter else 'off'}"
+        room = f" room={self.room:g}R" if self.room else ""
+        return f"{entry} exits={self._exits():10} trend filter={'on ' if self.trend_filter else 'off'}{room}"
 
     def atr_stop_distance(self, atr):
         return ATR_STOP * atr
@@ -440,12 +456,14 @@ class Rules:
     def key(self):
         """A short, stable name for these rules, as gold-trader.json lists the setups to trade."""
         exits = self._exits().lower().replace(" ", "-").replace("+be", "-be")
+        room = f"-room{self.room:g}" if self.room else ""
+
         if self.box:
-            return f"{self.setup}{self.box}-{exits}"
+            return f"{self.setup}{self.box}-{exits}{room}"
 
         trend = "" if self.trend_filter else "-no-trend"
         rsi = "" if self.setup != "bounce" or self.rsi == "not_extreme" else "-rsi-turned"
-        return f"{self.setup}-{exits}{trend}{rsi}"
+        return f"{self.setup}-{exits}{trend}{rsi}{room}"
 
 
 @dataclass
@@ -894,6 +912,82 @@ def exits_for(rules, entry, side, atr):
     return entry + distance, entry - reward, distance
 
 
+def four_hour(candles):
+    """Fifteen-minute [candles] built into four-hour ones on UTC's hours: [(start, open, high, low, close)]."""
+    built = []
+
+    for start, opened, high, low, closed in candles:
+        block = start.replace(hour=start.hour - start.hour % LINE_HOURS, minute=0, second=0, microsecond=0)
+
+        if built and built[-1][0] == block:
+            built[-1][2], built[-1][3], built[-1][4] = max(built[-1][2], high), min(built[-1][3], low), closed
+        else:
+            built.append([block, opened, high, low, closed])
+
+    return [tuple(block) for block in built]
+
+
+def chart_lines_from(four_hours):
+    """(lines, four-hour ATR) from finished four-hour candles, as the trade plan finds them."""
+    from actions import chart_lines
+
+    recent = four_hours[-LINE_CANDLES:]
+    atrs = average_true_range(recent)
+    atr = next((value for value in reversed(atrs) if value), None)
+
+    if not atr:
+        return [], None
+
+    return chart_lines.levels(recent, LINE_MERGE_ATR * atr, LINE_STRENGTH, LINE_TOUCHES), atr
+
+
+class LineBook:
+    """The four-hour lines known at each moment of a backtest: only four-hour candles finished by then."""
+
+    def __init__(self, candles):
+        self.blocks = four_hour(candles)
+        self.ends = [block[0] + timedelta(hours=LINE_HOURS) for block in self.blocks]
+        self._known = {}
+
+    def at(self, moment):
+        finished = bisect.bisect_right(self.ends, moment)
+
+        if finished not in self._known:
+            self._known[finished] = chart_lines_from(self.blocks[:finished])
+
+        return self._known[finished]
+
+
+def room_for(rules, side, entry, risk, lines, atr):
+    """(enough, room in R or None, the line in the way or None) for a trade [rules] would open."""
+    from actions import chart_lines
+
+    if not rules.room or not lines or not atr or risk <= 0:
+        return True, None, None
+
+    space, line = chart_lines.room(side, entry, lines, LINE_BUFFER_ATR * atr)
+
+    if space is None:
+        return True, None, None
+
+    return space >= rules.room * risk, space / risk, line
+
+
+_BOOKS = {}
+
+
+def _book(candles):
+    signature = (id(candles), len(candles), candles[0][0] if candles else None)
+
+    if signature not in _BOOKS:
+        if len(_BOOKS) > 8:
+            _BOOKS.clear()
+
+        _BOOKS[signature] = LineBook(candles)
+
+    return _BOOKS[signature]
+
+
 def backtest(candles, rules=Rules(), worked_out=None, most_open=1):
     """Every trade [rules] would have taken over [candles] (fifteen-minute, bid), in the order they closed.
 
@@ -940,6 +1034,13 @@ def backtest(candles, rules=Rules(), worked_out=None, most_open=1):
 
             if side:
                 opened = _open(side, index, candles, chosen, atrs, closes_at)
+
+                if opened is not None and chosen.room:
+                    lines, line_atr = _book(candles).at(closes_at)
+                    enough, _room, _line = room_for(chosen, side, opened.entry, opened.risk, lines, line_atr)
+
+                    if not enough:
+                        continue
 
                 if opened is not None:
                     open_trades.append(opened)
@@ -1074,6 +1175,14 @@ VARIANTS += [Rules(setup="orb", trend_filter=trend, exits="atr", ratio=ratio) fo
 VARIANTS += [Rules(setup=setup, box=box, target=target) for setup in ("range", "retest") for box in (30, 60)
              for target in (20.0, 30.0)]
 VARIANTS += [Rules(setup=setup, box=box, exits="atr", ratio=3.0) for setup in ("range", "retest") for box in (30, 60)]
+
+# Room to the next four-hour line, 2 R at least, on the setups worth trading: does keeping out of trades
+# aimed through a line that has held -- the two stopped-out trades of October 2026 among them -- make more
+# than it costs in winners left untaken? Measured beside the same rules without it.
+VARIANTS += [Rules(setup="pullback", trend_filter=True, room=2.0),
+             Rules(setup="pullback", trend_filter=True, target=40.0, room=2.0),
+             Rules(setup="pullback", trend_filter=True, exits="atr", ratio=3.0, room=2.0),
+             Rules(rsi="not_extreme", trend_filter=True, breakeven=True, room=2.0)]
 
 # The exits the trader can place at OANDA; the others are tested only.
 TRADEABLE_EXITS = ("fixed", "atr")

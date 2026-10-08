@@ -58,7 +58,10 @@ defaults the first time, and off until you turn it on):
     max_losses_in_a_row  2: after this many losses in a row it stands down until tomorrow
                          (null: never)
     setups               ["bounce-1:3-be"]: which tested setups to trade, by the backtest's key;
-                         the backtest names those worth trading
+                         the backtest names those worth trading. A key ending "-room2" adds
+                         the room rule: no trade with under 2 R of clear space before the
+                         first four-hour support or resistance line in its way (the lines the
+                         trade plan draws), said aloud when one is skipped
     friday_close         "20:00": anything open is closed then, UK time
     news_filter          true: stand aside around high-impact news
     calendar_url, news_currencies, news_impact, news_minutes_before,
@@ -369,6 +372,7 @@ class GoldTrader:
         self._entries = {}   # trade id -> (spread at entry), for the log
         self._looked = (None, None)   # (candle closing time, (candles, indicators) or None)
         self._forming_due = None      # (client, settings, candle closing time) to look at once decided
+        self._lines = (None, None)    # (four-hour candle it was read after, (lines, ATR)) for the room rule
 
     def set_listener(self, listener):
         self._listener = listener
@@ -659,6 +663,13 @@ class GoldTrader:
             return "no ATR yet"
 
         stop, target, distance = levels
+
+        if rules.room:
+            blocked = self._blocked(client, rules, side, entry, distance)
+
+            if blocked:
+                return blocked
+
         sized = self._size(client, chosen, distance)
 
         if isinstance(sized, str):
@@ -675,6 +686,37 @@ class GoldTrader:
         journal.write("gold", f"{verb} {units:g} oz at {trade['price']:.2f} ({rules.key()})",
                       f"stop {stop:.2f}, target {target:.2f}")
         return side
+
+    def _four_hour_lines(self, client):
+        """(lines, four-hour ATR) from OANDA's finished four-hour candles on UTC's hours, read once per candle."""
+        now = self._clock()
+        block = now.replace(hour=now.hour - now.hour % gold_strategy.LINE_HOURS, minute=0, second=0, microsecond=0)
+
+        if self._lines[0] != block:
+            candles, _asks = client.candles(oanda.GOLD, f"H{gold_strategy.LINE_HOURS}", gold_strategy.LINE_CANDLES,
+                                            align_utc=True)
+            self._lines = (block, gold_strategy.chart_lines_from(candles))
+
+        return self._lines[1]
+
+    def _blocked(self, client, rules, side, entry, distance):
+        """Why a trade has no room before the next four-hour line, or None when it has enough."""
+        try:
+            lines, atr = self._four_hour_lines(client)
+        except oanda.OandaError as error:
+            journal.write("gold", f"{side} skipped", f"the four-hour lines could not be read ({error})")
+            return "no lines"
+
+        enough, room, line = gold_strategy.room_for(rules, side, entry, distance, lines, atr)
+
+        if enough:
+            return None
+
+        kind = "resistance" if side == "buy" else "support"
+        self._say(f"Gold, sir: a {rules.setup} {side} at {entry:.2f}, skipped: {kind} at {line['price']:.2f} leaves"
+                  f" {max(room, 0.0):.1f} R of room, under the {rules.room:g} R the rules ask for.")
+        journal.write("gold", f"{side} skipped", f"{kind} {line['price']:.2f}, room {room:.2f} R")
+        return "no room"
 
     def _size(self, client, chosen, distance):
         """(units, words on the risk) for the next trade, or a reason not to trade.

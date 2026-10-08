@@ -83,7 +83,20 @@ class Account:
     def summary(self):
         return {"currency": self.currency, "balance": 100000.0, "margin_available": 100000.0, "open_trades": len(self.open)}
 
-    def candles(self, count=300):
+    def candles(self, name="XAU_USD", granularity="M15", count=300, align_utc=False):
+        if granularity != "M15":
+            # Four-hour candles for the room rule: a range between 4090 and 4170, swinging every five.
+            self.four_hour_asks = getattr(self, "four_hour_asks", 0) + 1
+            made = []
+
+            for index in range(count):
+                phase = index % 10
+                middle = 4090.0 + 16.0 * (phase if phase <= 5 else 10 - phase)
+                made.append((self.last_candle_start - timedelta(hours=4 * (count - index)), middle, middle + 3,
+                             middle - 3, middle))
+
+            return made, [candle[4] for candle in made]
+
         start = self.last_candle_start
         made = [(start - timedelta(minutes=15 * (count - 1 - index)), 4100.0, 4101.0, 4099.0, 4100.5)
                 for index in range(count)]
@@ -421,6 +434,22 @@ account.bid, account.ask = 4103.5, 4103.9
 fresh(utc(2026, 10, 16, 9, 30, 20))
 trader.tick()
 check(moved == [(account.open[-1]["id"], 4100.4)], "its own risk, $3, decides breakeven: $3.10 up, the stop goes to the entry")
+account.open, decision["setup"] = [], None
+
+# The room rule: a buy whose $30 target lies beyond the ceiling at 4170 is not taken; one with room is.
+gold_trader.change({"setups": ["pullback-1:3-room2"]})
+decision.update(side="buy", setup="pullback")
+account.bid, account.ask = 4150.0, 4150.4
+orders = len(account.orders)
+fresh(utc(2026, 10, 19, 9, 15, 20))
+check(trader.tick() == "no room" and len(account.orders) == orders and "skipped: resistance at" in said[-1]
+      and "R of room" in said[-1], f"room rule: a buy just under resistance is not taken ({said[-1]})")
+asks = account.four_hour_asks
+account.bid, account.ask = 4040.0, 4040.4
+fresh(utc(2026, 10, 19, 9, 30, 20))
+check(trader.tick() == "buy" and len(account.orders) == orders + 1,
+      "and one with room to its target is, the four-hour lines read once for the four-hour candle")
+check(account.four_hour_asks == asks, "the lines are read once per four-hour candle, not every fifteen minutes")
 account.open, decision["setup"] = [], None
 gold_trader.change({"setups": ["bounce-1:3-be"]})
 

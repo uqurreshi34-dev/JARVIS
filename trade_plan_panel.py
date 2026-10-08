@@ -41,8 +41,7 @@ _AMBER = QColor(235, 185, 80)
 _VERDICT_COLOURS = {"wait": _AMBER, "buy": _GAIN, "sell": _LOSS, "skip": _MUTED}
 _SIDE_COLOURS = {"buy": _GAIN, "sell": _LOSS}
 _STAGE_WORDS = {"break": "WAITING FOR THE BREAK", "retest": "BROKEN - WAITING FOR THE RETEST",
-                "confirm": "RETESTED - WAITING FOR CONFIRMATION", "ready": "CONFIRMED",
-                "passed": "PASSED - WAIT FOR THE NEXT"}
+                "confirm": "RETESTED - WAITING FOR CONFIRMATION", "ready": "CONFIRMED"}
 
 _BEAM_GAP = 74
 _FRAME_MS = 33
@@ -412,6 +411,20 @@ class _Page(QWidget):
         colour = _SIDE_COLOURS[side]
         y = self._section(painter, y, width, f"{side.upper()} PLAN")
 
+        gone = (found or {}).get("passed") or self.plan.get(f"{side}_passed")
+
+        if gone:
+            d = self.plan["decimals"]
+            verdict = ("worth taking" if gone["worth"] and gone["rsi_ok"]
+                       else "the rules would have skipped it" + (f" (RSI {gone['rsi']:.0f})" if not gone["rsi_ok"]
+                                                                 and gone["rsi"] is not None else
+                                                                 f" ({gone['ratio']:.2f} : 1)"))
+            y = self._note(painter, y, width,
+                           f"Already been and gone: a {side} setup at {gone['line']:,.{d}f} confirmed on the candle"
+                           f" that closed {gone['when']} UK -- entry {gone['entry']:,.{d}f}, stop {gone['stop']:,.{d}f},"
+                           f" target {gone['target']:,.{d}f}, {gone['ratio']:.2f} : 1; {verdict}. It is not chased:"
+                           f" the plan below is for the next one.") + 4
+
         if not found:
             where = "above" if side == "buy" else "below"
             return self._note(painter, y, width, f"No line {where} the price in the candles read:"
@@ -438,9 +451,9 @@ class _Page(QWidget):
             painter.drawText(QRectF(1, y + 1, 16, 16), Qt.AlignmentFlag.AlignCenter, str(number))
             painter.setFont(_font(9, bold=True))
             painter.setPen(QPen(_TEXT if step["done"] else _MUTED))
-            painter.drawText(QRectF(26, y, 100, 18), Qt.AlignmentFlag.AlignVCenter,
-                             step["name"] + (" - done" if step["done"] else ""))
-            y = max(y + 22, self._wrapped(painter, _LABEL, y + 1, width - _LABEL, step["text"], _font(9),
+            painter.drawText(QRectF(26, y, _LABEL - 30, 18), Qt.AlignmentFlag.AlignVCenter, step["name"])
+            text = ("done: " if step["done"] else "") + step["text"]
+            y = max(y + 22, self._wrapped(painter, _LABEL, y + 1, width - _LABEL, text, _font(9),
                                           _TEXT if not step["done"] else _MUTED) + 4)
 
         verdict = ("worth taking" if found["worth"]

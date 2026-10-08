@@ -51,7 +51,7 @@ import os
 import re
 from datetime import timedelta, timezone
 
-from actions import files, gold_strategy, oanda
+from actions import chart_lines, files, gold_strategy, oanda
 
 
 SETTINGS_NAME = "trade-plan.json"
@@ -68,6 +68,9 @@ DEFAULTS = {
     },
     # OANDA's candle size, and how many are read and shown.
     "granularity": "H4",
+    # Candles start on the hour in UTC (00:00, 04:00 ...), as TradingView draws OANDA's chart; false
+    # keeps OANDA's own day, which starts at 17:00 New York time.
+    "utc_candles": True,
     "candles": 200,
     "shown_candles": 60,
     # A swing high is higher than this many candles either side of it.
@@ -142,6 +145,8 @@ def settings():
                             for spoken, instrument in given.items()
                             if isinstance(instrument, str) and _INSTRUMENT.match(instrument) and str(spoken).strip()}
             chosen[name] = chosen[name] or dict(default)
+        elif name == "utc_candles":
+            chosen[name] = value if isinstance(value, bool) else default
         elif name == "your_levels":
             given = value if isinstance(value, dict) else {}
             chosen[name] = {instrument: [float(level) for level in levels
@@ -170,50 +175,10 @@ def settings():
 
 # ---- the lines -------------------------------------------------------------------------------
 
-def swings(candles, strength):
-    """[(index, price)] of every swing high and swing low: a candle beyond the [strength] either side."""
-    found = []
-
-    for index in range(strength, len(candles) - strength):
-        around = candles[index - strength:index + strength + 1]
-        high, low = candles[index][2], candles[index][3]
-
-        if high >= max(candle[2] for candle in around):
-            found.append((index, high))
-
-        if low <= min(candle[3] for candle in around):
-            found.append((index, low))
-
-    return found
-
-
 def levels(candles, atr, chosen, yours=()):
-    """The lines, lowest first: [{"price", "touches", "yours", "last"}].
-
-    Swings close together are one line at their average, and only a price turned at [min_touches]
-    times is a line. Your own lines are lines whatever the chart
-    says, and a swing close to one counts as a touch of yours.
-    """
-    gap = chosen["merge_atr"] * atr
-    groups = [{"prices": [], "touches": 0, "yours": True, "last": -1, "price": level} for level in yours]
-
-    for index, price in sorted(swings(candles, chosen["swing_strength"]), key=lambda swing: swing[1]):
-        near = min(groups, key=lambda group: abs(group["price"] - price), default=None)
-
-        if near is not None and abs(near["price"] - price) <= gap:
-            near["prices"].append(price)
-            near["touches"] += 1
-            near["last"] = max(near["last"], index)
-
-            if not near["yours"]:
-                near["price"] = sum(near["prices"]) / len(near["prices"])
-        else:
-            groups.append({"prices": [price], "touches": 1, "yours": False, "last": index, "price": price})
-
-    return sorted(({"price": round(group["price"], 6), "touches": group["touches"], "yours": group["yours"],
-                    "last": group["last"]} for group in groups
-                   if group["yours"] or group["touches"] >= chosen["min_touches"]),
-                  key=lambda level: level["price"])
+    """The lines, lowest first, as actions/chart_lines.py finds them with these settings."""
+    return chart_lines.levels(candles, chosen["merge_atr"] * atr, chosen["swing_strength"], chosen["min_touches"],
+                              yours)
 
 
 # ---- a plan for one side ----------------------------------------------------------------------
@@ -344,6 +309,7 @@ def side_plan(side, line, candles, atr, rsis, lines, chosen, broke=None, decimal
         "risk": round(risk, d), "reward": round(reward, d), "decimals": d, "ratio": round(ratio, 2),
         "ratio_working": f"({abs(target - entry):,.{d}f}) / ({risk:,.{d}f}) = {ratio:.2f} : 1",
         "worth": round(ratio, 2) >= chosen["min_reward"], "rsi": rsi_now, "rsi_ok": rsi_ok,
+        "confirmed": confirmed, "passed": None,
     }
 
 
@@ -411,6 +377,25 @@ def plan(candles, price, chosen, market, live=True):
         line, broke = _choose_line(side, price, lines, candles, chosen)
         plans[side] = side_plan(side, line, candles, atr, rsis, lines, chosen, broke, d) if line else None
 
+        # A setup that has been and gone is history: the plan is for the next line to break, with the
+        # one that passed kept beside it.
+        if plans[side] and plans[side]["stage"] == "passed":
+            gone = plans[side]
+            ahead = [other for other in lines if _beyond(other["price"], max(price, gone["line"]) if side == "buy"
+                                                         else min(price, gone["line"]), side)]
+            following = min(ahead, key=lambda other: abs(other["price"] - price)) if ahead else None
+            plans[side] = (side_plan(side, following, candles, atr, rsis, lines, chosen, None, d) if following
+                           else None)
+            passed = {"line": gone["line"], "entry": gone["entry"], "stop": gone["stop"], "target": gone["target"],
+                      "ratio": gone["ratio"], "worth": gone["worth"], "rsi": gone["rsi"], "rsi_ok": gone["rsi_ok"],
+                      "when": _uk(candles[gone["confirmed"]][0] + timedelta(
+                          seconds=GRANULARITY_SECONDS[chosen["granularity"]]))}
+
+            if plans[side]:
+                plans[side]["passed"] = passed
+            else:
+                plans[side + "_passed"] = passed
+
     verdict, headline = _verdict(plans, price, support, resistance, chosen, market)
     step = timedelta(seconds=GRANULARITY_SECONDS[chosen["granularity"]])
     next_close = candles[-1][0] + 2 * step
@@ -430,6 +415,7 @@ def plan(candles, price, chosen, market, live=True):
         "levels": [dict(line, last=max(-1, line["last"] - first_shown)) for line in lines],
         "support": support["price"] if support else None, "resistance": resistance["price"] if resistance else None,
         "buy": plans["buy"], "sell": plans["sell"],
+        "buy_passed": plans.get("buy_passed"), "sell_passed": plans.get("sell_passed"),
         "verdict": verdict, "headline": headline,
         "settings": {name: chosen[name] for name in ("swing_strength", "merge_atr", "min_touches", "stop_atr",
                                                      "target_buffer_atr", "min_reward", "retest_candles",
@@ -442,6 +428,12 @@ def _waiting_for(side_plan_):
 
     if side_plan_["stage"] != "passed" and not side_plan_["worth"]:
         said += f" -- though only {side_plan_['ratio']:.2f} : 1 to the next line, so not worth taking"
+
+    gone = side_plan_.get("passed")
+
+    if gone:
+        d = side_plan_["decimals"]
+        said += f" (the last {side_plan_['side']} setup, at {gone['line']:,.{d}f}, came and went at {gone['when']} UK)"
 
     return said
 
@@ -565,7 +557,8 @@ def read(command, client=None):
 
     try:
         details = client.instrument(instrument)
-        candles, _asks = client.candles(instrument, chosen["granularity"], chosen["candles"])
+        candles, _asks = client.candles(instrument, chosen["granularity"], chosen["candles"],
+                                        align_utc=chosen["utc_candles"])
     except oanda.OandaError as error:
         raise PlanError(str(error)) from None
 

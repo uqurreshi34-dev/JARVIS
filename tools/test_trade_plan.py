@@ -147,7 +147,13 @@ check(cool["buy"]["rsi_ok"] and cool["verdict"] == "buy" and "Buy setup confirme
       "with RSI in range and room to the target: the rules say buy, with every figure")
 
 later = confirmed + [(ceiling + 12, ceiling + 22, ceiling + 10, ceiling + 20)]
-check(tp.plan(made(later), ceiling + 20, chosen, GOLD)["buy"]["stage"] == "passed", "a candle later, that setup has passed")
+gone = tp.plan(made(later), ceiling + 20, chosen, GOLD)
+check(gone["buy"] is None and gone["buy_passed"]["line"] == ceiling and gone["buy_passed"]["when"],
+      "a candle later, that setup has been and gone: kept as history, not chased")
+ahead = tp.plan(made(later), ceiling + 20, dict(chosen, your_levels={"XAU_USD": [ceiling + 80.0]}), GOLD)
+check(ahead["buy"]["stage"] == "break" and ahead["buy"]["line"] == ceiling + 80 and ahead["buy"]["passed"]
+      and "came and went" in ahead["headline"],
+      f"and the plan moves on to the next line to break ({ahead['headline'][:120]})")
 
 failed = base + [(4050, 4062, 4048, 4060), (4060, ceiling + 6, 4058, ceiling + 4), (ceiling + 4, ceiling + 5, 4070, 4072)]
 check(tp.plan(made(failed), 4072, chosen, GOLD)["buy"]["stage"] == "break", "a break that closed back inside is no break")
@@ -179,8 +185,8 @@ class Oanda:
         shown, places = self.MARKETS[name]
         return {"name": name, "display_name": shown, "price_decimals": places}
 
-    def candles(self, name, granularity, count):
-        self.asked.append((name, granularity, count))
+    def candles(self, name, granularity, count, align_utc=False):
+        self.asked.append((name, granularity, count, align_utc))
 
         if self.broken:
             raise oanda.OandaError("OANDA answered 503")
@@ -198,9 +204,9 @@ shown = []
 tp.set_listeners(on_plan=shown.append, on_hide=lambda: shown.append("hidden"))
 client = Oanda(range_candles)
 said = tp.show("jarvis shall i buy or sell gold", client)
-check(client.asked == [("XAU_USD", "H4", chosen["candles"])] and shown and shown[-1]["price"] == 4050.0
+check(client.asked == [("XAU_USD", "H4", chosen["candles"], True)] and shown and shown[-1]["price"] == 4050.0
       and shown[-1]["live"] and shown[-1]["symbol"] == "XAU_USD",
-      "gold: its four-hour candles and the live price, mid-way between bid and ask")
+      "gold: its four-hour candles, on UTC's hours as TradingView draws them, and the live price")
 check("Gold is 4,050 on the 4-hour chart" in said and "panel" in said and len(said) < 400,
       f"said briefly; the panel holds the rest ({said})")
 client = Oanda(made([(o / 50, h / 50, l / 50, c / 50) for o, h, l, c in base] + [(81.0, 81.04, 80.92, 81.0)]))
