@@ -6,18 +6,25 @@ Checked, in a sandboxed JARVIS folder:
   idle ones left out;
 - fills are read page by page as Hyperliquid asks, each closing order counted
   once with its fees, and a trade id seen twice counted once;
+- a busy moment (429) is waited out, as long as Hyperliquid asks, and given
+  up on only after the retries;
 - the verdicts: consistent (enough trades, money made in every part), too
   few, inconsistent (naming the losing part), one big trade -- and consistent
-  records rank first;
-- the deepest fall is measured from the running best, in dollars and as a
-  share of the account then; open positions carry their leverage and how
-  far price is from liquidating them;
+  records rank first; the parts come from the account's profit history, so
+  fills Hyperliquid no longer keeps cannot make a part look empty;
+- the deepest fall is measured from the running best, in dollars, as a
+  share of the account then, and when; open positions carry their leverage
+  and how far price is from liquidating them;
+- how they trade: positions followed flat to flat (held how long, which
+  way, built in steps, added to at a loss), named for what they show; and
+  what they trade, spot pairs by name;
 - the board is saved and reused until stale, refreshed when it is, and
   shown through the listener, a trader by number too;
 - what is said is short and the panel holds the detail;
 - "show me the top traders", "show trader three" and "close the traders"
   are recognised, and nothing here can place an order;
-- the panel draws the board and a trader, steps between them, and goes back.
+- the panel draws the board and a trader, steps between them, and goes back;
+  the trader page grows to hold every section.
 
     python tools/test_trader_watch.py
 """
@@ -77,9 +84,20 @@ def closes(results, first_day=1, every_days=2.0, oid=1000):
     return fills
 
 
+def history(fills):
+    """The profit history Hyperliquid would keep for these fills: the running total after each closed trade."""
+    total, points = 0.0, [[START, "0"]]
+
+    for trade in tw.trades_from(fills):
+        total += trade["pnl"] - trade["fee"]
+        points.append([trade["time"], str(total)])
+
+    return points
+
+
 class Response:
-    def __init__(self, data, status=200):
-        self.data, self.status_code = data, status
+    def __init__(self, data, status=200, headers=None):
+        self.data, self.status_code, self.headers = data, status, headers or {}
 
     def json(self):
         return self.data
@@ -121,8 +139,7 @@ class Exchange:
             return Response(found[:self.page])
 
         if json["type"] == "portfolio":
-            pnl = [[START + day * DAY, str(value)] for day, value in ((0, 0), (20, 5000), (40, 1000), (60, 7000),
-                                                                      (89, 9000))]
+            pnl = history(self.fills.get(user, []))
             value = [[START + day * DAY, str(100000 + day * 1000)] for day in range(0, 90, 10)]
             return Response([["allTime", {"accountValueHistory": value, "pnlHistory": pnl, "vlm": "1"}]])
 
@@ -137,6 +154,37 @@ class Exchange:
 
 exchange = Exchange()
 client = tw.Hyperliquid(session=exchange, pause=0)
+
+# ---- a busy exchange --------------------------------------------------------------------------
+
+
+class Busy:
+    """Answers 429 [times] times, asking for a wait, then answers."""
+
+    def __init__(self, times):
+        self.times, self.calls = times, 0
+
+    def post(self, url, json, timeout):
+        self.calls += 1
+        return Response(None, 429, {"Retry-After": "2"}) if self.calls <= self.times else Response({"ok": True})
+
+
+slept, real_sleep = [], tw.time.sleep
+tw.time.sleep = slept.append
+check(tw.Hyperliquid(session=Busy(2), pause=0).info({}) == {"ok": True} and slept == [2.0, 2.0, 0],
+      "a 429 is waited out for as long as Hyperliquid asks, then read")
+busy = Busy(99)
+
+try:
+    tw.Hyperliquid(session=busy, pause=0).info({})
+    gave_up = None
+except tw.WatchError as error:
+    gave_up = str(error)
+
+check(gave_up and "limiting" in gave_up and busy.calls == tw.RETRIES, f"and given up on after the retries ({gave_up})")
+check(tw._wait(Response(None, 429), 0) == 3 and tw._wait(Response(None, 429), 9) == tw.LONGEST_WAIT,
+      "with no wait asked for, each wait doubles, never past the longest")
+tw.time.sleep = real_sleep
 
 # ---- choosing and reading --------------------------------------------------------------------
 
@@ -179,17 +227,68 @@ check(board["traders"][0]["address"] == steady["address"] and board["traders"][-
 
 one = tw.judge([{"time": START + day * DAY, "pnl": pnl, "fee": 0.0, "coin": "SOL"}
                 for day, pnl in [(day, 10.0) for day in range(1, 89, 3)] + [(45, 5000.0), (80, 20.0)]],
-               START, NOW, 3, 30)
+               [100.0, 5100.0, 120.0], 30)
 check(one["verdict"] == "one big trade" and "%" in one["reason"], f"most of the profit from one trade: flagged ({one['reason']})")
+
+# Only the latest fills are kept: trades seen only in the last part, but the account made money all along.
+curve = [(START, 0.0), (START + 30 * DAY, 4000.0), (START + 60 * DAY, 9000.0), (NOW, 12000.0)]
+parts = tw.curve_parts(curve, START, NOW, 3)
+check([round(value) for value in parts] == [4000, 5000, 3000], f"parts come from the profit history ({parts})")
+kept = [{"time": NOW - day * DAY, "pnl": 100.0 + day, "fee": 1.0, "coin": "BTC"} for day in range(1, 40)]
+check(tw.judge(kept, parts, 30)["verdict"] == "consistent",
+      "so weeks of trades no longer kept do not make a part look empty")
+check(tw.curve_at(curve, START - DAY) == 0.0 and tw.curve_at(curve, START + 15 * DAY) == 2000.0
+      and tw.curve_at(curve, NOW + DAY) == 12000.0, "the curve is read between its points")
 
 # ---- the fall, and positions --------------------------------------------------------------------
 
-dip, share = tw.deepest_dip([(1, 0.0), (2, 5000.0), (3, 1000.0), (4, 7000.0)], [(1, 100000.0), (2, 120000.0)])
-check(dip == 4000.0 and abs(share - 4000 / 120000) < 1e-9, "the deepest fall: 5,000 to 1,000, as a share of the account then")
-check(steady["dip"] == 4000.0, "and read from the account's own profit history")
+dip, share, fell_from, fell_to = tw.deepest_dip([(1, 0.0), (2, 5000.0), (3, 1000.0), (4, 7000.0)],
+                                                [(1, 100000.0), (2, 120000.0)])
+check(dip == 4000.0 and abs(share - 4000 / 120000) < 1e-9 and (fell_from, fell_to) == (2, 3),
+      "the deepest fall: 5,000 to 1,000, as a share of the account then, and when")
+check(abs(steady["dip"] - 102.0) < 1e-6 and steady["dip_from"] < steady["dip_to"],
+      f"and read from the account's own profit history ({steady['dip']})")
 position = steady["positions"][0]
 check(position["side"] == "short" and position["leverage"] == 10 and abs(position["mark"] - 2400) < 1e-9
       and abs(position["to_liquidation"] - 0.1) < 1e-9, "open positions: side, leverage, 10% from liquidation")
+
+# ---- how they trade, and what -------------------------------------------------------------------
+
+
+def fill(coin, side, size, before, price, hour):
+    return {"coin": coin, "side": side, "sz": str(size), "startPosition": str(before), "px": str(price),
+            "time": START + int(hour * 3_600_000), "dir": "", "closedPnl": "0", "oid": hour, "tid": hour}
+
+
+habit = [
+    fill("ETH", "B", 2, 5, 2500, 1),             # already open when the fills begin: start unknown, skipped
+    fill("ETH", "A", 7, 7, 2510, 2),             # ...until flat
+    fill("BTC", "B", 1, 0, 60000, 10),           # long, built in steps, adding as price falls
+    fill("BTC", "B", 1, 1, 59000, 20),
+    fill("BTC", "B", 1, 2, 58000, 30),
+    fill("BTC", "A", 3, 3, 61000, 82),           # flat after 72 hours
+    fill("SOL", "A", 4, 0, 150, 100),            # short ...
+    fill("SOL", "B", 6, -4, 140, 105),           # ... flipped long after 5 hours
+    fill("SOL", "A", 2, 2, 145, 110),            # flat after 5 more
+]
+held = tw.positions_from(habit)
+check([(position["coin"], position["side"], position["held"] // 3_600_000) for position in held]
+      == [("BTC", "long", 72), ("SOL", "short", 5), ("SOL", "long", 5)],
+      "positions are followed flat to flat; one open before the fills begin is skipped; a flip starts a new one")
+check(held[0]["adds"] == 2 and held[0]["worse"] == 2, "adding to a long as price falls is counted as averaging down")
+record = {"trades": 40, "win_rate": 0.8, "average_win": 50.0, "average_loss": 200.0,
+          "coins": [["BTC", 30, 900.0], ["spot #142", 10, -50.0]]}
+named = dict(tw.style(habit, record, [{"unrealised": -5000.0}], 20.0, 10000.0))
+check(named.get("Day trader", "").startswith("holds a position for 5.0 hours") and "Both ways" in named
+      and "Many small wins" in named and named["Pace"].startswith("2.0") and "Builds in steps" in named
+      and "Adds to losers" in named and "Specialist" in named and "Holding losers" in named,
+      f"how they trade is named for what the fills show ({sorted(named)})")
+check(tw.market("@142") == "spot #142" and tw.market("BTC") == "BTC", "a spot pair is named, not shown as @142")
+check(tw.coin_table([{"coin": "ETH", "pnl": 10.0, "fee": 1.0}, {"coin": "ETH", "pnl": -4.0, "fee": 1.0},
+                     {"coin": "@7", "pnl": 3.0, "fee": 0.0}]) == [["ETH", 2, 4.0], ["spot #7", 1, 3.0]],
+      "what they trade: markets by number of trades, with what each made")
+check(steady["coins"] == [["BTC", 45, round(steady["net"], 2)]] and steady["style"],
+      "every trader carries the markets they trade and how, open positions or not")
 
 # ---- saved, shown, said -------------------------------------------------------------------------
 
@@ -271,5 +370,12 @@ for name, focus in (("board", None), ("trader", 1)):
     if shot:
         image.save(os.path.join(shot, f"{name}.png"))
         panel._detail.grab().save(os.path.join(shot, f"{name}-content.png")) if focus else None
+
+fitted = panel._detail.height()
+crowded = dict(tw.cached()["traders"][0])
+crowded["style"] = crowded["style"] + [["Adds to losers", "a long explanation " * 30]] * 4
+crowded["positions"] = crowded["positions"] * 6
+panel._detail.show_trader(tw.cached(), crowded)
+check(panel._detail.height() > fitted + 6 * 26, "the trader page grows to hold every section")
 
 sys.exit(1 if failures else 0)

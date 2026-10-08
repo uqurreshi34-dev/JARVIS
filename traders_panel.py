@@ -4,13 +4,17 @@ Two views in one scrollable page, built like the other panels -- frameless,
 translucent, anchored beside the HUD with the beam crossing the gap:
 
     the board     every trader examined, consistent records first: verdict,
-                  net profit, win rate, profit factor, deepest fall, a
-                  sparkline of the profit curve and one bar per part of the
-                  period, green or red, so consistency is seen at a glance
-    one trader    the profit curve with its deepest fall shaded, the parts
-                  as bars, every closed trade as a dot, the calculations
+                  how they trade and what, profit over the period, win
+                  rate, profit factor, deepest fall, a sparkline of the
+                  profit curve and one bar per part of the period, green or
+                  red, so consistency is seen at a glance
+    one trader    how they trade (held for how long, which way, how they
+                  build and cut positions) and the markets they trade; the
+                  profit curve with its deepest fall shaded, the parts as
+                  bars, every closed trade as a dot, the calculations
                   written out with their numbers, and open positions with
-                  their leverage and how close each is to liquidation
+                  their leverage and how close each is to liquidation, with
+                  a key to the colours
 
 Click a row (or Up, Down and Enter) to open a trader; Back, Escape or
 Backspace returns; Left and Right step between traders; the wheel scrolls.
@@ -21,8 +25,8 @@ its own.
 
 from datetime import datetime, timezone
 
-from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
+from PyQt6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPicture
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
 
 
@@ -41,9 +45,17 @@ _AMBER = QColor(235, 185, 80)
 
 _VERDICT_COLOURS = {"consistent": _GAIN, "one big trade": _AMBER, "inconsistent": _LOSS, "too few": _MUTED}
 
+# How far price is from liquidating a position: the bar is full at this distance, and its colour.
+_LIQUIDATION_FULL = 0.5
+_SAFE_DISTANCE = 0.25
+_CLOSE_DISTANCE = 0.1
+
+_DAY_MS = 86_400_000
+
 _BEAM_GAP = 74
 _FRAME_MS = 33
-_ROW = 66
+_ROW = 88
+_FIGURES = 58         # the height of a row's name, badge and figures; the profile line sits beneath
 
 _CONTROLS = """
 QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }
@@ -82,6 +94,17 @@ def _name(trader):
 
 def _date(ms):
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%d %b")
+
+
+def _liquidation_colour(distance):
+    return _LOSS if distance < _CLOSE_DISTANCE else _AMBER if distance < _SAFE_DISTANCE else _GAIN
+
+
+def _profile(trader):
+    """A row's one-line summary: how long they hold, which way, their wins and losses, and the markets they trade most."""
+    habits = [name for name, _detail in (trader.get("style") or [])[:3]]
+    markets = [name for name, _count, _net in (trader.get("coins") or [])[:3]]
+    return "  -  ".join(habits + ([" ".join(markets)] if markets else []))
 
 
 def _font(size, bold=False, mono=False):
@@ -160,7 +183,7 @@ class _Board(QWidget):
     def show_board(self, board, selected=0):
         self.board = board
         self.selected = selected
-        self.setFixedHeight(max(1, 46 + _ROW * len(board["traders"]) + 70))
+        self.setFixedHeight(max(1, 46 + _ROW * len(board["traders"]) + 100))
         self.update()
 
     def row_top(self, index):
@@ -186,7 +209,7 @@ class _Board(QWidget):
         painter.setPen(QPen(_MUTED))
         painter.setFont(_font(8, bold=True))
 
-        for x, text in ((8, "#  TRADER"), (width - 448, "NET"), (width - 378, "WIN %"), (width - 318, "PROFIT F."),
+        for x, text in ((8, "#  TRADER"), (width - 448, f"MADE {self.board['days']}D"), (width - 378, "WIN %"), (width - 318, "PROFIT F."),
                         (width - 238, "DEEPEST FALL"), (width - 140, "CURVE"), (width - 52, "PARTS")):
             painter.drawText(int(x), 30, text)
 
@@ -213,30 +236,38 @@ class _Board(QWidget):
             name = QFontMetrics(painter.font()).elidedText(_name(trader), Qt.TextElideMode.ElideRight, width - 520)
             painter.drawText(QRectF(36, top + 2, width - 480, 22), Qt.AlignmentFlag.AlignVCenter, name)
             _badge(painter, 36, top + 30, trader["verdict"])
+            painter.setPen(QPen(_MUTED))
+            painter.setFont(_font(8))
+            room = width - 48
+            painter.drawText(QRectF(36, top + _FIGURES, room, 18), Qt.AlignmentFlag.AlignVCenter,
+                             QFontMetrics(painter.font()).elidedText(_profile(trader), Qt.TextElideMode.ElideRight,
+                                                                     int(room)))
 
+            made = trader.get("period_pnl", trader["net"])
             painter.setFont(_font(10, mono=True))
-            painter.setPen(QPen(_GAIN if trader["net"] >= 0 else _LOSS))
-            painter.drawText(QRectF(width - 452, top, 70, _ROW - 6), Qt.AlignmentFlag.AlignVCenter,
-                             _money(trader["net"]))
+            painter.setPen(QPen(_GAIN if made >= 0 else _LOSS))
+            painter.drawText(QRectF(width - 452, top, 70, _FIGURES), Qt.AlignmentFlag.AlignVCenter, _money(made))
             painter.setPen(QPen(_TEXT))
-            painter.drawText(QRectF(width - 378, top, 56, _ROW - 6), Qt.AlignmentFlag.AlignVCenter,
+            painter.drawText(QRectF(width - 378, top, 56, _FIGURES), Qt.AlignmentFlag.AlignVCenter,
                              f"{trader['win_rate']:.0%}")
             factor = trader.get("profit_factor")
-            painter.drawText(QRectF(width - 318, top, 70, _ROW - 6), Qt.AlignmentFlag.AlignVCenter,
+            painter.drawText(QRectF(width - 318, top, 70, _FIGURES), Qt.AlignmentFlag.AlignVCenter,
                              f"{factor:.2f}" if factor else "no losses")
             painter.setPen(QPen(_LOSS if trader.get("dip_share", 0) > 0.3 else _TEXT))
-            painter.drawText(QRectF(width - 238, top, 96, _ROW - 6), Qt.AlignmentFlag.AlignVCenter,
+            painter.drawText(QRectF(width - 238, top, 96, _FIGURES), Qt.AlignmentFlag.AlignVCenter,
                              f"{_money(-trader['dip'])} {trader.get('dip_share', 0):.0%}")
 
-            _sparkline(painter, QRectF(width - 140, top + 12, 78, _ROW - 30), trader.get("curve") or [])
-            _part_bars(painter, QRectF(width - 52, top + 12, 44, _ROW - 30), trader.get("parts") or [])
+            _sparkline(painter, QRectF(width - 140, top + 10, 78, _FIGURES - 20), trader.get("curve") or [])
+            _part_bars(painter, QRectF(width - 52, top + 10, 44, _FIGURES - 20), trader.get("parts") or [])
 
         painter.setPen(QPen(_MUTED))
         painter.setFont(_font(8))
         foot = self.row_top(len(self.board["traders"])) + 10
-        painter.drawText(QRectF(8, foot, width - 16, 50), Qt.TextFlag.TextWordWrap,
+        painter.drawText(QRectF(8, foot, width - 16, 84), Qt.TextFlag.TextWordWrap,
                          f"Consistent: made money in every one of the {self.board['parts']} parts of the last "
-                         f"{self.board['days']} days, over at least {self.board['min_trades']} closed trades. "
+                         f"{self.board['days']} days, over at least {self.board['min_trades']} closed trades. Made: the account's "
+                         f"profit over the period, open positions included. Under each name: how long they hold, "
+                         f"which way they lean, and the markets they trade most. "
                          f"Deepest fall: the furthest profit dropped from its best, and as a share of the account "
                          f"then. A past record only: it says nothing certain about what comes next.")
         painter.end()
@@ -248,6 +279,7 @@ class _Trader(QWidget):
     CHART = 190
     PARTS = 130
     DOTS = 120
+    LABEL = 150
 
     def __init__(self):
         super().__init__()
@@ -256,9 +288,25 @@ class _Trader(QWidget):
 
     def show_trader(self, board, trader):
         self.board, self.trader = board, trader
-        rows = len(trader.get("positions") or [])
-        self.setFixedHeight(70 + self.CHART + 40 + self.PARTS + 40 + self.DOTS + 40 + 175 + 50 + 26 * max(rows, 1) + 40)
+        self._fit()
         self.update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+
+        if event.size().width() != event.oldSize().width():
+            self._fit()
+
+    def _fit(self):
+        """The height every section needs at this width, found by laying the page out without showing it."""
+        if not self.trader:
+            return
+
+        picture = QPicture()
+        painter = QPainter(picture)
+        height = self._draw(painter, self.width() - 6)
+        painter.end()
+        self.setFixedHeight(int(height) + 30)
 
     def paintEvent(self, event):
         if not self.trader:
@@ -266,7 +314,12 @@ class _Trader(QWidget):
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        trader, width, y = self.trader, self.width() - 6, 0
+        self._draw(painter, self.width() - 6)
+        painter.end()
+
+    def _draw(self, painter, width):
+        """Every section, top to bottom; returns where the page ends."""
+        trader, board, y = self.trader, self.board, 0
 
         painter.setPen(QPen(_TEXT))
         painter.setFont(_font(13, bold=True))
@@ -281,24 +334,35 @@ class _Trader(QWidget):
         painter.drawText(QRectF(badge + 10, y + 46, width, 18), Qt.AlignmentFlag.AlignVCenter, trader["reason"])
         y += 76
 
-        y = self._section(painter, y, width, f"PROFIT OVER {self.board['days']} DAYS -- shaded: falls from the best")
-        self._curve(painter, QRectF(48, y, width - 56, self.CHART - 20))
-        y += self.CHART + 10
+        y = self._section(painter, y, width, "HOW THEY TRADE -- read from what they did")
+        y = self._style(painter, y, width)
 
-        y = self._section(painter, y, width, f"EACH PART OF THE PERIOD -- all {self.board['parts']} must be green")
+        y = self._section(painter, y + 10, width, "WHAT THEY TRADE -- share of closed trades, and what each made")
+        y = self._markets(painter, y, width)
+
+        y = self._section(painter, y + 10, width,
+                          f"PROFIT OVER {board['days']} DAYS -- shaded: every fall from the best so far")
+        y = self._curve(painter, QRectF(48, y, width - 56, self.CHART - 20), width)
+
+        y = self._section(painter, y + 10, width, f"EACH PART OF THE PERIOD -- all {board['parts']} must be green")
         self._parts(painter, QRectF(48, y, width - 56, self.PARTS - 30))
-        y += self.PARTS + 10
+        y = self._note(painter, y + self.PARTS - 8, width,
+                       "From the account's own profit history, so every part is covered, open positions included.")
 
-        y = self._section(painter, y, width, "EVERY CLOSED TRADE -- size of dot: size of the result")
+        y = self._section(painter, y + 10, width, "EVERY CLOSED TRADE -- size of dot: size of the result")
         self._dots(painter, QRectF(48, y, width - 56, self.DOTS - 20))
-        y += self.DOTS + 10
+        y += self.DOTS - 10
+        start = board["updated"] - board["days"] * _DAY_MS
 
-        y = self._section(painter, y, width, "THE WORKING")
+        if trader.get("covered_from", start) > start + _DAY_MS:
+            y = self._note(painter, y, width, f"Trades from {_date(trader['covered_from'])} on: Hyperliquid keeps only"
+                                              f" an account's most recent fills.")
+
+        y = self._section(painter, y + 10, width, "THE WORKING")
         y = self._working(painter, y, width)
 
         y = self._section(painter, y + 10, width, "OPEN NOW -- leverage, and how far price is from liquidating each")
-        self._positions(painter, y, width)
-        painter.end()
+        return self._positions(painter, y, width)
 
     def _section(self, painter, y, width, title):
         painter.setPen(QPen(_ACCENT))
@@ -307,6 +371,68 @@ class _Trader(QWidget):
         painter.setPen(QPen(_GRID, 1))
         painter.drawLine(QPointF(0, y + 19), QPointF(width, y + 19))
         return y + 28
+
+    def _wrapped(self, painter, x, y, width, text, font, colour):
+        """[text] wrapped to [width]; returns where it ends."""
+        painter.setFont(font)
+        painter.setPen(QPen(colour))
+        flags = int(Qt.TextFlag.TextWordWrap) | int(Qt.AlignmentFlag.AlignLeft) | int(Qt.AlignmentFlag.AlignTop)
+        height = QFontMetrics(font).boundingRect(QRect(0, 0, int(width), 10_000), flags, text).height()
+        painter.drawText(QRectF(x, y, width, height), flags, text)
+        return y + height
+
+    def _note(self, painter, y, width, text):
+        return self._wrapped(painter, 0, y, width, text, _font(8), _MUTED) + 4
+
+    def _style(self, painter, y, width):
+        habits = self.trader.get("style") or []
+
+        if not habits:
+            return self._note(painter, y, width, "Too little trading in the period to read a style.")
+
+        for name, detail in habits:
+            painter.setFont(_font(9, bold=True))
+            painter.setPen(QPen(_ACCENT))
+            painter.drawText(QRectF(0, y, self.LABEL, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                             name)
+            y = max(y + 20, self._wrapped(painter, self.LABEL, y + 2, width - self.LABEL, detail, _font(9), _TEXT)) + 4
+
+        return self._note(painter, y + 2, width, "Behaviour, not their plan: the signals behind each trade are not"
+                                                 " public, and the same habits can come from different reasons.")
+
+    def _markets(self, painter, y, width):
+        coins = self.trader.get("coins") or []
+        trades = self.trader.get("trades") or 0
+
+        if not coins or not trades:
+            return self._note(painter, y, width, "No closed trades among the fills Hyperliquid keeps.")
+
+        bar_left, bar_width = 110, width - 110 - 250
+
+        for name, count, net in coins:
+            share = count / trades
+            painter.setFont(_font(9, bold=True, mono=True))
+            painter.setPen(QPen(_TEXT))
+            painter.drawText(QRectF(0, y, bar_left - 8, 20), Qt.AlignmentFlag.AlignVCenter,
+                             QFontMetrics(painter.font()).elidedText(name, Qt.TextElideMode.ElideRight, bar_left - 8))
+            track = QRectF(bar_left, y + 5, bar_width, 10)
+            painter.setPen(QPen(_GRID, 1))
+            painter.drawRect(track)
+            painter.fillRect(QRectF(track.left(), track.top(), track.width() * share, track.height()), _ACCENT)
+            painter.setFont(_font(9, mono=True))
+            painter.drawText(QRectF(track.right() + 10, y, 130, 20), Qt.AlignmentFlag.AlignVCenter,
+                             f"{share:>4.0%}  {count} trades")
+            painter.setPen(QPen(_GAIN if net >= 0 else _LOSS))
+            painter.drawText(QRectF(track.right() + 140, y, 100, 20),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, _money(net))
+            y += 22
+
+        shown = sum(count for _name_, count, _net in coins)
+
+        if shown < trades:
+            y = self._note(painter, y + 2, width, f"{trades - shown} more trades in other markets.")
+
+        return y
 
     def _axis(self, painter, rect, low, high):
         painter.setFont(_font(7, mono=True))
@@ -320,14 +446,15 @@ class _Trader(QWidget):
             painter.drawText(QRectF(rect.left() - 48, level - 7, 44, 14),
                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, _money(value))
 
-    def _curve(self, painter, rect):
+    def _curve(self, painter, rect, width):
+        """The profit curve; the deepest fall is marked on it and explained beneath, never written across it."""
         curve = self.trader.get("curve") or []
 
         if len(curve) < 2:
             painter.setPen(QPen(_MUTED))
             painter.setFont(_font(9))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "No profit history for the period.")
-            return
+            return rect.bottom() + 10
 
         start, end = curve[0][0], curve[-1][0]
         values = [point[1] for point in curve]
@@ -385,15 +512,33 @@ class _Trader(QWidget):
             top, bottom = at(when, peak), at(when, value)
             painter.setPen(QPen(_LOSS, 1.2, Qt.PenStyle.DashLine))
             painter.drawLine(top, bottom)
-            painter.setFont(_font(8, bold=True))
-            label = f"deepest fall {_money(-deepest)} ({self.trader.get('dip_share', 0):.0%} of the account)"
-            x = min(bottom.x() + 6, rect.right() - QFontMetrics(painter.font()).horizontalAdvance(label))
-            painter.drawText(QPointF(x, bottom.y() + 14), label)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(_LOSS)
+            painter.drawEllipse(top, 2.5, 2.5)
+            painter.drawEllipse(bottom, 2.5, 2.5)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
 
         painter.setPen(QPen(_MUTED))
         painter.setFont(_font(7, mono=True))
         painter.drawText(QPointF(rect.left(), rect.bottom() + 12), _date(start))
         painter.drawText(QPointF(rect.right() - 36, rect.bottom() + 12), _date(end))
+
+        y = rect.bottom() + 20
+
+        if not deepest_at:
+            return self._note(painter, y, width, "Profit never fell from its best in the period.")
+
+        share = self.trader.get("dip_share", 0)
+        when = (f", {_date(self.trader['dip_from'])} to {_date(self.trader['dip_to'])}"
+                if self.trader.get("dip_from") and self.trader.get("dip_to") else "")
+        text = (f"Deepest fall (dashed red line): {_money(-self.trader.get('dip', deepest))}{when},"
+                f" {share:.0%} of the account at its best.")
+
+        if share > 1:
+            text += " More than the account held then, so money was paid in during the fall."
+
+        y = self._wrapped(painter, 0, y, width, text, _font(9, bold=True), _LOSS)
+        return y + 4
 
     def _parts(self, painter, rect):
         parts = self.trader.get("parts") or []
@@ -405,8 +550,8 @@ class _Trader(QWidget):
         self._axis(painter, rect, -biggest, biggest)
         middle = rect.center().y()
         width = rect.width() / len(parts)
-        start = self.board["updated"] - self.board["days"] * 86_400_000
-        step = self.board["days"] * 86_400_000 / len(parts)
+        start = self.board["updated"] - self.board["days"] * _DAY_MS
+        step = self.board["days"] * _DAY_MS / len(parts)
         painter.setFont(_font(8, bold=True, mono=True))
 
         for index, value in enumerate(parts):
@@ -431,8 +576,8 @@ class _Trader(QWidget):
         if not points:
             return
 
-        start = self.board["updated"] - self.board["days"] * 86_400_000
-        length = self.board["days"] * 86_400_000
+        start = self.board["updated"] - self.board["days"] * _DAY_MS
+        length = self.board["days"] * _DAY_MS
         biggest = max(abs(value) for _when, value in points) or 1.0
         self._axis(painter, rect, -biggest, biggest)
 
@@ -452,32 +597,29 @@ class _Trader(QWidget):
         trader = self.trader
         factor = trader.get("profit_factor")
         lines = [
+            ("Made in the period", f"{_money(trader.get('period_pnl', trader['net']))} by the account's profit"
+                                   f" history, open positions included"),
             ("Win rate", f"wins / trades = {trader['wins']} / {trader['trades']} = {trader['win_rate']:.0%}"),
             ("Profit factor", (f"won / lost = {_money(trader['gross_won'])} / {_money(trader['gross_lost'])}"
                                f" = {factor:.2f}") if factor else "no losing trades in the period"),
-            ("Net", f"won - lost = {_money(trader['gross_won'])} - {_money(trader['gross_lost'])}"
-                    f" = {_money(trader['net'])} (after {_money(trader['fees'])} fees)"),
+            ("Closed trades net", f"won - lost = {_money(trader['gross_won'])} - {_money(trader['gross_lost'])}"
+                                  f" = {_money(trader['net'])} (after {_money(trader['fees'])} fees)"),
             ("Win : loss size", (f"average win / average loss = {_money(trader['average_win'])} /"
                                  f" {_money(trader['average_loss'])} = "
                                  f"{trader['average_win'] / trader['average_loss']:.2f}")
              if trader["average_loss"] else "no losses to compare"),
-            ("Best trade's share", (f"best / net = {_money(trader['best'])} / {_money(trader['net'])} ="
+            ("Best trade's share", (f"best / closed net = {_money(trader['best'])} / {_money(trader['net'])} ="
                                     f" {trader['best_share']:.0%}") if trader.get("best_share") else "no net profit"),
-            ("Deepest fall", f"{_money(trader['dip'])} = {trader.get('dip_share', 0):.0%} of the account at its best"),
             ("Parts", "  ".join(f"{index + 1}: {_money(value)}" for index, value in enumerate(trader["parts"]))),
         ]
 
-        if trader.get("fills_capped"):
-            lines.append(("Note", "Hyperliquid keeps only the latest 10,000 fills, so early trades may be missing."))
-
-        painter.setFont(_font(9, mono=True))
-
         for label, text in lines:
+            painter.setFont(_font(9, mono=True))
             painter.setPen(QPen(_MUTED))
-            painter.drawText(QRectF(0, y, 150, 20), Qt.AlignmentFlag.AlignVCenter, label)
-            painter.setPen(QPen(_TEXT))
-            painter.drawText(QRectF(150, y, width - 150, 20), Qt.AlignmentFlag.AlignVCenter, text)
-            y += 22
+            painter.drawText(QRectF(0, y, self.LABEL, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                             label)
+            y = max(y + 20, self._wrapped(painter, self.LABEL, y + 2, width - self.LABEL, text,
+                                          _font(9, mono=True), _TEXT)) + 2
 
         return y
 
@@ -488,9 +630,10 @@ class _Trader(QWidget):
         if not positions:
             painter.setPen(QPen(_MUTED))
             painter.drawText(QRectF(0, y, width, 20), Qt.AlignmentFlag.AlignVCenter, "No open positions.")
-            return
+            return y + 24
 
-        columns = (("COIN", 0), ("SIDE", 70), ("VALUE", 130), ("LEV.", 210), ("UNREAL.", 260), ("TO LIQUIDATION", 350))
+        columns = (("MARKET", 0), ("SIDE", 90), ("VALUE", 145), ("LEV.", 220), ("OPEN P/L", 270),
+                   ("TO LIQUIDATION", 360))
         painter.setPen(QPen(_MUTED))
         painter.setFont(_font(8, bold=True))
 
@@ -502,31 +645,43 @@ class _Trader(QWidget):
 
         for position in positions:
             painter.setPen(QPen(_TEXT))
-            painter.drawText(QPointF(0, y + 14), position["coin"])
+            painter.drawText(QPointF(0, y + 14), QFontMetrics(painter.font()).elidedText(
+                position["coin"], Qt.TextElideMode.ElideRight, 84))
             painter.setPen(QPen(_GAIN if position["side"] == "long" else _LOSS))
-            painter.drawText(QPointF(70, y + 14), position["side"])
+            painter.drawText(QPointF(90, y + 14), position["side"])
             painter.setPen(QPen(_TEXT))
-            painter.drawText(QPointF(130, y + 14), _money(position["value"]))
-            painter.drawText(QPointF(210, y + 14), f"{position['leverage']:g}x" if position.get("leverage") else "-")
+            painter.drawText(QPointF(145, y + 14), _money(position["value"]))
+            painter.drawText(QPointF(220, y + 14), f"{position['leverage']:g}x" if position.get("leverage") else "-")
             painter.setPen(QPen(_GAIN if position["unrealised"] >= 0 else _LOSS))
-            painter.drawText(QPointF(260, y + 14), _money(position["unrealised"]))
+            painter.drawText(QPointF(270, y + 14), _money(position["unrealised"]))
 
             distance = position.get("to_liquidation")
-            bar = QRectF(350, y + 4, width - 430, 12)
+            bar = QRectF(360, y + 4, width - 440, 12)
             painter.setPen(QPen(_GRID, 1))
             painter.drawRect(bar)
 
             if distance is not None:
-                shown = min(distance, 0.5) / 0.5
-                colour = _LOSS if distance < 0.1 else _AMBER if distance < 0.25 else _GAIN
-                painter.fillRect(QRectF(bar.left(), bar.top(), bar.width() * shown, bar.height()), colour)
+                shown = min(distance, _LIQUIDATION_FULL) / _LIQUIDATION_FULL
+                painter.fillRect(QRectF(bar.left(), bar.top(), bar.width() * shown, bar.height()),
+                                 _liquidation_colour(distance))
                 painter.setPen(QPen(_TEXT))
                 painter.drawText(QPointF(bar.right() + 8, y + 14), f"{distance:.0%}")
             else:
-                painter.setPen(QPen(_MUTED))
-                painter.drawText(QPointF(bar.right() + 8, y + 14), "none")
+                painter.setPen(QPen(_GAIN))
+                painter.drawText(QRectF(bar.left(), bar.top() - 3, bar.width(), bar.height() + 6),
+                                 Qt.AlignmentFlag.AlignCenter, "no liquidation price")
+                painter.drawText(QPointF(bar.right() + 8, y + 14), "covered")
 
             y += 26
+
+        y = self._note(painter, y + 4, width,
+                       f"OPEN P/L: profit (green) or loss (red) on the position right now, not yet taken. TO"
+                       f" LIQUIDATION: how far price must move against the position before the exchange closes it"
+                       f" by force; a longer bar is safer. Green: over {_SAFE_DISTANCE:.0%} away; amber:"
+                       f" {_CLOSE_DISTANCE:.0%} to {_SAFE_DISTANCE:.0%}; red: under {_CLOSE_DISTANCE:.0%}. Covered:"
+                       f" Hyperliquid reports no liquidation price for it, which it does when the account's margin"
+                       f" covers the position.")
+        return y
 
 
 class TradersPanel(QWidget):

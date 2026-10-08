@@ -1939,18 +1939,32 @@ names the best recent performers (accounts of at least `min_account_usd`,
 still trading), and for the top `candidates` (25) JARVIS reads the last
 `days` (90) of fills -- paged until the exchange has no more, since its
 documented page size varies -- the account's own profit history and its
-open positions. Each closing order is one trade, its fees included. The
-verdict is the gold backtest's test: at least `min_trades` (30) closed
-trades and money made in every one of `parts` (3) parts; a record whose best
-trade made over half the profit is flagged as one big trade. The deepest
-fall is measured from the running best, as dollars and as a share of the
-account then; open positions carry leverage and distance to liquidation.
-"Show me the top traders" opens the board (a separate, scrollable panel):
-consistent records first, each row with a sparkline and a bar per part.
-Click a row, or "show trader three", for the record in full: the curve
-with every fall shaded and the deepest marked, the parts as bars, every
-trade as a dot, the calculations written out with their numbers, and the
-open positions. Back/Escape returns; arrows step between traders. A stale
+open positions. A busy reply (429) is waited out as long as the exchange
+asks, doubling when it does not say, before a trader is skipped. Each
+closing order is one trade, its fees included. The verdict is the gold
+backtest's test: at least `min_trades` (30) closed trades and money made in
+every one of `parts` (3) parts; a record whose best trade made over half
+the profit is flagged as one big trade. The parts come from the account's
+profit history, not from the fills: Hyperliquid keeps only an account's
+latest 10,000 fills, so a busy trader's early weeks would otherwise look
+empty. The deepest fall is measured from the running best, as dollars, as
+a share of the account then, and when. How they trade is read from the
+fills, following each position flat to flat: how long it is held (scalper,
+day, swing, position trader), which way they lean, wins and losses (many
+small wins, few big winners, balanced), pace, whether they build in steps
+and add to losers, how concentrated they are, and open losses they are
+sitting on -- behaviour, not their private signals. What they trade is the
+markets by closed trades, with what each made. Open positions carry
+leverage and distance to liquidation ("covered" when the exchange gives no
+liquidation price). "Show me the top traders" opens the board (a separate,
+scrollable panel): consistent records first, each row with its profit over
+the period, a sparkline, a bar per part and a line on how and what they
+trade. Click a row, or "show trader three", for the record in full: how
+they trade, what they trade, the curve with every fall shaded and the
+deepest marked and explained beneath it, the parts as bars, every trade as
+a dot, the calculations written out with their numbers, and the open
+positions with a key to their colours. Back/Escape returns; arrows step
+between traders. A stale
 board (over `refresh_hours`, 6) is shown at once and re-read in the
 background, the fresh one announced when it lands. Settings in
 trader-watch.json, results in trader-watch-cache.json. Read-only by

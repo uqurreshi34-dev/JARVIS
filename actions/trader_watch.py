@@ -66,9 +66,13 @@ FILLS_KEPT = 10000
 CONCENTRATED = 0.5
 
 # Between requests, so a refresh of twenty-five accounts never hammers the API.
-PAUSE_SECONDS = 0.35
+# Hyperliquid limits by request weight per minute per address; when it says
+# 429 the request is tried again after the wait it asks for, or a doubling
+# one, up to RETRIES times.
+PAUSE_SECONDS = 0.5
 TIMEOUT_SECONDS = 30
-RETRIES = 3
+RETRIES = 6
+LONGEST_WAIT = 30
 
 _DAY_MS = 86_400_000
 
@@ -164,8 +168,11 @@ class Hyperliquid:
             except Exception as error:
                 raise WatchError(f"{SOURCE} could not be reached ({type(error).__name__})") from None
 
-            if response.status_code == 429 and attempt < RETRIES - 1:
-                time.sleep(2 ** attempt * 2)
+            if response.status_code == 429:
+                if attempt == RETRIES - 1:
+                    break
+
+                time.sleep(_wait(response, attempt))
                 continue
 
             if response.status_code != 200:
@@ -271,6 +278,16 @@ class Hyperliquid:
         return found, account
 
 
+def _wait(response, attempt):
+    """How long to wait after a 429: what the exchange asks for, or a doubling wait, never over LONGEST_WAIT."""
+    asked = (getattr(response, "headers", None) or {}).get("Retry-After")
+
+    try:
+        return min(LONGEST_WAIT, max(1.0, float(asked)))
+    except (TypeError, ValueError):
+        return min(LONGEST_WAIT, 3 * 2 ** attempt)
+
+
 def _float(value):
     try:
         return float(value)
@@ -303,41 +320,40 @@ def trades_from(fills):
     return sorted(closing.values(), key=lambda trade: trade["time"])
 
 
-def judge(trades, start_ms, end_ms, parts, min_trades):
-    """The record's figures, every one with the numbers it came from, so the panel can show the working."""
+def market(coin):
+    """A coin as people know it: Hyperliquid names a spot pair by its index ("@142")."""
+    return f"spot #{coin[1:]}" if coin.startswith("@") else coin
+
+
+def judge(trades, parts, min_trades):
+    """The record's figures, every one with the numbers it came from, so the panel can show the working.
+
+    [parts] is the profit made in each part of the period, from the account's own profit history: it
+    covers the whole period even when Hyperliquid no longer keeps the trades of its early weeks. The
+    trade figures are from the closed trades it does keep.
+    """
     nets = [trade["pnl"] - trade["fee"] for trade in trades]
     wins = [value for value in nets if value > 0]
     losses = [value for value in nets if value <= 0]
     gross_won, gross_lost = sum(wins), -sum(losses)
     net = sum(nets)
-
-    span = (end_ms - start_ms) / parts
-    by_part = [0.0] * parts
-
-    for trade, value in zip(trades, nets):
-        index = min(parts - 1, max(0, int((trade["time"] - start_ms) // span))) if span > 0 else 0
-        by_part[index] += value
-
     best = max(nets) if nets else 0.0
-    coins = {}
-
-    for trade, value in zip(trades, nets):
-        coins[trade["coin"]] = coins.get(trade["coin"], 0.0) + value
 
     enough = len(trades) >= min_trades
-    every_part = all(value > 0 for value in by_part)
+    every_part = all(value > 0 for value in parts)
     concentrated = net > 0 and best / net > CONCENTRATED
 
     if not enough:
         verdict, reason = "too few", f"only {len(trades)} closed trades; {min_trades} needed to judge"
     elif not every_part:
-        losing = [index + 1 for index, value in enumerate(by_part) if value <= 0]
+        losing = [index + 1 for index, value in enumerate(parts) if value <= 0]
         verdict = "inconsistent"
-        reason = f"lost money in part{'s' if len(losing) > 1 else ''} {', '.join(map(str, losing))} of {parts}"
+        reason = (f"made nothing or lost money in part{'s' if len(losing) > 1 else ''}"
+                  f" {', '.join(map(str, losing))} of {len(parts)}")
     elif concentrated:
-        verdict, reason = "one big trade", f"one trade made {best / net:.0%} of the profit"
+        verdict, reason = "one big trade", f"one trade made {best / net:.0%} of the profit from closed trades"
     else:
-        verdict, reason = "consistent", f"made money in all {parts} parts, over {len(trades)} trades"
+        verdict, reason = "consistent", f"made money in all {len(parts)} parts, over {len(trades)} trades"
 
     return {
         "trades": len(trades), "wins": len(wins), "losses": len(losses),
@@ -349,14 +365,188 @@ def judge(trades, start_ms, end_ms, parts, min_trades):
         "average_loss": gross_lost / len(losses) if losses else 0.0,
         "best": best, "worst": min(nets) if nets else 0.0,
         "best_share": best / net if net > 0 else None,
-        "parts": by_part, "coins": sorted(coins.items(), key=lambda item: -abs(item[1]))[:5],
+        "parts": list(parts), "coins": coin_table(trades),
         "verdict": verdict, "reason": reason,
     }
 
 
+def coin_table(trades):
+    """[[market, closed trades, net]] for the markets traded most."""
+    table = {}
+
+    for trade in trades:
+        row = table.setdefault(market(trade["coin"]), [0, 0.0])
+        row[0] += 1
+        row[1] += trade["pnl"] - trade["fee"]
+
+    ordered = sorted(table.items(), key=lambda item: -item[1][0])
+    return [[name, count, round(net, 2)] for name, (count, net) in ordered[:8]]
+
+
+def curve_at(curve, when):
+    """The running profit at [when], read between the points either side; before the first point, nothing."""
+    if not curve or when <= curve[0][0]:
+        return 0.0 if not curve or when < curve[0][0] else curve[0][1]
+
+    for (then, before), (later, after) in zip(curve, curve[1:]):
+        if then <= when <= later:
+            return before + (after - before) * ((when - then) / (later - then) if later > then else 1.0)
+
+    return curve[-1][1]
+
+
+def curve_parts(curve, start_ms, end_ms, parts):
+    """The profit made in each of [parts] equal parts of the period, from the profit history."""
+    edges = [start_ms + (end_ms - start_ms) * index / parts for index in range(parts + 1)]
+    return [curve_at(curve, later) - curve_at(curve, earlier) for earlier, later in zip(edges, edges[1:])]
+
+
+# How long a position is typically held decides the style's name.
+_TIMEFRAMES = ((3_600_000, "Scalper", "minutes"), (_DAY_MS, "Day trader", "hours"),
+               (14 * _DAY_MS, "Swing trader", "days"), (None, "Position trader", "weeks"))
+
+# What the profile of wins and losses is called, and when.
+LOPSIDED_WINS = 0.65
+LOPSIDED_LOSSES = 0.45
+BIG_WINNERS = 1.5
+SPECIALIST = 0.5
+STEPS = 0.5
+OPEN_LOSSES = 0.1
+_EPSILON = 1e-9
+
+
+def duration(ms):
+    minutes = ms / 60_000
+
+    if minutes < 90:
+        return f"{minutes:.0f} minutes"
+
+    if minutes < 48 * 60:
+        return f"{minutes / 60:.1f} hours"
+
+    return f"{minutes / 1440:.1f} days"
+
+
+def positions_from(fills):
+    """Every position opened and closed in [fills]: side, how long it was held, how it was built.
+
+    Each fill says the position before it (startPosition), so a position is followed from flat to flat.
+    One already open when the fills begin is skipped until it is flat: its start is not known.
+    """
+    held, live = [], {}
+
+    for fill in fills:
+        coin = fill.get("coin", "")
+        before = _float(fill.get("startPosition"))
+        size = _float(fill.get("sz"))
+        after = before + (size if fill.get("side") == "B" else -size)
+        price, when = _float(fill.get("px")), fill.get("time", 0)
+        state = live.get(coin)
+
+        if state is None:
+            if abs(after) <= _EPSILON:
+                continue
+
+            state = live[coin] = {"known": abs(before) <= _EPSILON, "side": 1 if after > 0 else -1, "opened": when,
+                                  "entry": price, "size": abs(after), "adds": 0, "worse": 0}
+            continue
+
+        flat = abs(after) <= _EPSILON
+        flipped = not flat and (after > 0) != (state["side"] > 0)
+
+        if flat or flipped:
+            if state["known"]:
+                held.append({"coin": coin, "side": "long" if state["side"] > 0 else "short",
+                             "held": when - state["opened"], "adds": state["adds"], "worse": state["worse"]})
+
+            del live[coin]
+
+            if flipped:
+                live[coin] = {"known": True, "side": 1 if after > 0 else -1, "opened": when, "entry": price,
+                              "size": abs(after), "adds": 0, "worse": 0}
+        elif abs(after) > abs(before):
+            if state["known"]:
+                state["adds"] += 1
+                state["worse"] += (price < state["entry"]) if state["side"] > 0 else (price > state["entry"])
+
+            state["entry"] = (state["entry"] * abs(before) + price * size) / abs(after)
+            state["size"] = abs(after)
+        else:
+            state["size"] = abs(after)
+
+    return held
+
+
+def style(fills, record, positions, covered_days, period_pnl):
+    """How this trader trades, read from what they did: [[name, the numbers behind it]].
+
+    It describes behaviour, not intent -- the same habits can come from many different reasons.
+    """
+    held = positions_from(fills)
+    said = []
+
+    if held:
+        times = sorted(position["held"] for position in held)
+        middle = times[len(times) // 2]
+        name, unit = next((name, unit) for limit, name, unit in _TIMEFRAMES if limit is None or middle < limit)
+        said.append([name, f"holds a position for {duration(middle)} (the middle of {len(held)} positions);"
+                           f" typically {unit}"])
+
+        long_share = sum(1 for position in held if position["side"] == "long") / len(held)
+        direction = "Mostly long" if long_share >= 0.7 else "Mostly short" if long_share <= 0.3 else "Both ways"
+        said.append([direction, f"{long_share:.0%} of positions long, {1 - long_share:.0%} short"])
+
+    if record["trades"]:
+        win_rate = record["win_rate"]
+        ratio = record["average_win"] / record["average_loss"] if record["average_loss"] else None
+
+        if win_rate >= LOPSIDED_WINS and ratio is not None and ratio < 1:
+            name = "Many small wins"
+            detail = (f"wins {win_rate:.0%} of trades, but an average loss is bigger than an average win"
+                      f" ({money(record['average_loss'])} against {money(record['average_win'])})")
+        elif win_rate < LOPSIDED_LOSSES and ratio is not None and ratio >= BIG_WINNERS:
+            name = "Few big winners"
+            detail = (f"wins only {win_rate:.0%} of trades, but an average win is {ratio:.1f} times an average"
+                      f" loss: the shape of trend following")
+        else:
+            name = "Balanced"
+            detail = f"wins {win_rate:.0%} of trades" + (f"; average win {ratio:.2f} times average loss" if ratio else "")
+
+        said.append([name, detail])
+        said.append(["Pace", f"{record['trades'] / max(covered_days, 1):.1f} closed trades a day"])
+
+    if held:
+        adds = sum(position["adds"] for position in held)
+        worse = sum(position["worse"] for position in held)
+
+        if adds / len(held) >= STEPS:
+            said.append(["Builds in steps", f"{adds / len(held):.1f} additions to each position on average"])
+
+            if worse * 2 >= adds:
+                said.append(["Adds to losers", f"{worse} of {adds} additions were at a worse price than the"
+                                                f" average entry (averaging down): risky if a move keeps going"])
+
+    coins = record["coins"]
+
+    if coins:
+        top, count, _net = coins[0]
+        share = count / max(record["trades"], 1)
+        said.append(["Specialist" if share >= SPECIALIST else "Spread out",
+                     f"{share:.0%} of trades in {top}" if share >= SPECIALIST
+                     else f"{len(coins)}+ markets; the most traded, {top}, is {share:.0%} of trades"])
+
+    unrealised = sum(position["unrealised"] for position in positions)
+
+    if unrealised < 0 and abs(unrealised) >= OPEN_LOSSES * max(abs(period_pnl), 1.0):
+        said.append(["Holding losers", f"{money(unrealised)} of losses still open now, across"
+                                       f" {sum(1 for position in positions if position['unrealised'] < 0)} positions"])
+
+    return said
+
+
 def deepest_dip(pnl, value):
-    """The furthest the running profit fell from its best, in USD and as a share of the account at that best."""
-    peak, peak_time, worst, worst_share = None, None, 0.0, 0.0
+    """The furthest the running profit fell from its best: (USD, share of the account at that best, from, to)."""
+    peak, peak_time, worst, worst_share, span = None, None, 0.0, 0.0, (None, None)
 
     for when, amount in pnl:
         if peak is None or amount > peak:
@@ -365,11 +555,11 @@ def deepest_dip(pnl, value):
         fall = peak - amount
 
         if fall > worst:
-            worst = fall
+            worst, span = fall, (peak_time, when)
             account = _value_at(value, peak_time)
             worst_share = fall / account if account > 0 else 0.0
 
-    return worst, worst_share
+    return worst, worst_share, span[0], span[1]
 
 
 def _value_at(value, when):
@@ -390,19 +580,24 @@ def _window(series, start_ms):
 
 
 def examine(client, row, chosen, now_ms):
-    """One trader's record over the period, judged."""
+    """One trader's record over the period, judged, with how they trade."""
     start_ms = now_ms - chosen["days"] * _DAY_MS
     fills = client.fills(row["address"], start_ms, now_ms)
     trades = trades_from(fills)
-    record = judge(trades, start_ms, now_ms, chosen["parts"], chosen["min_trades"])
 
     history = client.portfolio(row["address"])
     period = history.get("allTime") or history.get("month") or {"pnl": [], "value": []}
     pnl = _window(period["pnl"], start_ms)
     value = [(when, amount) for when, amount in period["value"] if when >= start_ms]
-    dip, dip_share = deepest_dip(pnl, value)
+    dip, dip_share, dip_from, dip_to = deepest_dip(pnl, value)
+    period_pnl = pnl[-1][1] if pnl else 0.0
 
+    record = judge(trades, curve_parts(pnl, start_ms, now_ms, chosen["parts"]), chosen["min_trades"])
     positions, account = client.positions(row["address"])
+
+    # Hyperliquid keeps only an account's latest fills: the trade figures may start after the period does.
+    covered_from = fills[0].get("time", start_ms) if fills else start_ms
+    covered_days = max((now_ms - covered_from) / _DAY_MS, 1.0)
 
     return {
         "address": row["address"], "name": row["name"], "account": account or row["account"],
@@ -410,10 +605,12 @@ def examine(client, row, chosen, now_ms):
         "month_roi": row["windows"].get("month", {}).get("roi", 0.0),
         "curve": [[when, round(amount, 2)] for when, amount in pnl],
         "trade_points": [[trade["time"], round(trade["pnl"] - trade["fee"], 2)] for trade in trades],
-        "dip": dip, "dip_share": dip_share,
-        "fills_capped": len(fills) >= FILLS_KEPT,
-        "positions": positions,
+        "period_pnl": period_pnl,
+        "dip": dip, "dip_share": dip_share, "dip_from": dip_from, "dip_to": dip_to,
+        "fills_capped": len(fills) >= FILLS_KEPT, "covered_from": covered_from,
+        "positions": [dict(position, coin=market(position["coin"])) for position in positions],
         **record,
+        "style": style(fills, record, positions, covered_days, period_pnl),
     }
 
 
@@ -429,8 +626,9 @@ _VERDICT_ORDER = {"consistent": 0, "one big trade": 1, "inconsistent": 2, "too f
 
 
 def rank(traders):
-    """Consistent records first, then by net profit over the period."""
-    return sorted(traders, key=lambda trader: (_VERDICT_ORDER.get(trader["verdict"], 9), -trader["net"]))
+    """Consistent records first, then by profit over the period."""
+    return sorted(traders, key=lambda trader: (_VERDICT_ORDER.get(trader["verdict"], 9),
+                                               -trader.get("period_pnl", trader["net"])))
 
 
 # ---- the board -------------------------------------------------------------------------------
@@ -583,8 +781,10 @@ def describe(board, focus=None):
 
     if focus is not None:
         trader = traders[focus - 1]
-        return (f"Trader {focus}, {short_name(trader)}: {trader['reason']}. Net {money(trader['net'])} over"
-                f" {board['days']} days, deepest fall {money(trader['dip'])}. The working is on the board, sir.")
+        how = ", ".join(name.lower() for name, _detail in (trader.get("style") or [])[:3])
+        return (f"Trader {focus}, {short_name(trader)}: {trader['reason']}. Made {money(trader['period_pnl'])} over"
+                f" {board['days']} days, deepest fall {money(trader['dip'])}." + (f" Style: {how}." if how else "")
+                + " The working is on the board, sir.")
 
     good = [trader for trader in traders if trader["verdict"] == "consistent"]
 
@@ -594,7 +794,7 @@ def describe(board, focus=None):
 
     best = good[0]
     return (f"Of {len(traders)} top {SOURCE} traders, {len(good)} made money in every part of the last"
-            f" {board['days']} days. The strongest, {short_name(best)}, netted {money(best['net'])} over"
+            f" {board['days']} days. The strongest, {short_name(best)}, made {money(best['period_pnl'])} over"
             f" {best['trades']} trades. Details on the board, sir.")
 
 

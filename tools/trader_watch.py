@@ -41,15 +41,20 @@ def main(argv=None):
 
     print(f"\n{board['source']}, read {tw.updated_text(board)}: {len(board['traders'])} of {board['looked_at']} examined,"
           f" last {board['days']} days in {board['parts']} parts.\n")
-    print(f"  {'#':>2}  {'trader':24} {'verdict':14} {'trades':>6} {'win':>5} {'p.f.':>5} {'net':>10}"
+    print(f"  {'#':>2}  {'trader':24} {'verdict':14} {'trades':>6} {'win':>5} {'p.f.':>5} {'made':>10}"
           f" {'deepest fall':>13}  parts")
 
     for index, trader in enumerate(board["traders"], 1):
         factor = f"{trader['profit_factor']:.2f}" if trader.get("profit_factor") else "-"
         parts = " ".join(tw.money(value) for value in trader["parts"])
         print(f"  {index:>2}  {tw.short_name(trader)[:24]:24} {trader['verdict']:14} {trader['trades']:>6}"
-              f" {trader['win_rate']:>5.0%} {factor:>5} {tw.money(trader['net']):>10}"
+              f" {trader['win_rate']:>5.0%} {factor:>5} {tw.money(trader.get('period_pnl', trader['net'])):>10}"
               f" {tw.money(-trader['dip']):>8} {trader['dip_share']:>4.0%}  {parts}")
+        habits = ", ".join(name for name, _detail in trader.get("style") or [])
+        markets = ", ".join(f"{name} {count}" for name, count, _net in trader.get("coins") or [])
+
+        if habits or markets:
+            print(f"      {habits}" + (f"  |  trades: {markets}" if markets else ""))
 
     print("\n" + tw.describe(board).replace(", sir", "").replace(" sir.", "."))
     return 0
