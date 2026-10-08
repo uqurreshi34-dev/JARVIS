@@ -37,7 +37,8 @@ _WIDTH = 780
 _HEIGHT = 640
 _MARGIN = 22
 
-_BACKDROP = QColor(8, 14, 21, 238)
+# Nearly opaque: a chart behind a chart reads as one chart.
+_BACKDROP = QColor(8, 14, 21, 252)
 _ACCENT = QColor(95, 200, 245)
 _TEXT = QColor(226, 236, 245)
 _MUTED = QColor(130, 148, 165)
@@ -205,8 +206,9 @@ class _Page(QWidget):
     def _range(self):
         """The prices the chart must hold: the candles, and every plan's stop and target near them."""
         plan = self.plan
-        lows = [candle[3] for candle in plan["candles"]]
-        highs = [candle[2] for candle in plan["candles"]]
+        drawn = plan["candles"] + ([plan["forming"]] if plan.get("forming") else [])
+        lows = [candle[3] for candle in drawn]
+        highs = [candle[2] for candle in drawn]
         low, high = min(lows), max(highs)
         reach = (high - low) * 0.6
 
@@ -224,9 +226,12 @@ class _Page(QWidget):
     def _chart(self, painter, rect, width):
         plan = self.plan
         candles = plan["candles"]
+        forming = plan.get("forming")
         low, high = self._range()
         span = high - low
-        step = rect.width() / len(candles)
+        step = rect.width() / (len(candles) + (1 if forming else 0))
+        first = candles[0][0]
+        every = plan.get("candle_seconds", 0) * 1000 or ((candles[-1][0] - first) / max(len(candles) - 1, 1))
 
         def level(value):
             return rect.bottom() - (value - low) / span * rect.height()
@@ -272,15 +277,35 @@ class _Page(QWidget):
                 painter.setPen(QPen(colour))
                 painter.drawText(tag, Qt.AlignmentFlag.AlignCenter, text)
 
-        # The candles.
-        for index, (_when, opened, top, bottom, closed, _label) in enumerate(candles):
+        # The candles, and the one still forming after them, hollow: drawn so the chart reaches now, never
+        # judged on.
+        for index, (_when, opened, top, bottom, closed, _label) in enumerate(candles + ([forming] if forming else [])):
             colour = _GAIN if closed >= opened else _LOSS
             x = middle(index)
             painter.setPen(QPen(colour, 1))
-            painter.drawLine(QPointF(x, level(top)), QPointF(x, level(bottom)))
+            painter.drawLine(QPointF(x, level(top)), QPointF(x, level(max(opened, closed))))
+            painter.drawLine(QPointF(x, level(min(opened, closed))), QPointF(x, level(bottom)))
             body = QRectF(x - step * 0.32, level(max(opened, closed)), step * 0.64,
                           max(1.0, abs(level(opened) - level(closed))))
-            painter.fillRect(body, colour)
+
+            if index < len(candles):
+                painter.fillRect(body, colour)
+            else:
+                painter.drawRect(body)
+                painter.setFont(_font(7, mono=True))
+                painter.setPen(QPen(_MUTED))
+                painter.drawText(QPointF(x - 18, level(top) - 4), "forming")
+
+        # Where price turned at each line: the swings that made it, ringed -- on the chart they were found on.
+        for line in ([] if plan.get("lines_from") else plan["levels"]):
+            colour = _AMBER if line["yours"] else (_LOSS if line["price"] > plan["price"] else _GAIN)
+
+            for when, price in line.get("swings") or []:
+                place = (when - first) / every if every else -1
+
+                if 0 <= place <= len(candles) - 1 and low <= price <= high:
+                    painter.setPen(QPen(colour, 1.4))
+                    painter.drawEllipse(QPointF(middle(round(place)), level(price)), 4.5, 4.5)
 
         # The price now.
         now_y = level(plan["price"])
@@ -303,6 +328,8 @@ class _Page(QWidget):
 
         y = rect.bottom() + 20
         return self._note(painter, y, width,
+                          ("" if plan.get("lines_from") else "Rings: the swings that make each line, where price clearly"
+                           " turned. ") + "Hollow candle: still forming. "
                           f"Green dashes: the buy plan. Red: the sell plan. 1 break, 2 retest, 3 go, to the target"
                           f" (T); x marks the stop. Next {plan['timeframe']} candle closes {plan['next_close']} UK.")
 
@@ -520,10 +547,12 @@ class _Page(QWidget):
     def _working(self, painter, y, width):
         chosen = self.plan["settings"]
         rows = [
-            ("Lines", f"A swing high is a candle higher than the {chosen['swing_strength']} either side of it; a swing"
-                      f" low, lower. Swings within {chosen['merge_atr']:g} ATR of each other are one line, a line"
-                      f" needs {chosen['min_touches']} of them, and the swings count how often price turned there."
-                      f" Your own lines (amber) come from trade-plan.json, under {self.plan['symbol']}."),
+            ("Lines", f"A swing high is a candle higher than the {chosen['swing_strength']} either side of it that"
+                      f" price then fell at least {chosen.get('bounce_atr', 0):g} ATR from (a swing low: lower, and"
+                      f" rose from) -- a clear turn, not a pause. Swings within {chosen['merge_atr']:g} ATR of each"
+                      f" other are one line, a line needs {chosen['min_touches']} of them, and the swings count how"
+                      f" often price turned there. Your own lines (amber) come from trade-plan.json, under"
+                      f" {self.plan['symbol']}."),
             ("ATR (14)", f"{_price(self.plan['atr'], self.plan['decimals'])}: how far {self.plan['instrument']}"
                          f" typically moves in one {self.plan['timeframe']}"
                          f" candle. The stop sits {chosen['stop_atr']:g} ATR beyond the retest, so ordinary noise"

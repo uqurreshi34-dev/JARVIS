@@ -90,6 +90,15 @@ check(len(lines) == 2 and abs(prices[0] - 4008) < 1 and abs(prices[1] - 4092) < 
       f"the range's floor and ceiling are found, each turned at more than once ({prices})")
 lone = made(base + [(4050, 4052, 4046, 4050)] * 3 + [(4050, 4200, 4046, 4050)] + [(4050, 4052, 4046, 4050)] * 4)
 check(all(line["price"] < 4150 for line in tp.levels(lone, atr, chosen)), "a lone spike is a swing, not a line")
+check(all(len(line["swings"]) == line["touches"] and all(when > 0 for when, _price in line["swings"]) for line in lines),
+      "every line carries the swings that made it, by time, for the chart to ring")
+# A shallow wobble mid-range: highs and lows a few dollars apart, never moving an ATR from them.
+wobble = base + [(4050 + (2 if index % 4 < 2 else -2), 4053 + (2 if index % 4 < 2 else -2),
+                  4047 + (2 if index % 4 < 2 else -2), 4050 + (2 if index % 4 < 2 else -2)) for index in range(40)]
+shallow = tp.levels(made(wobble), atr, chosen)
+check(not any(4040 < line["price"] < 4060 for line in shallow)
+      and any(4040 < line["price"] < 4060 for line in tp.levels(made(wobble), atr, dict(chosen, bounce_atr=0.01))),
+      "a wobble price never clearly turned from makes no line; without the bounce rule it would")
 mine = dict(chosen, your_levels={"XAU_USD": [4050.0]})
 check(any(line["yours"] and line["price"] == 4050.0 for line in tp.plan(range_candles, 4050.0, mine, GOLD)["levels"])
       and not any(line["yours"] for line in tp.plan(range_candles, 4050.0, mine, dict(GOLD, instrument="XAG_USD"))
@@ -196,6 +205,11 @@ class Oanda:
         rows = self.entry_rows if granularity == "M15" else self.rows
         return rows[-count:], [row[4] for row in rows[-count:]]
 
+    def forming(self, name, granularity, align_utc=False):
+        rows = self.entry_rows if granularity == "M15" else self.rows
+        start = rows[-1][0] + (timedelta(minutes=15) if granularity == "M15" else timedelta(hours=4))
+        return (start, rows[-1][4], rows[-1][4] + 1, rows[-1][4] - 1, self.now)
+
     def price(self, name):
         if not self.open_market:
             raise oanda.OandaError(f"no price for {name} just now (the market may be closed)")
@@ -226,6 +240,9 @@ entry = shown[-1]["entry"]
 check(entry and entry["timeframe"] == "15-minute" and entry["lines_from"] == "4-hour"
       and [line["price"] for line in entry["levels"]] == [line["price"] for line in shown[-1]["levels"]],
       "the fifteen-minute page works against the four-hour chart's lines")
+check(shown[-1]["forming"] and entry["forming"] and shown[-1]["forming"][0] > shown[-1]["candles"][-1][0]
+      and entry["forming"][4] == shown[-1]["price"],
+      "each page carries the candle still forming, after the last finished one, so the chart reaches now")
 check(entry["atr"] < shown[-1]["atr"] and entry["line_atr"] == shown[-1]["atr"],
       f"its stop sized by its own, smaller ATR ({entry['atr']} against {shown[-1]['atr']})")
 check(entry["buy"]["stage"] == "ready" and entry["buy"]["line"] == floor and "15-minute" in entry["buy"]["steps"][0]["text"],
@@ -333,6 +350,19 @@ check(not image.isNull(), "the fifteen-minute page draws")
 
 if os.environ.get("TRADE_PLAN_SHOTS"):
     image.save(os.path.join(os.environ["TRADE_PLAN_SHOTS"], "plan-15m.png"))
+
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+from tools import trade_plan as cli  # noqa: E402
+
+printed = io.StringIO()
+
+with contextlib.redirect_stdout(printed):
+    cli.report(both)
+
+check("swings" in printed.getvalue() and "support" in printed.getvalue() and "15-minute:" in printed.getvalue(),
+      "tools/trade_plan.py prints every line with the swings that made it, and both pages' verdicts")
 
 panel._on_plan(tp.read("shall i buy or sell gold", Oanda(range_candles, entry_broken=True)))
 panel._turn_to(1)

@@ -168,6 +168,21 @@ class Client:
 
         return made[-count:], ask_closes[-count:]
 
+    def forming(self, name=GOLD, granularity="M15", align_utc=False):
+        """The candle still forming now, as (start, open, high, low, close) on the bid, or None between them."""
+        asked = {"granularity": granularity, "count": 1, "price": "B"}
+
+        if align_utc:
+            asked.update({"dailyAlignment": 0, "alignmentTimezone": "UTC"})
+
+        found = self._get(f"/v3/instruments/{name}/candles", asked).get("candles") or []
+
+        if not found or found[-1].get("complete"):
+            return None
+
+        bid = found[-1]["bid"]
+        return parse_time(found[-1]["time"]), float(bid["o"]), float(bid["h"]), float(bid["l"]), float(bid["c"])
+
     def history(self, start, end, name=GOLD, granularity="M15", page=5000):
         """Every finished candle from [start] to [end] (UTC), oldest first: (candles, ask closes), as candles() gives.
 

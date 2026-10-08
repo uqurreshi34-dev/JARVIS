@@ -8,7 +8,8 @@ with the exact prices for each step and where it stands on each:
 
     the lines     support and resistance found from the chart itself: a swing
                   high is a candle higher than the [swing_strength] either side
-                  of it (a swing low, lower); swings within [merge_atr] ATRs of
+                  of it (a swing low, lower) that price then clearly turned from,
+                  moving [bounce_atr] ATRs away; swings within [merge_atr] ATRs of
                   each other are one line, a line needs [min_touches] of them,
                   and the more swings at a line, the more it has been
                   respected. Your own lines (your_levels, by market) are drawn
@@ -44,7 +45,7 @@ Settings in trade-plan.json in the JARVIS folder:
     entry_granularity    "M15": a second page timing the trade on these candles against the
                          lines above (null: none); entry_candles, entry_shown_candles,
                          entry_retest_candles as for the chart's own
-    granularity, utc_candles, candles, shown_candles, swing_strength, merge_atr, min_touches,
+    granularity, utc_candles, candles, shown_candles, swing_strength, merge_atr, min_touches, bounce_atr,
     stop_atr, target_buffer_atr, min_reward, fallback_reward, retest_candles,
     touch_atr, rsi_high, rsi_low
 """
@@ -88,6 +89,9 @@ DEFAULTS = {
     # turning at a price once is a swing, turning there again makes it a line.
     "merge_atr": 0.5,
     "min_touches": 2,
+    # A swing counts only when price clearly turned from it: moved at least this many ATRs away within
+    # twice swing_strength candles. Dips that barely lift are not where traders draw their lines.
+    "bounce_atr": 1.0,
     # Your own lines, by OANDA's name for the market: always drawn and used.
     "your_levels": {},
     # The stop: beyond the retest's wick by this many ATRs.
@@ -189,8 +193,12 @@ def settings():
 
 def levels(candles, atr, chosen, yours=()):
     """The lines, lowest first, as actions/chart_lines.py finds them with these settings."""
-    return chart_lines.levels(candles, chosen["merge_atr"] * atr, chosen["swing_strength"], chosen["min_touches"],
-                              yours)
+    found = chart_lines.levels(candles, chosen["merge_atr"] * atr, chosen["swing_strength"], chosen["min_touches"],
+                               yours, chosen["bounce_atr"] * atr)
+
+    # Where price turned, by time rather than by place in this list, so any chart can mark them.
+    return [dict(line, swings=[[_ms(candles[index][0]), price] for index, price in line["swings"]])
+            for line in found]
 
 
 # ---- a plan for one side ----------------------------------------------------------------------
@@ -441,7 +449,7 @@ def plan(candles, price, chosen, market, live=True, lines=None, line_atr=None, l
         "buy": plans["buy"], "sell": plans["sell"],
         "buy_passed": plans.get("buy_passed"), "sell_passed": plans.get("sell_passed"),
         "verdict": verdict, "headline": headline,
-        "settings": {name: chosen[name] for name in ("swing_strength", "merge_atr", "min_touches", "stop_atr",
+        "settings": {name: chosen[name] for name in ("swing_strength", "merge_atr", "min_touches", "bounce_atr", "stop_atr",
                                                      "target_buffer_atr", "min_reward", "retest_candles",
                                                      "touch_atr")},
     }
@@ -598,6 +606,7 @@ def read(command, client=None):
     market = {"name": details.get("display_name") or spoken.title(), "instrument": instrument,
               "decimals": int(details.get("price_decimals", 2)), "spoken": spoken}
     found = plan(candles, price, chosen, market, live)
+    found["forming"] = _forming(client, instrument, chosen["granularity"], chosen["utc_candles"])
     found["entry"], found["entry_error"] = None, None
     found["entry_timeframe"] = GRANULARITY_WORDS.get(chosen["entry_granularity"])
 
@@ -629,8 +638,27 @@ def entry_plan(client, found, chosen, market, price, live):
     if not candles:
         raise PlanError(f"OANDA sent no {GRANULARITY_WORDS[shorter['granularity']]} candles")
 
-    return plan(candles, price, shorter, market, live, lines=found["levels"], line_atr=found["atr"],
-                lines_from=found["timeframe"])
+    shown = plan(candles, price, shorter, market, live, lines=found["levels"], line_atr=found["atr"],
+                 lines_from=found["timeframe"])
+    shown["forming"] = _forming(client, market["instrument"], shorter["granularity"], chosen["utc_candles"])
+    return shown
+
+
+def _forming(client, instrument, granularity, align_utc):
+    """The candle still forming, drawn after the finished ones so the chart reaches now; never judged on.
+
+    None when OANDA has none open (the market shut) or cannot say.
+    """
+    try:
+        candle = client.forming(instrument, granularity, align_utc=align_utc)
+    except oanda.OandaError:
+        return None
+
+    if not candle:
+        return None
+
+    start, opened, high, low, closed = candle
+    return [_ms(start), opened, high, low, closed, _uk(start)]
 
 
 def show(command, client=None):

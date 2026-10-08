@@ -1950,8 +1950,14 @@ named in trade-plan.json's `markets` (spoken name to OANDA instrument, so any
 OANDA market can be added) -- is answered with the rules, not a guess. JARVIS
 reads that market's four-hour candles and finds the lines from the chart: a
 swing high is a candle higher than the `swing_strength` (3) either side, a
-swing low lower; swings within `merge_atr` (0.5) ATR are one line, and a
-line needs `min_touches` (2) swings. Your own lines (`your_levels`, by
+swing low lower -- and price must then have clearly turned from it,
+moving `bounce_atr` (1) ATR away within twice that many candles, so a pause
+is not a line; swings within `merge_atr` (0.5) ATR are one line, and a
+line needs `min_touches` (2) swings. The chart rings the swings behind each
+line, and `python tools/trade_plan.py gold` prints them with their dates,
+to check against your own chart. The candle still forming is drawn hollow
+after the last finished one, so the chart reaches now; only finished
+candles are judged. Your own lines (`your_levels`, by
 instrument) are always lines. For each side it finds the line in play -- one
 broken within `retest_candles` (6) and holding, else the next one to break --
 and where things stand: waiting for the break, for the retest (within
