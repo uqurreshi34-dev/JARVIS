@@ -72,9 +72,9 @@ DEFAULTS = {
     },
     # OANDA's candle size, and how many are read and shown.
     "granularity": "H4",
-    # Candles start on the hour in UTC (00:00, 04:00 ...), as TradingView draws OANDA's chart; false
-    # keeps OANDA's own day, which starts at 17:00 New York time.
-    "utc_candles": True,
+    # false: OANDA's own day, starting 17:00 New York time -- the four-hour candles TradingView draws for
+    # OANDA (in summer 21:00, 01:00, 05:00 ... UTC). true: on UTC's hours (00:00, 04:00 ...) instead.
+    "utc_candles": False,
     "candles": 200,
     "shown_candles": 60,
     # The second page: the same plan timed on shorter candles, against the lines drawn on the chart above
@@ -298,14 +298,21 @@ def side_plan(side, line, candles, atr, rsis, lines, chosen, broke=None, decimal
                         f" ({chosen['stop_atr'] * atr:,.{d}f}) = {stop:,.{d}f}; beyond the retest's wick once it shows")
 
     risk = abs(entry - stop)
-    # The next line the trade could reach: past the entry by more than the buffer kept short of it.
-    ahead = [other for other in lines if _beyond(other["price"] - sign * buffer, entry, side)
+    # The first line in the trade's way: any line past the entry (other than the one traded), however
+    # close -- one right under a sell's entry leaves it no room at all, and the plan must say so rather
+    # than aim through it at a line further on.
+    ahead = [other for other in lines if _beyond(other["price"], entry, side)
              and abs(other["price"] - price) > chosen["merge_atr"] * line_atr]
     following = min(ahead, key=lambda other: abs(other["price"] - entry)) if ahead else None
+    kind = "resistance" if side == "buy" else "support"
 
-    if following:
+    if following and not _beyond(following["price"] - sign * buffer, entry, side):
+        target = entry
+        target_working = (f"no room: the next {kind}, {following['price']:,.{d}f}, is within"
+                          f" {chosen['target_buffer_atr']:g} ATR ({buffer:,.{d}f}) of the entry, {entry:,.{d}f}")
+    elif following:
         target = following["price"] - sign * buffer
-        target_working = (f"the next {'resistance' if side == 'buy' else 'support'} {following['price']:,.{d}f}"
+        target_working = (f"the next {kind} {following['price']:,.{d}f}"
                           f" {'-' if side == 'buy' else '+'} {chosen['target_buffer_atr']:g} ATR ({buffer:,.{d}f})"
                           f" = {target:,.{d}f}")
     else:
@@ -332,6 +339,7 @@ def side_plan(side, line, candles, atr, rsis, lines, chosen, broke=None, decimal
         "risk": round(risk, d), "reward": round(reward, d), "decimals": d, "ratio": round(ratio, 2),
         "ratio_working": f"({abs(target - entry):,.{d}f}) / ({risk:,.{d}f}) = {ratio:.2f} : 1",
         "worth": round(ratio, 2) >= chosen["min_reward"], "rsi": rsi_now, "rsi_ok": rsi_ok,
+        "no_room": bool(following) and reward <= 0, "kind_ahead": kind,
         "confirmed": confirmed, "passed": None,
     }
 
@@ -439,6 +447,7 @@ def plan(candles, price, chosen, market, live=True, lines=None, line_atr=None, l
         "price": round(price, d), "live": live, "lines_from": lines_from,
         "line_atr": round(line_atr, d) if line_atr else None,
         "read": _uk(candles[-1][0] + step), "next_close": _uk(next_close, "%H:%M"),
+        "read_utc": (candles[-1][0] + step).astimezone(timezone.utc).strftime("%H:%M UTC"),
         "atr": round(atr, d), "rsi": rsis[-1], "rsi_zone": rsi_zone(rsis[-1], chosen),
         "rsi_high": chosen["rsi_high"], "rsi_low": chosen["rsi_low"],
         "candles": [[_ms(start), opened, high, low, closed, _uk(start)]
@@ -458,7 +467,9 @@ def plan(candles, price, chosen, market, live=True, lines=None, line_atr=None, l
 def _waiting_for(side_plan_):
     said = _stage_words(side_plan_)
 
-    if side_plan_["stage"] != "passed" and not side_plan_["worth"]:
+    if side_plan_["stage"] != "passed" and side_plan_.get("no_room"):
+        said += f" -- though the next {side_plan_['kind_ahead']} leaves no room to a target, so not worth taking"
+    elif side_plan_["stage"] != "passed" and not side_plan_["worth"]:
         said += f" -- though only {side_plan_['ratio']:.2f} : 1 to the next line, so not worth taking"
 
     gone = side_plan_.get("passed")
@@ -494,6 +505,11 @@ def _verdict(plans, price, support, resistance, chosen, market):
 
         if not found or found["stage"] != "ready":
             continue
+
+        if found["no_room"]:
+            return "skip", (f"A {side} setup confirmed at {found['line']:,.{d}f}, but {found['kind_ahead']} at"
+                            f" {found['next_line']:,.{d}f} sits right {'above' if side == 'buy' else 'under'} the"
+                            f" entry: no room to a target, so the rules say skip it.")
 
         if not found["worth"]:
             return "skip", (f"A {side} setup confirmed at {found['line']:,.{d}f}, but only {found['ratio']:.2f} : 1 to"

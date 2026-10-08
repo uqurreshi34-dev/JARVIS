@@ -688,13 +688,11 @@ class GoldTrader:
         return side
 
     def _four_hour_lines(self, client):
-        """(lines, four-hour ATR) from OANDA's finished four-hour candles on UTC's hours, read once per candle."""
-        now = self._clock()
-        block = now.replace(hour=now.hour - now.hour % gold_strategy.LINE_HOURS, minute=0, second=0, microsecond=0)
+        """(lines, four-hour ATR) from OANDA's finished four-hour candles, read once per candle."""
+        block = gold_strategy.line_block(self._clock())
 
         if self._lines[0] != block:
-            candles, _asks = client.candles(oanda.GOLD, f"H{gold_strategy.LINE_HOURS}", gold_strategy.LINE_CANDLES,
-                                            align_utc=True)
+            candles, _asks = client.candles(oanda.GOLD, f"H{gold_strategy.LINE_HOURS}", gold_strategy.LINE_CANDLES)
             self._lines = (block, gold_strategy.chart_lines_from(candles))
 
         return self._lines[1]

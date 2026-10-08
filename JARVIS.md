@@ -1795,7 +1795,8 @@ $30 target beyond it, and was stopped out in five minutes. With the rule,
 a trade needs at least that many R of clear space before the first line in
 its way, less 0.2 of the four-hour ATR. The lines are
 `actions/chart_lines.py`'s, the same the trade plan draws, from the last
-200 finished four-hour candles on UTC's hours; the backtest builds them
+200 finished four-hour candles of OANDA's day (from 17:00 New York, as
+TradingView draws OANDA's chart); the backtest builds them
 from its fifteen-minute candles and knows only those finished by each
 moment, and the trader reads OANDA's four-hour candles once per candle. It
 is a row in the backtest beside the same rules without it, and trades only
@@ -1980,7 +1981,8 @@ four-hour line by the four-hour ATR's share -- a tighter stop and a better
 reward : risk, with more false starts. While the panel is open it reads
 afresh just after every fifteen-minute close, keeping the page and the
 place scrolled to, so the latest candle is always on it. Candles are on
-UTC's hours (`utc_candles`), as TradingView draws OANDA's chart. Read-only:
+OANDA's own day, from 17:00 New York, as TradingView draws OANDA's chart
+(`utc_candles` true puts them on UTC's hours instead). Read-only:
 candles and the price, never an order. `tools/test_trade_plan.py`.
 
 Work that takes a while shows on the HUD as a progress strip above the

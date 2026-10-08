@@ -7,7 +7,7 @@ Shared by the trade plan (actions/trade_plan.py), the gold backtest and the gold
                 (a swing low: whose low is the lowest) -- and from which price then clearly turned:
                 moving at least [bounce] away within [within] candles. A dip that barely lifts is not a
                 low traders draw a line from; one price ran away from is.
-    a line      swings within [merge] of each other, at their average; it needs [touches] of them,
+    a line      swings all within [merge] of each other, at their average; it needs [touches] of them,
                 as price turning at a price once is a swing, and turning there again makes it a line.
                 Your own lines are lines whatever the chart says, and keep their own price.
     room        how far a trade can go before the first line in its way, less a [buffer] -- price
@@ -45,10 +45,17 @@ def levels(candles, merge, strength, touches, yours=(), bounce=0.0, within=None)
     latest swing, "swings" [(index, price)] of every one, so a chart can mark where price turned."""
     groups = [{"prices": [], "swings": [], "yours": True, "price": float(level)} for level in yours]
 
-    for index, price in sorted(swings(candles, strength, bounce, within), key=lambda swing: swing[1]):
-        near = min(groups, key=lambda group: abs(group["price"] - price), default=None)
+    def fits(group, price):
+        # Every swing in a line lies within [merge] of every other: a line cannot creep, swing by swing,
+        # further than that from where it started.
+        spread = group["prices"] + [price] + ([group["price"]] if group["yours"] else [])
+        return max(spread) - min(spread) <= merge
 
-        if near is not None and abs(near["price"] - price) <= merge:
+    for index, price in sorted(swings(candles, strength, bounce, within), key=lambda swing: swing[1]):
+        near = min((group for group in groups if fits(group, price)), key=lambda group: abs(group["price"] - price),
+                   default=None)
+
+        if near is not None:
             near["prices"].append(price)
             near["swings"].append((index, price))
 

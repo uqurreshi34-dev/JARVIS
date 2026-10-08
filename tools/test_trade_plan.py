@@ -146,6 +146,14 @@ expected = "buy" if buy["rsi_ok"] else "skip"
 check(plan["verdict"] == expected and (buy["rsi_ok"] or "RSI" in plan["headline"]),
       f"the verdict follows RSI on the confirmation ({buy['rsi']:.0f}): {plan['verdict']}")
 
+# A sell confirmed right on top of support: it must not aim through the support at a line far beyond.
+crowded = tp.plan(made(confirmed), ceiling + 12, dict(chosen, your_levels={"XAU_USD": [ceiling + 13.0]}), GOLD)
+check(crowded["verdict"] != "buy" and crowded["buy"]["no_room"] and "no room" in crowded["buy"]["target_working"]
+      and crowded["buy"]["ratio"] <= 0, f"a line right past the entry: no room, never a target beyond it ({crowded['headline']})")
+spaced = tp.chart_lines.levels([(START + timedelta(hours=4 * index), price, price + 0.5, price - 0.5, price)
+                                for index, price in enumerate([100, 110, 103, 110, 107, 110, 111, 100])], 5.0, 1, 2)
+check(all(max(price for _i, price in line["swings"]) - min(price for _i, price in line["swings"]) <= 5.0
+          for line in spaced), "every swing in a line lies within the merge distance of every other: lines cannot creep")
 near = tp.plan(made(confirmed), ceiling + 12, dict(chosen, your_levels={"XAU_USD": [ceiling + 20.0]}), GOLD)
 buffer = chosen["target_buffer_atr"] * near["atr"]
 check(near["verdict"] == "skip" and "under" in near["headline"] and not near["buy"]["worth"]
@@ -233,9 +241,9 @@ shown = []
 tp.set_listeners(on_plan=shown.append, on_hide=lambda: shown.append("hidden"))
 client = Oanda(range_candles, entry_rows=made15(quarter))
 said = tp.show("jarvis shall i buy or sell gold", client)
-check(client.asked == [("XAU_USD", "H4", chosen["candles"], True), ("XAU_USD", "M15", chosen["entry_candles"], True)]
+check(client.asked == [("XAU_USD", "H4", chosen["candles"], False), ("XAU_USD", "M15", chosen["entry_candles"], False)]
       and shown and shown[-1]["price"] == floor + 9 and shown[-1]["live"] and shown[-1]["symbol"] == "XAU_USD",
-      "gold: its four-hour candles on UTC's hours, as TradingView draws them, then the fifteen-minute ones")
+      "gold: its four-hour candles from OANDA's own day, as TradingView draws them, then the fifteen-minute ones")
 entry = shown[-1]["entry"]
 check(entry and entry["timeframe"] == "15-minute" and entry["lines_from"] == "4-hour"
       and [line["price"] for line in entry["levels"]] == [line["price"] for line in shown[-1]["levels"]],

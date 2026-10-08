@@ -5,7 +5,8 @@ Checked:
 
 - room: the first line in a trade's way, less the buffer; none that way is
   None; a trade starting on top of a line has negative room;
-- fifteen-minute candles build into four-hour ones on UTC's hours, and the
+- fifteen-minute candles build into four-hour ones as OANDA's day has them
+  (from 17:00 New York, summer and winter), and the
   backtest's lines use only four-hour candles finished by then;
 - the room rule: a sell aimed through a floor that has held is not taken,
   the same sell with nothing in its way is, and rules without it are
@@ -50,7 +51,8 @@ check(chart_lines.room("sell", 4103.0, lines, 6.0)[0] < 0, "selling on top of a 
 
 # ---- four-hour candles, finished ones only ------------------------------------------------------------
 
-START = datetime(2026, 9, 1, tzinfo=timezone.utc)
+# 01:00 UTC is 21:00 in New York in summer: a four-hour candle of OANDA's day starts there.
+START = datetime(2026, 9, 1, 1, tzinfo=timezone.utc)
 
 
 def fifteen(rows):
@@ -74,8 +76,12 @@ def ranging(blocks, floor=4100.0, ceiling=4180.0):
 
 candles = fifteen(ranging(60))
 blocks = gs.four_hour(candles)
-check(len(blocks) == 60 and all(block[0].hour % 4 == 0 for block in blocks)
-      and blocks[0][2] == max(candle[2] for candle in candles[:16]), "fifteen-minute candles build four-hour ones on UTC's hours")
+check(len(blocks) == 60 and all(gs.new_york_time(block[0]).hour in (17, 21, 1, 5, 9, 13) for block in blocks)
+      and blocks[0][2] == max(candle[2] for candle in candles[:16]),
+      "fifteen-minute candles build four-hour ones as OANDA's day has them, from 17:00 New York")
+winter = datetime(2026, 12, 1, 22, tzinfo=timezone.utc)
+check(gs.line_block(winter + timedelta(hours=3, minutes=45)) == winter and gs.line_block(winter) == winter,
+      "and in winter, when 17:00 New York is 22:00 UTC")
 book = gs.LineBook(candles)
 lines, atr = book.at(candles[-1][0] + timedelta(minutes=15))
 prices = [round(line["price"]) for line in lines]

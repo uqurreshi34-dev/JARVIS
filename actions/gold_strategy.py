@@ -99,9 +99,10 @@ CANDLE_MINUTES = 15
 # chart asks price to break that line first: selling ten dollars above a floor that has held all day, say.
 # With [room] in the rules, a trade needs at least that many R of clear space before the first line in its
 # way, less a share of the four-hour ATR (price often turns just short of a line). The lines are
-# actions/chart_lines.py's, from the last LINE_CANDLES finished four-hour candles on UTC's hours -- what
+# actions/chart_lines.py's, from the last LINE_CANDLES finished four-hour candles of OANDA's day -- what
 # the trade plan draws -- so nothing is known before it could be.
 LINE_HOURS = 4
+LINE_DAY_STARTS = 17          # OANDA's day starts at 17:00 New York time, and its four-hour candles with it
 LINE_CANDLES = 200
 LINE_STRENGTH = 3
 LINE_MERGE_ATR = 0.5
@@ -913,12 +914,20 @@ def exits_for(rules, entry, side, atr):
     return entry + distance, entry - reward, distance
 
 
+def line_block(moment):
+    """The start of the four-hour candle of OANDA's day that [moment] (UTC) falls in."""
+    into = (new_york_time(moment).hour - LINE_DAY_STARTS) % LINE_HOURS
+    return moment.replace(minute=0, second=0, microsecond=0) - timedelta(hours=into)
+
+
 def four_hour(candles):
-    """Fifteen-minute [candles] built into four-hour ones on UTC's hours: [(start, open, high, low, close)]."""
+    """Fifteen-minute [candles] built into four-hour ones as OANDA (and TradingView's OANDA chart) draws
+    them: from OANDA's day, which starts at 17:00 New York time, so 17:00, 21:00, 01:00 ... New York.
+    [(start, open, high, low, close)]."""
     built = []
 
     for start, opened, high, low, closed in candles:
-        block = start.replace(hour=start.hour - start.hour % LINE_HOURS, minute=0, second=0, microsecond=0)
+        block = line_block(start)
 
         if built and built[-1][0] == block:
             built[-1][2], built[-1][3], built[-1][4] = max(built[-1][2], high), min(built[-1][3], low), closed
