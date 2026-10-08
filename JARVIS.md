@@ -1794,9 +1794,14 @@ pullback sold ten dollars above a floor that had held all day, with its
 $30 target beyond it, and was stopped out in five minutes. With the rule,
 a trade needs at least that many R of clear space before the first line in
 its way, less 0.2 of the four-hour ATR. The lines are
-`actions/chart_lines.py`'s, the same the trade plan draws, from the last
-200 finished four-hour candles of OANDA's day (from 17:00 New York, as
-TradingView draws OANDA's chart); the backtest builds them
+`actions/chart_lines.py`'s `zones()`: every level price turned at twice or
+more (highs or lows standing 2.5 ATR clear), old or new, from the last 200
+finished four-hour candles of OANDA's day (from 17:00 New York). Not the
+trade plan's lines, which are only the latest pair a trader draws: with
+those, pullback-1:3-room2 fell from +$850 over three years to -$120, so the
+room rule keeps every level in the way, pinned by a test on real gold. The
+backtest warns by name when what the trader is set to trade fails its test
+(fewer than 30 trades, or a part that lost money). The backtest builds them
 from its fifteen-minute candles and knows only those finished by each
 moment, and the trader reads OANDA's four-hour candles once per candle. It
 is a row in the backtest beside the same rules without it, and trades only

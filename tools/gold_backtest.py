@@ -151,6 +151,7 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=S
           + " ".join(f"{part:>15}" for part in parts) + "  key")
     worked_out = indicators(candles)
     passing = []
+    failing = []   # what the trader is set to trade, where it falls short: (key, why)
 
     for rules in variants_for(instrument):
         mark = "+" if rules in traded else "*" if rules == AS_WRITTEN else " "
@@ -161,6 +162,9 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=S
         if worth_trading(summary, *nets) and rules.exits in TRADEABLE_EXITS:
             passing.append((summary.net, rules))
 
+        if rules in traded and not worth_trading(summary, *nets):
+            failing.append((rules.key(), _shortfall(summary, nets, parts, lot_ounces)))
+
         print(f"{mark} {rules.name():52} {summary.trades:6d} {summary.win_rate:4.0%} {summary.net * lot_ounces:8.2f} "
               f"{summary.average_risk * lot_ounces:6.2f} {summary.worst_run:9d} {summary.deepest * lot_ounces:13.2f} "
               + " ".join(f"{net * lot_ounces:15.2f}" for net in nets) + f"  {rules.key()}")
@@ -170,6 +174,11 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=S
           " running total fell from its best.\nA rule worth trusting makes money in every part, not just overall:"
           " one good stretch is often luck.")
     print("Past results are no promise of future ones.")
+
+    # The one line not to miss: the trader is trading something this test says not to.
+    for key, why in failing:
+        print(f"\nWARNING: the trader is set to trade {key}, which {why}. Switch it to what is worth trading"
+              " (below), or stop it: python tools/gold_trader.py --off")
 
     if most_open > 1 and traded:
         _compare_open(f"What the trader trades ({', '.join(rules.key() for rules in traded)})", candles, worked_out,
@@ -188,6 +197,16 @@ MOST_OPEN = 3
 
 def worth_trading(summary, *nets):
     return summary.trades >= MOST_FEW_TRADES and all(net > 0 for net in nets)
+
+
+def _shortfall(summary, nets, parts, lot_ounces):
+    """Why a version is not worth trading, in words: too few trades, or the parts that lost money."""
+    if summary.trades < MOST_FEW_TRADES:
+        return f"made only {summary.trades} trades, too few to mean anything"
+
+    lost = [f"{part.replace('from ', '').replace(' $', '')} ({net * lot_ounces:+.2f} $)"
+            for part, net in zip(parts, nets) if net <= 0]
+    return f"lost money in the part from {', '.join(lost)}"
 
 
 def _line(summary, nets, lot_ounces):

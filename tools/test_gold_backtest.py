@@ -192,6 +192,25 @@ check(len(gb.VARIANTS) == 56 and len(gb.REGISTRY) == 56 and "pullback-1:3-room2"
       <= set(gb.REGISTRY) and gb.AS_WRITTEN in gb.VARIANTS and gb.CHOSEN in gb.VARIANTS
       and gb.REGISTRY["bounce-1:3-be"] == gb.CHOSEN, "every combination of the open choices is run")
 
+# ---- the room rule's lines: pinned ---------------------------------------------------------------
+
+# The room rule tested over three years of OANDA gold with every level price turned at twice or more
+# (chart_lines.zones). The trade plan's chart draws fewer -- the latest pair -- and with those room2 lost
+# money. On real gold's four-hour candles of 8 October 2026 the room rule's lines must stay these: a
+# change here changes what the trader trades, and needs a backtest first.
+import csv  # noqa: E402
+
+with open(ROOT / "tools" / "fixtures" / "gold-4h-2026-10-08.csv", encoding="utf-8") as handle:
+    four_hour = [(datetime.strptime("2026 " + row["start (UK)"], "%Y %d %b %H:%M").replace(tzinfo=timezone.utc),
+                  float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]))
+                 for row in csv.DictReader(handle)]
+
+room_lines, room_atr = gb.chart_lines_from(four_hour)
+check([(line["kind"], round(line["price"], 1), line["touches"]) for line in room_lines]
+      == [("low", 4107.2, 2), ("high", 4223.5, 2), ("low", 4257.5, 2), ("low", 4288.7, 3), ("high", 4369.4, 2),
+          ("high", 4401.1, 2), ("high", 4437.4, 3)] and abs(room_atr - 30.151) < 0.01,
+      "the room rule's lines on real gold are the ones it was tested with: every level in the way, old ones too")
+
 # ---- exits from the bands -------------------------------------------------------------------------
 
 banded = gb.backtest(made, gb.Rules(squeeze_filter=False, session=(0, 24), exits="bands"))
@@ -357,6 +376,14 @@ marked = [line for line in output.splitlines() if line.startswith("+ ")]
 check(len(marked) == 1 and marked[0].rstrip().endswith("pullback-1:3")
       and "What the trader trades (pullback-1:3)" in output,
       "the rows marked + are what the trader is set to trade, and those are what is compared with several open")
+check(output.count("WARNING: the trader is set to trade") == 1 and "WARNING: the trader is set to trade pullback-1:3,"
+      in output and "python tools/gold_trader.py --off" in output,
+      "what the trader trades, failing the test, is warned about by name, with how to stop it")
+parts = ["from Oct 23 $", "from Oct 24 $", "from Oct 25 $"]
+check(cli._shortfall(gb.Summary(trades=528), [90.0, 260.0, -470.0], parts, 1.0)
+      == "lost money in the part from Oct 25 (-470.00 $)"
+      and "too few" in cli._shortfall(gb.Summary(trades=12), [5.0, 5.0, 5.0], parts, 1.0),
+      "the warning says which parts lost money, or that there were too few trades")
 check(code == 0 and "your OANDA demo account" in output and "OANDA gold, 800 fifteen-minute candles" in output
       and "Spread $0.50" in output,
       "with OANDA, its own candles and the spread as it was in the trading window, not at night")

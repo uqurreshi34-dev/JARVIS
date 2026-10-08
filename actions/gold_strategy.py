@@ -99,16 +99,18 @@ CANDLE_MINUTES = 15
 # chart asks price to break that line first: selling ten dollars above a floor that has held all day, say.
 # With [room] in the rules, a trade needs at least that many R of clear space before the first line in its
 # way, less a share of the four-hour ATR (price often turns just short of a line). The lines are
-# actions/chart_lines.py's, from the last LINE_CANDLES finished four-hour candles of OANDA's day -- what
-# the trade plan draws -- so nothing is known before it could be.
+# actions/chart_lines.py's zones(): every level price turned at twice or more in the last LINE_CANDLES
+# finished four-hour candles of OANDA's day, so nothing is known before it could be. Deliberately not the
+# trade plan's lines (the latest pair a trader draws): the room rule wants every level in the way, and
+# tested over three years of OANDA gold with these settings (pullback-1:3-room2: 507 trades, +$850, money
+# made in every year). With the trade plan's fewer lines it fell to -$120. Change them only with a backtest.
 LINE_HOURS = 4
 LINE_DAY_STARTS = 17          # OANDA's day starts at 17:00 New York time, and its four-hour candles with it
 LINE_CANDLES = 200
 LINE_STRENGTH = 3
 LINE_MERGE_ATR = 0.5
 LINE_TOUCHES = 2
-LINE_PEAK_ATR = 2.0
-LINE_LOOKBACK = 60
+LINE_PEAK_ATR = 2.5
 LINE_PEAK_CANDLES = 12
 LINE_BUFFER_ATR = 0.2
 
@@ -940,7 +942,7 @@ def four_hour(candles):
 
 
 def chart_lines_from(four_hours):
-    """(lines, four-hour ATR) from finished four-hour candles, as the trade plan finds them."""
+    """(lines, four-hour ATR) from finished four-hour candles: every level in the way, for the room rule."""
     from actions import chart_lines
 
     recent = four_hours[-LINE_CANDLES:]
@@ -950,9 +952,8 @@ def chart_lines_from(four_hours):
     if not atr:
         return [], None
 
-    return chart_lines.levels(recent, LINE_MERGE_ATR * atr, LINE_STRENGTH, LINE_TOUCHES,
-                              prominence=LINE_PEAK_ATR * atr, window=LINE_PEAK_CANDLES,
-                              lookback=LINE_LOOKBACK), atr
+    return chart_lines.zones(recent, LINE_MERGE_ATR * atr, LINE_STRENGTH, LINE_TOUCHES,
+                             prominence=LINE_PEAK_ATR * atr, window=LINE_PEAK_CANDLES), atr
 
 
 class LineBook:

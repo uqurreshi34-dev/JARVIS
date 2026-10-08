@@ -12,6 +12,8 @@ Shared by the trade plan (actions/trade_plan.py), the gold backtest and the gold
                 Two lows the same way: support. The most recent such pair is the line in use, as a
                 trader takes the two latest highs that line up.
                 Your own lines are lines whatever the chart says, and keep their own price.
+    a zone      for the gold trader's room rule: every level price turned at twice or more, old or new,
+                since any of them can stop a trade short (zones()).
     room        how far a trade can go before the first line in its way, less a [buffer] -- price
                 often turns just short of a line, so a target is not asked to touch it
 
@@ -107,6 +109,41 @@ def levels(candles, merge, strength, touches=2, yours=(), prominence=0.0, window
                     break
 
     return sorted(found, key=lambda line: line["price"])
+
+
+def zones(candles, merge, strength, touches, yours=(), prominence=0.0, window=None):
+    """Every level price has turned at [touches] times or more, lowest first, in the same form as levels().
+
+    For the gold trader's room rule, which asks whether ANY level stands in a trade's way -- not only the
+    latest pair a trader would draw. Peaks of one kind within [merge] of each other are one level, at
+    their average; every peak in a level lies within [merge] of every other, so a level cannot creep.
+    Tested over three years of OANDA gold with the room rule: keep it as it is unless a backtest says so.
+    """
+    groups = [{"prices": [], "swings": [], "yours": True, "kind": None, "price": float(level)} for level in yours]
+
+    def fits(group, price):
+        spread = group["prices"] + [price] + ([group["price"]] if group["yours"] else [])
+        return max(spread) - min(spread) <= merge
+
+    for index, price, kind in sorted(peaks(candles, strength, prominence, window), key=lambda peak: peak[1]):
+        near = min((group for group in groups if group["kind"] in (None, kind) and fits(group, price)),
+                   key=lambda group: abs(group["price"] - price), default=None)
+
+        if near is not None:
+            near["prices"].append(price)
+            near["swings"].append((index, price))
+
+            if not near["yours"]:
+                near["price"] = sum(near["prices"]) / len(near["prices"])
+        else:
+            groups.append({"prices": [price], "swings": [(index, price)], "yours": False, "kind": kind,
+                           "price": price})
+
+    return sorted(({"price": round(group["price"], 6), "kind": group["kind"], "touches": len(group["swings"]),
+                    "yours": group["yours"],
+                    "last": max((index for index, _price in group["swings"]), default=-1),
+                    "swings": sorted(group["swings"])} for group in groups
+                   if group["yours"] or len(group["swings"]) >= touches), key=lambda line: line["price"])
 
 
 def latest(lines, kind):
