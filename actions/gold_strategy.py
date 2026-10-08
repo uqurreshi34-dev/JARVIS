@@ -101,9 +101,10 @@ CANDLE_MINUTES = 15
 # way, less a share of the four-hour ATR (price often turns just short of a line). The lines are
 # actions/chart_lines.py's zones(): every level price turned at twice or more in the last LINE_CANDLES
 # finished four-hour candles of OANDA's day, so nothing is known before it could be. Deliberately not the
-# trade plan's lines (the latest pair a trader draws): the room rule wants every level in the way, and
-# tested over three years of OANDA gold with these settings (pullback-1:3-room2: 507 trades, +$850, money
-# made in every year). With the trade plan's fewer lines it fell to -$120. Change them only with a backtest.
+# trade plan's lines (the latest pair a trader draws): the room rule wants every level in the way. On
+# OANDA gold, Oct 2023 to Oct 2026, pullback-1:3-room2 made 459 trades and -$70 (+60, +250, -380 by year)
+# with these, 528 trades and -$120 with the trade plan's -- the room rule helps, but cannot rescue a
+# pullback that lost money in the last year. Change these only with a backtest.
 LINE_HOURS = 4
 LINE_DAY_STARTS = 17          # OANDA's day starts at 17:00 New York time, and its four-hour candles with it
 LINE_CANDLES = 200

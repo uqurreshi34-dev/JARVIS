@@ -1797,9 +1797,11 @@ its way, less 0.2 of the four-hour ATR. The lines are
 `actions/chart_lines.py`'s `zones()`: every level price turned at twice or
 more (highs or lows standing 2.5 ATR clear), old or new, from the last 200
 finished four-hour candles of OANDA's day (from 17:00 New York). Not the
-trade plan's lines, which are only the latest pair a trader draws: with
-those, pullback-1:3-room2 fell from +$850 over three years to -$120, so the
-room rule keeps every level in the way, pinned by a test on real gold. The
+trade plan's lines, which are only the latest pair a trader draws: on
+OANDA gold from October 2023 to October 2026, pullback-1:3-room2 made -$70
+(+60, +250, -380 by year) with every level and -$120 with the trade plan's,
+so the room rule keeps every level in the way, pinned by a test on real
+gold. It does not make the pullback worth trading on its own. The
 backtest warns by name when what the trader is set to trade fails its test
 (fewer than 30 trades, or a part that lost money). The backtest builds them
 from its fifteen-minute candles and knows only those finished by each
