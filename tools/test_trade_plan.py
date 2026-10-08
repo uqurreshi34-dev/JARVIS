@@ -122,6 +122,20 @@ check(abs(argent["support"] - 60.118) < 0.01 and abs(argent["resistance"] - 61.9
       and "no line below the price" in argent["headline"],
       f"silver: the broken range floor is still drawn as the support it was, and said so ({argent['headline'][:90]})")
 
+# Platinum the same day: resistance through the highs of 2 and 5 Oct (a trader drew 1,737.7), support through
+# the lows of 29 Sep and 2 Oct, broken on 7 Oct. Nothing far above the price, like the 1,834 once offered.
+with open(ROOT / "tools" / "fixtures" / "platinum-4h-2026-10-08.csv", encoding="utf-8") as handle:
+    platinum = [(datetime.strptime("2026 " + row["start (UK)"], "%Y %d %b %H:%M").replace(tzinfo=timezone.utc),
+                 float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]))
+                for row in csv.DictReader(handle)]
+
+metal = tp.plan(platinum, platinum[-1][4], chosen, {"name": "Platinum", "instrument": "XPT_USD", "decimals": 3})
+check(abs(metal["resistance"] - 1731.1) < 1 and abs(metal["support"] - 1667.7) < 1
+      and "has broken below its support" in metal["headline"] and metal["sell"] is None
+      and metal["buy"]["line"] == metal["support"] and metal["buy"]["target"] < metal["resistance"],
+      f"platinum: support and resistance where the highs and lows pair, the buy aiming short of resistance"
+      f" ({metal['headline'][:90]})")
+
 # Resistance as a trader draws it: the most recent two highs close together above the price -- not merely
 # the nearest line. Here an older pair sits nearer; the newer pair, further up, is the resistance.
 older = {"price": 4150.0, "kind": "high", "touches": 2, "yours": False, "last": 10, "swings": []}
