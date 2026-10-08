@@ -15,10 +15,18 @@ HUD with the beam crossing the gap -- as one scrollable page:
                   the arithmetic written out
     the working   how the lines were found and what ATR and RSI are
 
+Two pages: the chart's own candles (four-hour), where the lines are drawn,
+and the entry candles (fifteen-minute), which time the trade against those
+lines -- the buttons at the top, or Left and Right, turn between them. While
+open it reads afresh just after every fifteen-minute close, so the latest
+candle is always on it, keeping the page and the place scrolled to.
+
 Escape or Close puts it away; the wheel scrolls. Everything arrives through a
 signal: this is driven from the command thread, and a Qt widget may only be
 touched from its own.
 """
+
+import time
 
 from PyQt6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPicture, QPolygonF
@@ -87,10 +95,17 @@ class _Page(QWidget):
     def __init__(self):
         super().__init__()
         self.plan = None
+        self.error = None
 
     def show_plan(self, plan):
-        self.plan = plan
+        self.plan, self.error = plan, None
         self._fit()
+        self.update()
+
+    def show_error(self, text):
+        """A page that could not be read says so, rather than standing empty."""
+        self.plan, self.error = None, text
+        self.setFixedHeight(80)
         self.update()
 
     def resizeEvent(self, event):
@@ -111,12 +126,17 @@ class _Page(QWidget):
         self.setFixedHeight(int(height) + 30)
 
     def paintEvent(self, event):
-        if not self.plan:
+        if not self.plan and not self.error:
             return
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self._draw(painter, self.width() - 6)
+
+        if self.plan:
+            self._draw(painter, self.width() - 6)
+        else:
+            self._wrapped(painter, 0, 10, self.width() - 6, self.error, _font(10), _MUTED)
+
         painter.end()
 
     # ---- the page ----
@@ -138,6 +158,14 @@ class _Page(QWidget):
                                       plan["headline"], _font(10, bold=True), _TEXT)) + 6
         y = self._note(painter, y, width, "Rules, not a forecast: this says what has to happen before a trade, and"
                                           " where -- never that it will.")
+
+        if plan.get("lines_from"):
+            y = self._wrapped(painter, 0, y + 2, width,
+                              f"The lines are the {plan['lines_from']} chart's; these {plan['timeframe']} candles only"
+                              f" time the trade. Break, retest and confirmation show here sooner, and the stop is sized"
+                              f" by this chart's smaller ATR ({_price(plan['atr'], plan['decimals'])}) -- a tighter"
+                              f" stop and a better reward : risk, at the cost of more false starts.",
+                              _font(9), _ACCENT) + 4
 
         y = self._section(painter, y + 8, width, f"{plan['instrument'].upper()}, {plan['timeframe'].upper()} CANDLES"
                                                  f" -- the lines, the price now, and each plan's path")
@@ -235,6 +263,7 @@ class _Page(QWidget):
                 name = ("yours" if line["yours"] else
                         "RESISTANCE" if line["price"] > plan["price"] else "SUPPORT")
                 touches = f", {line['touches']} swing{'s' if line['touches'] != 1 else ''}" if line["touches"] else ""
+                touches += f" ({plan['lines_from']})" if plan.get("lines_from") else ""
                 painter.setFont(_font(8, bold=True))
                 text = f"{name} {_price(line['price'], plan['decimals'])}{touches}"
                 tag = QRectF(rect.left() + 4, y - 16 if line["price"] > plan["price"] else y + 2,
@@ -285,9 +314,15 @@ class _Page(QWidget):
 
         colour = _SIDE_COLOURS[side]
         sign = 1 if side == "buy" else -1
+        real_level = level
+
+        def level(value):
+            # A target or stop beyond the chart is drawn at its edge, and labelled so.
+            return min(max(real_level(value), rect.top() + 6), rect.bottom() - 6)
+
         line_y = level(found["line"])
         nudge = sign * 12
-        left = rect.right() + 68
+        left = rect.right() + 76
         right = rect.right() + _AHEAD - 58
         stage = found["stage"]
 
@@ -343,7 +378,10 @@ class _Page(QWidget):
         target_y, stop_y = level(found["target"]), level(found["stop"])
         painter.setPen(QPen(colour, 1))
         d = self._short_places()
-        painter.drawText(QPointF(right + 10, target_y + 4), f"T {found['target']:,.{d}f}")
+        # Beyond the chart's top or bottom: an arrow says which way it carries on.
+        beyond = "" if level(found["target"]) == real_level(found["target"]) else (
+            " ^" if real_level(found["target"]) < rect.top() else " v")
+        painter.drawText(QPointF(right + 10, target_y + 4), f"T {found['target']:,.{d}f}{beyond}")
         painter.drawLine(QPointF(right + 2, stop_y - 3), QPointF(right + 8, stop_y + 3))
         painter.drawLine(QPointF(right + 2, stop_y + 3), QPointF(right + 8, stop_y - 3))
         painter.drawText(QPointF(right + 11, stop_y + 4), f"{found['stop']:,.{d}f}")
@@ -490,8 +528,11 @@ class _Page(QWidget):
                          f" typically moves in one {self.plan['timeframe']}"
                          f" candle. The stop sits {chosen['stop_atr']:g} ATR beyond the retest, so ordinary noise"
                          f" does not reach it."),
-            ("Target", f"{chosen['target_buffer_atr']:g} ATR short of the next line: price often turns just before a"
-                       f" line, so the target does not ask it to touch."),
+            ("Target", f"{chosen['target_buffer_atr']:g} ATR"
+                       + (f" of the {self.plan['lines_from']} chart ({_price(self.plan['line_atr'], self.plan['decimals'])})"
+                          if self.plan.get("lines_from") else "")
+                       + " short of the next line: price often turns just before a line, so the target does not ask"
+                         " it to touch."),
             ("Runaways", f"A break older than {chosen['retest_candles']} candles with no retest is not chased."),
         ]
 
@@ -505,11 +546,19 @@ class _Page(QWidget):
 
 
 class TradePlanPanel(QWidget):
-    """The plan, scrollable, beside the HUD."""
+    """The plan, scrollable, beside the HUD: the chart's own page, and the entry candles' page beside it.
+
+    While it is open it asks for a fresh reading just after each entry candle closes (refresh_requested),
+    so the latest candle is always on it; a fresh plan keeps the page and the place it was scrolled to.
+    """
 
     show_plan = pyqtSignal(dict)
     hide_requested = pyqtSignal()
     closed = pyqtSignal()
+    refresh_requested = pyqtSignal()
+
+    # After a candle closes, OANDA needs a moment to mark it complete.
+    SETTLE_SECONDS = 20
 
     def __init__(self):
         super().__init__()
@@ -530,15 +579,26 @@ class TradePlanPanel(QWidget):
         self._subtitle.setStyleSheet("color: #8294a5; font: 8pt 'Segoe UI';")
         self._close = QPushButton("Close")
         self._close.clicked.connect(self._close_panel)
+        self._tabs = [QPushButton(), QPushButton()]
+
+        for index, tab in enumerate(self._tabs):
+            tab.setCheckable(True)
+            tab.clicked.connect(lambda _checked, index=index: self._turn_to(index))
 
         heading = QHBoxLayout()
         words = QVBoxLayout()
         words.addWidget(self._title)
         words.addWidget(self._subtitle)
         heading.addLayout(words, 1)
+
+        for tab in self._tabs:
+            heading.addWidget(tab)
+
         heading.addWidget(self._close)
 
-        self._page = _Page()
+        self._pages = [_Page(), _Page()]
+        self._plan = None
+        self._showing = 0
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -556,35 +616,95 @@ class TradePlanPanel(QWidget):
         self._animate = QTimer(self)
         self._animate.timeout.connect(self._tick)
 
+        self._refresh = QTimer(self)
+        self._refresh.setSingleShot(True)
+        self._refresh.timeout.connect(self.refresh_requested.emit)
+
     def set_anchor(self, widget):
         self._anchor = widget
 
-    def _on_plan(self, plan):
-        self._title.setText(f"{plan['instrument'].upper()}  /  {plan['timeframe'].upper()} PLAN")
-        price = _price(plan["price"], plan["decimals"]) + ("" if plan["live"] else " (market closed: last close)")
-        self._subtitle.setText(f"{plan['symbol']}  -  price {price}  -  ATR {_price(plan['atr'], plan['decimals'])}"
-                               f"  -  candles to {plan['read']} UK"
-                               f"  -  next close {plan['next_close']} UK")
+    def _plans(self):
+        """The plans on the pages: the chart's own, then the entry candles' (None when there is none)."""
+        return [self._plan, self._plan.get("entry")] if self._plan else [None, None]
 
+    def _on_plan(self, plan):
+        fresh = not plan.get("refreshed") or not self.isVisible()
+        self._plan = plan
+        plans = self._plans()
+
+        self._tabs[0].setText(plan["timeframe"].upper())
+        self._tabs[1].setText((plan.get("entry_timeframe") or "").upper())
+        self._tabs[1].setVisible(bool(plans[1] or plan.get("entry_error")))
+
+        if fresh:
+            self._showing = 0
+
+        self._turn_to(self._showing, keep_place=not fresh)
+        self._schedule()
+
+        if fresh:
+            self._position()
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            self.setFocus()
+            self._animate.start(_FRAME_MS)
+
+    def _turn_to(self, index, keep_place=False):
+        """Show page [index]: 0 the chart's own candles, 1 the entry candles."""
+        if not self._plan:
+            return
+
+        plan = self._plans()[index] if index < 2 else None
+
+        if index == 1 and not plan and not self._plan.get("entry_error"):
+            index, plan = 0, self._plan
+
+        self._showing = index
+
+        for number, tab in enumerate(self._tabs):
+            tab.setChecked(number == index)
+
+        place = self._scroll.verticalScrollBar().value() if keep_place else 0
+        shown = plan or self._plan
+        self._title.setText(f"{shown['instrument'].upper()}  /  {shown['timeframe'].upper()} PLAN"
+                            if plan else f"{shown['instrument'].upper()}  /  ENTRY CANDLES")
+        price = _price(shown["price"], shown["decimals"]) + ("" if shown["live"] else " (market closed: last close)")
+        self._subtitle.setText(f"{shown['symbol']}  -  price {price}  -  ATR {_price(shown['atr'], shown['decimals'])}"
+                               f"  -  candles to {shown['read']} UK"
+                               f"  -  next close {shown['next_close']} UK")
+
+        page = self._pages[index]
         current = self._scroll.takeWidget()
 
-        if current is not None and current is not self._page:
+        if current is not None and current is not page:
             current.setParent(None)
 
-        self._page.setFixedWidth(self._scroll.viewport().width() or _WIDTH - 2 * _MARGIN)
-        self._page.show_plan(plan)
-        self._scroll.setWidget(self._page)
-        self._scroll.verticalScrollBar().setValue(0)
+        page.setFixedWidth(self._scroll.viewport().width() or _WIDTH - 2 * _MARGIN)
 
-        self._position()
-        self.show()
-        self.raise_()
-        self.activateWindow()
-        self.setFocus()
-        self._animate.start(_FRAME_MS)
+        if plan:
+            page.show_plan(plan)
+        else:
+            page.show_error(f"The {self._plan['instrument']} entry candles could not be read:"
+                            f" {self._plan.get('entry_error')}.")
+
+        self._scroll.setWidget(page)
+        self._scroll.verticalScrollBar().setValue(place)
+
+    def _schedule(self):
+        """Ask for a fresh reading just after the next entry candle closes (or the chart's own, with none)."""
+        if not self._plan:
+            return
+
+        shown = self._plan.get("entry") or self._plan
+        seconds = shown.get("candle_seconds") or 900
+        now = time.time()
+        wait = seconds - now % seconds + self.SETTLE_SECONDS
+        self._refresh.start(int(wait * 1000))
 
     def _on_hide(self):
         self._animate.stop()
+        self._refresh.stop()
         self.hide()
 
     def _close_panel(self):
@@ -594,6 +714,8 @@ class TradePlanPanel(QWidget):
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_Backspace):
             self._close_panel()
+        elif event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Tab):
+            self._turn_to(1 - self._showing)
         else:
             super().keyPressEvent(event)
 

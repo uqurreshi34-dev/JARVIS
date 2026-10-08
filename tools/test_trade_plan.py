@@ -175,8 +175,10 @@ check(gas["verdict"] == "wait" and "Natural Gas is between support 3.008 and res
 class Oanda:
     MARKETS = {"XAU_USD": ("Gold", 2), "WTICO_USD": ("West Texas Oil", 3)}
 
-    def __init__(self, rows, open_market=True, broken=False):
+    def __init__(self, rows, open_market=True, broken=False, entry_rows=None, entry_broken=False):
         self.rows, self.open_market, self.broken, self.asked = rows, open_market, broken, []
+        self.entry_rows, self.entry_broken = entry_rows or rows, entry_broken
+        self.now = (entry_rows or rows)[-1][4]
 
     def instrument(self, name):
         if name not in self.MARKETS:
@@ -188,27 +190,53 @@ class Oanda:
     def candles(self, name, granularity, count, align_utc=False):
         self.asked.append((name, granularity, count, align_utc))
 
-        if self.broken:
+        if self.broken or (granularity == "M15" and self.entry_broken):
             raise oanda.OandaError("OANDA answered 503")
 
-        return self.rows[-count:], [row[4] for row in self.rows[-count:]]
+        rows = self.entry_rows if granularity == "M15" else self.rows
+        return rows[-count:], [row[4] for row in rows[-count:]]
 
     def price(self, name):
         if not self.open_market:
             raise oanda.OandaError(f"no price for {name} just now (the market may be closed)")
 
-        return self.rows[-1][4] - 0.5, self.rows[-1][4] + 0.5, START
+        return self.now - 0.5, self.now + 0.5, START
 
 
+def made15(rows, start=START + timedelta(days=30)):
+    """Fifteen-minute candles from (open, high, low, close) rows."""
+    return [(start + timedelta(minutes=15 * index), *row) for index, row in enumerate(rows)]
+
+
+# Fifteen-minute candles under the four-hour floor's line: broken above it, retested, confirmed on the last.
+floor = prices[0]
+quarter = ([(4050.0 - 0.3 * index, 4051.0 - 0.3 * index, 4049.0 - 0.3 * index, 4050.0 - 0.3 * index)
+            for index in range(180)]
+           + [(3997.0, 3999.0, 3995.0, 3998.0), (3998.0, floor + 9, 3997.0, floor + 8),
+              (floor + 8, floor + 12, floor + 6, floor + 11), (floor + 11, floor + 12, floor + 1, floor + 3),
+              (floor + 3, floor + 10, floor + 2, floor + 9)])
 shown = []
 tp.set_listeners(on_plan=shown.append, on_hide=lambda: shown.append("hidden"))
-client = Oanda(range_candles)
+client = Oanda(range_candles, entry_rows=made15(quarter))
 said = tp.show("jarvis shall i buy or sell gold", client)
-check(client.asked == [("XAU_USD", "H4", chosen["candles"], True)] and shown and shown[-1]["price"] == 4050.0
-      and shown[-1]["live"] and shown[-1]["symbol"] == "XAU_USD",
-      "gold: its four-hour candles, on UTC's hours as TradingView draws them, and the live price")
-check("Gold is 4,050 on the 4-hour chart" in said and "panel" in said and len(said) < 400,
-      f"said briefly; the panel holds the rest ({said})")
+check(client.asked == [("XAU_USD", "H4", chosen["candles"], True), ("XAU_USD", "M15", chosen["entry_candles"], True)]
+      and shown and shown[-1]["price"] == floor + 9 and shown[-1]["live"] and shown[-1]["symbol"] == "XAU_USD",
+      "gold: its four-hour candles on UTC's hours, as TradingView draws them, then the fifteen-minute ones")
+entry = shown[-1]["entry"]
+check(entry and entry["timeframe"] == "15-minute" and entry["lines_from"] == "4-hour"
+      and [line["price"] for line in entry["levels"]] == [line["price"] for line in shown[-1]["levels"]],
+      "the fifteen-minute page works against the four-hour chart's lines")
+check(entry["atr"] < shown[-1]["atr"] and entry["line_atr"] == shown[-1]["atr"],
+      f"its stop sized by its own, smaller ATR ({entry['atr']} against {shown[-1]['atr']})")
+check(entry["buy"]["stage"] == "ready" and entry["buy"]["line"] == floor and "15-minute" in entry["buy"]["steps"][0]["text"],
+      "a break, retest and confirmation on fifteen-minute candles at the four-hour line")
+check(f"Gold is {floor + 9:,.0f} on the 4-hour chart" in said and "On the 15-minute chart" in said and "panel" in said
+      and len(said) < 600, f"said briefly, both charts; the panel holds the rest ({said})")
+check(tp.refresh() and shown[-1]["refreshed"] and len(client.asked) == 4,
+      "refreshed while open: read again, and shown without a word")
+tp.show("shall i buy or sell gold", Oanda(range_candles, entry_broken=True))
+check(shown[-1]["entry"] is None and "503" in shown[-1]["entry_error"] and shown[-1]["verdict"],
+      "the fifteen-minute candles unreadable: the four-hour page still stands, the reason kept")
 client = Oanda(made([(o / 50, h / 50, l / 50, c / 50) for o, h, l, c in base] + [(81.0, 81.04, 80.92, 81.0)]))
 said = tp.show("should i go long on crude oil", client)
 check(client.asked[0][0] == "WTICO_USD" and shown[-1]["instrument"] == "West Texas Oil" and shown[-1]["decimals"] == 3
@@ -280,12 +308,36 @@ for name, found in (("wait", tp.plan(range_candles, 4050.0, chosen, GOLD)),
                     ("ready", tp.plan(made(confirmed), ceiling + 12, chosen, GOLD)), ("gas", gas)):
     panel._on_plan(found)
     image = panel.grab()
-    check(not image.isNull() and panel._page.height() > panel.height(), f"the {name} plan draws, scrollable")
+    check(not image.isNull() and panel._pages[0].height() > panel.height() and not panel._tabs[1].isVisible(),
+          f"the {name} plan draws, scrollable; no second page without entry candles")
 
     if os.environ.get("TRADE_PLAN_SHOTS"):
         image.save(os.path.join(os.environ["TRADE_PLAN_SHOTS"], f"plan-{name}.png"))
 
 check("NATURAL GAS" in panel._title.text() and "4-HOUR" in panel._title.text() and "3.050" in panel._subtitle.text()
       and "next close" in panel._subtitle.text(), "titled with the market, the timeframe, its price and the next close")
+
+both = tp.read("shall i buy or sell gold", Oanda(range_candles, entry_rows=made15(quarter)))
+panel._on_plan(both)
+check(panel._showing == 0 and panel._tabs[1].isVisible() and panel._tabs[1].text() == "15-MINUTE"
+      and panel._refresh.isActive(), "with entry candles: two pages, the four-hour first, and a fresh reading booked")
+panel._turn_to(1)
+check(panel._scroll.widget() is panel._pages[1] and "15-MINUTE" in panel._title.text() and panel._tabs[1].isChecked(),
+      "the second page: the fifteen-minute plan")
+panel._scroll.verticalScrollBar().setValue(120)
+panel._on_plan(dict(both, refreshed=True))
+check(panel._showing == 1 and panel._scroll.verticalScrollBar().value() == 120,
+      "a fresh reading keeps the page and the place scrolled to")
+image = panel.grab()
+check(not image.isNull(), "the fifteen-minute page draws")
+
+if os.environ.get("TRADE_PLAN_SHOTS"):
+    image.save(os.path.join(os.environ["TRADE_PLAN_SHOTS"], "plan-15m.png"))
+
+panel._on_plan(tp.read("shall i buy or sell gold", Oanda(range_candles, entry_broken=True)))
+panel._turn_to(1)
+check(panel._pages[1].error and "503" in panel._pages[1].error, "entry candles unreadable: that page says why")
+panel._on_hide()
+check(not panel._refresh.isActive(), "and put away, it stops reading")
 
 sys.exit(1 if failures else 0)

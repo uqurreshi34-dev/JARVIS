@@ -41,7 +41,10 @@ Settings in trade-plan.json in the JARVIS folder:
     markets              {"gold": "XAU_USD", "silver": "XAG_USD", ...}: what you call a
                          market, and OANDA's name for it; add any instrument OANDA offers
     your_levels          {"XAU_USD": [4114, 4229]}: your own lines, by OANDA's name
-    granularity, candles, shown_candles, swing_strength, merge_atr, min_touches,
+    entry_granularity    "M15": a second page timing the trade on these candles against the
+                         lines above (null: none); entry_candles, entry_shown_candles,
+                         entry_retest_candles as for the chart's own
+    granularity, utc_candles, candles, shown_candles, swing_strength, merge_atr, min_touches,
     stop_atr, target_buffer_atr, min_reward, fallback_reward, retest_candles,
     touch_atr, rsi_high, rsi_low
 """
@@ -73,6 +76,12 @@ DEFAULTS = {
     "utc_candles": True,
     "candles": 200,
     "shown_candles": 60,
+    # The second page: the same plan timed on shorter candles, against the lines drawn on the chart above
+    # -- the lines from four-hour candles, the moment from fifteen-minute ones. null: no second page.
+    "entry_granularity": "M15",
+    "entry_candles": 200,
+    "entry_shown_candles": 96,
+    "entry_retest_candles": 12,
     # A swing high is higher than this many candles either side of it.
     "swing_strength": 3,
     # Swings this many ATRs apart or closer are one line, and a line needs this many swings: price
@@ -139,6 +148,8 @@ def settings():
 
         if name == "granularity":
             chosen[name] = value if value in GRANULARITY_SECONDS else default
+        elif name == "entry_granularity":
+            chosen[name] = value if value is None or value in GRANULARITY_SECONDS else default
         elif name == "markets":
             given = value if isinstance(value, dict) else {}
             chosen[name] = {" ".join(str(spoken).casefold().split()): instrument
@@ -160,6 +171,7 @@ def settings():
             chosen[name] = type(default)(value)
 
     chosen["shown_candles"] = min(chosen["shown_candles"], chosen["candles"])
+    chosen["entry_shown_candles"] = min(chosen["entry_shown_candles"], chosen["entry_candles"])
     chosen["rsi_low"], chosen["rsi_high"] = sorted((chosen["rsi_low"], chosen["rsi_high"]))
 
     if path and not os.path.exists(path):
@@ -223,14 +235,17 @@ def _confirmation_of(candles, line, side, retest):
     return None
 
 
-def side_plan(side, line, candles, atr, rsis, lines, chosen, broke=None, decimals=2):
+def side_plan(side, line, candles, atr, rsis, lines, chosen, broke=None, decimals=2, line_atr=None):
     """The plan for one side at [line]: where it stands, its steps, and its figures with their working.
 
-    Prices are written to [decimals] places, the market's own.
+    Prices are written to [decimals] places, the market's own. [atr] is these candles' own, for the
+    retest's reach and the stop; [line_atr], the ATR of the chart the lines came from (these candles',
+    unless given), for how far short of a line the target sits and how far apart lines are.
     """
     d = decimals
+    line_atr = line_atr or atr
     touch = chosen["touch_atr"] * atr
-    buffer = chosen["target_buffer_atr"] * atr
+    buffer = chosen["target_buffer_atr"] * line_atr
     word = "above" if side == "buy" else "below"
     last = len(candles) - 1
     retest = _retest_of(candles, line["price"], side, broke, touch) if broke is not None else None
@@ -277,7 +292,7 @@ def side_plan(side, line, candles, atr, rsis, lines, chosen, broke=None, decimal
     risk = abs(entry - stop)
     # The next line the trade could reach: past the entry by more than the buffer kept short of it.
     ahead = [other for other in lines if _beyond(other["price"] - sign * buffer, entry, side)
-             and abs(other["price"] - price) > chosen["merge_atr"] * atr]
+             and abs(other["price"] - price) > chosen["merge_atr"] * line_atr]
     following = min(ahead, key=lambda other: abs(other["price"] - entry)) if ahead else None
 
     if following:
@@ -355,10 +370,12 @@ def _uk(moment, form="%d %b %H:%M"):
     return gold_strategy.uk_time(moment.astimezone(timezone.utc)).strftime(form)
 
 
-def plan(candles, price, chosen, market, live=True):
+def plan(candles, price, chosen, market, live=True, lines=None, line_atr=None, lines_from=None):
     """The plan from [candles] (oldest first, finished ones only) and the price now.
 
     [market]: {"name", "instrument", "decimals"} -- what it is called, OANDA's name, and its decimal places.
+    [lines], [line_atr] and [lines_from]: lines drawn on another chart, its ATR and its timeframe's words --
+    the four-hour chart's lines, timed on fifteen-minute candles -- instead of lines from these candles.
     """
     d = market["decimals"]
     if len(candles) < max(30, 2 * chosen["swing_strength"] + 2):
@@ -367,7 +384,12 @@ def plan(candles, price, chosen, market, live=True):
     atrs = gold_strategy.average_true_range(candles)
     rsis = gold_strategy.rsi([candle[4] for candle in candles])
     atr = atrs[-1] or (sum(candle[2] - candle[3] for candle in candles[-14:]) / 14)
-    lines = levels(candles, atr, chosen, chosen["your_levels"].get(market["instrument"], ()))
+    if lines is None:
+        lines = levels(candles, atr, chosen, chosen["your_levels"].get(market["instrument"], ()))
+    else:
+        # Their swings were on the other chart's candles: no index here.
+        lines = [dict(line, last=-1) for line in lines]
+
     resistance = min((line for line in lines if line["price"] > price), key=lambda line: line["price"], default=None)
     support = max((line for line in lines if line["price"] < price), key=lambda line: line["price"], default=None)
 
@@ -375,7 +397,7 @@ def plan(candles, price, chosen, market, live=True):
 
     for side in ("buy", "sell"):
         line, broke = _choose_line(side, price, lines, candles, chosen)
-        plans[side] = side_plan(side, line, candles, atr, rsis, lines, chosen, broke, d) if line else None
+        plans[side] = side_plan(side, line, candles, atr, rsis, lines, chosen, broke, d, line_atr) if line else None
 
         # A setup that has been and gone is history: the plan is for the next line to break, with the
         # one that passed kept beside it.
@@ -384,7 +406,7 @@ def plan(candles, price, chosen, market, live=True):
             ahead = [other for other in lines if _beyond(other["price"], max(price, gone["line"]) if side == "buy"
                                                          else min(price, gone["line"]), side)]
             following = min(ahead, key=lambda other: abs(other["price"] - price)) if ahead else None
-            plans[side] = (side_plan(side, following, candles, atr, rsis, lines, chosen, None, d) if following
+            plans[side] = (side_plan(side, following, candles, atr, rsis, lines, chosen, None, d, line_atr) if following
                            else None)
             passed = {"line": gone["line"], "entry": gone["entry"], "stop": gone["stop"], "target": gone["target"],
                       "ratio": gone["ratio"], "worth": gone["worth"], "rsi": gone["rsi"], "rsi_ok": gone["rsi_ok"],
@@ -405,7 +427,9 @@ def plan(candles, price, chosen, market, live=True):
     return {
         "instrument": market["name"], "symbol": market["instrument"], "decimals": d,
         "granularity": chosen["granularity"], "timeframe": GRANULARITY_WORDS[chosen["granularity"]],
-        "price": round(price, d), "live": live,
+        "candle_seconds": GRANULARITY_SECONDS[chosen["granularity"]],
+        "price": round(price, d), "live": live, "lines_from": lines_from,
+        "line_atr": round(line_atr, d) if line_atr else None,
         "read": _uk(candles[-1][0] + step), "next_close": _uk(next_close, "%H:%M"),
         "atr": round(atr, d), "rsi": rsis[-1], "rsi_zone": rsi_zone(rsis[-1], chosen),
         "rsi_high": chosen["rsi_high"], "rsi_low": chosen["rsi_low"],
@@ -573,7 +597,40 @@ def read(command, client=None):
 
     market = {"name": details.get("display_name") or spoken.title(), "instrument": instrument,
               "decimals": int(details.get("price_decimals", 2)), "spoken": spoken}
-    return plan(candles, price, chosen, market, live)
+    found = plan(candles, price, chosen, market, live)
+    found["entry"], found["entry_error"] = None, None
+    found["entry_timeframe"] = GRANULARITY_WORDS.get(chosen["entry_granularity"])
+
+    if chosen["entry_granularity"]:
+        try:
+            found["entry"] = entry_plan(client, found, chosen, market, price, live)
+        except (oanda.OandaError, PlanError) as error:
+            found["entry_error"] = str(error)
+
+    return found
+
+
+def entry_chosen(chosen):
+    """The settings for the second page: the entry candles in place of the chart's own."""
+    return dict(chosen, granularity=chosen["entry_granularity"], candles=chosen["entry_candles"],
+                shown_candles=chosen["entry_shown_candles"], retest_candles=chosen["entry_retest_candles"])
+
+
+def entry_plan(client, found, chosen, market, price, live):
+    """The same plan on the entry candles (fifteen-minute, unless set otherwise), against [found]'s lines.
+
+    The longer chart draws the lines; the shorter one says when price breaks, retests and confirms --
+    sooner, with a stop sized by its own, smaller ATR, at the cost of more false starts.
+    """
+    shorter = entry_chosen(chosen)
+    candles, _asks = client.candles(market["instrument"], shorter["granularity"], shorter["candles"],
+                                    align_utc=chosen["utc_candles"])
+
+    if not candles:
+        raise PlanError(f"OANDA sent no {GRANULARITY_WORDS[shorter['granularity']]} candles")
+
+    return plan(candles, price, shorter, market, live, lines=found["levels"], line_atr=found["atr"],
+                lines_from=found["timeframe"])
 
 
 def show(command, client=None):
@@ -590,10 +647,35 @@ def show(command, client=None):
     except PlanError as error:
         return f"I couldn't read the {named[0]} chart, sir: {error}."
 
+    global _last
+    _last = (command, client)
+
     if _listener:
         _listener(found)
 
     return describe(found)
+
+
+_last = None
+
+
+def refresh():
+    """Read the plan last shown again and show it, saying nothing: the panel keeps itself current while open.
+
+    Returns True when a fresh plan was shown.
+    """
+    if not _last or not _listener:
+        return False
+
+    try:
+        found = read(*_last)
+    except PlanError as error:
+        print(f"[JARVIS] trade plan: refresh failed ({error})")
+        return False
+
+    found["refreshed"] = True
+    _listener(found)
+    return True
 
 
 def hide():
@@ -609,7 +691,16 @@ def describe(found):
     places = 0 if found["price"] >= 1000 else found["decimals"]
     price = f"{found['price']:,.{places}f}" + ("" if found["live"] else ", the market closed")
     rsi = f" RSI is {found['rsi']:.0f}, {found['rsi_zone'].split(':')[0]}." if found["rsi"] is not None else ""
-    return (f"{found['instrument']} is {price} on the {found['timeframe']} chart. {found['headline']}{rsi}"
+    shorter = found.get("entry")
+    timed = ""
+
+    if shorter:
+        if shorter["verdict"] in ("buy", "sell", "skip"):
+            timed = f" On the {shorter['timeframe']} chart: {shorter['headline']}"
+        else:
+            timed = f" On the {shorter['timeframe']} chart, nothing to do yet either."
+
+    return (f"{found['instrument']} is {price} on the {found['timeframe']} chart. {found['headline']}{rsi}{timed}"
             f" The plan is on the panel, sir.")
 
 

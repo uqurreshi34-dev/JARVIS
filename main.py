@@ -1389,6 +1389,9 @@ def main():
 
     trade_plan.set_listeners(on_plan=plan_shown, on_hide=plan_hidden)
     plan_panel.closed.connect(plan_beam.hidden.emit)
+    # Kept current while open: read afresh after each candle closes, off the interface thread.
+    plan_panel.refresh_requested.connect(
+        lambda: threading.Thread(target=trade_plan.refresh, name="trade-plan", daemon=True).start())
     hud.shutdown.connect(plan_panel.hide_requested.emit)
     hud.shutdown.connect(plan_beam.hidden.emit)
 

@@ -1966,8 +1966,16 @@ same rules suit gold and natural gas alike, and prices are written to
 OANDA's own decimal places for each market. The answer opens in its own
 panel: the verdict, the chart with the lines and each plan's path (1 break,
 2 retest, 3 go, stop and target marked), RSI beneath with its zones, each
-plan step by step with the arithmetic, and the working. Read-only: candles
-and the price, never an order. `tools/test_trade_plan.py`.
+plan step by step with the arithmetic, and the working. A second page times
+the trade on fifteen-minute candles (`entry_granularity`) against the
+four-hour lines: break, retest and confirmation show there sooner, the
+stop sized by the fifteen-minute ATR, the target still short of the
+four-hour line by the four-hour ATR's share -- a tighter stop and a better
+reward : risk, with more false starts. While the panel is open it reads
+afresh just after every fifteen-minute close, keeping the page and the
+place scrolled to, so the latest candle is always on it. Candles are on
+UTC's hours (`utc_candles`), as TradingView draws OANDA's chart. Read-only:
+candles and the price, never an order. `tools/test_trade_plan.py`.
 
 Work that takes a while shows on the HUD as a progress strip above the
 state label (`Hud.progress_changed`): what it is, how far, and a moving
