@@ -598,11 +598,12 @@ class _Page(QWidget):
     def _working(self, painter, y, width):
         chosen = self.plan["settings"]
         rows = [
-            ("Lines", f"A swing high is a candle higher than the {chosen['swing_strength']} either side of it that"
-                      f" price then fell at least {chosen.get('bounce_atr', 0):g} ATR from (a swing low: lower, and"
-                      f" rose from) -- a clear turn, not a pause. Swings within {chosen['merge_atr']:g} ATR of each"
-                      f" other are one line, a line needs {chosen['min_touches']} of them, and the swings count how"
-                      f" often price turned there. Your own lines (amber) come from trade-plan.json, under"
+            ("Lines", f"Resistance runs through the two most recent highs above the price that are within"
+                      f" {chosen['merge_atr']:g} ATR of each other; support through the two most recent such lows"
+                      f" below it. A high is a candle higher than the {chosen['swing_strength']} either side that"
+                      f" stands out: price rose at least {chosen.get('peak_atr', 0):g} ATR to reach it and fell as"
+                      f" far from it, each within {chosen.get('peak_candles', 0)} candles -- a wobble in a range is"
+                      f" not a high. Your own lines (amber) come from trade-plan.json, under"
                       f" {self.plan['symbol']}."),
             ("ATR (14)", f"{_price(self.plan['atr'], self.plan['decimals'])}: how far {self.plan['instrument']}"
                          f" typically moves in one {self.plan['timeframe']}"

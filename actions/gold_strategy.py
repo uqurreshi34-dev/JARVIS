@@ -107,7 +107,8 @@ LINE_CANDLES = 200
 LINE_STRENGTH = 3
 LINE_MERGE_ATR = 0.5
 LINE_TOUCHES = 2
-LINE_BOUNCE_ATR = 1.0
+LINE_PEAK_ATR = 2.0
+LINE_PEAK_CANDLES = 12
 LINE_BUFFER_ATR = 0.2
 
 
@@ -949,7 +950,7 @@ def chart_lines_from(four_hours):
         return [], None
 
     return chart_lines.levels(recent, LINE_MERGE_ATR * atr, LINE_STRENGTH, LINE_TOUCHES,
-                              bounce=LINE_BOUNCE_ATR * atr), atr
+                              prominence=LINE_PEAK_ATR * atr, window=LINE_PEAK_CANDLES), atr
 
 
 class LineBook:

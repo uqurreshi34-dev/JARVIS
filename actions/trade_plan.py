@@ -6,14 +6,15 @@ OANDA's four-hour candles for that market and lays out the rules this trading
 is done by -- a line breaks, price comes back to test it, a candle confirms --
 with the exact prices for each step and where it stands on each:
 
-    the lines     support and resistance found from the chart itself: a swing
-                  high is a candle higher than the [swing_strength] either side
-                  of it (a swing low, lower) that price then clearly turned from,
-                  moving [bounce_atr] ATRs away; swings within [merge_atr] ATRs of
-                  each other are one line, a line needs [min_touches] of them,
-                  and the more swings at a line, the more it has been
-                  respected. Your own lines (your_levels, by market) are drawn
-                  and used alongside.
+    the lines     as a trader draws them: resistance through the two most recent
+                  highs that are close together (within [merge_atr] ATRs), above
+                  the price; support through the two most recent such lows below
+                  it. A high is a candle higher than the [swing_strength] either
+                  side that stands out -- price rose [peak_atr] ATRs to it and
+                  fell as far from it, within [peak_candles] candles -- so the
+                  wobbles in a range are not highs. Older pairs make the further
+                  lines, for targets. Your own lines (your_levels, by market) are
+                  drawn and used alongside.
     the plans     one to buy and one to sell. Buying: a candle closes above
                   the resistance (the break), price comes back down to it (the
                   retest), and a candle closes back above it (the confirmation)
@@ -45,7 +46,8 @@ Settings in trade-plan.json in the JARVIS folder:
     entry_granularity    "M15": a second page timing the trade on these candles against the
                          lines above (null: none); entry_candles, entry_shown_candles,
                          entry_retest_candles as for the chart's own
-    granularity, utc_candles, mid_prices, candles, shown_candles, swing_strength, merge_atr, min_touches, bounce_atr,
+    granularity, utc_candles, mid_prices, candles, shown_candles, swing_strength, merge_atr, min_touches, peak_atr,
+    peak_candles,
     stop_atr, target_buffer_atr, min_reward, fallback_reward, retest_candles,
     touch_atr, rsi_high, rsi_low
 """
@@ -92,9 +94,11 @@ DEFAULTS = {
     # turning at a price once is a swing, turning there again makes it a line.
     "merge_atr": 0.5,
     "min_touches": 2,
-    # A swing counts only when price clearly turned from it: moved at least this many ATRs away within
-    # twice swing_strength candles. Dips that barely lift are not where traders draw their lines.
-    "bounce_atr": 1.0,
+    # A high counts only when it stands out, as a trader sees one: price rose at least this many ATRs to
+    # reach it and fell at least as far from it, each within peak_candles candles (a low: the mirror).
+    # Wobbles in a range are not highs.
+    "peak_atr": 2.0,
+    "peak_candles": 12,
     # Your own lines, by OANDA's name for the market: always drawn and used.
     "your_levels": {},
     # The stop: beyond the retest's wick by this many ATRs.
@@ -197,7 +201,7 @@ def settings():
 def levels(candles, atr, chosen, yours=()):
     """The lines, lowest first, as actions/chart_lines.py finds them with these settings."""
     found = chart_lines.levels(candles, chosen["merge_atr"] * atr, chosen["swing_strength"], chosen["min_touches"],
-                               yours, chosen["bounce_atr"] * atr)
+                               yours, chosen["peak_atr"] * atr, chosen["peak_candles"])
 
     # Where price turned, by time rather than by place in this list, so any chart can mark them.
     return [dict(line, swings=[[_ms(candles[index][0]), price] for index, price in line["swings"]])
@@ -347,8 +351,9 @@ def side_plan(side, line, candles, atr, rsis, lines, chosen, broke=None, decimal
     }
 
 
-def _choose_line(side, price, lines, candles, chosen):
-    """The line a [side] plan trades: one broken recently and holding, else the next one to break."""
+def _choose_line(side, price, lines, candles, chosen, waiting=None):
+    """The line a [side] plan trades: one broken recently and holding, else the one to break -- [waiting],
+    the resistance (for a buy) or support (for a sell), when there is one."""
     window = chosen["retest_candles"]
     behind = [line for line in lines if not _beyond(line["price"], price, side) or line["price"] == price]
     behind.sort(key=lambda line: abs(line["price"] - price))
@@ -358,6 +363,9 @@ def _choose_line(side, price, lines, candles, chosen):
 
         if broke is not None:
             return line, broke
+
+    if waiting:
+        return waiting, None
 
     ahead = [line for line in lines if _beyond(line["price"], price, side)]
     return (min(ahead, key=lambda line: abs(line["price"] - price)), None) if ahead else (None, None)
@@ -409,13 +417,13 @@ def plan(candles, price, chosen, market, live=True, lines=None, line_atr=None, l
         # Their swings were on the other chart's candles: no index here.
         lines = [dict(line, last=-1) for line in lines]
 
-    resistance = min((line for line in lines if line["price"] > price), key=lambda line: line["price"], default=None)
-    support = max((line for line in lines if line["price"] < price), key=lambda line: line["price"], default=None)
+    resistance = chart_lines.latest(lines, price, "above")
+    support = chart_lines.latest(lines, price, "below")
 
     plans = {}
 
     for side in ("buy", "sell"):
-        line, broke = _choose_line(side, price, lines, candles, chosen)
+        line, broke = _choose_line(side, price, lines, candles, chosen, resistance if side == "buy" else support)
         plans[side] = side_plan(side, line, candles, atr, rsis, lines, chosen, broke, d, line_atr) if line else None
 
         # A setup that has been and gone is history: the plan is for the next line to break, with the
@@ -455,13 +463,15 @@ def plan(candles, price, chosen, market, live=True, lines=None, line_atr=None, l
         "rsi_high": chosen["rsi_high"], "rsi_low": chosen["rsi_low"],
         "candles": [[_ms(start), opened, high, low, closed, _uk(start)]
                     for start, opened, high, low, closed in shown],
+        # Every candle the lines were read from, not only those shown, for tools/trade_plan.py --save.
+        "read_candles": [[_uk(start), opened, high, low, closed] for start, opened, high, low, closed in candles],
         "rsis": [round(value, 1) if value is not None else None for value in rsis[first_shown:]],
         "levels": [dict(line, last=max(-1, line["last"] - first_shown)) for line in lines],
         "support": support["price"] if support else None, "resistance": resistance["price"] if resistance else None,
         "buy": plans["buy"], "sell": plans["sell"],
         "buy_passed": plans.get("buy_passed"), "sell_passed": plans.get("sell_passed"),
         "verdict": verdict, "headline": headline,
-        "settings": {name: chosen[name] for name in ("swing_strength", "merge_atr", "min_touches", "bounce_atr", "stop_atr",
+        "settings": {name: chosen[name] for name in ("swing_strength", "merge_atr", "min_touches", "peak_atr", "peak_candles", "stop_atr",
                                                      "target_buffer_atr", "min_reward", "retest_candles",
                                                      "touch_atr")},
     }

@@ -1949,14 +1949,17 @@ tools/trade_journal.py` lists every trade. `tools/test_trade_journal.py`.
 "Shall I buy or sell gold" -- or silver, oil, copper, natural gas, any market
 named in trade-plan.json's `markets` (spoken name to OANDA instrument, so any
 OANDA market can be added) -- is answered with the rules, not a guess. JARVIS
-reads that market's four-hour candles and finds the lines from the chart: a
-swing high is a candle higher than the `swing_strength` (3) either side, a
-swing low lower -- and price must then have clearly turned from it,
-moving `bounce_atr` (1) ATR away within twice that many candles, so a pause
-is not a line; swings within `merge_atr` (0.5) ATR are one line, and a
-line needs `min_touches` (2) swings. The chart rings the swings behind each
-line, and `python tools/trade_plan.py gold` prints them with their dates,
-to check against your own chart. The candle still forming is drawn hollow
+reads that market's four-hour candles and draws the lines as a trader does:
+resistance through the two most recent highs above the price that are
+within `merge_atr` (0.5) ATR of each other, support through the two most
+recent such lows below it. A high is a candle higher than the
+`swing_strength` (3) either side that stands out -- price rose `peak_atr`
+(2) ATR to reach it and fell as far from it, each within `peak_candles`
+(12) candles -- so the wobbles inside a range are not highs. Older pairs
+make the further lines, for targets. The chart rings the peaks behind
+support and resistance, and `python tools/trade_plan.py gold` prints every
+line with its peaks' dates (`--save` keeps the candles too), to check
+against your own chart. The candle still forming is drawn hollow
 after the last finished one, so the chart reaches now; only finished
 candles are judged. Your own lines (`your_levels`, by
 instrument) are always lines. For each side it finds the line in play -- one

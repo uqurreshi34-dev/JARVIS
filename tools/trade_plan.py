@@ -3,6 +3,8 @@ what each page says -- to check the lines against your own chart.
 
     python tools/trade_plan.py gold
     python tools/trade_plan.py "crude oil"
+    python tools/trade_plan.py gold --save     and keep the four-hour candles in trade-plan-candles.csv in
+                                               the JARVIS folder, to check the lines against
 
 Read-only: OANDA's candles and price, nothing placed. Settings in trade-plan.json in the JARVIS folder.
 """
@@ -28,13 +30,15 @@ def report(found):
     d = found["decimals"]
     print(f"\n{found['instrument']} ({found['symbol']}), {found['timeframe']} candles to {found['read']} UK,"
           f" price {found['price']:,.{d}f}, ATR {found['atr']:,.{d}f}")
-    print("\nLines (support below the price, resistance above), each from the swings price clearly turned at:")
+    print("\nLines, each through peaks that stand out (<- the resistance and support in use: the most recent"
+          " pair of close highs above the price, of lows below it):")
 
     for line in reversed(found["levels"]):
-        kind = "yours" if line["yours"] else ("resistance" if line["price"] > found["price"] else "support")
+        kind = "yours" if line["yours"] else f"{line.get('kind') or ''}s".replace("highs", "highs (resistance)").replace(
+            "lows", "lows (support)")
         mark = " <-" if line["price"] in (found["support"], found["resistance"]) else ""
         swings = ", ".join(f"{_when(when)} at {price:,.{d}f}" for when, price in line.get("swings") or [])
-        print(f"  {line['price']:>12,.{d}f}  {kind:10}  {line['touches']} swings{mark}: {swings}")
+        print(f"  {line['price']:>12,.{d}f}  {kind:18}  {line['touches']} peaks{mark}: {swings}")
 
     for page in (found, found.get("entry")):
         if page:
@@ -44,8 +48,29 @@ def report(found):
         print(f"\nThe entry candles could not be read: {found['entry_error']}.")
 
 
+def save(found):
+    """The chart's candles, as drawn, to a file beside JARVIS's others."""
+    import csv
+    import os
+
+    from actions import files
+
+    path = os.path.join(files.root(), "trade-plan-candles.csv")
+
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["start (UK)", "open", "high", "low", "close"])
+
+        for row in found["read_candles"]:
+            writer.writerow(row)
+
+    print(f"\nThe {len(found['read_candles'])} candles the lines came from are in {path}.")
+
+
 def main(argv=None):
-    words = " ".join(argv if argv is not None else sys.argv[1:]) or "gold"
+    words = argv if argv is not None else sys.argv[1:]
+    keep = "--save" in words
+    words = " ".join(word for word in words if word != "--save") or "gold"
 
     # The OANDA token, as JARVIS reads it at start-up; the other tools do the same.
     try:
@@ -60,7 +85,11 @@ def main(argv=None):
         return 1
 
     try:
-        report(tp.read(f"{words} plan"))
+        found = tp.read(f"{words} plan")
+        report(found)
+
+        if keep:
+            save(found)
     except tp.PlanError as error:
         print(f"Could not read the chart: {error}.")
         return 1

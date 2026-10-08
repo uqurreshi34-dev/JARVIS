@@ -78,6 +78,7 @@ _PROTECTED_NAMES = frozenset({
     "trader-watch-cache.json",
     # The trade plan's settings: the markets it reads, and your own lines.
     "trade-plan.json",
+    "trade-plan-candles.csv",
     # Your own trades, as JARVIS records them (actions/trade_journal.py).
     "manual-trades.csv",
     # Your voiceprint, and the model that compares voices with it (speaker.py);

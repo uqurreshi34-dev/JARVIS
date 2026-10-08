@@ -90,6 +90,16 @@ check(len(lines) == 2 and abs(prices[0] - 4008) < 1 and abs(prices[1] - 4092) < 
       f"the range's floor and ceiling are found, each turned at more than once ({prices})")
 lone = made(base + [(4050, 4052, 4046, 4050)] * 3 + [(4050, 4200, 4046, 4050)] + [(4050, 4052, 4046, 4050)] * 4)
 check(all(line["price"] < 4150 for line in tp.levels(lone, atr, chosen)), "a lone spike is a swing, not a line")
+# Resistance as a trader draws it: the most recent two highs close together above the price -- not merely
+# the nearest line. Here an older pair sits nearer; the newer pair, further up, is the resistance.
+older = {"price": 4150.0, "kind": "high", "touches": 2, "yours": False, "last": 10, "swings": []}
+newer = {"price": 4229.0, "kind": "high", "touches": 2, "yours": False, "last": 90, "swings": []}
+floor_ = {"price": 4100.0, "kind": "low", "touches": 2, "yours": False, "last": 80, "swings": []}
+above_low = {"price": 4140.0, "kind": "low", "touches": 2, "yours": False, "last": 95, "swings": []}
+check(tp.chart_lines.latest([older, newer, floor_, above_low], 4125.0, "above") is newer
+      and tp.chart_lines.latest([older, newer, floor_, above_low], 4125.0, "below") is floor_,
+      "resistance: the most recent pair of highs above the price; support: of lows below it -- never a pair of"
+      " lows as resistance")
 check(all(len(line["swings"]) == line["touches"] and all(when > 0 for when, _price in line["swings"]) for line in lines),
       "every line carries the swings that made it, by time, for the chart to ring")
 # A shallow wobble mid-range: highs and lows a few dollars apart, never moving an ATR from them.
@@ -97,8 +107,8 @@ wobble = base + [(4050 + (2 if index % 4 < 2 else -2), 4053 + (2 if index % 4 < 
                   4047 + (2 if index % 4 < 2 else -2), 4050 + (2 if index % 4 < 2 else -2)) for index in range(40)]
 shallow = tp.levels(made(wobble), atr, chosen)
 check(not any(4040 < line["price"] < 4060 for line in shallow)
-      and any(4040 < line["price"] < 4060 for line in tp.levels(made(wobble), atr, dict(chosen, bounce_atr=0.01))),
-      "a wobble price never clearly turned from makes no line; without the bounce rule it would")
+      and any(4040 < line["price"] < 4060 for line in tp.levels(made(wobble), atr, dict(chosen, peak_atr=0.01))),
+      "a wobble price never clearly turned from makes no line; without the standing-out rule it would")
 mine = dict(chosen, your_levels={"XAU_USD": [4050.0]})
 check(any(line["yours"] and line["price"] == 4050.0 for line in tp.plan(range_candles, 4050.0, mine, GOLD)["levels"])
       and not any(line["yours"] for line in tp.plan(range_candles, 4050.0, mine, dict(GOLD, instrument="XAG_USD"))
@@ -373,8 +383,13 @@ with contextlib.redirect_stdout(printed):
 
 cli_source = (ROOT / "tools" / "trade_plan.py").read_text(encoding="utf-8")
 check('load_dotenv(ROOT / ".env")' in cli_source, "tools/trade_plan.py reads the OANDA token from .env, as JARVIS does")
-check("swings" in printed.getvalue() and "support" in printed.getvalue() and "15-minute:" in printed.getvalue(),
-      "tools/trade_plan.py prints every line with the swings that made it, and both pages' verdicts")
+check("peaks" in printed.getvalue() and "(support)" in printed.getvalue() and "15-minute:" in printed.getvalue(),
+      "tools/trade_plan.py prints every line with the peaks that made it, and both pages' verdicts")
+saved = tp.files.root()
+cli.save(both)
+check(os.path.exists(os.path.join(saved, "trade-plan-candles.csv"))
+      and len(open(os.path.join(saved, "trade-plan-candles.csv"), encoding="utf-8").read().splitlines())
+      == len(both["read_candles"]) + 1, "--save keeps every candle the lines came from, to check them against")
 
 panel._on_plan(tp.read("shall i buy or sell gold", Oanda(range_candles, entry_broken=True)))
 panel._turn_to(1)
