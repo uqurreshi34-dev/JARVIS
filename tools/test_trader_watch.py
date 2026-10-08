@@ -19,7 +19,8 @@ Checked, in a sandboxed JARVIS folder:
   way, built in steps, added to at a loss), named for what they show; and
   what they trade, spot pairs by name;
 - the board is saved and reused until stale, refreshed when it is, and
-  shown through the listener, a trader by number too;
+  shown through the listener, a trader by number too; one saved in an
+  older shape is read afresh;
 - what is said is short and the panel holds the detail;
 - "show me the top traders", "show trader three" and "close the traders"
   are recognised, and nothing here can place an order;
@@ -304,6 +305,10 @@ said = tw.show(focus=1, client=client)
 check(shown[-1]["focus"] == 1 and len(exchange.asked) == calls and "Trader 1, SteadyEddie" in said,
       "a trader by number, from the saved board while it is fresh")
 check("There are 4 traders" in tw.show(focus=9, client=client), "a number past the end is said, not shown")
+saved = tw.cached()
+tw._write(os.path.join(folder, tw.CACHE_NAME), dict(saved, format=tw.BOARD_FORMAT - 1))
+check(tw.cached() is None, "a board saved in an older shape is not handed to the panel: it is read afresh")
+tw._write(os.path.join(folder, tw.CACHE_NAME), saved)
 old = tw.cached()
 old["updated"] -= 7 * 3_600_000
 tw._write(os.path.join(folder, tw.CACHE_NAME), old)

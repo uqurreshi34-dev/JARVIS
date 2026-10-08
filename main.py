@@ -41,6 +41,7 @@ from commands import (
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime
 
 from PyQt6.QtCore import QTimer
@@ -867,7 +868,33 @@ class Assistant:
         self._hud.shutdown.emit()
 
 
+_faults_seen = set()
+
+
+def _report_fault(kind, error, trace):
+    """A fault inside a Qt event -- a panel drawing, a click -- is reported, not fatal.
+
+    PyQt aborts the whole application on an exception it cannot hand back, so one panel's
+    mistake would otherwise close JARVIS. Each fault is printed once: a drawing fault would
+    otherwise repeat on every frame.
+    """
+    if issubclass(kind, KeyboardInterrupt):
+        sys.__excepthook__(kind, error, trace)
+        return
+
+    where = traceback.extract_tb(trace)[-1] if trace else None
+    key = (kind, where.filename, where.lineno) if where else (kind, str(error))
+
+    if key in _faults_seen:
+        return
+
+    _faults_seen.add(key)
+    traceback.print_exception(kind, error, trace)
+    print("[JARVIS] that fault was reported, not fatal; carrying on")
+
+
 def main():
+    sys.excepthook = _report_fault
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
 

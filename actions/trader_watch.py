@@ -39,6 +39,10 @@ from actions.file_hologram import number_in
 SETTINGS_NAME = "trader-watch.json"
 CACHE_NAME = "trader-watch-cache.json"
 
+# The shape of a saved board. Raise it whenever what a trader carries changes: a board saved in an
+# older shape is read afresh rather than handed to code that expects the new one.
+BOARD_FORMAT = 2
+
 INFO_URL = "https://api.hyperliquid.xyz/info"
 LEADERBOARD_URL = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
 SOURCE = "Hyperliquid"
@@ -141,7 +145,10 @@ def cached():
     except (OSError, ValueError):
         return None
 
-    return board if isinstance(board, dict) and isinstance(board.get("traders"), list) else None
+    if not isinstance(board, dict) or board.get("format") != BOARD_FORMAT or not isinstance(board.get("traders"), list):
+        return None
+
+    return board
 
 
 # ---- the exchange --------------------------------------------------------------------------
@@ -673,6 +680,7 @@ def refresh(client=None, now=None, report=None):
             print(f"[JARVIS] trader watch: {row['address']} skipped ({error})")
 
     board = {
+        "format": BOARD_FORMAT,
         "source": SOURCE, "updated": now_ms, "days": chosen["days"], "parts": chosen["parts"],
         "min_trades": chosen["min_trades"], "looked_at": len(shortlist), "traders": rank(traders),
     }
