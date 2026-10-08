@@ -90,6 +90,23 @@ check(len(lines) == 2 and abs(prices[0] - 4008) < 1 and abs(prices[1] - 4092) < 
       f"the range's floor and ceiling are found, each turned at more than once ({prices})")
 lone = made(base + [(4050, 4052, 4046, 4050)] * 3 + [(4050, 4200, 4046, 4050)] + [(4050, 4052, 4046, 4050)] * 4)
 check(all(line["price"] < 4150 for line in tp.levels(lone, atr, chosen)), "a lone spike is a swing, not a line")
+# OANDA gold's real four-hour candles of 8 October 2026: a trader drew resistance at 4,229 through the highs
+# of 30 Sep and 2 Oct and support at 4,114 through the lows of 28 Sep and 6 Oct, by eye. The lines must agree.
+import csv  # noqa: E402
+
+with open(ROOT / "tools" / "fixtures" / "gold-4h-2026-10-08.csv", encoding="utf-8") as handle:
+    real = [(datetime.strptime("2026 " + row["start (UK)"], "%Y %d %b %H:%M").replace(tzinfo=timezone.utc),
+             float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]))
+            for row in csv.DictReader(handle)]
+
+drawn = tp.plan(real, real[-1][4], chosen, GOLD)
+check(abs(drawn["resistance"] - 4223.5) < 1 and abs(drawn["support"] - 4107.2) < 1,
+      f"on real gold: resistance {drawn['resistance']:,.1f} and support {drawn['support']:,.1f}, where a trader drew"
+      f" 4,229 and 4,114")
+lower = tp.plan(real, real[-1][4], dict(chosen, peak_atr=2.0), GOLD)
+check(abs(lower["resistance"] - drawn["resistance"]) > 20,
+      f"and a smaller peak would have taken two lower highs inside the range instead ({lower['resistance']:,.1f})")
+
 # Resistance as a trader draws it: the most recent two highs close together above the price -- not merely
 # the nearest line. Here an older pair sits nearer; the newer pair, further up, is the resistance.
 older = {"price": 4150.0, "kind": "high", "touches": 2, "yours": False, "last": 10, "swings": []}
@@ -195,6 +212,24 @@ gas = tp.plan(made(gas_rows + [(3.05, 3.052, 3.046, 3.05)]), 3.05, chosen,
 check(gas["verdict"] == "wait" and "Natural Gas is between support 3.008 and resistance 3.092" in gas["headline"]
       and gas["buy"]["stop_working"].count(".") >= 2 and gas["atr"] < 1,
       f"a market priced in single figures reads the same way, to its own decimals ({gas['headline']})")
+
+# Words and chart agree, on every market: each price the plan names is a line on the chart, and a line a plan
+# has broken and waits to retest is called the support (or resistance) it now is.
+def named_lines_drawn(found):
+    drawn = {line["price"] for line in found["levels"]}
+    named = [found.get("support"), found.get("resistance")] + [found[side]["line"] for side in ("buy", "sell")
+                                                               if found.get(side)]
+    in_words = all(f"{value:,.{found['decimals']}f}" in found["headline"] for value in named[:2] if value)
+    return all(value in drawn for value in named if value is not None) and in_words
+
+
+plans = [tp.plan(made(rows), rows_price, chosen, GOLD) for rows, rows_price in
+         ((broken, ceiling + 18), (retested, ceiling + 4), (confirmed, ceiling + 12))]
+plans.append(tp.plan(real, real[-1][4], chosen, GOLD))
+check(all(named_lines_drawn(found) for found in plans),
+      "every line the words name is drawn, and the support and resistance named are the ones drawn")
+check(plans[0]["support"] == plans[0]["buy"]["line"] and plans[0]["buy"]["stage"] == "retest",
+      "a line broken upward and awaiting its retest is named the support")
 
 # ---- reading OANDA ------------------------------------------------------------------------------
 

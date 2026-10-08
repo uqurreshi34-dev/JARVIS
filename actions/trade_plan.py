@@ -96,8 +96,10 @@ DEFAULTS = {
     "min_touches": 2,
     # A high counts only when it stands out, as a trader sees one: price rose at least this many ATRs to
     # reach it and fell at least as far from it, each within peak_candles candles (a low: the mirror).
-    # Wobbles in a range are not highs.
-    "peak_atr": 2.0,
+    # Wobbles in a range are not highs. In ATRs, so one rule fits every market: on gold's four-hour chart
+    # of 8 October 2026 (ATR $30) it drew resistance at 4,223.5 through the highs of 30 Sep and 2 Oct, and
+    # support at 4,107.2 through the lows of 28 Sep and 6 Oct -- the lines a trader drew by eye.
+    "peak_atr": 2.5,
     "peak_candles": 12,
     # Your own lines, by OANDA's name for the market: always drawn and used.
     "your_levels": {},
@@ -444,6 +446,20 @@ def plan(candles, price, chosen, market, live=True, lines=None, line_atr=None, l
                 plans[side]["passed"] = passed
             else:
                 plans[side + "_passed"] = passed
+
+    # Words and chart name the same lines. A line a plan has broken through and waits to retest is now
+    # the support (broken up through) or the resistance (broken down through), so it is named as such.
+    for side, name in (("buy", "support"), ("sell", "resistance")):
+        waiting = plans[side]
+
+        if waiting and waiting["stage"] in ("retest", "confirm", "ready"):
+            broken = next((line for line in lines if line["price"] == waiting["line"]), None)
+
+            if broken and (broken["price"] < price if side == "buy" else broken["price"] > price):
+                if name == "support":
+                    support = broken
+                else:
+                    resistance = broken
 
     verdict, headline = _verdict(plans, price, support, resistance, chosen, market)
     step = timedelta(seconds=GRANULARITY_SECONDS[chosen["granularity"]])

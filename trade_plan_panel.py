@@ -229,8 +229,7 @@ class _Page(QWidget):
         low, high = self._range()
         span = high - low
         step = rect.width() / len(drawn)
-        first = candles[0][0]
-        every = plan.get("candle_seconds", 0) * 1000 or ((candles[-1][0] - first) / max(len(candles) - 1, 1))
+        shown_at = {candle[0]: index for index, candle in enumerate(candles)}
         d = plan["decimals"]
 
         def level(value):
@@ -242,7 +241,10 @@ class _Page(QWidget):
         def colour_of(line):
             return _AMBER if line["yours"] else (_LOSS if line["price"] > plan["price"] else _GAIN)
 
-        strong = [line for line in plan["levels"] if line["price"] in (plan.get("support"), plan.get("resistance"))]
+        # Every line the words name: support, resistance, and each plan's own line.
+        named = {plan.get("support"), plan.get("resistance")} | {plan[side]["line"] for side in ("buy", "sell")
+                                                                 if plan.get(side)}
+        strong = [line for line in plan["levels"] if line["price"] in named]
         shown_lines = [line for line in plan["levels"] if low <= line["price"] <= high]
 
         # Price grid, and dates along the bottom at even steps, as a chart's time axis has them.
@@ -307,12 +309,6 @@ class _Page(QWidget):
             painter.setPen(QPen(colour_of(line), 1.6))
             painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right() + _AHEAD - 8, y))
 
-            for when, price in ([] if plan.get("lines_from") else line.get("swings") or []):
-                place = (when - first) / every if every else -1
-
-                if 0 <= place <= len(candles) - 1:
-                    painter.setPen(QPen(colour_of(line), 1.4))
-                    painter.drawEllipse(QPointF(middle(round(place)), level(price)), 5, 5)
 
         # The price now.
         now_y = level(plan["price"])
@@ -340,16 +336,53 @@ class _Page(QWidget):
                 continue
 
             name = "yours" if line["yours"] else ("RESISTANCE" if line["price"] > plan["price"] else "SUPPORT")
-            text = (f"{name} {_price(line['price'], d)} -- {line['touches']} swing{'s' if line['touches'] != 1 else ''}"
-                    + (f" on the {plan['lines_from']} chart" if plan.get("lines_from") else ""))
+            # Short, so it finds a clear place on the line; the rings show the peaks it runs through.
+            text = f"{name} {_price(line['price'], d)}" + (f" ({plan['lines_from']})" if plan.get("lines_from") else "")
             painter.setFont(_font(8, bold=True))
             y = level(line["price"])
-            label = QRectF(rect.left() + 4, y - 17 if line["price"] > plan["price"] else y + 3,
-                           QFontMetrics(painter.font()).horizontalAdvance(text) + 12, 15)
+            # At the right, on the far side of the line from the price -- where price is not, so the
+            # label covers no recent candle and no ringed peak.
+            wide = QFontMetrics(painter.font()).horizontalAdvance(text) + 12
+            rings = [middle(shown_at[when]) for when, _price in line.get("swings") or [] if when in shown_at]
+            top = y - 17 if line["price"] > plan["price"] else y + 3
+            label = QRectF(rect.right() - wide - 4, top, wide, 15)
+
+            def clear(left):
+                """Whether a label at [left] covers no ringed peak and no candle."""
+                if any(left - 8 <= ring <= left + wide + 8 for ring in rings):
+                    return False
+
+                for index, candle in enumerate(drawn):
+                    x = middle(index)
+
+                    if left - 2 <= x <= left + wide + 2 and level(candle[2]) <= top + 15 and level(candle[3]) >= top:
+                        return False
+
+                return True
+
+            # The first place along the line, from the right, that covers nothing; the right end if none does.
+            left = rect.right() - wide - 4
+
+            while left >= rect.left() + 4:
+                if clear(left):
+                    label = QRectF(left, top, wide, 15)
+                    break
+
+                left -= 12
             painter.fillRect(label, _BACKDROP)
             painter.setPen(QPen(colour_of(line), 1))
             painter.drawRect(label)
             painter.drawText(label, Qt.AlignmentFlag.AlignCenter, text)
+
+        # The peaks each line runs through, ringed over everything -- on the chart they were found on. By
+        # the candle's own time, not by spacing: markets close at weekends, so candles are not evenly spread.
+        for line in ([] if plan.get("lines_from") else strong):
+            for when, price in line.get("swings") or []:
+                place = shown_at.get(when)
+
+                if place is not None and low <= price <= high:
+                    painter.setPen(QPen(colour_of(line), 1.6))
+                    painter.drawEllipse(QPointF(middle(place), level(price)), 5.5, 5.5)
 
         painter.setFont(_font(8, bold=True, mono=True))
         tag = QRectF(rect.right() + 4, now_y - 8, 66, 16)
@@ -359,8 +392,7 @@ class _Page(QWidget):
 
         y = rect.bottom() + 20
         return self._note(painter, y, width,
-                          ("" if plan.get("lines_from") else "Rings: the swings that make each line, where price clearly"
-                           " turned. ") + "Hollow candle: still forming. "
+                          ("" if plan.get("lines_from") else "Rings: the highs and lows each line runs through. ") + "Hollow candle: still forming. "
                           f"Green dashes: the buy plan. Red: the sell plan. 1 break, 2 retest, 3 go, to the target"
                           f" (T); x marks the stop. Times are UK. Next {plan['timeframe']} candle closes"
                           f" {plan['next_close']} UK.")
