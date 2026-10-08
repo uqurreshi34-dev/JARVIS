@@ -141,16 +141,17 @@ class Client:
         quote = prices[0]
         return float(quote["bids"][0]["price"]), float(quote["asks"][0]["price"]), parse_time(quote.get("time"))
 
-    def candles(self, name=GOLD, granularity="M15", count=300, align_utc=False):
+    def candles(self, name=GOLD, granularity="M15", count=300, align_utc=False, mid=False):
         """The last [count] finished candles, oldest first, as (start, open, high, low, close) on the bid.
 
         Bid prices, as the backtest uses, with the ask's close alongside in
         a second list: (candles, ask closes). The candle still forming is
         left out. [align_utc]: hourly and longer candles start on UTC's
-        hours (a four-hour candle at 00:00, 04:00 ...), as TradingView draws
-        them, rather than from OANDA's day, which begins at 17:00 New York.
+        hours (a four-hour candle at 00:00, 04:00 ...) rather than from
+        OANDA's day, which begins at 17:00 New York. [mid]: halfway between
+        bid and ask instead, the prices OANDA's own charts draw.
         """
-        asked = {"granularity": granularity, "count": count + 1, "price": "BA"}
+        asked = {"granularity": granularity, "count": count + 1, "price": "MBA" if mid else "BA"}
 
         if align_utc:
             asked.update({"dailyAlignment": 0, "alignmentTimezone": "UTC"})
@@ -162,15 +163,16 @@ class Client:
             if not candle.get("complete"):
                 continue
 
-            bid, ask = candle["bid"], candle["ask"]
+            bid, ask = candle["mid"] if mid else candle["bid"], candle["ask"]
             made.append((parse_time(candle["time"]), float(bid["o"]), float(bid["h"]), float(bid["l"]), float(bid["c"])))
             ask_closes.append(float(ask["c"]))
 
         return made[-count:], ask_closes[-count:]
 
-    def forming(self, name=GOLD, granularity="M15", align_utc=False):
-        """The candle still forming now, as (start, open, high, low, close) on the bid, or None between them."""
-        asked = {"granularity": granularity, "count": 1, "price": "B"}
+    def forming(self, name=GOLD, granularity="M15", align_utc=False, mid=False):
+        """The candle still forming now, as (start, open, high, low, close) on the bid (or [mid]), or None
+        between them."""
+        asked = {"granularity": granularity, "count": 1, "price": "M" if mid else "B"}
 
         if align_utc:
             asked.update({"dailyAlignment": 0, "alignmentTimezone": "UTC"})
@@ -180,7 +182,7 @@ class Client:
         if not found or found[-1].get("complete"):
             return None
 
-        bid = found[-1]["bid"]
+        bid = found[-1]["mid" if mid else "bid"]
         return parse_time(found[-1]["time"]), float(bid["o"]), float(bid["h"]), float(bid["l"]), float(bid["c"])
 
     def history(self, start, end, name=GOLD, granularity="M15", page=5000):

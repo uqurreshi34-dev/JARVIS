@@ -45,7 +45,7 @@ Settings in trade-plan.json in the JARVIS folder:
     entry_granularity    "M15": a second page timing the trade on these candles against the
                          lines above (null: none); entry_candles, entry_shown_candles,
                          entry_retest_candles as for the chart's own
-    granularity, utc_candles, candles, shown_candles, swing_strength, merge_atr, min_touches, bounce_atr,
+    granularity, utc_candles, mid_prices, candles, shown_candles, swing_strength, merge_atr, min_touches, bounce_atr,
     stop_atr, target_buffer_atr, min_reward, fallback_reward, retest_candles,
     touch_atr, rsi_high, rsi_low
 """
@@ -75,6 +75,9 @@ DEFAULTS = {
     # false: OANDA's own day, starting 17:00 New York time -- the four-hour candles TradingView draws for
     # OANDA (in summer 21:00, 01:00, 05:00 ... UTC). true: on UTC's hours (00:00, 04:00 ...) instead.
     "utc_candles": False,
+    # true: prices halfway between bid and ask, as OANDA's own chart (trade.oanda.com) draws them, so a
+    # candle here is the same candle there, colour and all; false: the bid, as the gold trader trades.
+    "mid_prices": True,
     "candles": 200,
     "shown_candles": 60,
     # The second page: the same plan timed on shorter candles, against the lines drawn on the chart above
@@ -160,7 +163,7 @@ def settings():
                             for spoken, instrument in given.items()
                             if isinstance(instrument, str) and _INSTRUMENT.match(instrument) and str(spoken).strip()}
             chosen[name] = chosen[name] or dict(default)
-        elif name == "utc_candles":
+        elif name in ("utc_candles", "mid_prices"):
             chosen[name] = value if isinstance(value, bool) else default
         elif name == "your_levels":
             given = value if isinstance(value, dict) else {}
@@ -606,7 +609,7 @@ def read(command, client=None):
     try:
         details = client.instrument(instrument)
         candles, _asks = client.candles(instrument, chosen["granularity"], chosen["candles"],
-                                        align_utc=chosen["utc_candles"])
+                                        align_utc=chosen["utc_candles"], mid=chosen["mid_prices"])
     except oanda.OandaError as error:
         raise PlanError(str(error)) from None
 
@@ -622,7 +625,8 @@ def read(command, client=None):
     market = {"name": details.get("display_name") or spoken.title(), "instrument": instrument,
               "decimals": int(details.get("price_decimals", 2)), "spoken": spoken}
     found = plan(candles, price, chosen, market, live)
-    found["forming"] = _forming(client, instrument, chosen["granularity"], chosen["utc_candles"])
+    found["forming"] = _forming(client, instrument, chosen["granularity"], chosen["utc_candles"],
+                                chosen["mid_prices"])
     found["entry"], found["entry_error"] = None, None
     found["entry_timeframe"] = GRANULARITY_WORDS.get(chosen["entry_granularity"])
 
@@ -649,24 +653,25 @@ def entry_plan(client, found, chosen, market, price, live):
     """
     shorter = entry_chosen(chosen)
     candles, _asks = client.candles(market["instrument"], shorter["granularity"], shorter["candles"],
-                                    align_utc=chosen["utc_candles"])
+                                    align_utc=chosen["utc_candles"], mid=chosen["mid_prices"])
 
     if not candles:
         raise PlanError(f"OANDA sent no {GRANULARITY_WORDS[shorter['granularity']]} candles")
 
     shown = plan(candles, price, shorter, market, live, lines=found["levels"], line_atr=found["atr"],
                  lines_from=found["timeframe"])
-    shown["forming"] = _forming(client, market["instrument"], shorter["granularity"], chosen["utc_candles"])
+    shown["forming"] = _forming(client, market["instrument"], shorter["granularity"], chosen["utc_candles"],
+                                chosen["mid_prices"])
     return shown
 
 
-def _forming(client, instrument, granularity, align_utc):
+def _forming(client, instrument, granularity, align_utc, mid):
     """The candle still forming, drawn after the finished ones so the chart reaches now; never judged on.
 
     None when OANDA has none open (the market shut) or cannot say.
     """
     try:
-        candle = client.forming(instrument, granularity, align_utc=align_utc)
+        candle = client.forming(instrument, granularity, align_utc=align_utc, mid=mid)
     except oanda.OandaError:
         return None
 

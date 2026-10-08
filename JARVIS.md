@@ -1981,7 +1981,8 @@ four-hour line by the four-hour ATR's share -- a tighter stop and a better
 reward : risk, with more false starts. While the panel is open it reads
 afresh just after every fifteen-minute close, keeping the page and the
 place scrolled to, so the latest candle is always on it. Candles are on
-OANDA's own day, from 17:00 New York, as TradingView draws OANDA's chart
+OANDA's own day, from 17:00 New York, at mid prices (`mid_prices`) -- the
+candles OANDA's own chart at trade.oanda.com draws, colour and all
 (`utc_candles` true puts them on UTC's hours instead). Read-only:
 candles and the price, never an order. `tools/test_trade_plan.py`.
 

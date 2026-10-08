@@ -53,7 +53,8 @@ class Answer:
 def candle(time, close, complete=True):
     side = {"o": f"{close - 1:.2f}", "h": f"{close + 1:.2f}", "l": f"{close - 2:.2f}", "c": f"{close:.2f}"}
     ask = {key: f"{float(value) + 0.4:.2f}" for key, value in side.items()}
-    return {"time": time, "complete": complete, "volume": 10, "bid": side, "ask": ask}
+    mid = {key: f"{float(value) + 0.2:.2f}" for key, value in side.items()}
+    return {"time": time, "complete": complete, "volume": 10, "bid": side, "ask": ask, "mid": mid}
 
 
 class Oanda:
@@ -129,6 +130,11 @@ check(len(made) == 2 and made[-1] == (datetime(2026, 10, 5, 10, 45, tzinfo=timez
       and ask_closes == [4138.4, 4140.4],
       "finished candles only, on the bid, with the ask's close alongside; the forming one left out")
 check(server.asked[-1][1] == {"granularity": "M15", "count": 6, "price": "BA"}, "asked for bid and ask, 15-minute candles")
+made, _asks = client.candles(granularity="H4", count=5, mid=True)
+check(made[-1][4] == 4140.2 and server.asked[-1][1]["price"] == "MBA",
+      "at mid prices when asked: halfway between bid and ask, as OANDA's own chart draws them")
+forming = client.forming(granularity="H4", mid=True)
+check(forming is None or forming[4] == 4141.2, "and the forming candle the same way")
 
 try:
     oanda.Client(token=TOKEN, account_id="x", session=Oanda(status=401)).summary()

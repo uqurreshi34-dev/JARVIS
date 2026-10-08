@@ -204,8 +204,8 @@ class Oanda:
         shown, places = self.MARKETS[name]
         return {"name": name, "display_name": shown, "price_decimals": places}
 
-    def candles(self, name, granularity, count, align_utc=False):
-        self.asked.append((name, granularity, count, align_utc))
+    def candles(self, name, granularity, count, align_utc=False, mid=False):
+        self.asked.append((name, granularity, count, align_utc, mid))
 
         if self.broken or (granularity == "M15" and self.entry_broken):
             raise oanda.OandaError("OANDA answered 503")
@@ -213,7 +213,7 @@ class Oanda:
         rows = self.entry_rows if granularity == "M15" else self.rows
         return rows[-count:], [row[4] for row in rows[-count:]]
 
-    def forming(self, name, granularity, align_utc=False):
+    def forming(self, name, granularity, align_utc=False, mid=False):
         rows = self.entry_rows if granularity == "M15" else self.rows
         start = rows[-1][0] + (timedelta(minutes=15) if granularity == "M15" else timedelta(hours=4))
         return (start, rows[-1][4], rows[-1][4] + 1, rows[-1][4] - 1, self.now)
@@ -241,9 +241,11 @@ shown = []
 tp.set_listeners(on_plan=shown.append, on_hide=lambda: shown.append("hidden"))
 client = Oanda(range_candles, entry_rows=made15(quarter))
 said = tp.show("jarvis shall i buy or sell gold", client)
-check(client.asked == [("XAU_USD", "H4", chosen["candles"], False), ("XAU_USD", "M15", chosen["entry_candles"], False)]
+check(client.asked == [("XAU_USD", "H4", chosen["candles"], False, True),
+                      ("XAU_USD", "M15", chosen["entry_candles"], False, True)]
       and shown and shown[-1]["price"] == floor + 9 and shown[-1]["live"] and shown[-1]["symbol"] == "XAU_USD",
-      "gold: its four-hour candles from OANDA's own day, as TradingView draws them, then the fifteen-minute ones")
+      "gold: OANDA's four-hour candles from its own day, then the fifteen-minute ones, at mid prices as OANDA's"
+      " chart draws them")
 entry = shown[-1]["entry"]
 check(entry and entry["timeframe"] == "15-minute" and entry["lines_from"] == "4-hour"
       and [line["price"] for line in entry["levels"]] == [line["price"] for line in shown[-1]["levels"]],

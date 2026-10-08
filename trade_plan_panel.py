@@ -384,6 +384,21 @@ class _Page(QWidget):
         left = rect.right() + 76
         right = rect.right() + _AHEAD - 58
         stage = found["stage"]
+        d = self._short_places()
+
+        # The line this plan waits on is off the chart: one arrow towards it, and its price, rather than
+        # the whole path and its labels squeezed flat against the edge.
+        if line_y != real_level(found["line"]):
+            above = real_level(found["line"]) < rect.top()
+            edge = rect.top() + 6 if above else rect.bottom() - 6
+            painter.setPen(QPen(_tint(colour, 220), 1.6, Qt.PenStyle.DashLine))
+            painter.drawLine(QPointF(left, now_y), QPointF(left + 30, edge))
+            painter.setFont(_font(8, bold=True))
+            text = f"{side} {'above' if side == 'buy' else 'below'} {found['line']:,.{d}f} {'^' if above else 'v'}"
+            painter.setPen(QPen(colour))
+            painter.drawText(QRectF(left + 34, edge - (0 if above else 14), _AHEAD - 110, 14),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+            return
 
         if stage == "break":
             points = [(left, now_y), (left + 28, line_y - nudge), (left + 56, line_y), (right, level(found["target"]))]
@@ -432,11 +447,15 @@ class _Page(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawText(circle, Qt.AlignmentFlag.AlignCenter, text)
 
-        # Target and stop, marked at the right.
+        # Target and stop, marked at the right -- never printed over each other.
         painter.setFont(_font(7, bold=True, mono=True))
         target_y, stop_y = level(found["target"]), level(found["stop"])
+
+        if abs(target_y - stop_y) < 13:
+            inward = 1 if stop_y < rect.center().y() else -1
+            stop_y = target_y + inward * 13
+
         painter.setPen(QPen(colour, 1))
-        d = self._short_places()
         # Beyond the chart's top or bottom: an arrow says which way it carries on.
         beyond = "" if level(found["target"]) == real_level(found["target"]) else (
             " ^" if real_level(found["target"]) < rect.top() else " v")
