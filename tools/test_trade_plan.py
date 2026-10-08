@@ -1,0 +1,285 @@
+"""The trade plan (actions/trade_plan.py, trade_plan_panel.py), on candles made for each case.
+
+Checked, in a sandboxed JARVIS folder:
+
+- swings and lines: a swing beyond the candles either side; swings close
+  together are one line; a lone swing is not a line; your own lines are
+  always lines, for their own market only;
+- the stages, for each side: waiting for the break, broken and waiting for
+  the retest, retested and waiting for confirmation, confirmed on the last
+  candle, and passed; a break that did not hold is no break;
+- the figures: entry, stop beyond the retest's wick by the ATR, target short
+  of the next line by a share of the ATR, reward : risk, all with the
+  arithmetic that gives them; a target too close says skip, as does RSI
+  outside the range;
+- with no line on a side, that side says so instead of inventing one;
+- any market: the one named is the one read, by OANDA's name, its prices to
+  OANDA's decimal places and its display name; one not known is asked about;
+- reading OANDA: the live price when there is one, the last close when the
+  market is shut, and a plain sentence when OANDA cannot be read;
+- "shall I buy or sell gold", "should I go long on oil" and "close the gold
+  plan" are recognised, and "remind me to buy gold earrings" and the gold
+  trader's own questions are not; nothing here can place an order;
+- the panel draws the plan and grows to hold it.
+
+    python tools/test_trade_plan.py
+"""
+
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools import sandbox  # noqa: E402  (must precede actions imports)
+
+folder = sandbox.activate()
+
+from actions import folder_organizer, oanda, trade_plan as tp  # noqa: E402
+
+
+failures = 0
+
+
+def check(condition, message):
+    global failures
+    print(("PASS " if condition else "FAIL ") + message)
+    failures += not condition
+
+
+START = datetime(2026, 9, 1, tzinfo=timezone.utc)
+GOLD = {"name": "Gold", "instrument": "XAU_USD", "decimals": 2}
+
+
+def made(rows):
+    """Candles from (open, high, low, close) rows, four hours apart."""
+    return [(START + timedelta(hours=4 * index), *row) for index, row in enumerate(rows)]
+
+
+def zigzag(count=100, low=4010.0, high=4090.0, period=10, wick=2.0):
+    """A range: up for [period] candles, down for [period], with small wicks."""
+    rows, price, step = [], (low + high) / 2, (high - low) / period
+
+    for index in range(count):
+        rising = (index // period) % 2 == 0
+        opened = price
+        price = min(high, price + step) if rising else max(low, price - step)
+        rows.append((opened, max(opened, price) + wick, min(opened, price) - wick, price))
+
+    return rows
+
+
+chosen = tp.settings()
+check(os.path.exists(os.path.join(folder, tp.SETTINGS_NAME)) and folder_organizer.is_protected(tp.SETTINGS_NAME),
+      "the settings are written the first time, and never tidied away")
+
+# ---- the lines -------------------------------------------------------------------------------
+
+base = zigzag()
+range_candles = made(base + [(4050, 4052, 4046, 4050)])
+atr = tp.gold_strategy.average_true_range(range_candles)[-1]
+lines = tp.levels(range_candles, atr, chosen)
+prices = [line["price"] for line in lines]
+check(len(lines) == 2 and abs(prices[0] - 4008) < 1 and abs(prices[1] - 4092) < 1
+      and all(line["touches"] >= 2 for line in lines),
+      f"the range's floor and ceiling are found, each turned at more than once ({prices})")
+lone = made(base + [(4050, 4052, 4046, 4050)] * 3 + [(4050, 4200, 4046, 4050)] + [(4050, 4052, 4046, 4050)] * 4)
+check(all(line["price"] < 4150 for line in tp.levels(lone, atr, chosen)), "a lone spike is a swing, not a line")
+mine = dict(chosen, your_levels={"XAU_USD": [4050.0]})
+check(any(line["yours"] and line["price"] == 4050.0 for line in tp.plan(range_candles, 4050.0, mine, GOLD)["levels"])
+      and not any(line["yours"] for line in tp.plan(range_candles, 4050.0, mine, dict(GOLD, instrument="XAG_USD"))
+                  ["levels"]),
+      "your own line is a line whatever the chart says, on its own market only")
+
+# ---- the stages, and the figures -------------------------------------------------------------------
+
+plan = tp.plan(range_candles, 4050.0, chosen, GOLD)
+check(plan["verdict"] == "wait" and plan["buy"]["stage"] == "break" and plan["sell"]["stage"] == "break"
+      and "Gold is between support" in plan["headline"],
+      f"inside the range: wait for a break either way ({plan['headline']})")
+buy = plan["buy"]
+check(abs(buy["stop"] - (buy["line"] - chosen["stop_atr"] * plan["atr"])) < 0.02 and "1 ATR" in buy["stop_working"]
+      and buy["entry"] == buy["line"], "before a retest: entry at the line, stop one ATR beyond it")
+sell = plan["sell"]
+check(sell["target"] < sell["entry"] < sell["stop"], "the sell plan: stop above, target below")
+
+ceiling = prices[1]
+broken = base + [(4050, 4062, 4048, 4060), (4060, 4082, 4058, 4080), (4080, ceiling + 10, 4078, ceiling + 8),
+                 (ceiling + 8, ceiling + 20, ceiling + 6, ceiling + 18)]
+plan = tp.plan(made(broken), ceiling + 18, chosen, GOLD)
+check(plan["buy"]["stage"] == "retest" and plan["buy"]["line"] == ceiling and plan["buy"]["steps"][0]["done"]
+      and not plan["buy"]["steps"][1]["done"] and "come back to" in plan["headline"],
+      "broken above: waiting for price to come back to the line")
+
+retested = broken + [(ceiling + 18, ceiling + 19, ceiling + 1, ceiling + 4)]
+plan = tp.plan(made(retested), ceiling + 4, chosen, GOLD)
+check(plan["buy"]["stage"] == "confirm" and plan["buy"]["steps"][1]["done"],
+      "back at the line on a red candle: retested, waiting for confirmation")
+
+confirmed = retested + [(ceiling + 4, ceiling + 14, ceiling + 2, ceiling + 12)]
+plan = tp.plan(made(confirmed), ceiling + 12, chosen, GOLD)
+buy = plan["buy"]
+wick = ceiling + 1
+check(buy["stage"] == "ready" and all(step["done"] for step in buy["steps"]),
+      "a green candle closing back above it: confirmed, on the last candle")
+check(buy["entry"] == round(ceiling + 12, 2) and abs(buy["stop"] - (wick - plan["atr"])) < 0.02
+      and "wick" in buy["stop_working"],
+      f"entry at the confirmation's close; stop one ATR under the retest's wick ({buy['stop_working']})")
+check(abs(buy["ratio"] - round(buy["reward"] / buy["risk"], 2)) < 0.02 and buy["next_line"] is None
+      and abs(buy["target"] - (buy["entry"] + chosen["fallback_reward"] * buy["risk"])) < 0.05,
+      f"with no line above: the target is {chosen['fallback_reward']:g} times the risk ({buy['target_working']})")
+expected = "buy" if buy["rsi_ok"] else "skip"
+check(plan["verdict"] == expected and (buy["rsi_ok"] or "RSI" in plan["headline"]),
+      f"the verdict follows RSI on the confirmation ({buy['rsi']:.0f}): {plan['verdict']}")
+
+near = tp.plan(made(confirmed), ceiling + 12, dict(chosen, your_levels={"XAU_USD": [ceiling + 20.0]}), GOLD)
+buffer = chosen["target_buffer_atr"] * near["atr"]
+check(near["verdict"] == "skip" and "under" in near["headline"] and not near["buy"]["worth"]
+      and abs(near["buy"]["target"] - (ceiling + 20 - buffer)) < 0.02 and "ATR" in near["buy"]["target_working"],
+      f"a line just above: target a share of the ATR short of it, too little reward, skip ({near['headline']})")
+cool = tp.plan(made(confirmed), ceiling + 12, dict(chosen, rsi_high=99, rsi_low=1), GOLD)
+check(cool["buy"]["rsi_ok"] and cool["verdict"] == "buy" and "Buy setup confirmed" in cool["headline"],
+      "with RSI in range and room to the target: the rules say buy, with every figure")
+
+later = confirmed + [(ceiling + 12, ceiling + 22, ceiling + 10, ceiling + 20)]
+check(tp.plan(made(later), ceiling + 20, chosen, GOLD)["buy"]["stage"] == "passed", "a candle later, that setup has passed")
+
+failed = base + [(4050, 4062, 4048, 4060), (4060, ceiling + 6, 4058, ceiling + 4), (ceiling + 4, ceiling + 5, 4070, 4072)]
+check(tp.plan(made(failed), 4072, chosen, GOLD)["buy"]["stage"] == "break", "a break that closed back inside is no break")
+
+top = tp.plan(made(broken), ceiling + 18, chosen, GOLD)
+check(top["resistance"] is None and "no line above" in top["headline"], "above every line: said, not invented")
+
+# The same rules on a market priced in single figures: lines, figures and words to its own decimals.
+gas_rows = [(o / 1000, h / 1000, l / 1000, c / 1000) for o, h, l, c in zigzag(low=3010, high=3090, wick=2)]
+gas = tp.plan(made(gas_rows + [(3.05, 3.052, 3.046, 3.05)]), 3.05, chosen,
+              {"name": "Natural Gas", "instrument": "NATGAS_USD", "decimals": 3})
+check(gas["verdict"] == "wait" and "Natural Gas is between support 3.008 and resistance 3.092" in gas["headline"]
+      and gas["buy"]["stop_working"].count(".") >= 2 and gas["atr"] < 1,
+      f"a market priced in single figures reads the same way, to its own decimals ({gas['headline']})")
+
+# ---- reading OANDA ------------------------------------------------------------------------------
+
+
+class Oanda:
+    MARKETS = {"XAU_USD": ("Gold", 2), "WTICO_USD": ("West Texas Oil", 3)}
+
+    def __init__(self, rows, open_market=True, broken=False):
+        self.rows, self.open_market, self.broken, self.asked = rows, open_market, broken, []
+
+    def instrument(self, name):
+        if name not in self.MARKETS:
+            raise oanda.OandaError(f"this account cannot trade {name}")
+
+        shown, places = self.MARKETS[name]
+        return {"name": name, "display_name": shown, "price_decimals": places}
+
+    def candles(self, name, granularity, count):
+        self.asked.append((name, granularity, count))
+
+        if self.broken:
+            raise oanda.OandaError("OANDA answered 503")
+
+        return self.rows[-count:], [row[4] for row in self.rows[-count:]]
+
+    def price(self, name):
+        if not self.open_market:
+            raise oanda.OandaError(f"no price for {name} just now (the market may be closed)")
+
+        return self.rows[-1][4] - 0.5, self.rows[-1][4] + 0.5, START
+
+
+shown = []
+tp.set_listeners(on_plan=shown.append, on_hide=lambda: shown.append("hidden"))
+client = Oanda(range_candles)
+said = tp.show("jarvis shall i buy or sell gold", client)
+check(client.asked == [("XAU_USD", "H4", chosen["candles"])] and shown and shown[-1]["price"] == 4050.0
+      and shown[-1]["live"] and shown[-1]["symbol"] == "XAU_USD",
+      "gold: its four-hour candles and the live price, mid-way between bid and ask")
+check("Gold is 4,050 on the 4-hour chart" in said and "panel" in said and len(said) < 400,
+      f"said briefly; the panel holds the rest ({said})")
+client = Oanda(made([(o / 50, h / 50, l / 50, c / 50) for o, h, l, c in base] + [(81.0, 81.04, 80.92, 81.0)]))
+said = tp.show("should i go long on crude oil", client)
+check(client.asked[0][0] == "WTICO_USD" and shown[-1]["instrument"] == "West Texas Oil" and shown[-1]["decimals"] == 3
+      and said.startswith("West Texas Oil is 81.000"),
+      f"any market: oil is read by OANDA's name and shown by its own ({said[:60]})")
+tp.show("shall i buy or sell gold", Oanda(range_candles, open_market=False))
+check(not shown[-1]["live"] and shown[-1]["price"] == 4050.0, "with the market shut, the last close")
+said = tp.show("shall i buy or sell gold", Oanda(range_candles, broken=True))
+check("couldn't read the gold chart" in said and "503" in said, f"OANDA unreadable: said plainly ({said})")
+said = tp.show("should i sell silver", Oanda(range_candles))
+check("cannot trade XAG_USD" in said, f"a market the account does not offer: said ({said})")
+said = tp.show("shall i buy or sell", Oanda(range_candles))
+check(said.startswith("Which market") and "gold" in said and "natural gas" in said,
+      f"no market named: asked which, with what can be read ({said[:80]})")
+check(tp.hide() and shown[-1] == "hidden", "and put away")
+
+# ---- what is asked ----------------------------------------------------------------------------------
+
+asked = ("jarvis shall i buy or sell gold", "should i sell gold", "should i go long on gold", "gold plan",
+         "what's the plan for gold", "is it a good time to buy gold", "should i buy silver",
+         "shall i short natural gas", "copper trade setup", "should i go long on crude oil")
+not_asked = ("remind me to buy gold earrings", "how has the gold trader done", "turn on the gold trader",
+             "set a price alert for gold", "what is gold at", "close the gold plan", "should i buy or sell")
+check(all(tp.wanted(text) for text in asked), "a question about trading a market is recognised")
+check(not any(tp.wanted(text) for text in not_asked), "other sentences about it are left to their own routes")
+check(tp.which("should i go long on crude oil") == ("crude oil", "WTICO_USD")
+      and tp.which("shall i buy brent crude")[1] == "BCO_USD", "the longest name wins: crude oil, brent crude")
+check(tp.dismissed("close the gold plan") and tp.dismissed("hide the trade plan")
+      and tp.dismissed("close the oil chart") and not tp.dismissed("close my gold trade"),
+      "closing the plan, and not a trade")
+
+try:
+    import commands  # noqa: E402  (Windows only: it drives the desktop)
+except ImportError as error:
+    print(f"SKIP routing: the command router needs Windows ({error})")
+else:
+    trader = commands._fast_path("how has the gold trader done")
+    check(commands._fast_path("shall i buy or sell gold")["intent"] == "trade_plan"
+          and commands._fast_path("should i go long on oil")["intent"] == "trade_plan"
+          and commands._fast_path("close the gold plan")["intent"] == "trade_plan_hide"
+          and (trader is None or trader["intent"] != "trade_plan"),
+          "routed without a model call; the gold trader's own questions are not")
+
+source = (ROOT / "actions" / "trade_plan.py").read_text(encoding="utf-8")
+check("market_order" not in source and "close_trade" not in source and "move_stop" not in source,
+      "nothing here can place, move or close a trade")
+
+with open(os.path.join(folder, tp.SETTINGS_NAME), "w", encoding="utf-8") as handle:
+    handle.write('{"granularity": "H3", "stop_atr": -1, "your_levels": {"XAU_USD": [4100, "x", true]},'
+                 ' "min_reward": "lots", "markets": {"Gold": "XAU_USD", "tin": "not an instrument"}}')
+
+fixed = tp.settings()
+check(fixed["granularity"] == "H4" and fixed["stop_atr"] == 1.0 and fixed["your_levels"] == {"XAU_USD": [4100.0]}
+      and fixed["min_reward"] == 2.0 and fixed["markets"] == {"gold": "XAU_USD"},
+      "nonsense in the settings falls back to the defaults; a market needs a real OANDA name")
+os.remove(os.path.join(folder, tp.SETTINGS_NAME))
+
+# ---- the panel ------------------------------------------------------------------------------------
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PyQt6.QtWidgets import QApplication  # noqa: E402
+
+app = QApplication.instance() or QApplication([])
+from trade_plan_panel import TradePlanPanel  # noqa: E402
+
+panel = TradePlanPanel()
+
+for name, found in (("wait", tp.plan(range_candles, 4050.0, chosen, GOLD)),
+                    ("ready", tp.plan(made(confirmed), ceiling + 12, chosen, GOLD)), ("gas", gas)):
+    panel._on_plan(found)
+    image = panel.grab()
+    check(not image.isNull() and panel._page.height() > panel.height(), f"the {name} plan draws, scrollable")
+
+    if os.environ.get("TRADE_PLAN_SHOTS"):
+        image.save(os.path.join(os.environ["TRADE_PLAN_SHOTS"], f"plan-{name}.png"))
+
+check("NATURAL GAS" in panel._title.text() and "4-HOUR" in panel._title.text() and "3.050" in panel._subtitle.text()
+      and "next close" in panel._subtitle.text(), "titled with the market, the timeframe, its price and the next close")
+
+sys.exit(1 if failures else 0)

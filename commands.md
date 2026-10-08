@@ -84,6 +84,8 @@ stays on the PC.
 | show me the top traders | The trader board: Hyperliquid's best recent performers, judged on their whole record -- consistent ones first, with profit curves, each part of the period, deepest fall and the working. Read-only (also "best traders", "copy traders") |
 | show trader three | One trader's record in full on the board: the curve with its falls shaded, every trade, the calculations, open positions and how close each is to liquidation |
 | close the traders | Puts the trader board away |
+| shall I buy or sell gold | The trade plan for that market on the four-hour chart -- gold, silver, oil, copper, natural gas and any other market in trade-plan.json: support and resistance found from the chart (and your own lines), RSI, and for each side what has to happen first -- the break, the retest, the confirmation -- with exact entry, stop, target and reward : risk, drawn on the chart in its own panel. Rules, not a forecast; read-only (also "should I go long on oil", "silver plan") |
+| close the gold plan | Puts the trade plan away (also "close the trade plan") |
 | how much battery do I have | battery only |
 | take a screenshot | saves to your JARVIS folder |
 | minimise everything | clears the desktop |

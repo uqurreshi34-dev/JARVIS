@@ -24,6 +24,8 @@ Checked, in a sandboxed JARVIS folder:
 - what is said is short and the panel holds the detail;
 - "show me the top traders", "show trader three" and "close the traders"
   are recognised, and nothing here can place an order;
+- a refresh reports its progress, which the HUD shows above its state
+  label and clears when done;
 - the panel draws the board and a trader, steps between them, and goes back;
   the trader page grows to hold every section.
 
@@ -209,7 +211,11 @@ check(len(trades) == 45 and abs(trades[0]["pnl"] - 300) < 1e-9 and abs(trades[0]
 
 # ---- verdicts --------------------------------------------------------------------------------
 
+progress = []
+tw.set_listeners(on_progress=lambda label, done, total: progress.append((label, done, total)))
 board = tw.refresh(client, now=NOW / 1000)
+check(progress[0] == (tw.PROGRESS_LABEL, 0, 0) and (tw.PROGRESS_LABEL, 3, 4) in progress
+      and progress[-1] == (None, 0, 0), f"the refresh reports how far it has got, then that it is done ({progress[-3:]})")
 by_address = {trader["address"]: trader for trader in board["traders"]}
 steady = by_address["0xsteady00000000000000000000000000000001"]
 check(steady["verdict"] == "consistent" and steady["trades"] == 45 and all(value > 0 for value in steady["parts"]),
@@ -285,6 +291,8 @@ check(named.get("Day trader", "").startswith("holds a position for 5.0 hours") a
       and "Adds to losers" in named and "Specialist" in named and "Holding losers" in named,
       f"how they trade is named for what the fills show ({sorted(named)})")
 check(tw.market("@142") == "spot #142" and tw.market("BTC") == "BTC", "a spot pair is named, not shown as @142")
+check(tw.market("xyz:NVDA") == "NVDA (xyz)" and tw.builder_exchanges(["BTC", "xyz:NVDA", "xyz:SP500", "abc:GOLD"])
+      == ["xyz", "abc"], "a builder market is the asset with its exchange after it, and the exchanges are listed")
 check(tw.coin_table([{"coin": "ETH", "pnl": 10.0, "fee": 1.0}, {"coin": "ETH", "pnl": -4.0, "fee": 1.0},
                      {"coin": "@7", "pnl": 3.0, "fee": 0.0}]) == [["ETH", 2, 4.0], ["spot #7", 1, 3.0]],
       "what they trade: markets by number of trades, with what each made")
@@ -375,6 +383,15 @@ for name, focus in (("board", None), ("trader", 1)):
     if shot:
         image.save(os.path.join(shot, f"{name}.png"))
         panel._detail.grab().save(os.path.join(shot, f"{name}-content.png")) if focus else None
+
+import hud  # noqa: E402
+
+face = hud.Hud()
+face._on_progress("traders", "Reading traders", 7, 25)
+drawn = face.grab()
+check(face._progress["traders"][:3] == ("Reading traders", 7, 25) and not drawn.isNull(), "the HUD shows the progress")
+face._on_progress("traders", "", 0, 0)
+check(not face._progress, "and clears it when the work is done")
 
 fitted = panel._detail.height()
 crowded = dict(tw.cached()["traders"][0])

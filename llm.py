@@ -452,6 +452,10 @@ Use traders_show when the user asks about other traders worth following:
 the best or top traders, copy traders, Hyperliquid's leaderboard, or one
 of them by number ("how has trader three done"). Use traders_hide when
 they want that board closed.
+Use trade_plan when the user asks whether to buy or sell a commodity or
+market (gold, silver, oil, copper, natural gas and the like), for a trade
+plan or setup for one, or whether to go long or short on it -- not about the
+gold trader's own record. Use trade_plan_hide when they want it closed.
 For these, leave both "application" and "website" null.
 
 Use answer_question when the user asks a general knowledge or factual
@@ -608,6 +612,8 @@ _SCHEMA = {
                 "trading_record",
                 "traders_show",
                 "traders_hide",
+                "trade_plan",
+                "trade_plan_hide",
                 "answer_question",
                 "unknown",
             ],

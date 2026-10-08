@@ -328,8 +328,30 @@ def trades_from(fills):
 
 
 def market(coin):
-    """A coin as people know it: Hyperliquid names a spot pair by its index ("@142")."""
-    return f"spot #{coin[1:]}" if coin.startswith("@") else coin
+    """A coin as people know it.
+
+    Hyperliquid names a spot pair by its index ("@142"), and a market another exchange runs on it (a
+    builder market, HIP-3: stocks, indices, commodities) as "exchange:asset" ("xyz:NVDA"): shown as the
+    asset with its exchange after it, "NVDA (xyz)".
+    """
+    if coin.startswith("@"):
+        return f"spot #{coin[1:]}"
+
+    exchange, _colon, asset = coin.partition(":")
+    return f"{asset} ({exchange})" if asset and exchange else coin
+
+
+def builder_exchanges(coins):
+    """The builder exchanges ("xyz" in "xyz:NVDA") among Hyperliquid's coin names, in order."""
+    found = []
+
+    for coin in coins:
+        exchange, _colon, asset = coin.partition(":")
+
+        if asset and exchange not in found:
+            found.append(exchange)
+
+    return found
 
 
 def judge(trades, parts, min_trades):
@@ -616,6 +638,7 @@ def examine(client, row, chosen, now_ms):
         "dip": dip, "dip_share": dip_share, "dip_from": dip_from, "dip_to": dip_to,
         "fills_capped": len(fills) >= FILLS_KEPT, "covered_from": covered_from,
         "positions": [dict(position, coin=market(position["coin"])) for position in positions],
+        "builders": builder_exchanges([trade["coin"] for trade in trades] + [position["coin"] for position in positions]),
         **record,
         "style": style(fills, record, positions, covered_days, period_pnl),
     }
@@ -645,12 +668,17 @@ _refreshing = threading.Event()
 _board_listener = None
 _hide_listener = None
 _say_listener = None
+_progress_listener = None
+
+# What the HUD's progress strip says while the board is read.
+PROGRESS_LABEL = "Reading traders"
 
 
-def set_listeners(on_board=None, on_hide=None, on_say=None):
-    """Who is shown the board (a dict, with "focus" naming a trader or None), who puts it away, and who
-    says what a refresh found when it finishes after the question was answered."""
-    global _board_listener, _hide_listener, _say_listener
+def set_listeners(on_board=None, on_hide=None, on_say=None, on_progress=None):
+    """Who is shown the board (a dict, with "focus" naming a trader or None), who puts it away, who
+    says what a refresh found when it finishes after the question was answered, and who shows how far
+    a refresh has got: on_progress(label, done, total), and on_progress(None, 0, 0) when it ends."""
+    global _board_listener, _hide_listener, _say_listener, _progress_listener
 
     if on_board is not None:
         _board_listener = on_board
@@ -661,23 +689,38 @@ def set_listeners(on_board=None, on_hide=None, on_say=None):
     if on_say is not None:
         _say_listener = on_say
 
+    if on_progress is not None:
+        _progress_listener = on_progress
+
+
+def _progress(done, total):
+    if _progress_listener:
+        _progress_listener(PROGRESS_LABEL if done is not None else None, done or 0, total)
+
 
 def refresh(client=None, now=None, report=None):
     """Read the exchange afresh and save the board. Returns it."""
     chosen = settings()
     client = client or Hyperliquid()
     now_ms = int((now or time.time()) * 1000)
-    shortlist = candidates(client.leaderboard(), chosen)
-    traders = []
+    _progress(0, 0)
 
-    for index, row in enumerate(shortlist, 1):
-        if report:
-            report(f"{index}/{len(shortlist)} {row['name'] or row['address']}")
+    try:
+        shortlist = candidates(client.leaderboard(), chosen)
+        traders = []
 
-        try:
-            traders.append(examine(client, row, chosen, now_ms))
-        except WatchError as error:
-            print(f"[JARVIS] trader watch: {row['address']} skipped ({error})")
+        for index, row in enumerate(shortlist, 1):
+            _progress(index - 1, len(shortlist))
+
+            if report:
+                report(f"{index}/{len(shortlist)} {row['name'] or row['address']}")
+
+            try:
+                traders.append(examine(client, row, chosen, now_ms))
+            except WatchError as error:
+                print(f"[JARVIS] trader watch: {row['address']} skipped ({error})")
+    finally:
+        _progress(None, 0)
 
     board = {
         "format": BOARD_FORMAT,

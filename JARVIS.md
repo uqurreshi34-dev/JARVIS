@@ -1931,6 +1931,36 @@ or the stop, warning until there are ENOUGH_TRADES (30); then the gold
 trader's record, without its money said twice. `python
 tools/trade_journal.py` lists every trade. `tools/test_trade_journal.py`.
 
+### The trade plan - `actions/trade_plan.py`, `trade_plan_panel.py`
+"Shall I buy or sell gold" -- or silver, oil, copper, natural gas, any market
+named in trade-plan.json's `markets` (spoken name to OANDA instrument, so any
+OANDA market can be added) -- is answered with the rules, not a guess. JARVIS
+reads that market's four-hour candles and finds the lines from the chart: a
+swing high is a candle higher than the `swing_strength` (3) either side, a
+swing low lower; swings within `merge_atr` (0.5) ATR are one line, and a
+line needs `min_touches` (2) swings. Your own lines (`your_levels`, by
+instrument) are always lines. For each side it finds the line in play -- one
+broken within `retest_candles` (6) and holding, else the next one to break --
+and where things stand: waiting for the break, for the retest (within
+`touch_atr` of the line), for the confirmation (a candle closing back beyond
+the line in the trade's colour), confirmed on the last candle, or passed.
+The figures: entry at the confirmation's close; stop `stop_atr` (1) ATR
+beyond the retest's wick; target `target_buffer_atr` (0.2) ATR short of the
+next line, or `fallback_reward` (3) R with none in the way; under
+`min_reward` (2) : 1 it says skip, as it does when RSI on the confirmation is
+outside 50-70 for a buy or 30-50 for a sell. Distances are in ATRs, so the
+same rules suit gold and natural gas alike, and prices are written to
+OANDA's own decimal places for each market. The answer opens in its own
+panel: the verdict, the chart with the lines and each plan's path (1 break,
+2 retest, 3 go, stop and target marked), RSI beneath with its zones, each
+plan step by step with the arithmetic, and the working. Read-only: candles
+and the price, never an order. `tools/test_trade_plan.py`.
+
+Work that takes a while shows on the HUD as a progress strip above the
+state label (`Hud.progress_changed`): what it is, how far, and a moving
+bar, clear of the reply so an announcement never covers it. The trader
+board reports through it.
+
 ### The trader board - `actions/trader_watch.py`, `traders_panel.py`, `tools/trader_watch.py`
 Copy-trading leaderboards rank by recent returns, and among thousands
 someone is always on top by luck. Hyperliquid publishes every account's

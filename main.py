@@ -17,6 +17,7 @@ from news_panel import NewsPanel
 from quran_panel import QuranPanel
 from radar_panel import RadarPanel
 from traders_panel import TradersPanel
+from trade_plan_panel import TradePlanPanel
 from sensor_panel import SensorPanel
 from files_panel import FilesPanel
 from house_panel import HousePanel
@@ -70,6 +71,7 @@ from actions import (
     report_search,
     recitation,
     trader_watch,
+    trade_plan,
 )
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
@@ -1362,10 +1364,33 @@ def main():
         traders.hide_requested.emit()
         traders_beam.hidden.emit()
 
-    trader_watch.set_listeners(on_board=traders_board, on_hide=traders_hide, on_say=assistant._on_alert)
+    def traders_progress(label, done, total):
+        hud.progress_changed.emit("traders", label or "", done, total)
+
+    trader_watch.set_listeners(on_board=traders_board, on_hide=traders_hide, on_say=assistant._on_alert,
+                               on_progress=traders_progress)
     traders.closed.connect(traders_beam.hidden.emit)
     hud.shutdown.connect(traders.hide_requested.emit)
     hud.shutdown.connect(traders_beam.hidden.emit)
+
+    # The trade plan: a market's chart, its lines and what has to happen
+    # before a trade, projected beside the HUD like the trader board.
+    plan_panel = TradePlanPanel()
+    plan_panel.set_anchor(hud)
+    plan_beam = Beam(plan_panel, hud)
+
+    def plan_shown(plan):
+        plan_panel.show_plan.emit(plan)
+        plan_beam.shown.emit()
+
+    def plan_hidden():
+        plan_panel.hide_requested.emit()
+        plan_beam.hidden.emit()
+
+    trade_plan.set_listeners(on_plan=plan_shown, on_hide=plan_hidden)
+    plan_panel.closed.connect(plan_beam.hidden.emit)
+    hud.shutdown.connect(plan_panel.hide_requested.emit)
+    hud.shutdown.connect(plan_beam.hidden.emit)
 
     hud.stop_clicked.connect(assistant.stop_speaking)
 

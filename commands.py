@@ -80,6 +80,7 @@ from actions import (
     trader_watch,
     tradingview,
     tripo,
+    trade_plan,
 )
 from actions.screen import describe_capture
 from actions.system import describe_system, describe_time, describe_weather
@@ -3945,6 +3946,17 @@ def _fast_path(command):
     if aircraft.wanted(text):
         return _blank_result("aircraft_overhead")
 
+    # The trade plan: "shall I buy or sell gold", "should I go long on
+    # oil". A market from trade-plan.json and a question about trading it
+    # are both needed, and the gold trader and the trading record keep
+    # their own words, so "how has the gold trader done" never lands here.
+    # Dismissal first, as with the radar.
+    if trade_plan.dismissed(text):
+        return _blank_result("trade_plan_hide")
+
+    if trade_plan.wanted(text):
+        return _blank_result("trade_plan")
+
     # The trader board: dismissal first, as with the radar, so "close the
     # traders" never reopens it.
     if trader_watch.dismissed(text):
@@ -5902,6 +5914,14 @@ def _handle_command(command, *, fast_only=False, probe=False):
             return aircraft.describe()
 
         return _query(intent, sky)
+
+    if intent == "trade_plan_hide":
+        return _query(intent, lambda: "Trade plan closed, sir." if trade_plan.hide()
+                      else "The trade plan isn't open, sir.")
+
+    if intent == "trade_plan":
+        # The market is read from what was said, so the model's route here keeps it too.
+        return _query(intent, lambda: trade_plan.show(command))
 
     if intent == "traders_hide":
         return _query(intent, lambda: "Trader board closed, sir." if trader_watch.hide()

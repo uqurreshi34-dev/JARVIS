@@ -1,0 +1,651 @@
+"""Should I buy or sell gold, silver, oil...? The plan, worked out on the chart, with every figure shown.
+
+Asked "shall I buy or sell gold" -- or silver, oil, copper, any market in the
+"markets" setting -- JARVIS does not guess where the price goes. It reads
+OANDA's four-hour candles for that market and lays out the rules this trading
+is done by -- a line breaks, price comes back to test it, a candle confirms --
+with the exact prices for each step and where it stands on each:
+
+    the lines     support and resistance found from the chart itself: a swing
+                  high is a candle higher than the [swing_strength] either side
+                  of it (a swing low, lower); swings within [merge_atr] ATRs of
+                  each other are one line, a line needs [min_touches] of them,
+                  and the more swings at a line, the more it has been
+                  respected. Your own lines (your_levels, by market) are drawn
+                  and used alongside.
+    the plans     one to buy and one to sell. Buying: a candle closes above
+                  the resistance (the break), price comes back down to it (the
+                  retest), and a candle closes back above it (the confirmation)
+                  with RSI above 50 -- momentum with buyers -- but under
+                  rsi_high, not already overbought. Selling is the mirror image.
+                  A break more than [retest_candles] candles old with no retest
+                  has run away, and is not chased.
+    the figures   entry at the confirmation's close (the line, until then); the
+                  stop beyond the retest's wick by [stop_atr] ATRs (beyond the
+                  line, until a wick exists); the target [target_buffer_atr]
+                  ATRs short of the next line, so price need not reach the line
+                  itself -- in ATRs, so it suits gold and natural gas alike;
+                  reward : risk worked out, and under [min_reward] the plan
+                  says skip. With no line in the way, the target is
+                  [fallback_reward] times the risk.
+
+Every market is read the same way; only its prices differ, written to OANDA's
+own decimal places for it. Rules, not a forecast: it says what has to happen
+before a trade and where, never that it will. The answer opens in its own
+panel (trade_plan_panel.py): the chart with the lines and each plan's path
+drawn on it, RSI beneath, the plans step by step, and the working. Read-only:
+it reads candles and the price, and places nothing.
+
+Settings in trade-plan.json in the JARVIS folder:
+
+    markets              {"gold": "XAU_USD", "silver": "XAG_USD", ...}: what you call a
+                         market, and OANDA's name for it; add any instrument OANDA offers
+    your_levels          {"XAU_USD": [4114, 4229]}: your own lines, by OANDA's name
+    granularity, candles, shown_candles, swing_strength, merge_atr, min_touches,
+    stop_atr, target_buffer_atr, min_reward, fallback_reward, retest_candles,
+    touch_atr, rsi_high, rsi_low
+"""
+
+import json
+import os
+import re
+from datetime import timedelta, timezone
+
+from actions import files, gold_strategy, oanda
+
+
+SETTINGS_NAME = "trade-plan.json"
+
+DEFAULTS = {
+    # What you call each market, and OANDA's name for it. Longer names are matched first, so
+    # "crude oil" is not read as "oil" alone; add any instrument your OANDA account offers.
+    "markets": {
+        "gold": "XAU_USD", "silver": "XAG_USD", "platinum": "XPT_USD", "palladium": "XPD_USD",
+        "copper": "XCU_USD", "oil": "WTICO_USD", "crude oil": "WTICO_USD", "crude": "WTICO_USD",
+        "us oil": "WTICO_USD", "wti": "WTICO_USD", "brent": "BCO_USD", "brent crude": "BCO_USD",
+        "natural gas": "NATGAS_USD", "nat gas": "NATGAS_USD", "corn": "CORN_USD", "wheat": "WHEAT_USD",
+        "soybeans": "SOYBN_USD", "soya beans": "SOYBN_USD", "sugar": "SUGAR_USD",
+    },
+    # OANDA's candle size, and how many are read and shown.
+    "granularity": "H4",
+    "candles": 200,
+    "shown_candles": 60,
+    # A swing high is higher than this many candles either side of it.
+    "swing_strength": 3,
+    # Swings this many ATRs apart or closer are one line, and a line needs this many swings: price
+    # turning at a price once is a swing, turning there again makes it a line.
+    "merge_atr": 0.5,
+    "min_touches": 2,
+    # Your own lines, by OANDA's name for the market: always drawn and used.
+    "your_levels": {},
+    # The stop: beyond the retest's wick by this many ATRs.
+    "stop_atr": 1.0,
+    # The target: this many ATRs short of the next line (on gold, about $3).
+    "target_buffer_atr": 0.2,
+    # Under this reward : risk, the plan says skip.
+    "min_reward": 2.0,
+    # With no line in the way, the target is this many times the risk.
+    "fallback_reward": 3.0,
+    # A break older than this many candles, never retested, has run away.
+    "retest_candles": 6,
+    # Within this many ATRs of the line counts as reaching it.
+    "touch_atr": 0.3,
+    # RSI above this is overbought, below rsi_low oversold.
+    "rsi_high": 70,
+    "rsi_low": 30,
+}
+
+_INSTRUMENT = re.compile(r"^[A-Z0-9]+_[A-Z0-9]+$")
+
+GRANULARITY_SECONDS = {"M15": 900, "M30": 1800, "H1": 3600, "H2": 7200, "H4": 14400, "H8": 28800, "D": 86400}
+GRANULARITY_WORDS = {"M15": "15-minute", "M30": "30-minute", "H1": "1-hour", "H2": "2-hour", "H4": "4-hour",
+                     "H8": "8-hour", "D": "daily"}
+
+# RSI's middle: above it momentum is with buyers, below it with sellers.
+RSI_MIDDLE = 50
+
+
+class PlanError(Exception):
+    """The chart could not be read."""
+
+
+# ---- settings ------------------------------------------------------------------------------
+
+def _path(name):
+    base = files.root()
+    return os.path.join(base, name) if base else None
+
+
+def settings():
+    """The settings, defaults filled in; written out the first time. Nonsense is replaced by the default."""
+    path = _path(SETTINGS_NAME)
+    saved = {}
+
+    if path and os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                saved = json.load(handle)
+        except (OSError, ValueError) as error:
+            print(f"[JARVIS] trade plan: {SETTINGS_NAME} could not be read ({error}); using the defaults")
+            saved = {}
+
+    chosen = dict(DEFAULTS)
+
+    for name, default in DEFAULTS.items():
+        value = saved.get(name, default)
+
+        if name == "granularity":
+            chosen[name] = value if value in GRANULARITY_SECONDS else default
+        elif name == "markets":
+            given = value if isinstance(value, dict) else {}
+            chosen[name] = {" ".join(str(spoken).casefold().split()): instrument
+                            for spoken, instrument in given.items()
+                            if isinstance(instrument, str) and _INSTRUMENT.match(instrument) and str(spoken).strip()}
+            chosen[name] = chosen[name] or dict(default)
+        elif name == "your_levels":
+            given = value if isinstance(value, dict) else {}
+            chosen[name] = {instrument: [float(level) for level in levels
+                                         if isinstance(level, (int, float)) and not isinstance(level, bool)
+                                         and level > 0]
+                            for instrument, levels in given.items()
+                            if isinstance(instrument, str) and isinstance(levels, list)}
+        elif isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            chosen[name] = default
+        else:
+            chosen[name] = type(default)(value)
+
+    chosen["shown_candles"] = min(chosen["shown_candles"], chosen["candles"])
+    chosen["rsi_low"], chosen["rsi_high"] = sorted((chosen["rsi_low"], chosen["rsi_high"]))
+
+    if path and not os.path.exists(path):
+        temporary = f"{path}.part"
+
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(chosen, handle, indent=1)
+
+        os.replace(temporary, path)
+
+    return chosen
+
+
+# ---- the lines -------------------------------------------------------------------------------
+
+def swings(candles, strength):
+    """[(index, price)] of every swing high and swing low: a candle beyond the [strength] either side."""
+    found = []
+
+    for index in range(strength, len(candles) - strength):
+        around = candles[index - strength:index + strength + 1]
+        high, low = candles[index][2], candles[index][3]
+
+        if high >= max(candle[2] for candle in around):
+            found.append((index, high))
+
+        if low <= min(candle[3] for candle in around):
+            found.append((index, low))
+
+    return found
+
+
+def levels(candles, atr, chosen, yours=()):
+    """The lines, lowest first: [{"price", "touches", "yours", "last"}].
+
+    Swings close together are one line at their average, and only a price turned at [min_touches]
+    times is a line. Your own lines are lines whatever the chart
+    says, and a swing close to one counts as a touch of yours.
+    """
+    gap = chosen["merge_atr"] * atr
+    groups = [{"prices": [], "touches": 0, "yours": True, "last": -1, "price": level} for level in yours]
+
+    for index, price in sorted(swings(candles, chosen["swing_strength"]), key=lambda swing: swing[1]):
+        near = min(groups, key=lambda group: abs(group["price"] - price), default=None)
+
+        if near is not None and abs(near["price"] - price) <= gap:
+            near["prices"].append(price)
+            near["touches"] += 1
+            near["last"] = max(near["last"], index)
+
+            if not near["yours"]:
+                near["price"] = sum(near["prices"]) / len(near["prices"])
+        else:
+            groups.append({"prices": [price], "touches": 1, "yours": False, "last": index, "price": price})
+
+    return sorted(({"price": round(group["price"], 6), "touches": group["touches"], "yours": group["yours"],
+                    "last": group["last"]} for group in groups
+                   if group["yours"] or group["touches"] >= chosen["min_touches"]),
+                  key=lambda level: level["price"])
+
+
+# ---- a plan for one side ----------------------------------------------------------------------
+
+def _beyond(value, line, side):
+    """Whether [value] is past [line] on the side a trade of [side] wants: above for a buy."""
+    return value > line if side == "buy" else value < line
+
+
+def _break_of(candles, line, side, window):
+    """The index of a recent close through [line] that has held since, or None."""
+    closes = [candle[4] for candle in candles]
+    first = max(1, len(candles) - window)
+
+    for index in range(len(candles) - 1, first - 1, -1):
+        if _beyond(closes[index], line, side) and not _beyond(closes[index - 1], line, side):
+            held = all(_beyond(close, line, side) for close in closes[index:])
+            return index if held else None
+
+    return None
+
+
+def _retest_of(candles, line, side, broke, touch):
+    """The first candle after the break to come back to [line], or None."""
+    for index in range(broke + 1, len(candles)):
+        reach = candles[index][3] if side == "buy" else candles[index][2]
+
+        if (reach <= line + touch) if side == "buy" else (reach >= line - touch):
+            return index
+
+    return None
+
+
+def _confirmation_of(candles, line, side, retest):
+    """The first candle from the retest on to close back beyond [line] in the trade's direction, or None."""
+    for index in range(retest, len(candles)):
+        _start, opened, _high, _low, closed = candles[index][:5]
+
+        if _beyond(closed, line, side) and (closed > opened if side == "buy" else closed < opened):
+            return index
+
+    return None
+
+
+def side_plan(side, line, candles, atr, rsis, lines, chosen, broke=None, decimals=2):
+    """The plan for one side at [line]: where it stands, its steps, and its figures with their working.
+
+    Prices are written to [decimals] places, the market's own.
+    """
+    d = decimals
+    touch = chosen["touch_atr"] * atr
+    buffer = chosen["target_buffer_atr"] * atr
+    word = "above" if side == "buy" else "below"
+    last = len(candles) - 1
+    retest = _retest_of(candles, line["price"], side, broke, touch) if broke is not None else None
+    confirmed = _confirmation_of(candles, line["price"], side, retest) if retest is not None else None
+    price = line["price"]
+
+    if confirmed is not None:
+        stage = "ready" if confirmed == last else "passed"
+    elif retest is not None:
+        stage = "confirm"
+    elif broke is not None:
+        stage = "retest"
+    else:
+        stage = "break"
+
+    steps = [
+        {"name": "Break", "done": broke is not None,
+         "text": f"a {GRANULARITY_WORDS[chosen['granularity']]} candle closes {word} {price:,.{d}f}"},
+        {"name": "Retest", "done": retest is not None,
+         "text": f"price comes back to {price:,.{d}f} (within {touch:,.{d}f})"},
+        {"name": "Confirmation", "done": confirmed is not None,
+         "text": f"a candle closes back {word} {price:,.{d}f}, {'green' if side == 'buy' else 'red'}, with RSI"
+                 + (f" between {RSI_MIDDLE} and {chosen['rsi_high']}" if side == "buy"
+                    else f" between {chosen['rsi_low']} and {RSI_MIDDLE}")},
+    ]
+
+    # The figures: from the candles once they exist, from the line until then.
+    sign = 1 if side == "buy" else -1
+    entry = candles[confirmed][4] if confirmed is not None else price
+    entry_working = (f"the confirmation candle's close, {entry:,.{d}f}" if confirmed is not None
+                     else f"at the line, {price:,.{d}f}, once confirmed")
+
+    if retest is not None:
+        tested = candles[retest:(confirmed if confirmed is not None else retest) + 1]
+        wick = min(candle[3] for candle in tested) if side == "buy" else max(candle[2] for candle in tested)
+        stop = wick - sign * chosen["stop_atr"] * atr
+        stop_working = (f"the retest's wick {wick:,.{d}f} {'-' if side == 'buy' else '+'} {chosen['stop_atr']:g} ATR"
+                        f" ({chosen['stop_atr'] * atr:,.{d}f}) = {stop:,.{d}f}")
+    else:
+        stop = price - sign * chosen["stop_atr"] * atr
+        stop_working = (f"the line {price:,.{d}f} {'-' if side == 'buy' else '+'} {chosen['stop_atr']:g} ATR"
+                        f" ({chosen['stop_atr'] * atr:,.{d}f}) = {stop:,.{d}f}; beyond the retest's wick once it shows")
+
+    risk = abs(entry - stop)
+    # The next line the trade could reach: past the entry by more than the buffer kept short of it.
+    ahead = [other for other in lines if _beyond(other["price"] - sign * buffer, entry, side)
+             and abs(other["price"] - price) > chosen["merge_atr"] * atr]
+    following = min(ahead, key=lambda other: abs(other["price"] - entry)) if ahead else None
+
+    if following:
+        target = following["price"] - sign * buffer
+        target_working = (f"the next {'resistance' if side == 'buy' else 'support'} {following['price']:,.{d}f}"
+                          f" {'-' if side == 'buy' else '+'} {chosen['target_buffer_atr']:g} ATR ({buffer:,.{d}f})"
+                          f" = {target:,.{d}f}")
+    else:
+        target = entry + sign * chosen["fallback_reward"] * risk
+        target_working = (f"no line {word} in the last {len(candles)} candles: {chosen['fallback_reward']:g} times"
+                          f" the risk, {entry:,.{d}f} {'+' if side == 'buy' else '-'} {chosen['fallback_reward']:g} x"
+                          f" {risk:,.{d}f} = {target:,.{d}f}")
+
+    reward = sign * (target - entry)
+    ratio = reward / risk if risk > 0 else 0.0
+    rsi_now = rsis[confirmed] if confirmed is not None else None
+    rsi_ok = None
+
+    if rsi_now is not None:
+        rsi_ok = (RSI_MIDDLE < rsi_now < chosen["rsi_high"]) if side == "buy" else \
+            (chosen["rsi_low"] < rsi_now < RSI_MIDDLE)
+
+    return {
+        "side": side, "line": price, "touches": line["touches"], "yours": line["yours"], "stage": stage,
+        "broke_at": candles[broke][0] if broke is not None else None,
+        "steps": steps, "entry": round(entry, d), "entry_working": entry_working,
+        "stop": round(stop, d), "stop_working": stop_working,
+        "target": round(target, d), "target_working": target_working, "next_line": following["price"] if following else None,
+        "risk": round(risk, d), "reward": round(reward, d), "decimals": d, "ratio": round(ratio, 2),
+        "ratio_working": f"({abs(target - entry):,.{d}f}) / ({risk:,.{d}f}) = {ratio:.2f} : 1",
+        "worth": round(ratio, 2) >= chosen["min_reward"], "rsi": rsi_now, "rsi_ok": rsi_ok,
+    }
+
+
+def _choose_line(side, price, lines, candles, chosen):
+    """The line a [side] plan trades: one broken recently and holding, else the next one to break."""
+    window = chosen["retest_candles"]
+    behind = [line for line in lines if not _beyond(line["price"], price, side) or line["price"] == price]
+    behind.sort(key=lambda line: abs(line["price"] - price))
+
+    for line in behind:
+        broke = _break_of(candles, line["price"], side, window)
+
+        if broke is not None:
+            return line, broke
+
+    ahead = [line for line in lines if _beyond(line["price"], price, side)]
+    return (min(ahead, key=lambda line: abs(line["price"] - price)), None) if ahead else (None, None)
+
+
+# ---- the whole plan ------------------------------------------------------------------------------
+
+def rsi_zone(value, chosen):
+    if value is None:
+        return "not enough candles to read"
+
+    if value >= chosen["rsi_high"]:
+        return "overbought: buyers may be spent, so a buy now is late"
+
+    if value <= chosen["rsi_low"]:
+        return "oversold: sellers may be spent, so a sell now is late -- and not a buy on its own"
+
+    if value >= RSI_MIDDLE:
+        return "above 50: momentum is with buyers"
+
+    return "below 50: momentum is with sellers"
+
+
+def _ms(moment):
+    return int(moment.timestamp() * 1000)
+
+
+def _uk(moment, form="%d %b %H:%M"):
+    return gold_strategy.uk_time(moment.astimezone(timezone.utc)).strftime(form)
+
+
+def plan(candles, price, chosen, market, live=True):
+    """The plan from [candles] (oldest first, finished ones only) and the price now.
+
+    [market]: {"name", "instrument", "decimals"} -- what it is called, OANDA's name, and its decimal places.
+    """
+    d = market["decimals"]
+    if len(candles) < max(30, 2 * chosen["swing_strength"] + 2):
+        raise PlanError("too few candles to read the chart")
+
+    atrs = gold_strategy.average_true_range(candles)
+    rsis = gold_strategy.rsi([candle[4] for candle in candles])
+    atr = atrs[-1] or (sum(candle[2] - candle[3] for candle in candles[-14:]) / 14)
+    lines = levels(candles, atr, chosen, chosen["your_levels"].get(market["instrument"], ()))
+    resistance = min((line for line in lines if line["price"] > price), key=lambda line: line["price"], default=None)
+    support = max((line for line in lines if line["price"] < price), key=lambda line: line["price"], default=None)
+
+    plans = {}
+
+    for side in ("buy", "sell"):
+        line, broke = _choose_line(side, price, lines, candles, chosen)
+        plans[side] = side_plan(side, line, candles, atr, rsis, lines, chosen, broke, d) if line else None
+
+    verdict, headline = _verdict(plans, price, support, resistance, chosen, market)
+    step = timedelta(seconds=GRANULARITY_SECONDS[chosen["granularity"]])
+    next_close = candles[-1][0] + 2 * step
+    shown = candles[-chosen["shown_candles"]:]
+    first_shown = len(candles) - len(shown)
+
+    return {
+        "instrument": market["name"], "symbol": market["instrument"], "decimals": d,
+        "granularity": chosen["granularity"], "timeframe": GRANULARITY_WORDS[chosen["granularity"]],
+        "price": round(price, d), "live": live,
+        "read": _uk(candles[-1][0] + step), "next_close": _uk(next_close, "%H:%M"),
+        "atr": round(atr, d), "rsi": rsis[-1], "rsi_zone": rsi_zone(rsis[-1], chosen),
+        "rsi_high": chosen["rsi_high"], "rsi_low": chosen["rsi_low"],
+        "candles": [[_ms(start), opened, high, low, closed, _uk(start)]
+                    for start, opened, high, low, closed in shown],
+        "rsis": [round(value, 1) if value is not None else None for value in rsis[first_shown:]],
+        "levels": [dict(line, last=max(-1, line["last"] - first_shown)) for line in lines],
+        "support": support["price"] if support else None, "resistance": resistance["price"] if resistance else None,
+        "buy": plans["buy"], "sell": plans["sell"],
+        "verdict": verdict, "headline": headline,
+        "settings": {name: chosen[name] for name in ("swing_strength", "merge_atr", "min_touches", "stop_atr",
+                                                     "target_buffer_atr", "min_reward", "retest_candles",
+                                                     "touch_atr")},
+    }
+
+
+def _waiting_for(side_plan_):
+    said = _stage_words(side_plan_)
+
+    if side_plan_["stage"] != "passed" and not side_plan_["worth"]:
+        said += f" -- though only {side_plan_['ratio']:.2f} : 1 to the next line, so not worth taking"
+
+    return said
+
+
+def _stage_words(side_plan_):
+    d = side_plan_["decimals"]
+    line = f"{side_plan_['line']:,.{d}f}"
+
+    if side_plan_["stage"] == "break":
+        return f"a {'close above' if side_plan_['side'] == 'buy' else 'close below'} {line}"
+
+    if side_plan_["stage"] == "retest":
+        return f"price to come back to {line}, which it broke {'up' if side_plan_['side'] == 'buy' else 'down'} through"
+
+    if side_plan_["stage"] == "confirm":
+        return f"a candle to close back {'above' if side_plan_['side'] == 'buy' else 'below'} {line} after its retest"
+
+    return f"the next break: the last setup at {line} has passed"
+
+
+def _verdict(plans, price, support, resistance, chosen, market):
+    d = market["decimals"]
+
+    for side in ("buy", "sell"):
+        found = plans[side]
+
+        if not found or found["stage"] != "ready":
+            continue
+
+        if not found["worth"]:
+            return "skip", (f"A {side} setup confirmed at {found['line']:,.{d}f}, but only {found['ratio']:.2f} : 1 to"
+                            f" the next line, under {chosen['min_reward']:g} : 1: the rules say skip it.")
+
+        if not found["rsi_ok"]:
+            return "skip", (f"A {side} setup confirmed at {found['line']:,.{d}f}, but RSI is {found['rsi']:.0f}, outside"
+                            f" the range the rules want: skip it.")
+
+        return side, (f"{side.title()} setup confirmed at {found['line']:,.{d}f}: in near {found['entry']:,.{d}f}, stop"
+                      f" {found['stop']:,.{d}f}, target {found['target']:,.{d}f}, {found['ratio']:.2f} : 1.")
+
+    if support and resistance:
+        where = f"between support {support['price']:,.{d}f} and resistance {resistance['price']:,.{d}f}"
+    elif support:
+        where = f"above support {support['price']:,.{d}f}, with no line above it in the candles read"
+    elif resistance:
+        where = f"below resistance {resistance['price']:,.{d}f}, with no line under it in the candles read"
+    else:
+        where = f"at {price:,.{d}f}, with no line either side in the candles read"
+
+    waits = [f"{side.title()} plan: wait for {_waiting_for(plans[side])}." for side in ("buy", "sell") if plans[side]]
+    return "wait", " ".join([f"Nothing to do yet: {market['name']} is {where}."] + waits)
+
+
+# ---- reading and showing --------------------------------------------------------------------------
+
+_listener = None
+_hide_listener = None
+
+
+def set_listeners(on_plan=None, on_hide=None):
+    """Who is shown the plan (a dict), and who puts it away."""
+    global _listener, _hide_listener
+
+    if on_plan is not None:
+        _listener = on_plan
+
+    if on_hide is not None:
+        _hide_listener = on_hide
+
+
+def _said(command):
+    return " ".join(re.findall(r"[a-z0-9]+", (command or "").casefold()))
+
+
+def _names_pattern(chosen):
+    """Every market's name, longest first, as one pattern."""
+    names = sorted(chosen["markets"], key=len, reverse=True)
+    return "(?:" + "|".join(r"\s+".join(map(re.escape, name.split())) for name in names) + ")"
+
+
+def which(command, chosen=None):
+    """The market named in [command]: (what was said, OANDA's name), or None. The longest name wins."""
+    chosen = chosen or settings()
+    found = re.search(rf"\b{_names_pattern(chosen)}\b", _said(command))
+
+    if not found:
+        return None
+
+    spoken = " ".join(found.group(0).split())
+    return spoken, chosen["markets"][spoken]
+
+
+def known(chosen=None):
+    """One name for each market that can be read, in the settings' order."""
+    chosen = chosen or settings()
+    names, seen = [], set()
+
+    for spoken, instrument in chosen["markets"].items():
+        if instrument not in seen:
+            seen.add(instrument)
+            names.append(spoken)
+
+    return names
+
+
+def read(command, client=None):
+    """The plan now for the market named in [command], read from OANDA."""
+    chosen = settings()
+    named = which(command, chosen)
+
+    if not named:
+        raise PlanError("no market I know was named")
+
+    spoken, instrument = named
+
+    if client is None:
+        if not oanda.configured():
+            raise PlanError("OANDA isn't set up, so no chart can be read")
+
+        client = oanda.Client()
+
+    try:
+        details = client.instrument(instrument)
+        candles, _asks = client.candles(instrument, chosen["granularity"], chosen["candles"])
+    except oanda.OandaError as error:
+        raise PlanError(str(error)) from None
+
+    if not candles:
+        raise PlanError("OANDA sent no candles")
+
+    try:
+        bid, ask, _when = client.price(instrument)
+        price, live = (bid + ask) / 2, True
+    except oanda.OandaError:
+        price, live = candles[-1][4], False
+
+    market = {"name": details.get("display_name") or spoken.title(), "instrument": instrument,
+              "decimals": int(details.get("price_decimals", 2)), "spoken": spoken}
+    return plan(candles, price, chosen, market, live)
+
+
+def show(command, client=None):
+    """Open the plan for the market asked about and say it briefly. Returns the sentence."""
+    chosen = settings()
+    named = which(command, chosen)
+
+    if not named:
+        return (f"Which market, sir? I can read {', '.join(known(chosen))}; more can be added in"
+                f" {SETTINGS_NAME}.")
+
+    try:
+        found = read(command, client)
+    except PlanError as error:
+        return f"I couldn't read the {named[0]} chart, sir: {error}."
+
+    if _listener:
+        _listener(found)
+
+    return describe(found)
+
+
+def hide():
+    if _hide_listener:
+        _hide_listener()
+        return True
+
+    return False
+
+
+def describe(found):
+    """A few sentences for the voice; the panel carries the chart and the figures."""
+    places = 0 if found["price"] >= 1000 else found["decimals"]
+    price = f"{found['price']:,.{places}f}" + ("" if found["live"] else ", the market closed")
+    rsi = f" RSI is {found['rsi']:.0f}, {found['rsi_zone'].split(':')[0]}." if found["rsi"] is not None else ""
+    return (f"{found['instrument']} is {price} on the {found['timeframe']} chart. {found['headline']}{rsi}"
+            f" The plan is on the panel, sir.")
+
+
+# ---- what is asked --------------------------------------------------------------------------------
+
+# A question about trading a market, not any sentence with "buy" in it: "remind me to buy gold
+# earrings" is not one.
+_DECIDING = re.compile(
+    r"\b(?:should|shall|do|would|could|can|must)\s+(?:i|we)\b.*\b(?:buy|sell|long|short|enter|trade)\b"
+    r"|\bis\s+(?:it|now)\s+(?:a\s+good\s+time|time)\s+to\s+(?:buy|sell|go\s+long|go\s+short|trade)\b"
+    r"|\bbuy\s+or\s+sell\b|\bsell\s+or\s+buy\b|\blong\s+or\s+short\b"
+    r"|\b(?:trade\s+)?(?:plan|setup|set\s+up)\s+(?:for|on)\b")
+_NOT_THIS = re.compile(r"\b(?:trader|trades|traded|record|journal|bot|alert|alerts)\b")
+
+
+def wanted(command):
+    """ "Shall I buy or sell gold", "silver plan", "should I go long on oil" -- not a trader or its record."""
+    text = _said(command)
+    chosen = settings()
+
+    if not which(text, chosen) or _NOT_THIS.search(text) or dismissed(text):
+        return False
+
+    named_plan = re.search(rf"\b{_names_pattern(chosen)}\s+(?:trade\s+)?(?:plan|setup|set\s+up)\b", text)
+    return bool(_DECIDING.search(text) or named_plan)
+
+
+def dismissed(command):
+    text = _said(command)
+    names = _names_pattern(settings())
+    return bool(re.search(rf"\b(?:close|hide|dismiss|shut|put away)\b.*\b(?:{names}|trade)\s+"
+                          rf"(?:plan|chart|panel|setup)\b", text))

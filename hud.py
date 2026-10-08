@@ -138,6 +138,12 @@ _LIVE_COLOURS = {
 }
 _FLASH_SECONDS = 2.2
 
+# Work that takes a while (reading the trader board, say) shows as a strip
+# above the state label, clear of the reply, so an announcement arriving
+# meanwhile never covers it. The newest piece of work is the one shown.
+_PROGRESS_Y = 27
+_PROGRESS_RIGHT = _PANEL_RIGHT - 30
+
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
@@ -190,6 +196,10 @@ class Hud(QWidget):
     services_listed = pyqtSignal(list)
     service_activity = pyqtSignal(str, str)
 
+    # (key, label, done, total): work under way. total 0 is work of unknown
+    # length; an empty label clears that key.
+    progress_changed = pyqtSignal(str, str, int, int)
+
     # The HUD has been dragged: panels docked to it follow.
     moved = pyqtSignal()
 
@@ -221,6 +231,7 @@ class Hud(QWidget):
 
         self._live = {}                 # key -> what a service reports as live
         self._flash = None              # (word, when) flashed after an instant action
+        self._progress = {}             # key -> (label, done, total, since)
 
         self._target = 0.0
         self._level = 0.0
@@ -264,6 +275,7 @@ class Hud(QWidget):
         self.live_flash.connect(self._on_live_flash)
         self.services_listed.connect(self._on_services_listed)
         self.service_activity.connect(self._on_service_activity)
+        self.progress_changed.connect(self._on_progress)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -372,6 +384,15 @@ class Hud(QWidget):
             "at": time.monotonic(),
             "colour": str(colour),
         }
+        self.update()
+
+    def _on_progress(self, key, label, done, total):
+        if not label:
+            self._progress.pop(key, None)
+        else:
+            since = self._progress.get(key, (None, 0, 0, time.monotonic()))[3]
+            self._progress[key] = (label, max(0, done), max(0, total), since)
+
         self.update()
 
     def _on_live_flash(self, word):
@@ -593,6 +614,7 @@ class Hud(QWidget):
         self._paint_core(painter, accent, energy)
         self._paint_face(painter, accent)
         self._paint_text(painter, accent)
+        self._paint_progress(painter, accent)
         self._paint_telemetry(painter, accent)
         self._paint_scanline(painter, accent)
         self._paint_stop(painter)
@@ -1322,6 +1344,46 @@ class Hud(QWidget):
                 _HEIGHT - 22,
                 f"DOCUMENTS {self._documents_count} / 8",
             )
+
+    def _paint_progress(self, painter, accent):
+        """The newest work under way, above the state label: what it is, how far, and a bar."""
+        if not self._progress:
+            return
+
+        label, done, total, since = max(self._progress.values(), key=lambda item: item[3])
+        now = time.monotonic()
+        colour = _CONFIRM_COLOUR
+
+        font = QFont("Consolas", 7, QFont.Weight.Bold)
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.6)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+        count = f"{min(done, total)} / {total}" if total else ""
+        room = _PROGRESS_RIGHT - _PANEL_X - (metrics.horizontalAdvance(count) + 10 if count else 0)
+
+        painter.setPen(QPen(self._tint(colour, 230)))
+        painter.drawText(_PANEL_X, _PROGRESS_Y - 4,
+                         metrics.elidedText(label.upper(), Qt.TextElideMode.ElideRight, int(room)))
+
+        if count:
+            painter.drawText(_PROGRESS_RIGHT - metrics.horizontalAdvance(count), _PROGRESS_Y - 4, count)
+
+        track = QRectF(_PANEL_X, _PROGRESS_Y, _PROGRESS_RIGHT - _PANEL_X, 2.5)
+        painter.fillRect(track, self._tint(colour, 45))
+
+        if total:
+            painter.fillRect(QRectF(track.left(), track.top(), track.width() * min(1.0, done / total),
+                                    track.height()), self._tint(colour, 220))
+
+        # A glint travelling along the bar says it is alive, known length or not.
+        glint = ((now - since) * 0.45) % 1.0
+        width = track.width() * 0.18
+        left = track.left() + (track.width() + width) * glint - width
+        shown = QRectF(max(track.left(), left), track.top(), 0, track.height())
+        shown.setRight(min(track.right(), left + width))
+
+        if shown.width() > 0:
+            painter.fillRect(shown, self._tint(colour, 255 if not total else 140))
 
     def _paint_wave(self, painter, accent, x, y, width):
         """A live level meter: microphone when listening, voice when speaking."""

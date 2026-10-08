@@ -432,6 +432,15 @@ class _Trader(QWidget):
         if shown < trades:
             y = self._note(painter, y + 2, width, f"{trades - shown} more trades in other markets.")
 
+        builders = self.trader.get("builders") or []
+
+        if builders:
+            example = next((name for name, _count, _net in coins if name.endswith(")")), None)
+            y = self._note(painter, y + 2, width,
+                           f"In brackets ({', '.join(builders)}): a market another exchange runs on Hyperliquid"
+                           f" (a builder market, HIP-3), usually a share, an index or a commodity rather than a"
+                           f" coin" + (f", such as {example}." if example else "."))
+
         return y
 
     def _axis(self, painter, rect, low, high):
