@@ -1931,6 +1931,32 @@ or the stop, warning until there are ENOUGH_TRADES (30); then the gold
 trader's record, without its money said twice. `python
 tools/trade_journal.py` lists every trade. `tools/test_trade_journal.py`.
 
+### The trader board - `actions/trader_watch.py`, `traders_panel.py`, `tools/trader_watch.py`
+Copy-trading leaderboards rank by recent returns, and among thousands
+someone is always on top by luck. Hyperliquid publishes every account's
+trades and positions, so a record can be checked: the stats leaderboard
+names the best recent performers (accounts of at least `min_account_usd`,
+still trading), and for the top `candidates` (25) JARVIS reads the last
+`days` (90) of fills -- paged until the exchange has no more, since its
+documented page size varies -- the account's own profit history and its
+open positions. Each closing order is one trade, its fees included. The
+verdict is the gold backtest's test: at least `min_trades` (30) closed
+trades and money made in every one of `parts` (3) parts; a record whose best
+trade made over half the profit is flagged as one big trade. The deepest
+fall is measured from the running best, as dollars and as a share of the
+account then; open positions carry leverage and distance to liquidation.
+"Show me the top traders" opens the board (a separate, scrollable panel):
+consistent records first, each row with a sparkline and a bar per part.
+Click a row, or "show trader three", for the record in full: the curve
+with every fall shaded and the deepest marked, the parts as bars, every
+trade as a dot, the calculations written out with their numbers, and the
+open positions. Back/Escape returns; arrows step between traders. A stale
+board (over `refresh_hours`, 6) is shown at once and re-read in the
+background, the fresh one announced when it lands. Settings in
+trader-watch.json, results in trader-watch-cache.json. Read-only by
+design: public endpoints, no key, no orders, no mempool, no front-running.
+`tools/test_trader_watch.py`.
+
 ### Providers and failover
 
 The pool is tried in order: awake providers first, resting ones after, on

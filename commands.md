@@ -81,6 +81,9 @@ stays on the PC.
 | how's my system | CPU, memory, disk, battery |
 | status report | JARVIS himself: which connected services are up, the sensor boards, today's sensor record and its gaps, how quickly he has been answering, and the last day's model calls with the share read from the cache (also "run diagnostics", "run a self check") |
 | how are my trades going | Your own trades at OANDA, the ones placed by hand: how many, won and lost, the result overall and in R, how many reached the target or the stop; then the gold trader's record. Kept in manual-trades.csv (also "how's my trading", "read my trade journal") |
+| show me the top traders | The trader board: Hyperliquid's best recent performers, judged on their whole record -- consistent ones first, with profit curves, each part of the period, deepest fall and the working. Read-only (also "best traders", "copy traders") |
+| show trader three | One trader's record in full on the board: the curve with its falls shaded, every trade, the calculations, open positions and how close each is to liquidation |
+| close the traders | Puts the trader board away |
 | how much battery do I have | battery only |
 | take a screenshot | saves to your JARVIS folder |
 | minimise everything | clears the desktop |

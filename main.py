@@ -16,6 +16,7 @@ from speech import first_sound, mark_turn
 from news_panel import NewsPanel
 from quran_panel import QuranPanel
 from radar_panel import RadarPanel
+from traders_panel import TradersPanel
 from sensor_panel import SensorPanel
 from files_panel import FilesPanel
 from house_panel import HousePanel
@@ -67,6 +68,7 @@ from actions import (
     quran,
     report_search,
     recitation,
+    trader_watch,
 )
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
@@ -1316,6 +1318,27 @@ def main():
     hud.shutdown.connect(aircraft.stop_watching)
     hud.shutdown.connect(radar.hide)
     hud.shutdown.connect(radar_beam.hidden.emit)
+
+    # The trader board, projected the same way. trader_watch reads the
+    # exchange on its own thread and hands the board here; a refresh that
+    # lands after the question was answered is announced through the same
+    # gate as every other unprompted announcement.
+    traders = TradersPanel()
+    traders.set_anchor(hud)
+    traders_beam = Beam(traders, hud)
+
+    def traders_board(board):
+        traders.show_board.emit(board)
+        traders_beam.shown.emit()
+
+    def traders_hide():
+        traders.hide_requested.emit()
+        traders_beam.hidden.emit()
+
+    trader_watch.set_listeners(on_board=traders_board, on_hide=traders_hide, on_say=assistant._on_alert)
+    traders.closed.connect(traders_beam.hidden.emit)
+    hud.shutdown.connect(traders.hide_requested.emit)
+    hud.shutdown.connect(traders_beam.hidden.emit)
 
     hud.stop_clicked.connect(assistant.stop_speaking)
 

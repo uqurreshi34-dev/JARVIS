@@ -77,6 +77,7 @@ from actions import (
     project_setup,
     protocols,
     trade_journal,
+    trader_watch,
     tradingview,
     tripo,
 )
@@ -3944,6 +3945,14 @@ def _fast_path(command):
     if aircraft.wanted(text):
         return _blank_result("aircraft_overhead")
 
+    # The trader board: dismissal first, as with the radar, so "close the
+    # traders" never reopens it.
+    if trader_watch.dismissed(text):
+        return _blank_result("traders_hide")
+
+    if trader_watch.wanted(text):
+        return _blank_result("traders_show")
+
     # What the boards on the wifi last said: "what's the temperature in the
     # room", "is anyone in the kitchen". Rooms are the boards' own names, so
     # it only claims a question naming one of them (or "in here"), and
@@ -5893,6 +5902,15 @@ def _handle_command(command, *, fast_only=False, probe=False):
             return aircraft.describe()
 
         return _query(intent, sky)
+
+    if intent == "traders_hide":
+        return _query(intent, lambda: "Trader board closed, sir." if trader_watch.hide()
+                      else "The trader board isn't open, sir.")
+
+    if intent == "traders_show":
+        # The number is read from what was said, so the model's route here
+        # keeps it too: "how has trader three done".
+        return _query(intent, lambda: trader_watch.show(trader_watch.which(command)))
 
     if intent == "aircraft_range":
         def range_change():

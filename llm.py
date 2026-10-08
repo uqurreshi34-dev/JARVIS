@@ -448,6 +448,10 @@ doing, or about CPU, memory, disk space, or battery.
 Use trading_record when the user asks how their own trading or trades are
 going, for their trading record or trade journal, or how the gold trader
 has done.
+Use traders_show when the user asks about other traders worth following:
+the best or top traders, copy traders, Hyperliquid's leaderboard, or one
+of them by number ("how has trader three done"). Use traders_hide when
+they want that board closed.
 For these, leave both "application" and "website" null.
 
 Use answer_question when the user asks a general knowledge or factual
@@ -602,6 +606,8 @@ _SCHEMA = {
                 "get_weather",
                 "get_system_status",
                 "trading_record",
+                "traders_show",
+                "traders_hide",
                 "answer_question",
                 "unknown",
             ],
