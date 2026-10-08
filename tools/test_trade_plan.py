@@ -361,6 +361,8 @@ printed = io.StringIO()
 with contextlib.redirect_stdout(printed):
     cli.report(both)
 
+cli_source = (ROOT / "tools" / "trade_plan.py").read_text(encoding="utf-8")
+check('load_dotenv(ROOT / ".env")' in cli_source, "tools/trade_plan.py reads the OANDA token from .env, as JARVIS does")
 check("swings" in printed.getvalue() and "support" in printed.getvalue() and "15-minute:" in printed.getvalue(),
       "tools/trade_plan.py prints every line with the swings that made it, and both pages' verdicts")
 

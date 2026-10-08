@@ -47,6 +47,14 @@ def report(found):
 def main(argv=None):
     words = " ".join(argv if argv is not None else sys.argv[1:]) or "gold"
 
+    # The OANDA token, as JARVIS reads it at start-up; the other tools do the same.
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(ROOT / ".env")
+    except ImportError:
+        pass
+
     if not tp.which(words):
         print(f"Not a market I know: {words}. Known: {', '.join(tp.known())}.")
         return 1
