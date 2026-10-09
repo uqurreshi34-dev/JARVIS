@@ -546,6 +546,18 @@ class PanelTests(TestCase):
         self.assertEqual(table["USDT/USDC"]["route"], "no gap")
         self.assertLess(table["USDT/USDC"]["net"], 0)
         self.assertEqual(dex_panel.price_text("0.000012345678"), "0.0000123457")
+
+    def test_a_shallow_pool_is_named_as_the_reason_for_a_large_loss(self):
+        import dex_panel
+
+        report = dex.scan_once(Chain(), amount_usd="1000")
+        weth = next(market for market in report["markets"] if market["pair"] == "WETH/USDC")
+        # The pretend pools hold $10m a side: $20m deep.
+        self.assertAlmostEqual(float(weth["depth_usd"]["Uniswap V2"]), 20_000_000, delta=200_000)
+        shallow = dict(report, requested_trade_size_usd="2000000.00")
+        table = {row["pair"]: row for row in dex_panel.rows(shallow)}
+        self.assertTrue(table["WETH/USDC"]["route"].endswith("deep"))
+        self.assertIn("pool only $", table["WETH/USDC"]["route"])
         self.assertEqual(dex_panel.money_text("-7.394"), "-$7.39")
 
 

@@ -98,6 +98,27 @@ def money_text(value):
     return f"{sign}${abs(number):,.2f}"
 
 
+# A pool holding less than this many times the trade is shallow: the trade's own size moves its price, which
+# is the loss shown, not the gap.
+_SHALLOW_TIMES = 20
+
+
+def _route(market, best, gap, report):
+    """The line under a row's best figure: a shallow pool named first, as it explains a large loss; then
+    where to buy and sell; or that the prices match."""
+    trade = _number(report.get("requested_trade_size_usd")) or Decimal(0)
+    depths = {name: _number(value) for name, value in (market.get("depth_usd") or {}).items()}
+    shallow = min(((value, name) for name, value in depths.items() if value is not None), default=None)
+
+    if shallow and trade and shallow[0] < trade * _SHALLOW_TIMES:
+        return f"{shallow[1].split()[0]} pool only ${shallow[0]:,.0f} deep"
+
+    if not gap:
+        return "no gap"
+
+    return f"buy {best['buy_base_on'].split()[0]}, sell {best['sell_base_on'].split()[0]}" if best.get("buy_base_on") else ""
+
+
 def rows(report):
     """The table, one dict per pair: its prices on each exchange, gap, whether it clears break-even, and the
     best round trip after fees and gas -- what the panel draws, kept apart so it can be checked."""
@@ -115,9 +136,7 @@ def rows(report):
             "gap": gap,
             "clears": gap is not None and gap > needed,
             "net": net,
-            "route": ("no gap" if not gap else
-                      f"buy {best['buy_base_on'].split()[0]}, sell {best['sell_base_on'].split()[0]}"
-                      if best.get("buy_base_on") else ""),
+            "route": _route(market, best, gap, report),
         })
 
     return table

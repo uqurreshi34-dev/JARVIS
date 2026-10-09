@@ -2025,7 +2025,9 @@ fees and gas, the network's fee for running them, for a trade of
 `amount_usd` (1,000). Ether's price comes from its dollar pools, bitcoin's
 from its pools against ether or a dollar coin. The panel shows the prices,
 the gap as a bar with the break-even marked (fees plus gas as a share of the
-trade; green when a gap clears it) and the best round trip in dollars; the
+trade; green when a gap clears it) and the best round trip in dollars --
+under it a pool holding less than 20 times the trade is named with its depth,
+as the trade's own size moving that pool's price is then the loss; the
 HUD's progress strip counts the pools as they are read, and JARVIS says the
 widest gap against the break-even. It is a paper estimate only: it reads
 public pool state, never looks at pending transactions, and has no wallet,

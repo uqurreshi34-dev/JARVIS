@@ -598,6 +598,15 @@ def _prices_in_usd(pools_by_pair: dict, tokens: dict) -> dict[str, Decimal]:
     return prices
 
 
+def _depth_usd(pool: PoolSnapshot, token_prices: dict) -> Decimal | None:
+    """What a pool holds, both sides, in dollars: how much a trade can move through it before its own size
+    moves the price. None if either token has no dollar price."""
+    sides = ((pool.token0, pool.reserve0, pool.decimals0), (pool.token1, pool.reserve1, pool.decimals1))
+    if any(token not in token_prices for token, _reserve, _decimals in sides):
+        return None
+    return sum(raw_to_decimal(reserve, decimals) * token_prices[token] for token, reserve, decimals in sides)
+
+
 def scan_once(
     rpc: EthereumReadOnlyRPC,
     amount_usd: Decimal | str | int = DEFAULT_AMOUNT_USD,
@@ -656,6 +665,8 @@ def scan_once(
         # Shown to 8 significant figures, so a small price keeps its digits; the gap is worked from the exact.
         market = {"pair": f"{name_a}/{name_b}",
                   "prices": {dex: format(price, ".8g") for dex, price in exact.items()},
+                  "depth_usd": {pool.dex: _format_decimal(_depth_usd(pool, token_prices), 2)
+                                for pool in pools.values() if _depth_usd(pool, token_prices) is not None},
                   "gap_pct": None, "best": None}
         markets.append(market)
 
