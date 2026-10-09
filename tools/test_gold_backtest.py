@@ -34,6 +34,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# The "line" setup reads trade-plan.json from the JARVIS folder: a temporary one here, never the real one.
+from tools import sandbox  # noqa: E402
+
+sandbox.activate()
+
 from actions import gold_strategy as gb  # noqa: E402
 from tools import gold_backtest as cli  # noqa: E402
 
@@ -187,7 +192,7 @@ summary = gb.summarise([gb.Trade("buy", start, 0, 0, 0, result=value) for value 
 check(summary.trades == 6 and summary.wins == 2 and summary.net == 20 and summary.worst_run == 3
       and summary.deepest == 30, "the summary: trades, wins, net, worst run of losses, deepest dip")
 
-check(len(gb.VARIANTS) == 56 and len(gb.REGISTRY) == 56 and "pullback-1:3-room2" in gb.REGISTRY and "range30-1:3" in gb.REGISTRY and "retest60-atr-1:3" in gb.REGISTRY and "pullback-atr-1:3" in gb.REGISTRY and "orb-1:3" in gb.REGISTRY and "orb-atr-1:2-no-trend" in gb.REGISTRY and
+check(len(gb.VARIANTS) == 68 and len(gb.REGISTRY) == 68 and "pullback-1:3-room2" in gb.REGISTRY and "range30-1:3" in gb.REGISTRY and "retest60-atr-1:3" in gb.REGISTRY and "pullback-atr-1:3" in gb.REGISTRY and "orb-1:3" in gb.REGISTRY and "orb-atr-1:2-no-trend" in gb.REGISTRY and
       {"pullback-1:1.5", "pullback-1:2", "pullback-1:3", "pullback-1:3-be", "pullback-1:4", "pullback-1:4-be"}
       <= set(gb.REGISTRY) and gb.AS_WRITTEN in gb.VARIANTS and gb.CHOSEN in gb.VARIANTS
       and gb.REGISTRY["bounce-1:3-be"] == gb.CHOSEN, "every combination of the open choices is run")
@@ -210,6 +215,66 @@ check([(line["kind"], round(line["price"], 1), line["touches"]) for line in room
       == [("low", 4107.2, 2), ("high", 4223.5, 2), ("low", 4257.5, 2), ("low", 4288.7, 3), ("high", 4369.4, 2),
           ("high", 4401.1, 2), ("high", 4437.4, 3)] and abs(room_atr - 30.151) < 0.01,
       "the room rule's lines on real gold are the ones it was tested with: every level in the way, old ones too")
+
+# ---- the bounce off support and resistance ("line") -----------------------------------------------
+
+from actions import trade_plan  # noqa: E402
+
+PLAN = dict(trade_plan.DEFAULTS)
+
+
+def split(block):
+    """Sixteen fifteen-minute candles making exactly [block], a four-hour candle: open, to the low and the
+    high (in the order its colour says), to the close."""
+    start, opened, high, low, closed = block
+    path = [opened, low, high, closed] if closed >= opened else [opened, high, low, closed]
+    points = []
+    for leg in range(3):
+        points += [path[leg] + (path[leg + 1] - path[leg]) * step / 5 for step in range(5)]
+    points += [closed, closed]
+    return [(start + timedelta(minutes=15 * index), points[index], max(points[index], points[index + 1]),
+             min(points[index], points[index + 1]), points[index + 1]) for index in range(16)]
+
+
+# The fixture's times are UK summer time, an hour ahead of UTC.
+real_four_hour = [(start - timedelta(hours=1), *prices) for start, *prices in four_hour]
+fifteen = [candle for block in real_four_hour for candle in split(block)]
+check(gb.four_hour(fifteen) == real_four_hour,
+      "fifteen-minute candles split from real gold build back into OANDA's own four-hour candles")
+
+support, resistance, line_atr = gb.plan_lines_from(real_four_hour, PLAN)
+check(abs(support - 4107.193) < 0.01 and abs(resistance - 4223.472) < 0.01,
+      f"from the same four-hour candles, the bounce sees the lines the trade plan draws ({support}, {resistance})")
+
+# Then the next day: down to support, and three ways back up. Your candle of 8 October 16:15 UTC, opening
+# under the line and closing back above it with a long upper wick -- sellers pushing back; one with a long
+# lower wick -- buyers taking it; and the candle after, closing higher still.
+after = real_four_hour[-1][0] + timedelta(hours=4)
+walk = [(after + timedelta(minutes=15 * index), price + 2, price + 3, price - 1, price)
+        for index, price in enumerate(range(4180, 4115, -8))]
+S = support
+upper_wick = (S - 2.0, S + 18.0, S - 5.0, S + 4.0)        # O, H, L, C: as the 16:15 candle did at 4,114
+lower_wick = (S + 1.0, S + 6.0, S - 8.0, S + 5.0)
+higher = (S + 5.0, S + 12.0, S + 4.0, S + 11.0)
+tail = [(walk[-1][0] + timedelta(minutes=15 * (index + 1)), *prices)
+        for index, prices in enumerate((upper_wick, lower_wick, higher))]
+history = fifteen + walk + tail
+first = len(fifteen) + len(walk)
+seen = {entry: gb.line_bounces(history, entry, PLAN)[first:first + 3] for entry in ("close", "wick", "confirm")}
+check(seen["close"] == ["buy", "buy", None],
+      f"'close': in on each candle that reaches support and closes green back above it ({seen['close']})")
+check(seen["wick"] == [None, "buy", None],
+      f"'wick': not the candle with the long upper wick -- sellers pushed back -- only the long lower one"
+      f" ({seen['wick']})")
+check(seen["confirm"] == [None, "buy", "buy"],
+      f"'confirm': in on the candle after a bounce, once it closes higher ({seen['confirm']})")
+check(gb._reclaims((None, 4112.175, 4132.915, 4109.425, 4117.775), 4114.001, None, 3.0) == ("buy", False),
+      "your 16:15 candle: support reclaimed, but its upper wick the longer")
+check(gb.history_needed(gb.REGISTRY["line-wick-1:3"]) >= (gb.LINE_CANDLES + 2) * 16,
+      "the trader asks for enough history to draw the lines a bounce needs")
+check({"line-close-1:3", "line-wick-1:3", "line-confirm-1:3", "line-wick-atr-1:3"} <= set(gb.REGISTRY)
+      and gb.REGISTRY["line-wick-1:3"].name().startswith("line wick"),
+      "each way in, with each exit, is a version the backtest runs and the trader can name")
 
 # ---- exits from the bands -------------------------------------------------------------------------
 

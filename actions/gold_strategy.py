@@ -419,7 +419,12 @@ class Rules:
                                  # average, with the trend; "breakout": out of a squeeze, with the trend;
                                  # "orb": the first close beyond the New York opening range;
                                  # "range": a bounce off the floor or ceiling of the last [box] four-hour
-                                 # candles; "retest": after a four-hour close beyond one, the first return to it
+                                 # candles; "retest": after a four-hour close beyond one, the first return to it;
+                                 # "line": a bounce off the support or resistance the trade plan draws
+    entry: str = "close"         # "line" only -- "close": in on the candle that reaches the line and closes
+                                 # back beyond it; "wick": the same, its wick on the line's side the longer
+                                 # (buyers, or sellers, won the candle); "confirm": in on the next candle,
+                                 # closing further the bounce's way
     touch: str = "wick"          # "wick": the candle reaches the band; "close": it closes beyond it
     rsi: str = "turned"          # "turned": was beyond 30/70 and is back; "not_extreme": simply not beyond now
     squeeze_filter: bool = True
@@ -449,6 +454,8 @@ class Rules:
     def name(self):
         if self.setup == "bounce":
             entry = f"rsi={self.rsi:11}"
+        elif self.setup == "line":
+            entry = f"{'line ' + self.entry:15}"
         elif self.box:
             entry = f"{self.setup + ' ' + str(self.box) + 'x4h':15}"
         else:
@@ -467,6 +474,9 @@ class Rules:
 
         if self.box:
             return f"{self.setup}{self.box}-{exits}{room}"
+
+        if self.setup == "line":
+            return f"line-{self.entry}-{exits}{room}"
 
         trend = "" if self.trend_filter else "-no-trend"
         rsi = "" if self.setup != "bounce" or self.rsi == "not_extreme" else "-rsi-turned"
@@ -516,6 +526,9 @@ def signal(index, candles, bands, rsis, squeezes, rules, averages=None, fast=Non
 
     if rules.setup in ("range", "retest"):
         return levels(candles, rules.box)[rules.setup][index]
+
+    if rules.setup == "line":
+        return line_bounces(candles, rules.entry)[index]
 
     _start, open2, _high2, _low2, close2 = candles[index]
 
@@ -790,8 +803,10 @@ def levels(candles, box, stop=STOP_DOLLARS):
 
 def history_needed(rules):
     """How many fifteen-minute candles [rules] need behind the latest to decide: enough for every indicator,
-    and for "range" and "retest" a whole [box] of four-hour candles more."""
-    return max(300, (rules.box + 2) * BLOCK_HOURS * 60 // CANDLE_MINUTES + 50)
+    for "range" and "retest" a whole [box] of four-hour candles more, and for "line" the four-hour candles
+    the lines are drawn from."""
+    blocks = LINE_CANDLES if rules.setup == "line" else rules.box
+    return max(300, (blocks + 2) * BLOCK_HOURS * 60 // CANDLE_MINUTES + 50)
 
 
 def _breakout(index, candles, bands, rsis, squeezes, rules, trend):
@@ -955,6 +970,132 @@ def chart_lines_from(four_hours):
 
     return chart_lines.zones(recent, LINE_MERGE_ATR * atr, LINE_STRENGTH, LINE_TOUCHES,
                              prominence=LINE_PEAK_ATR * atr, window=LINE_PEAK_CANDLES), atr
+
+
+# ---- the bounce off support and resistance ("line") ------------------------------------------------
+#
+# Support and resistance as the trade plan draws them (actions/trade_plan.py, with its settings): the two
+# most recent lows, or highs, within half an ATR of each other that price held at. Drawn afresh after every
+# four-hour candle closes, from those finished by then, so over three years the lines move as the chart
+# does and nothing is known before it could be.
+
+# How near a line a fifteen-minute candle must reach to count as testing it: this share of the four-hour ATR.
+BOUNCE_TOUCH_ATR = 0.1
+
+_BOUNCES = {}
+_DRAWN = {}
+
+
+def _plan_lines(candles, chosen=None):
+    """For each fifteen-minute candle, (support, resistance, four-hour ATR) as drawn from the four-hour candles
+    finished by its close. Drawn once per four-hour candle and once per candles list, shared by every way in."""
+    signature = (id(candles), len(candles), candles[0][0] if candles else None)
+
+    if signature in _DRAWN:
+        return _DRAWN[signature]
+
+    if chosen is None:
+        from actions import trade_plan
+
+        chosen = trade_plan.settings()
+
+    blocks = four_hour(candles)
+    ends = [block[0] + timedelta(hours=LINE_HOURS) for block in blocks]
+    drawn, per_candle, finished = {}, [], 0
+
+    for candle in candles:
+        closes_at = candle[0] + timedelta(minutes=CANDLE_MINUTES)
+
+        while finished < len(ends) and ends[finished] <= closes_at:
+            finished += 1
+
+        if finished not in drawn:
+            drawn[finished] = plan_lines_from(blocks[:finished], chosen) if finished else (None, None, None)
+
+        per_candle.append(drawn[finished])
+
+    if len(_DRAWN) > 8:
+        _DRAWN.clear()
+
+    _DRAWN[signature] = per_candle
+    return per_candle
+
+
+def plan_lines_from(four_hours, chosen=None):
+    """(support, resistance, four-hour ATR) as the trade plan would draw them on [four_hours] (finished):
+    each a price, or None."""
+    from actions import chart_lines, trade_plan
+
+    chosen = chosen or trade_plan.settings()
+    recent = four_hours[-chosen["candles"]:]
+    atrs = average_true_range(recent)
+    atr = next((value for value in reversed(atrs) if value), None)
+
+    if not atr or len(recent) < 2 * chosen["swing_strength"] + 2:
+        return None, None, None
+
+    lines = chart_lines.levels(recent, chosen["merge_atr"] * atr, chosen["swing_strength"], chosen["min_touches"],
+                               prominence=chosen["peak_atr"] * atr, window=chosen["peak_candles"],
+                               lookback=chosen["lookback_candles"])
+    support, resistance = chart_lines.latest(lines, "low"), chart_lines.latest(lines, "high")
+    return (support["price"] if support else None), (resistance["price"] if resistance else None), atr
+
+
+def _reclaims(candle, support, resistance, touch):
+    """"buy" when [candle] reaches support and closes green back above it, "sell" when it reaches resistance
+    and closes red back below it; with which wick was the longer. (side, wick won) or (None, False)."""
+    _start, open_, high, low, close = candle
+    lower, upper = min(open_, close) - low, high - max(open_, close)
+
+    if support is not None and low <= support + touch and close > support and close > open_:
+        return "buy", lower > upper
+
+    if resistance is not None and high >= resistance - touch and close < resistance and close < open_:
+        return "sell", upper > lower
+
+    return None, False
+
+
+def line_bounces(candles, entry="close", chosen=None):
+    """For each fifteen-minute candle, the side a bounce off support or resistance takes on its close, or None.
+
+    "close": the candle that reaches the line and closes back beyond it, the bounce's colour. "wick": the
+    same, and its wick on the line's side longer than the other -- a long lower wick at support is buyers
+    taking the candle back; a long upper one, sellers pushing back. "confirm": the candle after such a
+    one, closing the bounce's colour and beyond its close. Worked out once for each candles list.
+    """
+    signature = (id(candles), len(candles), candles[0][0] if candles else None, entry)
+
+    if signature in _BOUNCES:
+        return _BOUNCES[signature]
+
+    lines = _plan_lines(candles, chosen)
+    sides = [None] * len(candles)
+    before = (None, False)
+
+    for index, candle in enumerate(candles):
+        support, resistance, atr = lines[index]
+        now = _reclaims(candle, support, resistance, BOUNCE_TOUCH_ATR * atr) if atr else (None, False)
+
+        if entry == "close":
+            sides[index] = now[0]
+        elif entry == "wick":
+            sides[index] = now[0] if now[1] else None
+        elif entry == "confirm" and before[0]:
+            _start, open_, _high, _low, close = candle
+            last_close = candles[index - 1][4]
+            if before[0] == "buy" and close > open_ and close > last_close and support and close > support:
+                sides[index] = "buy"
+            elif before[0] == "sell" and close < open_ and close < last_close and resistance and close < resistance:
+                sides[index] = "sell"
+
+        before = now
+
+    if len(_BOUNCES) > 16:
+        _BOUNCES.clear()
+
+    _BOUNCES[signature] = sides
+    return sides
 
 
 class LineBook:
@@ -1191,6 +1332,15 @@ VARIANTS += [Rules(setup="orb", trend_filter=trend, exits="atr", ratio=ratio) fo
 VARIANTS += [Rules(setup=setup, box=box, target=target) for setup in ("range", "retest") for box in (30, 60)
              for target in (20.0, 30.0)]
 VARIANTS += [Rules(setup=setup, box=box, exits="atr", ratio=3.0) for setup in ("range", "retest") for box in (30, 60)]
+
+# The bounce off support and resistance as the trade plan draws them, three ways in: on the candle that
+# reaches the line and closes back beyond it; the same, only when its wick on the line's side is the longer
+# (buyers, or sellers, won it); or on the next candle, once it closes further the bounce's way. Fixed $10
+# stops at 1:2 and 1:3 and stops sized by ATR at 1:2 and 1:3. No trend or RSI filter: the line is the setup.
+VARIANTS += [Rules(setup="line", entry=entry, target=target) for entry in ("close", "wick", "confirm")
+             for target in (20.0, 30.0)]
+VARIANTS += [Rules(setup="line", entry=entry, exits="atr", ratio=ratio) for entry in ("close", "wick", "confirm")
+             for ratio in (2.0, 3.0)]
 
 # Room to the next four-hour line, 2 R at least, on the setups worth trading: does keeping out of trades
 # aimed through a line that has held -- the two stopped-out trades of October 2026 among them -- make more

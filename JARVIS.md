@@ -1830,7 +1830,17 @@ close beyond one, the first fifteen-minute candle to come back to the line
 and close the breakout's way; `gold_strategy.levels`, the four-hour candles
 built on the UTC clock, so they differ a little from OANDA's chart, which
 starts its at 17:00 New York; the trader asks for as many candles as the
-box needs, `history_needed`)
+box needs, `history_needed`), a bounce off the support or resistance the
+trade plan draws (`line`: the two most recent lows, or highs, that line up
+and held, by the trade plan's own rule and settings, drawn afresh as each
+four-hour candle of OANDA's day closes, from those finished by then, so over
+three years the lines move as the chart did; a fifteen-minute candle
+reaching within 0.1 four-hour ATR of the line and closing back beyond it in
+the bounce's colour -- `close` takes it there; `wick` only when its wick on
+the line's side is the longer, buyers (or sellers) having won the candle,
+not been pushed back; `confirm` on the next candle, once it closes further
+the bounce's way; fixed $10 stops at 1:2 and 1:3, ATR stops at 1:2 and 1:3;
+`gold_strategy.line_bounces`; `--hours 0 24` tests it at any hour)
 and a breakout (a squeeze ending with a
 close beyond a band, with the trend). Exits may also be sized by ATR: a
 stop of 1.5 ATR, the target 2 or 3 times that, breakeven at 1 R, so the
