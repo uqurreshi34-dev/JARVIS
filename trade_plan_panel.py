@@ -45,8 +45,6 @@ _MUTED = QColor(130, 148, 165)
 _GRID = QColor(95, 200, 245, 34)
 _GAIN = QColor(70, 205, 135)
 _LOSS = QColor(235, 95, 95)
-# The candle still forming: its own colour, this opaque, so it reads as not yet closed.
-_FORMING_ALPHA = 130
 _AMBER = QColor(235, 185, 80)
 
 _VERDICT_COLOURS = {"wait": _AMBER, "buy": _GAIN, "sell": _LOSS, "skip": _MUTED}
@@ -285,9 +283,9 @@ class _Page(QWidget):
                 painter.setPen(QPen(_tint(colour_of(line), 80), 1, Qt.PenStyle.DashLine))
                 painter.drawLine(QPointF(rect.left(), level(line["price"])), QPointF(rect.right(), level(line["price"])))
 
-        # The candles, the one still forming after them in its own colour but paler, as it may yet change: drawn
-        # so the chart reaches now, never judged on. A doji, opening and closing at the same price, is a bar
-        # across, as on any chart.
+        # The candles, the one still forming after them drawn as OANDA and TradingView draw it, live: so the
+        # chart reaches now. Only finished candles are judged. A doji, opening and closing at the same price,
+        # is a bar across, as on any chart.
         for index, (_when, opened, top, bottom, closed, _label) in enumerate(drawn):
             colour = _GAIN if closed >= opened else _LOSS
             x = middle(index)
@@ -299,13 +297,8 @@ class _Page(QWidget):
             if body_bottom - body_top < 1.5:
                 painter.setPen(QPen(colour, 1.6))
                 painter.drawLine(QPointF(x - width_ / 2, body_top), QPointF(x + width_ / 2, body_top))
-            elif index < len(candles):
-                painter.fillRect(QRectF(x - width_ / 2, body_top, width_, body_bottom - body_top), colour)
             else:
-                paler = QColor(colour)
-                paler.setAlpha(_FORMING_ALPHA)
-                painter.fillRect(QRectF(x - width_ / 2, body_top, width_, body_bottom - body_top), paler)
-                painter.drawRect(QRectF(x - width_ / 2, body_top, width_, body_bottom - body_top))
+                painter.fillRect(QRectF(x - width_ / 2, body_top, width_, body_bottom - body_top), colour)
 
         # Support and resistance over the candles, and the swings that make them ringed -- on the chart they
         # were found on.
@@ -401,10 +394,10 @@ class _Page(QWidget):
 
         y = rect.bottom() + 20
         return self._note(painter, y, width,
-                          ("" if plan.get("lines_from") else "Rings: the highs and lows each line runs through. ") + "Paler last candle: still forming. "
+                          ("" if plan.get("lines_from") else "Rings: the highs and lows each line runs through. ")
+                          + f"The last candle is still forming, live, as on OANDA: it closes {plan['next_close']} UK. "
                           f"Green dashes: the buy plan. Red: the sell plan. 1 break, 2 retest, 3 go, to the target"
-                          f" (T); x marks the stop. Times are UK. Next {plan['timeframe']} candle closes"
-                          f" {plan['next_close']} UK.")
+                          f" (T); x marks the stop. Times are UK, each candle by when it opened.")
 
     def _path(self, painter, side, rect, level, now_y):
         found = self.plan.get(side)
@@ -795,8 +788,8 @@ class TradePlanPanel(QWidget):
                             if plan else f"{shown['instrument'].upper()}  /  ENTRY CANDLES")
         price = _price(shown["price"], shown["decimals"]) + ("" if shown["live"] else " (market closed: last close)")
         self._subtitle.setText(f"{shown['symbol']}  -  price {price}  -  ATR {_price(shown['atr'], shown['decimals'])}"
-                               f"  -  candles to {shown['read']} UK ({shown.get('read_utc', '')})"
-                               f"  -  next close {shown['next_close']} UK")
+                               f"  -  last candle closed {shown['read']} UK ({shown.get('read_utc', '')})"
+                               f"  -  the one forming closes {shown['next_close']} UK")
 
         page = self._pages[index]
         current = self._scroll.takeWidget()

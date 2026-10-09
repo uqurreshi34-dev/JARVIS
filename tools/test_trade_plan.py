@@ -167,6 +167,9 @@ plan = tp.plan(range_candles, 4050.0, chosen, GOLD)
 check(plan["verdict"] == "wait" and plan["buy"]["stage"] == "break" and plan["sell"]["stage"] == "break"
       and "Gold is between support" in plan["headline"],
       f"inside the range: wait for a break either way ({plan['headline']})")
+check(f"Buy plan: wait for a {tp.GRANULARITY_WORDS[chosen['granularity']]} close above" in plan["headline"],
+      f"the plan names the candle it waits on, so the 4-hour and 15-minute pages are never confused"
+      f" ({plan['headline']})")
 buy = plan["buy"]
 check(abs(buy["stop"] - (buy["line"] - chosen["stop_atr"] * plan["atr"])) < 0.02 and "1 ATR" in buy["stop_working"]
       and buy["entry"] == buy["line"], "before a retest: entry at the line, stop one ATR beyond it")
@@ -419,7 +422,8 @@ for name, found in (("wait", tp.plan(range_candles, 4050.0, chosen, GOLD)),
         image.save(os.path.join(os.environ["TRADE_PLAN_SHOTS"], f"plan-{name}.png"))
 
 check("NATURAL GAS" in panel._title.text() and "4-HOUR" in panel._title.text() and "3.050" in panel._subtitle.text()
-      and "next close" in panel._subtitle.text(), "titled with the market, the timeframe, its price and the next close")
+      and "last candle closed" in panel._subtitle.text() and "the one forming closes" in panel._subtitle.text(),
+      "titled with the market, the timeframe, its price, when the last candle closed and when the forming one will")
 
 both = tp.read("shall i buy or sell gold", Oanda(range_candles, entry_rows=made15(quarter)))
 panel._on_plan(both)

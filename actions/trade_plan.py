@@ -482,8 +482,8 @@ def plan(candles, price, chosen, market, live=True, lines=None, line_atr=None, l
     }
 
 
-def _waiting_for(side_plan_):
-    said = _stage_words(side_plan_)
+def _waiting_for(side_plan_, timeframe=""):
+    said = _stage_words(side_plan_, timeframe)
 
     if side_plan_["stage"] != "passed" and side_plan_.get("no_room"):
         said += f" -- though the next {side_plan_['kind_ahead']} leaves no room to a target, so not worth taking"
@@ -499,18 +499,22 @@ def _waiting_for(side_plan_):
     return said
 
 
-def _stage_words(side_plan_):
+def _stage_words(side_plan_, timeframe=""):
+    """What the plan waits for, naming the candle it is judged on ("a 4-hour close above 4,223.472"), so the
+    four-hour page and the fifteen-minute page cannot be mistaken for one another."""
     d = side_plan_["decimals"]
     line = f"{side_plan_['line']:,.{d}f}"
+    candle = f"{timeframe} " if timeframe else ""
 
     if side_plan_["stage"] == "break":
-        return f"a {'close above' if side_plan_['side'] == 'buy' else 'close below'} {line}"
+        return f"a {candle}{'close above' if side_plan_['side'] == 'buy' else 'close below'} {line}"
 
     if side_plan_["stage"] == "retest":
         return f"price to come back to {line}, which it broke {'up' if side_plan_['side'] == 'buy' else 'down'} through"
 
     if side_plan_["stage"] == "confirm":
-        return f"a candle to close back {'above' if side_plan_['side'] == 'buy' else 'below'} {line} after its retest"
+        return (f"a {candle}candle to close back {'above' if side_plan_['side'] == 'buy' else 'below'} {line}"
+                " after its retest")
 
     return f"the next break: the last setup at {line} has passed"
 
@@ -559,7 +563,8 @@ def _verdict(plans, price, support, resistance, chosen, market):
     else:
         where = f"{name} is at {price:,.{d}f}; no two recent highs or lows line up, so there are no lines to trade."
 
-    waits = [f"{side.title()} plan: wait for {_waiting_for(plans[side])}." if plans[side] else
+    timeframe = GRANULARITY_WORDS.get(chosen["granularity"], "")
+    waits = [f"{side.title()} plan: wait for {_waiting_for(plans[side], timeframe)}." if plans[side] else
              f"{side.title()} plan: none -- no line {'above' if side == 'buy' else 'below'} the price to break."
              for side in ("buy", "sell") if plans[side] or support or resistance]
     return "wait", " ".join([f"Nothing to do yet: {where}"] + waits)
