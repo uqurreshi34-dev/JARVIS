@@ -69,7 +69,14 @@ ROUND_TRIP_FEE = 1 - (Decimal(BPS - 30) / BPS) ** 2
 # only the two named V2 factories; it does not assume this fee for other DEXes.
 POOL_FEE_BPS = 30
 GAS_PRICE_SELECTOR = "0x"
+# Multicall3: a public, read-only contract at this address on every Ethereum network since 2022. Handed a
+# list of reads, it makes them all within one eth_call and returns every answer -- one request to the
+# provider instead of dozens, which is what makes a scan quick on a rate-limited free endpoint.
+MULTICALL3 = "0xca11bde05977b3631167028862be2a173976ca11"
+# Reads handed to Multicall3 at once, well inside what providers allow for one eth_call.
+MULTICALL_BATCH = 100
 SELECTORS = {
+    "aggregate3": "82ad56cb",
     "getPair": "e6a43905",
     "getReserves": "0902f1ac",
     "decimals": "313ce567",
@@ -442,53 +449,126 @@ def _pool_price(pool: PoolSnapshot, base: str, quote: str) -> Decimal:
     return quote_human / base_human
 
 
-def _fetch_pool(
-    rpc: EthereumReadOnlyRPC,
-    dex: str,
-    factory: str,
-    token_a: str,
-    token_b: str,
-    block_number: int,
-    decimals_cache: dict[str, int],
-) -> PoolSnapshot | None:
-    pair_data = rpc.contract_call(
-        factory,
-        "0x" + SELECTORS["getPair"] + _address_word(token_a) + _address_word(token_b),
-        block_number,
-    )
-    pair_address = _decode_address(pair_data)
-    if pair_address == ZERO_ADDRESS:
-        return None
+def _word(value: int) -> str:
+    return f"{value:064x}"
 
-    # A Uniswap V2 pair (and SushiSwap's, a fork) stores its tokens sorted by address: token0 is the lower.
-    # Known without asking the pool, which halves the requests a scan makes of a rate-limited provider.
-    token0, token1 = sorted((normalize_address(token_a), normalize_address(token_b)))
-    reserve_data = rpc.contract_call(
-        pair_address, "0x" + SELECTORS["getReserves"], block_number
-    )
-    reserve0, reserve1, _timestamp = _decode_words(reserve_data, 3)
 
-    for token in (token0, token1):
-        if token not in decimals_cache:
-            result = rpc.contract_call(
-                token, "0x" + SELECTORS["decimals"], block_number
-            )
-            decimals = _decode_words(result, 1)[0]
+def _padded(data: bytes) -> str:
+    return data.hex() + "00" * ((-len(data)) % 32)
+
+
+def encode_aggregate3(calls: list[tuple[str, str]]) -> str:
+    """Call data for Multicall3.aggregate3: each (contract, call data) with allowFailure set, so one read
+    that fails (a pool that does not exist) leaves the rest standing. ABI-encoded by hand: an array of
+    (address, bool, bytes) tuples, each tuple dynamic for its bytes."""
+    tuples = []
+
+    for target, data in calls:
+        payload = bytes.fromhex(data[2:] if data.startswith("0x") else data)
+        tuples.append(_address_word(target) + _word(1) + _word(96) + _word(len(payload)) + _padded(payload))
+
+    offsets, at = [], 32 * len(tuples)
+    for encoded in tuples:
+        offsets.append(_word(at))
+        at += len(encoded) // 2
+
+    return "0x" + SELECTORS["aggregate3"] + _word(32) + _word(len(tuples)) + "".join(offsets) + "".join(tuples)
+
+
+def decode_aggregate3(data: str, count: int) -> list[str | None]:
+    """Multicall3's answer: each read's return data as hex, or None where that read failed."""
+    if not isinstance(data, str) or not data.startswith("0x") or not re.fullmatch(r"(?:[0-9a-fA-F]{2})*", data[2:]):
+        raise ValueError("Multicall returned malformed data.")
+    raw = bytes.fromhex(data[2:])
+
+    def word(at: int) -> int:
+        if at + 32 > len(raw):
+            raise ValueError("Multicall returned truncated data.")
+        return int.from_bytes(raw[at:at + 32], "big")
+
+    array = word(0)
+    if word(array) != count:
+        raise ValueError("Multicall returned a different number of answers than reads.")
+    items = array + 32
+    results = []
+
+    for index in range(count):
+        start = items + word(items + 32 * index)
+        succeeded = word(start)
+        body = start + word(start + 32)
+        length = word(body)
+        if body + 32 + length > len(raw):
+            raise ValueError("Multicall returned truncated data.")
+        results.append("0x" + raw[body + 32:body + 32 + length].hex() if succeeded else None)
+
+    return results
+
+
+def multicall(rpc: EthereumReadOnlyRPC, calls: list[tuple[str, str]], block_number: int) -> list[str | None]:
+    """Every read in [calls] at [block_number], MULTICALL_BATCH to a request."""
+    answers = []
+
+    for first in range(0, len(calls), MULTICALL_BATCH):
+        batch = calls[first:first + MULTICALL_BATCH]
+        answers += decode_aggregate3(rpc.contract_call(MULTICALL3, encode_aggregate3(batch), block_number),
+                                     len(batch))
+
+    return answers
+
+
+# What never changes once read: a factory's pool for two tokens, and a token's decimals. Kept for the
+# session, so after the first scan only the pools' reserves are asked for.
+_known_pools: dict[tuple[str, str, str], str] = {}
+_known_decimals: dict[str, int] = {}
+
+
+def _read_pools(rpc, wanted, tokens, block_number, progress=None) -> dict:
+    """{(base, quote): {dex: PoolSnapshot}} for every pair in [wanted] on every factory, in at most three
+    requests: the pools' addresses and the tokens' decimals the first time, then the reserves."""
+    keys = [((base, quote), dex, factory, *sorted((tokens[base], tokens[quote])))
+            for base, quote in wanted for dex, factory in FACTORIES]
+
+    def step(label, done):
+        if progress:
+            progress(f"Arbitrage scan: {label}", done, 3)
+
+    unknown = [key for key in keys if (key[2], key[3], key[4]) not in _known_pools]
+    if unknown:
+        step("finding the pools", 1)
+        found = multicall(rpc, [(factory, "0x" + SELECTORS["getPair"] + _address_word(token0) + _address_word(token1))
+                                for _pair, _dex, factory, token0, token1 in unknown], block_number)
+        for (_pair, _dex, factory, token0, token1), answer in zip(unknown, found):
+            if answer is not None:
+                _known_pools[(factory, token0, token1)] = _decode_address(answer)
+
+    needed = sorted({token for key in keys for token in key[3:]} - set(_known_decimals))
+    if needed:
+        step("reading the tokens", 2)
+        for token, answer in zip(needed, multicall(rpc, [(token, "0x" + SELECTORS["decimals"]) for token in needed],
+                                                  block_number)):
+            if answer is None:
+                raise RuntimeError(f"Token {token} would not say its decimals.")
+            decimals = _decode_words(answer, 1)[0]
             if decimals > 36:
                 raise RuntimeError("Token reports unsupported decimals.")
-            decimals_cache[token] = decimals
+            _known_decimals[token] = decimals
 
-    return PoolSnapshot(
-        dex=dex,
-        address=pair_address,
-        token0=token0,
-        token1=token1,
-        reserve0=reserve0,
-        reserve1=reserve1,
-        decimals0=decimals_cache[token0],
-        decimals1=decimals_cache[token1],
-        fee_bps=POOL_FEE_BPS,
-    )
+    live = [key for key in keys if _known_pools.get((key[2], key[3], key[4]), ZERO_ADDRESS) != ZERO_ADDRESS]
+    step("reading the prices", 3)
+    reserves = multicall(rpc, [(_known_pools[(key[2], key[3], key[4])], "0x" + SELECTORS["getReserves"])
+                               for key in live], block_number)
+    pools: dict = {pair: {} for pair in wanted}
+
+    for (pair, dex, factory, token0, token1), answer in zip(live, reserves):
+        if answer is None:
+            continue
+        reserve0, reserve1, _timestamp = _decode_words(answer, 3)
+        pools[pair][dex] = PoolSnapshot(
+            dex=dex, address=_known_pools[(factory, token0, token1)], token0=token0, token1=token1,
+            reserve0=reserve0, reserve1=reserve1, decimals0=_known_decimals[token0],
+            decimals1=_known_decimals[token1], fee_bps=POOL_FEE_BPS)
+
+    return pools
 
 
 def _format_decimal(value: Decimal, places: int = 8) -> str:
@@ -551,21 +631,8 @@ def scan_once(
     block_number = rpc.block_number()
     gas_price_wei = rpc.gas_price_wei()
 
-    decimals_cache: dict[str, int] = {}
-    pools_by_pair: dict[tuple[str, str], dict[str, PoolSnapshot]] = {}
-    pool_count = 0
-    total = len(pairs) * len(FACTORIES)
-
-    for done, ((base, quote), (dex, factory)) in enumerate(
-            ((pair, factory) for pair in pairs for factory in FACTORIES), 1):
-        pool = _fetch_pool(rpc, dex, factory, tokens[base], tokens[quote], block_number, decimals_cache)
-        if pool is not None:
-            pools_by_pair.setdefault((base, quote), {})[dex] = pool
-            pool_count += 1
-        else:
-            pools_by_pair.setdefault((base, quote), {})
-        if progress:
-            progress(f"DEX scan: {base}/{quote} on {dex}", done, total)
+    pools_by_pair = _read_pools(rpc, [tuple(pair) for pair in pairs], tokens, block_number, progress)
+    pool_count = sum(len(pools) for pools in pools_by_pair.values())
 
     token_prices = _prices_in_usd(pools_by_pair, tokens)
     weth_usd = token_prices.get(tokens.get("WETH"))

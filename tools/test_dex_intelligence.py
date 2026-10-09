@@ -45,7 +45,48 @@ def pool(name, usdc_reserve, weth_reserve):
     )
 
 
+def _words(raw, at, count=1):
+    return [int.from_bytes(raw[at + 32 * index:at + 32 * index + 32], "big") for index in range(count)]
+
+
+class Contracts:
+    """A pretend chain's contracts: single reads in one(); Multicall3's aggregate3 unpacked into them and
+    answered as the real contract answers -- written apart from the module's encoder, so each checks the
+    other."""
+
+    multicalls = 0
+
+    def contract_call(self, address, data, block):
+        if address != dex.MULTICALL3:
+            return self.one(address, data, block)
+        assert data.startswith("0x" + dex.SELECTORS["aggregate3"]), data[:10]
+        type(self).multicalls += 1
+        raw = bytes.fromhex(data[10:])
+        array = _words(raw, 0)[0]
+        count = _words(raw, array)[0]
+        answers = []
+        for index in range(count):
+            start = array + 32 + _words(raw, array + 32 + 32 * index)[0]
+            target, allow, offset = _words(raw, start, 3)
+            length = _words(raw, start + offset)[0]
+            call = "0x" + raw[start + offset + 32:start + offset + 32 + length].hex()
+            assert allow == 1
+            answers.append(self.one("0x" + f"{target:040x}", call, block))
+        heads, bodies, at = [], [], 32 * len(answers)
+        for answer in answers:
+            payload = bytes.fromhex(answer[2:]) if answer else b""
+            body = (f"{int(answer is not None):064x}" + f"{64:064x}" + f"{len(payload):064x}"
+                    + payload.hex() + "00" * ((-len(payload)) % 32))
+            heads.append(f"{at:064x}")
+            bodies.append(body)
+            at += len(body) // 2
+        return "0x" + f"{32:064x}" + f"{len(answers):064x}" + "".join(heads) + "".join(bodies)
+
+
 class DexMathTests(TestCase):
+    def setUp(self):
+        dex._known_pools.clear()
+        dex._known_decimals.clear()
     def test_normalize_address_accepts_case_and_rejects_bad_input(self):
         self.assertEqual(dex.normalize_address(USDC), USDC)
         with self.assertRaises(ValueError):
@@ -147,7 +188,7 @@ class DexMathTests(TestCase):
             client._request("eth_sendTransaction", [{}])
 
     def test_no_trade_amount_and_gas_inputs_are_accepted(self):
-        class Mainnet:
+        class Mainnet(Contracts):
             def chain_id(self):
                 return 1
 
@@ -157,7 +198,7 @@ class DexMathTests(TestCase):
             def gas_price_wei(self):
                 return 1_000_000_000
 
-            def contract_call(self, _address, data, _block):
+            def one(self, _address, data, _block):
                 if data.startswith("0xe6a43905"):
                     return "0x" + "0" * 64
                 raise AssertionError(f"Unexpected call data: {data}")
@@ -257,6 +298,10 @@ class RpcClientTests(TestCase):
 
 
 class ScanTests(TestCase):
+    def setUp(self):
+        dex._known_pools.clear()
+        dex._known_decimals.clear()
+
     def test_a_dollar_amount_in_weth_is_rounded_to_what_weth_can_hold(self):
         # $100 at an ETH price that does not divide evenly: 18+ decimal places, once refused outright.
         weth = 10**21              # 1,000 WETH (18 decimals)
@@ -264,7 +309,7 @@ class ScanTests(TestCase):
         places = {dex.TOKENS["USDC"]: 6, dex.TOKENS["USDT"]: 6, dex.TOKENS["DAI"]: 18, dex.TOKENS["WETH"]: 18,
                   dex.TOKENS["WBTC"]: 8}
 
-        class Mainnet:
+        class Mainnet(Contracts):
             def chain_id(self):
                 return 1
 
@@ -274,7 +319,7 @@ class ScanTests(TestCase):
             def gas_price_wei(self):
                 return 1_000_000_000
 
-            def contract_call(self, address, data, _block):
+            def one(self, address, data, _block):
                 if data.startswith("0xe6a43905"):
                     return "0x" + "0" * 24 + "ab" * 20
                 if data.startswith("0x0902f1ac"):
@@ -295,7 +340,7 @@ class ScanTests(TestCase):
     def test_pools_are_read_without_asking_their_token_order(self):
         asked = []
 
-        class Mainnet:
+        class Mainnet(Contracts):
             def chain_id(self):
                 return 1
 
@@ -305,7 +350,7 @@ class ScanTests(TestCase):
             def gas_price_wei(self):
                 return 1_000_000_000
 
-            def contract_call(self, address, data, _block):
+            def one(self, address, data, _block):
                 asked.append(data[:10])
                 if data.startswith("0xe6a43905"):
                     return "0x" + "0" * 24 + "ab" * 20
@@ -326,7 +371,7 @@ DECIMALS = {"USDC": 6, "USDT": 6, "DAI": 18, "WETH": 18, "WBTC": 8}
 USD = {"USDC": 1, "USDT": 1, "DAI": 1, "WETH": 2500, "WBTC": 62500}
 
 
-class Chain:
+class Chain(Contracts):
     """A pretend mainnet: every default pair on both exchanges, each pool holding $10m a side."""
 
     def __init__(self, sushi_eth=1.01):
@@ -352,7 +397,7 @@ class Chain:
     def gas_price_wei(self):
         return 2_000_000_000   # 2 gwei
 
-    def contract_call(self, address, data, _block):
+    def one(self, address, data, _block):
         self.calls += 1
         if data.startswith("0xe6a43905"):
             first, second = "0x" + data[34:74], "0x" + data[98:138]
@@ -368,6 +413,10 @@ class Chain:
 
 
 class FullScanTests(TestCase):
+    def setUp(self):
+        dex._known_pools.clear()
+        dex._known_decimals.clear()
+
     def test_every_pair_is_priced_on_both_exchanges_with_its_gap(self):
         steps = []
         report = dex.scan_once(Chain(), amount_usd="1000", progress=lambda *step: steps.append(step))
@@ -380,7 +429,7 @@ class FullScanTests(TestCase):
         # Bitcoin's price comes through ether: 25 ETH a bitcoin at $2,500 = $62,500.
         self.assertAlmostEqual(float(report["estimated_btc_usd"]), 62500, delta=5)
         self.assertAlmostEqual(float(report["estimated_eth_usd"]), 2500, delta=15)
-        self.assertEqual(steps[-1][1:], (16, 16))
+        self.assertEqual(steps[-1][1:], (3, 3))
 
     def test_the_breakeven_is_fees_and_gas_as_a_share_of_the_trade(self):
         report = dex.scan_once(Chain(), amount_usd="1000")
@@ -426,7 +475,63 @@ class FullScanTests(TestCase):
         self.assertFalse(dex.asked("close the dex scan"))
 
 
+# Reference encodings made with the eth-abi library, so the hand-written encoder cannot drift from the ABI.
+_AGGREGATE3_VECTOR = (
+    "000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000"
+    "000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000040"
+    "00000000000000000000000000000000000000000000000000000000000001200000000000000000000000005c69bee7"
+    "01ef814a2b6a3edd4b1652cb9cc5aa6f0000000000000000000000000000000000000000000000000000000000000001"
+    "000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000"
+    "00000000000000000000000000000044e6a43905000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce"
+    "3606eb48000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000"
+    "00000000000000000000000000000000000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    "000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000"
+    "000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000004"
+    "313ce56700000000000000000000000000000000000000000000000000000000"
+)
+_RESULTS_VECTOR = (
+    "000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000"
+    "000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000040"
+    "00000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000"
+    "000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000040"
+    "000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000"
+    "000000000000000000000000000000050000000000000000000000000000000000000000000000000000000000000000"
+    "000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000"
+    "00000000000000000000000000000000"
+)
+
+
+class MulticallTests(TestCase):
+    def setUp(self):
+        dex._known_pools.clear()
+        dex._known_decimals.clear()
+
+    def test_reads_are_encoded_exactly_as_the_abi_says(self):
+        calls = [("0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f", "0xe6a43905" + "00" * 12 + USDC[2:] + "00" * 12
+                  + WETH[2:]), (USDC, "0x313ce567")]
+        self.assertEqual(dex.encode_aggregate3(calls), "0x82ad56cb" + _AGGREGATE3_VECTOR)
+
+    def test_answers_are_decoded_and_a_failed_read_is_none(self):
+        self.assertEqual(dex.decode_aggregate3("0x" + _RESULTS_VECTOR, 2), ["0x" + f"{5:064x}", None])
+        with self.assertRaises(ValueError):
+            dex.decode_aggregate3("0x" + _RESULTS_VECTOR, 3)
+        with self.assertRaises(ValueError):
+            dex.decode_aggregate3("0x" + _RESULTS_VECTOR[:100], 2)
+
+    def test_a_scan_is_a_handful_of_requests_and_the_next_fewer(self):
+        Chain.multicalls = 0
+        chain = Chain()
+        dex.scan_once(chain, amount_usd="1000")
+        self.assertEqual(Chain.multicalls, 3)        # the pools, the tokens, the prices
+        dex.scan_once(chain, amount_usd="1000")
+        self.assertEqual(Chain.multicalls, 4)        # the pools and tokens are known: the prices alone
+
+
 class PanelTests(TestCase):
+    def setUp(self):
+        dex._known_pools.clear()
+        dex._known_decimals.clear()
+
     def test_the_panel_rows_say_what_the_scan_found(self):
         import os as _os
 

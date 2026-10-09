@@ -2035,8 +2035,12 @@ reads. XRP is not on Ethereum, so it is not here. The provider is
 than `ETHEREUM_RPC_MIN_INTERVAL` seconds apart (0.25); it names itself (free
 providers behind Cloudflare refuse Python's default name with HTTP 403), a
 429 is asked again after waiting, and a refusal names the provider, the
-request and what to try. `python -m actions.dex_intelligence --amount-usd
-100` prints the full scan. `tools/test_dex_intelligence.py`.
+request and what to try. A scan is quick: every read goes through Multicall3
+(a public read-only contract at 0xcA11...CA11 on every Ethereum network) in
+one request, and the pools' addresses and tokens' decimals, which never
+change, are kept for the session, so a scan is six requests the first time
+and four after. `python -m actions.dex_intelligence --amount-usd 100`
+prints the full scan. `tools/test_dex_intelligence.py`.
 
 ### The trader board - `actions/trader_watch.py`, `traders_panel.py`, `tools/trader_watch.py`
 Copy-trading leaderboards rank by recent returns, and among thousands
