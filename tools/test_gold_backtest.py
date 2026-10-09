@@ -192,7 +192,7 @@ summary = gb.summarise([gb.Trade("buy", start, 0, 0, 0, result=value) for value 
 check(summary.trades == 6 and summary.wins == 2 and summary.net == 20 and summary.worst_run == 3
       and summary.deepest == 30, "the summary: trades, wins, net, worst run of losses, deepest dip")
 
-check(len(gb.VARIANTS) == 68 and len(gb.REGISTRY) == 68 and "pullback-1:3-room2" in gb.REGISTRY and "range30-1:3" in gb.REGISTRY and "retest60-atr-1:3" in gb.REGISTRY and "pullback-atr-1:3" in gb.REGISTRY and "orb-1:3" in gb.REGISTRY and "orb-atr-1:2-no-trend" in gb.REGISTRY and
+check(len(gb.VARIANTS) == 80 and len(gb.REGISTRY) == 80 and "pullback-1:3-room2" in gb.REGISTRY and "range30-1:3" in gb.REGISTRY and "retest60-atr-1:3" in gb.REGISTRY and "pullback-atr-1:3" in gb.REGISTRY and "orb-1:3" in gb.REGISTRY and "orb-atr-1:2-no-trend" in gb.REGISTRY and
       {"pullback-1:1.5", "pullback-1:2", "pullback-1:3", "pullback-1:3-be", "pullback-1:4", "pullback-1:4-be"}
       <= set(gb.REGISTRY) and gb.AS_WRITTEN in gb.VARIANTS and gb.CHOSEN in gb.VARIANTS
       and gb.REGISTRY["bounce-1:3-be"] == gb.CHOSEN, "every combination of the open choices is run")
@@ -270,6 +270,23 @@ check(seen["confirm"] == [None, "buy", "buy"],
       f"'confirm': in on the candle after a bounce, once it closes higher ({seen['confirm']})")
 check(gb._reclaims((None, 4112.175, 4132.915, 4109.425, 4117.775), 4114.001, None, 3.0) == ("buy", False),
       "your 16:15 candle: support reclaimed, but its upper wick the longer")
+# The four-hour chart is the map, the fifteen-minute candle the trigger: a bounce only when the map agrees.
+check(gb.agrees_4h("buy", 4107.0, 4223.0, 4189.0, 4150.0) and not gb.agrees_4h("buy", 4107.0, 4223.0, 4100.0, 4050.0)
+      and not gb.agrees_4h("buy", 4107.0, 4223.0, 4189.0, 4200.0)
+      and gb.agrees_4h("sell", 4107.0, 4223.0, 4150.0, 4190.0) and not gb.agrees_4h("sell", 4107.0, 4223.0, 4230.0, 4250.0)
+      and not gb.agrees_4h("buy", 4107.0, 4223.0, 4189.0, None),
+      "the four-hour chart agrees with a buy only above support and above its average; a sell the mirror;"
+      " no average yet, no trade")
+# On real gold of 8 October the last four-hour close (4,123.9) sat under its two-week average (4,149.9): the
+# trend down, so the bounce the wick rule takes at support is one the four-hour chart does not agree with.
+drawn_4h = gb._plan_lines(history, PLAN)[first]
+agreed = gb.line_bounces(history, "wick", PLAN, agree_4h=True)
+check(drawn_4h[3] < drawn_4h[4] and seen["wick"][1] == "buy" and agreed[first:first + 3] == [None, None, None]
+      and all(side is None or side == plain for side, plain in zip(agreed, gb.line_bounces(history, "wick", PLAN))),
+      f"the four-hour filter keeps only bounces the map agrees with: trend down (close {drawn_4h[3]:.1f} under"
+      f" its average {drawn_4h[4]:.1f}), so no buy at support")
+check(gb.REGISTRY["line-wick-4h-1:2"].agree_4h and gb.REGISTRY["line-wick-4h-1:2"].name().startswith("line wick+4h"),
+      "each four-hour-filtered version has its own row and key")
 check(gb.history_needed(gb.REGISTRY["line-wick-1:3"]) >= (gb.LINE_CANDLES + 2) * 16,
       "the trader asks for enough history to draw the lines a bounce needs")
 check({"line-close-1:3", "line-wick-1:3", "line-confirm-1:3", "line-wick-atr-1:3"} <= set(gb.REGISTRY)

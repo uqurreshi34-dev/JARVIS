@@ -1840,7 +1840,11 @@ the bounce's colour -- `close` takes it there; `wick` only when its wick on
 the line's side is the longer, buyers (or sellers) having won the candle,
 not been pushed back; `confirm` on the next candle, once it closes further
 the bounce's way; fixed $10 stops at 1:2 and 1:3, ATR stops at 1:2 and 1:3;
-`gold_strategy.line_bounces`; `--hours 0 24` tests it at any hour)
+`gold_strategy.line_bounces`; `--hours 0 24` tests it at any hour; each
+also with `+4h`, the four-hour chart as the map and the fifteen-minute candle
+as the trigger: a buy only while the last four-hour close is above support
+and above the average of the last 50 four-hour closes, a sell the mirror,
+`gold_strategy.agrees_4h`)
 and a breakout (a squeeze ending with a
 close beyond a band, with the trend). Exits may also be sized by ATR: a
 stop of 1.5 ATR, the target 2 or 3 times that, breakeven at 1 R, so the

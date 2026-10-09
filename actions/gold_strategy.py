@@ -425,6 +425,8 @@ class Rules:
                                  # back beyond it; "wick": the same, its wick on the line's side the longer
                                  # (buyers, or sellers, won the candle); "confirm": in on the next candle,
                                  # closing further the bounce's way
+    agree_4h: bool = False       # "line" only: and only when the four-hour chart agrees -- its last close still
+                                 # the line's side of it (not broken) and its trend the bounce's way
     touch: str = "wick"          # "wick": the candle reaches the band; "close": it closes beyond it
     rsi: str = "turned"          # "turned": was beyond 30/70 and is back; "not_extreme": simply not beyond now
     squeeze_filter: bool = True
@@ -455,7 +457,7 @@ class Rules:
         if self.setup == "bounce":
             entry = f"rsi={self.rsi:11}"
         elif self.setup == "line":
-            entry = f"{'line ' + self.entry:15}"
+            entry = f"{'line ' + self.entry + ('+4h' if self.agree_4h else ''):15}"
         elif self.box:
             entry = f"{self.setup + ' ' + str(self.box) + 'x4h':15}"
         else:
@@ -476,7 +478,7 @@ class Rules:
             return f"{self.setup}{self.box}-{exits}{room}"
 
         if self.setup == "line":
-            return f"line-{self.entry}-{exits}{room}"
+            return f"line-{self.entry}{'-4h' if self.agree_4h else ''}-{exits}{room}"
 
         trend = "" if self.trend_filter else "-no-trend"
         rsi = "" if self.setup != "bounce" or self.rsi == "not_extreme" else "-rsi-turned"
@@ -528,7 +530,7 @@ def signal(index, candles, bands, rsis, squeezes, rules, averages=None, fast=Non
         return levels(candles, rules.box)[rules.setup][index]
 
     if rules.setup == "line":
-        return line_bounces(candles, rules.entry)[index]
+        return line_bounces(candles, rules.entry, agree_4h=rules.agree_4h)[index]
 
     _start, open2, _high2, _low2, close2 = candles[index]
 
@@ -982,13 +984,18 @@ def chart_lines_from(four_hours):
 # How near a line a fifteen-minute candle must reach to count as testing it: this share of the four-hour ATR.
 BOUNCE_TOUCH_ATR = 0.1
 
+# The four-hour trend, for a bounce the four-hour chart must agree with: the last four-hour close against the
+# average of this many four-hour closes (about two weeks), all finished.
+TREND_4H_CANDLES = 50
+
 _BOUNCES = {}
 _DRAWN = {}
 
 
 def _plan_lines(candles, chosen=None):
-    """For each fifteen-minute candle, (support, resistance, four-hour ATR) as drawn from the four-hour candles
-    finished by its close. Drawn once per four-hour candle and once per candles list, shared by every way in."""
+    """For each fifteen-minute candle, (support, resistance, four-hour ATR, last four-hour close, the average of
+    the last TREND_4H_CANDLES four-hour closes or None) from the four-hour candles finished by its close. Drawn
+    once per four-hour candle and once per candles list, shared by every way in."""
     signature = (id(candles), len(candles), candles[0][0] if candles else None)
 
     if signature in _DRAWN:
@@ -1010,7 +1017,11 @@ def _plan_lines(candles, chosen=None):
             finished += 1
 
         if finished not in drawn:
-            drawn[finished] = plan_lines_from(blocks[:finished], chosen) if finished else (None, None, None)
+            done = blocks[:finished]
+            closes = [block[4] for block in done[-TREND_4H_CANDLES:]]
+            drawn[finished] = ((*plan_lines_from(done, chosen), closes[-1],
+                                sum(closes) / len(closes) if len(closes) == TREND_4H_CANDLES else None)
+                               if finished else (None, None, None, None, None))
 
         per_candle.append(drawn[finished])
 
@@ -1056,15 +1067,28 @@ def _reclaims(candle, support, resistance, touch):
     return None, False
 
 
-def line_bounces(candles, entry="close", chosen=None):
+def agrees_4h(side, support, resistance, close, average):
+    """Whether the four-hour chart agrees with a bounce: for a buy, its last close still above support (the line
+    not broken) and above its average (the trend up); for a sell, the mirror. No average yet: no."""
+    if close is None or average is None:
+        return False
+
+    if side == "buy":
+        return support is not None and close > support and close > average
+
+    return resistance is not None and close < resistance and close < average
+
+
+def line_bounces(candles, entry="close", chosen=None, agree_4h=False):
     """For each fifteen-minute candle, the side a bounce off support or resistance takes on its close, or None.
 
     "close": the candle that reaches the line and closes back beyond it, the bounce's colour. "wick": the
     same, and its wick on the line's side longer than the other -- a long lower wick at support is buyers
     taking the candle back; a long upper one, sellers pushing back. "confirm": the candle after such a
-    one, closing the bounce's colour and beyond its close. Worked out once for each candles list.
+    one, closing the bounce's colour and beyond its close. [agree_4h]: only those the four-hour chart agrees
+    with (agrees_4h). Worked out once for each candles list.
     """
-    signature = (id(candles), len(candles), candles[0][0] if candles else None, entry)
+    signature = (id(candles), len(candles), candles[0][0] if candles else None, entry, agree_4h)
 
     if signature in _BOUNCES:
         return _BOUNCES[signature]
@@ -1074,7 +1098,7 @@ def line_bounces(candles, entry="close", chosen=None):
     before = (None, False)
 
     for index, candle in enumerate(candles):
-        support, resistance, atr = lines[index]
+        support, resistance, atr, close_4h, average_4h = lines[index]
         now = _reclaims(candle, support, resistance, BOUNCE_TOUCH_ATR * atr) if atr else (None, False)
 
         if entry == "close":
@@ -1090,6 +1114,9 @@ def line_bounces(candles, entry="close", chosen=None):
                 sides[index] = "sell"
 
         before = now
+
+        if agree_4h and sides[index] and not agrees_4h(sides[index], support, resistance, close_4h, average_4h):
+            sides[index] = None
 
     if len(_BOUNCES) > 16:
         _BOUNCES.clear()
@@ -1341,6 +1368,14 @@ VARIANTS += [Rules(setup="line", entry=entry, target=target) for entry in ("clos
              for target in (20.0, 30.0)]
 VARIANTS += [Rules(setup="line", entry=entry, exits="atr", ratio=ratio) for entry in ("close", "wick", "confirm")
              for ratio in (2.0, 3.0)]
+
+# The same, only when the four-hour chart agrees: the four-hour chart is the map, the fifteen-minute candle the
+# trigger. A buy only while the last four-hour close is still above support and above its two-week average;
+# a sell the mirror. Beside the rows above, so what the four-hour chart adds is measured.
+VARIANTS += [Rules(setup="line", entry=entry, agree_4h=True, target=target) for entry in ("close", "wick", "confirm")
+             for target in (20.0, 30.0)]
+VARIANTS += [Rules(setup="line", entry=entry, agree_4h=True, exits="atr", ratio=ratio)
+             for entry in ("close", "wick", "confirm") for ratio in (2.0, 3.0)]
 
 # Room to the next four-hour line, 2 R at least, on the setups worth trading: does keeping out of trades
 # aimed through a line that has held -- the two stopped-out trades of October 2026 among them -- make more
