@@ -2019,6 +2019,23 @@ state label (`Hud.progress_changed`): what it is, how far, and a moving
 bar, clear of the reply so an announcement never covers it. The trader
 board reports through it.
 
+### The line watch - `actions/line_watch.py`
+For the markets in trade-plan.json's `alert_markets` (gold and silver; any
+name from `markets`, `[]` for none), after every fifteen-minute candle closes
+JARVIS reads the plan as "shall I buy or sell gold" does. A finished candle
+reaching the four-hour chart's support or resistance (within 0.1 four-hour
+ATR, as the backtest's `line` setup counts it) is announced, unprompted,
+and the plan opens with what happened in an amber box at its top: a
+**bounce** (closed back beyond the line, its wick on the line's side the
+longer: buyers, or sellers, took it back), **pushed back** (closed back
+beyond it but the other wick the longer: wait), **through** (closed beyond
+it: a four-hour close decides a break) or **testing**. Each says what to
+wait for and where a stop would sit: beyond the candle's wick by the plan's
+`stop_atr` (1) of the fifteen-minute ATR, room for the noise around a line.
+A line is said once when reached and once more if a bounce follows; again
+only after price has been `alert_clear_atr` (1) four-hour ATRs away. It
+watches and says; it trades nothing. `tools/test_line_watch.py`.
+
 ### The arbitrage scanner - `actions/dex_intelligence.py`, `dex_panel.py`
 "Jarvis, arbitrage", "scan for arbitrage", "any crypto arbitrage" -- a whole
 word, said plainly (speech hears "DEX" as "decks"), and nothing else in JARVIS

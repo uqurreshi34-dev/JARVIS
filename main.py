@@ -74,6 +74,7 @@ from actions import (
     trader_watch,
     trade_plan,
     dex_intelligence,
+    line_watch,
 )
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
@@ -1397,6 +1398,13 @@ def main():
         lambda: threading.Thread(target=trade_plan.refresh, name="trade-plan", daemon=True).start())
     hud.shutdown.connect(plan_panel.hide_requested.emit)
     hud.shutdown.connect(plan_beam.hidden.emit)
+
+    # Support and resistance watched for gold and silver (trade-plan.json's alert_markets): a finished
+    # fifteen-minute candle reaching one is announced through the same gate as other announcements, and the
+    # plan opens with what it did there.
+    line_watch.set_listeners(on_say=assistant._on_alert, on_show=trade_plan.present)
+    line_watch.start()
+    hud.shutdown.connect(line_watch.stop)
 
     # The DEX scan: each pair's price on both exchanges and whether the gap would pay, beside the HUD.
     dex_view = DexPanel()

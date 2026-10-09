@@ -107,6 +107,11 @@ DEFAULTS = {
     "peak_candles": 12,
     # Your own lines, by OANDA's name for the market: always drawn and used.
     "your_levels": {},
+    # The markets watched in the background (actions/line_watch.py), by the names in "markets": when a
+    # finished fifteen-minute candle reaches support or resistance, JARVIS says so and opens the plan. []: none.
+    "alert_markets": ["gold", "silver"],
+    # A line is said again only once price has been this many four-hour ATRs away from it.
+    "alert_clear_atr": 1.0,
     # The stop: beyond the retest's wick by this many ATRs.
     "stop_atr": 1.0,
     # The target: this many ATRs short of the next line (on gold, about $3).
@@ -175,6 +180,10 @@ def settings():
             chosen[name] = chosen[name] or dict(default)
         elif name in ("utc_candles", "mid_prices"):
             chosen[name] = value if isinstance(value, bool) else default
+        elif name == "alert_markets":
+            given = value if isinstance(value, list) else default
+            chosen[name] = [" ".join(str(spoken).casefold().split()) for spoken in given
+                            if " ".join(str(spoken).casefold().split()) in chosen["markets"]]
         elif name == "your_levels":
             given = value if isinstance(value, dict) else {}
             chosen[name] = {instrument: [float(level) for level in levels
@@ -738,6 +747,15 @@ def show(command, client=None):
 
 
 _last = None
+
+
+def present(found, command):
+    """Show a plan already read -- one the line watch found at a line -- and keep it current like any other."""
+    global _last
+    _last = (command, None)
+
+    if _listener:
+        _listener(found)
 
 
 def refresh():

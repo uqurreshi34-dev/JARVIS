@@ -146,6 +146,21 @@ class _Page(QWidget):
         plan, y = self.plan, 0
         colour = _VERDICT_COLOURS.get(plan["verdict"], _MUTED)
 
+        # Opened by the line watch: what price has just done at a line, first, in a box of its own.
+        if plan.get("alert"):
+            painter.setFont(_font(10, bold=True))
+            flags = int(Qt.TextFlag.TextWordWrap) | int(Qt.AlignmentFlag.AlignLeft) | int(Qt.AlignmentFlag.AlignTop)
+            height = QFontMetrics(painter.font()).boundingRect(QRect(0, 0, int(width - 24), 10_000), flags,
+                                                               plan["alert"]).height()
+            box = QRectF(0, y, width, height + 20)
+            frame = QPainterPath()
+            frame.addRoundedRect(box, 6, 6)
+            painter.fillPath(frame, _tint(_AMBER, 38))
+            painter.setPen(QPen(_AMBER, 1.4))
+            painter.drawPath(frame)
+            self._wrapped(painter, 12, y + 10, width - 24, plan["alert"], _font(10, bold=True), _TEXT)
+            y = box.bottom() + 12
+
         word = plan["verdict"].upper()
         painter.setFont(_font(12, bold=True, mono=True))
         badge = QRectF(0, y, QFontMetrics(painter.font()).horizontalAdvance(word) + 24, 30)
