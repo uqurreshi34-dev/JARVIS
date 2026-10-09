@@ -13,7 +13,19 @@ from tools import sandbox  # noqa: E402
 sandbox.activate()
 
 from actions import dex_intelligence as dex  # noqa: E402
-import commands  # noqa: E402
+
+# commands needs Windows' own modules; elsewhere its routing is skipped, as the other suites do.
+try:
+    import commands  # noqa: E402
+except Exception as error:  # noqa: BLE001
+    commands = None
+    print(f"SKIP commands routing (could not import commands: {error})")
+
+import io  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+from unittest import mock, skipIf  # noqa: E402
+from urllib.error import HTTPError  # noqa: E402
 
 
 USDC = dex.TOKENS["USDC"]
@@ -101,6 +113,7 @@ class DexMathTests(TestCase):
         with self.assertRaisesRegex(RuntimeError, "Ethereum mainnet"):
             dex.scan_once(WrongNetwork())
 
+    @skipIf(commands is None, "commands needs Windows")
     def test_voice_command_routes_to_read_only_scanner(self):
         result = commands._fast_path("scan DEX opportunities")
         self.assertEqual(result["intent"], "dex_scan")
@@ -108,7 +121,12 @@ class DexMathTests(TestCase):
     def test_scanner_command_rejects_general_information_questions(self):
         self.assertFalse(dex.asked("what is a DEX"))
         self.assertFalse(dex.asked("buy ethereum"))
+        self.assertFalse(dex.asked("check arbitrage on gold"))
+        self.assertFalse(dex.asked("scan my downloads folder"))
         self.assertTrue(dex.asked("run the DEX scanner"))
+        self.assertTrue(dex.asked("jarvis scan the dex"))
+        self.assertTrue(dex.asked("any arbitrage on uniswap"))
+        self.assertTrue(dex.asked("check defi price gaps"))
 
     def test_rpc_client_has_no_transaction_submission_methods(self):
         client = dex.EthereumReadOnlyRPC("https://ethereum-rpc.publicnode.com")
@@ -137,6 +155,124 @@ class DexMathTests(TestCase):
             dex.scan_once(Mainnet(), amount_usd="-5")
         with self.assertRaises(ValueError):
             dex.scan_once(Mainnet(), gas_units=20_000)
+
+
+class Response:
+    def __init__(self, result):
+        self._body = json.dumps({"jsonrpc": "2.0", "id": 1, "result": result}).encode()
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+def refusal(code, retry_after=None):
+    headers = {"Retry-After": str(retry_after)} if retry_after is not None else {}
+    return HTTPError("https://rpc.example", code, "refused", headers, io.BytesIO(b""))
+
+
+class RpcClientTests(TestCase):
+    def client(self, interval=0.0):
+        self.slept = []
+        self.now = [100.0]
+        return dex.EthereumReadOnlyRPC("https://rpc.example/eth", interval=interval,
+                                       sleep=self.slept.append, clock=lambda: self.now[0])
+
+    def test_names_itself_so_cloudflare_fronted_providers_answer(self):
+        sent = []
+
+        def answer(request, timeout):
+            sent.append(request)
+            return Response("0x1")
+
+        with mock.patch.object(dex, "urlopen", answer):
+            self.assertEqual(self.client().chain_id(), 1)
+        self.assertEqual(sent[0].get_header("User-agent"), dex.USER_AGENT)
+        self.assertNotIn("Python-urllib", sent[0].get_header("User-agent"))
+
+    def test_requests_are_spaced_by_the_minimum_interval(self):
+        client = self.client(interval=0.5)
+        with mock.patch.object(dex, "urlopen", lambda request, timeout: Response("0x1")):
+            client.chain_id()
+            self.now[0] += 0.1
+            client.chain_id()
+        self.assertEqual(len(self.slept), 1)
+        self.assertAlmostEqual(self.slept[0], 0.4)
+
+    def test_too_many_requests_is_asked_again_after_waiting(self):
+        answers = [refusal(429, retry_after=3), Response("0x1")]
+
+        def answer(request, timeout):
+            reply = answers.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        with mock.patch.object(dex, "urlopen", answer):
+            self.assertEqual(self.client().chain_id(), 1)
+        self.assertIn(3.0, self.slept)
+
+    def test_a_refusal_says_which_provider_request_and_what_to_try(self):
+        def answer(request, timeout):
+            raise refusal(403)
+
+        with mock.patch.object(dex, "urlopen", answer):
+            with self.assertRaises(RuntimeError) as caught:
+                self.client().chain_id()
+        message = str(caught.exception)
+        for part in ("rpc.example", "refused", "HTTP 403", "request 1", "eth_chainId", "ETHEREUM_RPC_URL"):
+            self.assertIn(part, message)
+
+    def test_provider_and_pace_come_from_the_environment_when_used(self):
+        with mock.patch.dict(os.environ, {"ETHEREUM_RPC_URL": "https://rpc.nodeflare.app/eth/public",
+                                          "ETHEREUM_RPC_MIN_INTERVAL": "0.6"}):
+            self.assertEqual(dex.rpc_url(), "https://rpc.nodeflare.app/eth/public")
+            self.assertEqual(dex.min_interval(), 0.6)
+        with mock.patch.dict(os.environ, {"ETHEREUM_RPC_URL": "", "ETHEREUM_RPC_MIN_INTERVAL": "soon"}):
+            self.assertEqual(dex.rpc_url(), dex.FALLBACK_RPC_URL)
+            self.assertEqual(dex.min_interval(), dex.DEFAULT_MIN_INTERVAL)
+
+    def test_a_failed_scan_is_said_not_crashed(self):
+        with mock.patch.object(dex, "scan_once", side_effect=RuntimeError(
+                "Ethereum RPC x refused the request (HTTP 403) on request 1 (eth_chainId); try another")):
+            said = dex.describe()
+        self.assertIn("couldn't read the exchanges", said)
+        self.assertNotIn("try another", said)
+
+
+class ScanTests(TestCase):
+    def test_pools_are_read_without_asking_their_token_order(self):
+        asked = []
+
+        class Mainnet:
+            def chain_id(self):
+                return 1
+
+            def block_number(self):
+                return 19_000_000
+
+            def gas_price_wei(self):
+                return 1_000_000_000
+
+            def contract_call(self, address, data, _block):
+                asked.append(data[:10])
+                if data.startswith("0xe6a43905"):
+                    return "0x" + "0" * 24 + "ab" * 20
+                if data.startswith("0x0902f1ac"):
+                    return "0x" + f"{10**12:064x}" + f"{10**21:064x}" + "0" * 64
+                if data.startswith("0x313ce567"):
+                    return "0x" + f"{18:064x}"
+                raise AssertionError(f"Unexpected call data: {data}")
+
+        report = dex.scan_once(Mainnet(), amount_usd="100")
+        self.assertEqual(report["pools_read"], 12)
+        self.assertNotIn("0x0dfe1681", asked)
+        self.assertNotIn("0xd21220a7", asked)
 
 
 if __name__ == "__main__":

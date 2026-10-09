@@ -2008,6 +2008,22 @@ state label (`Hud.progress_changed`): what it is, how far, and a moving
 bar, clear of the reply so an announcement never covers it. The trader
 board reports through it.
 
+### The DEX scanner - `actions/dex_intelligence.py`
+"Scan the DEX", "any arbitrage on Uniswap" -- a request needs a decentralised
+exchange named and a request to look, so "what is a DEX" is not one. JARVIS
+reads the Uniswap V2 and SushiSwap V2 pools for USDC, USDT, DAI and WETH at one
+Ethereum block, works out each buy-on-one, sell-on-the-other round trip with
+the pools' 0.3% fees, and takes off an estimate of gas, then says the best
+route and whether it would pay. It is a paper estimate only: it reads public
+pool state, never looks at pending transactions, and has no wallet, signing
+or sending at all -- its RPC client refuses every method but four reads. The
+provider is `ETHEREUM_RPC_URL` in .env (a free public one if unset), asked
+no faster than `ETHEREUM_RPC_MIN_INTERVAL` seconds apart (0.25); it names
+itself (free providers behind Cloudflare refuse Python's default name with
+HTTP 403), a 429 is asked again after waiting, and a refusal names the
+provider, the request and what to try. `python -m actions.dex_intelligence
+--amount-usd 100` prints the full scan. `tools/test_dex_intelligence.py`.
+
 ### The trader board - `actions/trader_watch.py`, `traders_panel.py`, `tools/trader_watch.py`
 Copy-trading leaderboards rank by recent returns, and among thousands
 someone is always on top by luck. Hyperliquid publishes every account's

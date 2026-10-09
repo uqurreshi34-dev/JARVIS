@@ -14,6 +14,7 @@ import os
 import re
 import statistics
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -23,9 +24,14 @@ from urllib.request import Request, urlopen
 
 
 CHAIN_ID = 1
-DEFAULT_RPC_URL = os.getenv(
-    "ETHEREUM_RPC_URL", "https://ethereum-rpc.publicnode.com"
-)
+# The provider: ETHEREUM_RPC_URL in .env, read when a scan starts (not at import, before .env is loaded).
+FALLBACK_RPC_URL = "https://ethereum-rpc.publicnode.com"
+# Free public providers sit behind Cloudflare, which refuses Python's default User-Agent with HTTP 403.
+USER_AGENT = "JARVIS/1.0 (read-only DEX scanner)"
+# Seconds between requests, so a free endpoint's rate limit is respected (ETHEREUM_RPC_MIN_INTERVAL).
+DEFAULT_MIN_INTERVAL = 0.25
+# A 429 (too many requests) is asked again after a growing wait, this many times in all.
+RPC_ATTEMPTS = 3
 DEFAULT_AMOUNT_USD = Decimal("1000")
 DEFAULT_GAS_UNITS = 240_000
 BPS = 10_000
@@ -57,8 +63,6 @@ POOL_FEE_BPS = 30
 GAS_PRICE_SELECTOR = "0x"
 SELECTORS = {
     "getPair": "e6a43905",
-    "token0": "0dfe1681",
-    "token1": "d21220a7",
     "getReserves": "0902f1ac",
     "decimals": "313ce567",
 }
@@ -68,6 +72,19 @@ _ALLOWED_RPC_METHODS = frozenset(
 _ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _HEX_RE = re.compile(r"^0x(?:[0-9a-fA-F]{2})*$")
 USD_PEG_ASSUMPTIONS = frozenset({"USDC", "USDT", "DAI"})
+
+
+def rpc_url() -> str:
+    """The Ethereum provider to use: ETHEREUM_RPC_URL, else a free public one."""
+    return (os.getenv("ETHEREUM_RPC_URL") or "").strip() or FALLBACK_RPC_URL
+
+
+def min_interval() -> float:
+    """Seconds between requests: ETHEREUM_RPC_MIN_INTERVAL, else the default; never negative."""
+    try:
+        return max(0.0, float(os.getenv("ETHEREUM_RPC_MIN_INTERVAL", DEFAULT_MIN_INTERVAL)))
+    except ValueError:
+        return DEFAULT_MIN_INTERVAL
 
 
 def normalize_address(value: str) -> str:
@@ -104,7 +121,9 @@ def _decode_address(data: str) -> str:
 class EthereumReadOnlyRPC:
     """Small JSON-RPC client with an explicit read-only method allowlist."""
 
-    def __init__(self, url: str = DEFAULT_RPC_URL, timeout: float = 12.0):
+    def __init__(self, url: str | None = None, timeout: float = 12.0, interval: float | None = None,
+                 sleep=time.sleep, clock=time.monotonic):
+        url = url or rpc_url()
         parsed = urlparse(url)
         is_local_http = parsed.scheme == "http" and parsed.hostname in {
             "localhost", "127.0.0.1", "::1"
@@ -118,6 +137,21 @@ class EthereumReadOnlyRPC:
         self._url = url
         self._timeout = timeout
         self._request_id = 0
+        self._interval = min_interval() if interval is None else max(0.0, interval)
+        self._sleep = sleep
+        self._clock = clock
+        self._last = None
+        self.host = parsed.hostname
+
+    def _pace(self):
+        """Wait out the minimum interval since the last request."""
+        if self._last is not None:
+            wait = self._interval - (self._clock() - self._last)
+
+            if wait > 0:
+                self._sleep(wait)
+
+        self._last = self._clock()
 
     def _request(self, method: str, params: list) -> str:
         if method not in _ALLOWED_RPC_METHODS:
@@ -129,23 +163,37 @@ class EthereumReadOnlyRPC:
             "method": method,
             "params": params,
         }).encode("utf-8")
-        request = Request(
-            self._url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urlopen(request, timeout=self._timeout) as response:
-                body = response.read()
-        except HTTPError as error:
-            raise RuntimeError(
-                f"Ethereum RPC returned HTTP {error.code}; check the provider."
-            ) from None
-        except (URLError, TimeoutError, OSError):
-            raise RuntimeError(
-                "Could not reach the Ethereum RPC provider; check the network or ETHEREUM_RPC_URL."
-            ) from None
+        headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": USER_AGENT}
+        body = None
+
+        for attempt in range(RPC_ATTEMPTS):
+            self._pace()
+
+            try:
+                with urlopen(Request(self._url, data=payload, headers=headers, method="POST"),
+                             timeout=self._timeout) as response:
+                    body = response.read()
+                break
+            except HTTPError as error:
+                if error.code == 429 and attempt + 1 < RPC_ATTEMPTS:
+                    # Too many requests: wait as asked (Retry-After), else a growing pause, and ask again.
+                    try:
+                        wait = float(error.headers.get("Retry-After") or 0)
+                    except (TypeError, ValueError):
+                        wait = 0.0
+                    self._sleep(min(10.0, max(wait, 2.0 ** attempt)))
+                    continue
+                why = {403: "refused the request", 429: "is rate-limiting this scanner"}.get(error.code, "failed")
+                raise RuntimeError(
+                    f"Ethereum RPC {self.host} {why} (HTTP {error.code}) on request {self._request_id}"
+                    f" ({method}); try another provider in ETHEREUM_RPC_URL, or a slower"
+                    " ETHEREUM_RPC_MIN_INTERVAL."
+                ) from None
+            except (URLError, TimeoutError, OSError):
+                raise RuntimeError(
+                    f"Could not reach the Ethereum RPC provider {self.host}; check the network or"
+                    " ETHEREUM_RPC_URL."
+                ) from None
 
         try:
             decoded = json.loads(body.decode("utf-8"))
@@ -332,12 +380,9 @@ def _fetch_pool(
     if pair_address == ZERO_ADDRESS:
         return None
 
-    token0 = _decode_address(
-        rpc.contract_call(pair_address, "0x" + SELECTORS["token0"], block_number)
-    )
-    token1 = _decode_address(
-        rpc.contract_call(pair_address, "0x" + SELECTORS["token1"], block_number)
-    )
+    # A Uniswap V2 pair (and SushiSwap's, a fork) stores its tokens sorted by address: token0 is the lower.
+    # Known without asking the pool, which halves the requests a scan makes of a rate-limited provider.
+    token0, token1 = sorted((normalize_address(token_a), normalize_address(token_b)))
     reserve_data = rpc.contract_call(
         pair_address, "0x" + SELECTORS["getReserves"], block_number
     )
@@ -537,24 +582,31 @@ def scan_once(
     }
 
 
+# What the scanner is about, and what asking it to look sounds like. A request needs both: "scan the DEX",
+# "any arbitrage on uniswap", "check defi price gaps" -- not "what is a DEX", "buy ethereum", or arbitrage
+# on anything but the decentralised exchanges.
+_DEX_SUBJECT = re.compile(
+    r"\b(?:dex(?:es)?|defi|decentrali[sz]ed exchanges?|uniswap|sushi ?swap)\b")
+_DEX_LOOK = re.compile(
+    r"\b(?:scan(?:ner)?|check|find|show|look|search|any|run|what are)\b"
+    r"|\b(?:opportunit(?:y|ies)|price gaps?|dislocations?)\b")
+_DEX_NOT = re.compile(r"\b(?:what is|what s|what does|explain|meaning of|define|buy|sell|swap my|send)\b")
+
+
 def asked(command: str) -> bool:
-    """Recognise an explicit request to run the read-only DEX scanner."""
-    text = re.sub(r"[^a-z0-9 ]+", " ", str(command or "").casefold())
-    text = " ".join(text.split())
-    patterns = (
-        r"^(?:scan|check|find|show) (?:the )?(?:ethereum )?(?:dex|defi)"
-        r"(?: arbitrage)?(?: opportunities)?(?: now)?$",
-        r"^run (?:the )?(?:ethereum )?dex scanner$",
-        r"^(?:scan|check|find) (?:decentralized|decentralised) exchange"
-        r" arbitrage(?: opportunities)?$",
-        r"^(?:what are|show me) (?:the )?dex arbitrage opportunities$",
-    )
-    return any(re.fullmatch(pattern, text) for pattern in patterns)
+    """Recognise a request to run the read-only DEX scanner: its subject and a request to look."""
+    text = " ".join(re.sub(r"[^a-z0-9 ]+", " ", str(command or "").casefold()).split())
+    return bool(_DEX_SUBJECT.search(text) and _DEX_LOOK.search(text) and not _DEX_NOT.search(text))
 
 
 def describe() -> str:
     """Run one read-only scan and return a concise voice response."""
-    report = scan_once(EthereumReadOnlyRPC())
+    try:
+        report = scan_once(EthereumReadOnlyRPC())
+    except (RuntimeError, ValueError) as error:
+        print(f"[DEX scanner] {error}", flush=True)
+        return f"I couldn't read the exchanges just now, sir: {str(error).split(';')[0]}."
+
     print(json.dumps(report, indent=2), flush=True)
     opportunities = report["opportunities"]
     block = report["snapshot_block"]
@@ -599,8 +651,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--rpc-url",
-        default=DEFAULT_RPC_URL,
-        help="HTTPS Ethereum JSON-RPC URL; or set ETHEREUM_RPC_URL.",
+        default=None,
+        help="HTTPS Ethereum JSON-RPC URL; or set ETHEREUM_RPC_URL in .env.",
     )
     parser.add_argument(
         "--amount-usd",
@@ -614,6 +666,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Assumed gas units per two-swap route (default: 240000).",
     )
     options = parser.parse_args(argv)
+
+    # The provider and pace come from .env, as the other tools read theirs.
+    try:
+        from pathlib import Path
+
+        from dotenv import load_dotenv
+
+        load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+    except ImportError:
+        pass
 
     try:
         result = scan_once(
