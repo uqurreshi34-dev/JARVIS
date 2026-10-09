@@ -42,21 +42,29 @@ FACTORIES = (
     ("Uniswap V2", "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f"),
     ("SushiSwap V2", "0xc0aee478e3658e2610c5f7a4a2e1777ce9e4f2ac"),
 )
+# The defaults; dex-scan.json in the JARVIS folder adds or replaces tokens and pairs. WETH is Ethereum's
+# ether as a token, WBTC bitcoin held on Ethereum one for one.
 TOKENS = {
     "USDC": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
     "USDT": "0xdac17f958d2ee523a2206206994597c13d831ec7",
     "DAI": "0x6b175474e89094c44da98b954eedeac495271d0f",
     "WETH": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+    "WBTC": "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599",
 }
-# The first three pairs are stablecoin/WETH markets; the rest compare stablecoins.
+# Each pair is (what is priced, what it is priced in): "WETH/USDC" is ether's price in USDC.
 PAIR_CONFIGS = (
-    ("USDC", "WETH"),
-    ("USDT", "WETH"),
-    ("DAI", "WETH"),
-    ("USDC", "USDT"),
-    ("USDC", "DAI"),
-    ("USDT", "DAI"),
+    ("WETH", "USDC"),
+    ("WETH", "USDT"),
+    ("WETH", "DAI"),
+    ("WBTC", "WETH"),
+    ("WBTC", "USDC"),
+    ("USDT", "USDC"),
+    ("DAI", "USDC"),
+    ("DAI", "USDT"),
 )
+SETTINGS_NAME = "dex-scan.json"
+# The share a round trip loses to the two pools' fees alone: 1 - 0.997 x 0.997, about 0.6%.
+ROUND_TRIP_FEE = 1 - (Decimal(BPS - 30) / BPS) ** 2
 # Uniswap V2-style pools charge 30 bps. This scanner intentionally supports
 # only the two named V2 factories; it does not assume this fee for other DEXes.
 POOL_FEE_BPS = 30
@@ -85,6 +93,67 @@ def min_interval() -> float:
         return max(0.0, float(os.getenv("ETHEREUM_RPC_MIN_INTERVAL", DEFAULT_MIN_INTERVAL)))
     except ValueError:
         return DEFAULT_MIN_INTERVAL
+
+
+def _settings_path() -> str | None:
+    try:
+        from actions import files
+
+        base = files.root()
+    except Exception:  # noqa: BLE001 - no JARVIS folder: the defaults alone
+        return None
+    return os.path.join(base, SETTINGS_NAME) if base else None
+
+
+def settings() -> dict:
+    """{"tokens": {name: address}, "pairs": [(base, quote)], "amount_usd": Decimal}: the defaults, with
+    dex-scan.json's additions; written out the first time so there is a file to edit. A token with a bad
+    address, or a pair naming a token not known, is left out and said."""
+    chosen = {"tokens": dict(TOKENS), "pairs": [list(pair) for pair in PAIR_CONFIGS],
+              "amount_usd": str(DEFAULT_AMOUNT_USD)}
+    path = _settings_path()
+    saved = {}
+
+    if path and os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                saved = json.load(handle)
+        except (OSError, ValueError) as error:
+            print(f"[DEX scanner] {SETTINGS_NAME} could not be read ({error}); using the defaults")
+            saved = {}
+    elif path:
+        try:
+            with open(f"{path}.part", "w", encoding="utf-8") as handle:
+                json.dump(chosen, handle, indent=1)
+            os.replace(f"{path}.part", path)
+        except OSError:
+            pass
+
+    tokens = dict(TOKENS)
+
+    for name, address in (saved.get("tokens") or {}).items() if isinstance(saved.get("tokens"), dict) else ():
+        try:
+            tokens[str(name).upper()] = normalize_address(address)
+        except ValueError:
+            print(f"[DEX scanner] {SETTINGS_NAME}: {name} has no valid address; left out")
+
+    pairs = []
+
+    for pair in saved.get("pairs") or PAIR_CONFIGS:
+        names = tuple(str(name).upper() for name in pair) if isinstance(pair, (list, tuple)) else ()
+
+        if len(names) != 2 or names[0] == names[1] or not all(name in tokens for name in names):
+            print(f"[DEX scanner] {SETTINGS_NAME}: pair {pair!r} needs two different known tokens; left out")
+        elif names not in pairs:
+            pairs.append(names)
+
+    try:
+        amount = Decimal(str(saved.get("amount_usd", DEFAULT_AMOUNT_USD)))
+        amount = amount if amount.is_finite() and amount > 0 else DEFAULT_AMOUNT_USD
+    except InvalidOperation:
+        amount = DEFAULT_AMOUNT_USD
+
+    return {"tokens": tokens, "pairs": pairs, "amount_usd": amount}
 
 
 def normalize_address(value: str) -> str:
@@ -427,12 +496,40 @@ def _format_decimal(value: Decimal, places: int = 8) -> str:
     return format(value.quantize(quantum), "f")
 
 
+def _prices_in_usd(pools_by_pair: dict, tokens: dict) -> dict[str, Decimal]:
+    """Each token's dollar price at this block: the stablecoins $1 for screening, the rest worked out from
+    their pools against a token already priced (WETH from USDC, then WBTC from WETH), the median of the
+    exchanges' prices."""
+    prices = {tokens[name]: Decimal("1") for name in USD_PEG_ASSUMPTIONS if name in tokens}
+    learned = True
+
+    while learned:
+        learned = False
+
+        for (base, quote), pools in pools_by_pair.items():
+            for known, unknown in ((quote, base), (base, quote)):
+                if tokens[unknown] in prices or tokens[known] not in prices or not pools:
+                    continue
+                # Only stablecoin pools price a token in dollars directly; a stablecoin's own price stays $1.
+                quotes = [_pool_price(pool, tokens[unknown], tokens[known]) for pool in pools.values()]
+                prices[tokens[unknown]] = Decimal(str(statistics.median(quotes))) * prices[tokens[known]]
+                learned = True
+
+    return prices
+
+
 def scan_once(
     rpc: EthereumReadOnlyRPC,
     amount_usd: Decimal | str | int = DEFAULT_AMOUNT_USD,
     gas_units: int = DEFAULT_GAS_UNITS,
+    chosen: dict | None = None,
+    progress=None,
 ) -> dict:
-    """Scan current public pool state and return paper-only arbitrage candidates."""
+    """Scan current public pool state: every pair's price on each exchange, the gap between them, the best
+    round trip after fees and gas, and the paper-only candidates that would gain before gas.
+
+    [chosen] is settings() (tokens and pairs); [progress] is called (label, done, total) as pools are read.
+    """
     try:
         amount_usd = Decimal(str(amount_usd))
     except InvalidOperation:
@@ -441,6 +538,9 @@ def scan_once(
         raise ValueError("amount_usd must be finite and greater than zero.")
     if not isinstance(gas_units, int) or not 21_000 <= gas_units <= 2_000_000:
         raise ValueError("gas_units must be between 21000 and 2000000.")
+
+    tokens = (chosen or {}).get("tokens") or TOKENS
+    pairs = (chosen or {}).get("pairs") or PAIR_CONFIGS
 
     chain_id = rpc.chain_id()
     if chain_id != CHAIN_ID:
@@ -454,38 +554,21 @@ def scan_once(
     decimals_cache: dict[str, int] = {}
     pools_by_pair: dict[tuple[str, str], dict[str, PoolSnapshot]] = {}
     pool_count = 0
+    total = len(pairs) * len(FACTORIES)
 
-    for name_a, name_b in PAIR_CONFIGS:
-        token_a, token_b = TOKENS[name_a], TOKENS[name_b]
-        by_dex: dict[str, PoolSnapshot] = {}
-        for dex, factory in FACTORIES:
-            pool = _fetch_pool(
-                rpc, dex, factory, token_a, token_b, block_number, decimals_cache
-            )
-            if pool is not None:
-                by_dex[dex] = pool
-                pool_count += 1
-        pools_by_pair[(name_a, name_b)] = by_dex
+    for done, ((base, quote), (dex, factory)) in enumerate(
+            ((pair, factory) for pair in pairs for factory in FACTORIES), 1):
+        pool = _fetch_pool(rpc, dex, factory, tokens[base], tokens[quote], block_number, decimals_cache)
+        if pool is not None:
+            pools_by_pair.setdefault((base, quote), {})[dex] = pool
+            pool_count += 1
+        else:
+            pools_by_pair.setdefault((base, quote), {})
+        if progress:
+            progress(f"DEX scan: {base}/{quote} on {dex}", done, total)
 
-    # Stablecoins are treated as $1 only for this rough screening estimate.
-    # WETH/USD is derived from the current USDC/WETH pool snapshots, where present.
-    token_prices: dict[str, Decimal] = {
-        TOKENS[name]: Decimal("1") for name in USD_PEG_ASSUMPTIONS
-    }
-    weth_usd_prices: list[Decimal] = []
-    for pair, pools in pools_by_pair.items():
-        if set(pair) != {"USDC", "WETH"}:
-            continue
-        for pool in pools.values():
-            weth_usd_prices.append(
-                _pool_price(pool, TOKENS["WETH"], TOKENS["USDC"])
-            )
-    weth_usd = (
-        Decimal(str(statistics.median(weth_usd_prices)))
-        if weth_usd_prices else None
-    )
-    if weth_usd is not None and weth_usd > 0:
-        token_prices[TOKENS["WETH"]] = weth_usd
+    token_prices = _prices_in_usd(pools_by_pair, tokens)
+    weth_usd = token_prices.get(tokens.get("WETH"))
 
     gas_cost_usd = None
     if weth_usd is not None:
@@ -495,12 +578,27 @@ def scan_once(
         )
 
     opportunities = []
+    markets = []
     for (name_a, name_b), pools in pools_by_pair.items():
-        if len(pools) < 2:
+        exact = {}
+        for pool in pools.values():
+            try:
+                exact[pool.dex] = _pool_price(pool, tokens[name_a], tokens[name_b])
+            except ValueError:
+                continue   # an empty pool has no price
+        # Shown to 8 significant figures, so a small price keeps its digits; the gap is worked from the exact.
+        market = {"pair": f"{name_a}/{name_b}",
+                  "prices": {dex: format(price, ".8g") for dex, price in exact.items()},
+                  "gap_pct": None, "best": None}
+        markets.append(market)
+
+        if len(exact) < 2:
             continue
         pool_items = list(pools.values())
         pool_one, pool_two = pool_items[0], pool_items[1]
-        pair_tokens = (TOKENS[name_a], TOKENS[name_b])
+        market["gap_pct"] = _format_decimal(
+            (max(exact.values()) - min(exact.values())) / min(exact.values()) * 100, 4)
+        pair_tokens = (tokens[name_a], tokens[name_b])
 
         for token_in in pair_tokens:
             price_usd = token_prices.get(token_in)
@@ -524,19 +622,23 @@ def scan_once(
                 except ValueError:
                     continue
                 gross_profit_raw = final_amount - amount_in
-                if gross_profit_raw <= 0:
-                    continue
-                gross_profit_token = raw_to_decimal(gross_profit_raw, decimals)
+                # A loss is negative: raw_to_decimal takes only amounts, so the sign is kept apart.
+                gross_profit_token = raw_to_decimal(abs(gross_profit_raw), decimals) * (
+                    1 if gross_profit_raw >= 0 else -1)
                 gross_profit_usd = gross_profit_token * price_usd
                 net_profit_usd = (
                     gross_profit_usd - gas_cost_usd
                     if gas_cost_usd is not None else None
                 )
-                opportunities.append({
+                route = {
                     "pair": f"{name_a}/{name_b}",
                     "buy_on": first.dex,
                     "sell_on": second.dex,
-                    "input_token": name_a if token_in == TOKENS[name_a] else name_b,
+                    "input_token": name_a if token_in == tokens[name_a] else name_b,
+                    # In a person's words: where the pair's first token (ether in WETH/USDC) is bought
+                    # cheap and where it is sold dear -- the same whichever token the trip starts with.
+                    "buy_base_on": (first if token_in == tokens[name_b] else second).dex,
+                    "sell_base_on": (second if token_in == tokens[name_b] else first).dex,
                     "input_amount": _format_decimal(
                         raw_to_decimal(amount_in, decimals), 6
                     ),
@@ -555,7 +657,13 @@ def scan_once(
                     ),
                     "snapshot_block": block_number,
                     "simulation_only": True,
-                })
+                }
+                score = net_profit_usd if net_profit_usd is not None else gross_profit_usd
+                if market["best"] is None or score > Decimal(
+                        market["best"]["estimated_net_profit_usd"] or market["best"]["gross_profit_usd"]):
+                    market["best"] = route
+                if gross_profit_raw > 0:
+                    opportunities.append(route)
 
     opportunities.sort(
         key=lambda item: Decimal(
@@ -565,6 +673,8 @@ def scan_once(
         ),
         reverse=True,
     )
+    # The gap a round trip must beat to pay: the two pools' fees, and gas as a share of the trade.
+    breakeven = ROUND_TRIP_FEE * 100 + ((gas_cost_usd or Decimal(0)) / amount_usd * 100)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "read-only paper simulation",
@@ -577,8 +687,14 @@ def scan_once(
             Decimal(gas_price_wei) / Decimal(10**9), 4
         ),
         "assumed_gas_units_per_round_trip": gas_units,
+        "estimated_gas_cost_usd": _format_decimal(gas_cost_usd, 4) if gas_cost_usd is not None else None,
         "estimated_eth_usd": _format_decimal(weth_usd, 4) if weth_usd else None,
+        "estimated_btc_usd": (_format_decimal(token_prices[tokens["WBTC"]], 2)
+                              if tokens.get("WBTC") in token_prices else None),
+        "round_trip_fee_pct": _format_decimal(ROUND_TRIP_FEE * 100, 4),
+        "breakeven_gap_pct": _format_decimal(breakeven, 4),
         "stablecoin_usd_assumption": "USDC, USDT and DAI treated as $1 for screening",
+        "markets": markets,
         "opportunities": opportunities,
         "safety": {
             "wallet_address_used": False,
@@ -609,53 +725,84 @@ _DEX_NOT = re.compile(r"\b(?:what is|what s|what does|explain|meaning of|define|
 def asked(command: str) -> bool:
     """Recognise a request to run the read-only DEX scanner: its subject and a request to look."""
     text = " ".join(re.sub(r"[^a-z0-9 ]+", " ", str(command or "").casefold()).split())
-    return bool(_DEX_SUBJECT.search(text) and _DEX_LOOK.search(text) and not _DEX_NOT.search(text))
+    return bool(_DEX_SUBJECT.search(text) and _DEX_LOOK.search(text) and not _DEX_NOT.search(text)
+                and not dismissed(text))
+
+
+_listener = None
+_hide_listener = None
+_progress_listener = None
+
+
+def set_listeners(on_scan=None, on_hide=None, on_progress=None):
+    """The panel's hooks: on_scan(report) shows a scan, on_hide() closes it, on_progress(label, done, total)
+    marks the HUD while pools are read."""
+    global _listener, _hide_listener, _progress_listener
+    _listener, _hide_listener, _progress_listener = on_scan, on_hide, on_progress
+
+
+def dismissed(command: str) -> bool:
+    """ "Close the DEX scan", "hide the dex panel"."""
+    text = " ".join(re.sub(r"[^a-z0-9 ]+", " ", str(command or "").casefold()).split())
+    return bool(re.search(r"\b(?:close|hide|dismiss|shut|put away)\b", text) and _DEX_SUBJECT.search(text))
+
+
+def hide() -> bool:
+    if _hide_listener:
+        _hide_listener()
+        return True
+    return False
+
+
+def _done(label=""):
+    if _progress_listener:
+        _progress_listener(label, 0, 0)
 
 
 def describe() -> str:
-    """Run one read-only scan and return a concise voice response."""
+    """Run one read-only scan, show it in the panel, and return a concise voice response."""
+    chosen = settings()
+
     try:
-        report = scan_once(EthereumReadOnlyRPC())
+        report = scan_once(EthereumReadOnlyRPC(), amount_usd=chosen["amount_usd"], chosen=chosen,
+                           progress=_progress_listener)
     except (RuntimeError, ValueError) as error:
         print(f"[DEX scanner] {error}", flush=True)
         return f"I couldn't read the exchanges just now, sir: {str(error).split(';')[0]}."
+    finally:
+        _done()
 
     print(json.dumps(report, indent=2), flush=True)
-    opportunities = report["opportunities"]
-    block = report["snapshot_block"]
-    pool_count = report["pools_read"]
-    if not opportunities:
-        return (
-            f"I scanned {pool_count} Uniswap and SushiSwap pools at Ethereum "
-            f"block {block}, sir. No positive gross price dislocation was found "
-            "among the configured pairs in this snapshot. No trades were placed."
-        )
 
-    best = opportunities[0]
-    gross = Decimal(best["gross_profit_usd"])
-    net_value = best["estimated_net_profit_usd"]
-    route = (
-        f"{best['pair']}, buying on {best['buy_on']} and selling on "
-        f"{best['sell_on']}"
-    )
-    if net_value is None:
-        return (
-            f"The best paper-only route is {route}, sir, with an estimated "
-            f"gross difference of ${gross:.4f}. I couldn't estimate gas in USD, "
-            "so this is not a net-profit signal. No trades were placed."
-        )
-    net = Decimal(net_value)
-    if net <= 0:
-        return (
-            f"The best gross paper route is {route}, sir, but after the rough "
-            f"gas estimate it loses about ${abs(net):.4f}. No trades were placed."
-        )
-    return (
-        f"The best paper-only route is {route}, sir. The estimate is "
-        f"${gross:.4f} gross and ${net:.4f} after approximate gas for a "
-        f"${best['input_amount']} {best['input_token']} route. This is only a "
-        "reserve-ratio estimate, not an executable quote. No trades were placed."
-    )
+    if _listener:
+        _listener(report)
+
+    return summary(report)
+
+
+def summary(report: dict) -> str:
+    """What to say about a scan: the widest gap against what a round trip needs to pay, and the best route."""
+    compared = [market for market in report["markets"] if market["gap_pct"] is not None]
+    if not compared:
+        return (f"I couldn't find each pair on both exchanges at block {report['snapshot_block']}, sir, so there"
+                " was nothing to compare.")
+
+    widest = max(compared, key=lambda market: Decimal(market["gap_pct"]))
+    needed = Decimal(report["breakeven_gap_pct"])
+    gap = Decimal(widest["gap_pct"])
+    gas = report.get("estimated_gas_cost_usd")
+    gas_words = f" and gas at about ${Decimal(gas):.2f}" if gas is not None else ""
+    opening = (f"I compared {len(compared)} pairs on Uniswap and SushiSwap at block {report['snapshot_block']},"
+               f" sir. The widest gap is {widest['pair']} at {gap:.2f} percent; a round trip needs about"
+               f" {needed:.2f} percent to pay, for the two swaps' fees{gas_words}.")
+    best = widest["best"]
+
+    if best and best["estimated_net_profit_usd"] is not None and Decimal(best["estimated_net_profit_usd"]) > 0:
+        coin = widest["pair"].split("/")[0]
+        return (opening + f" Buying {coin} on {best['buy_base_on']} and selling it on {best['sell_base_on']}"
+                f" would clear about ${Decimal(best['estimated_net_profit_usd']):.2f} on paper. Nothing was traded.")
+
+    return opening + " Nothing clears it right now. Nothing was traded."
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -669,8 +816,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--amount-usd",
-        default=str(DEFAULT_AMOUNT_USD),
-        help="Input size to simulate in USD-equivalent terms (default: 1000).",
+        default=None,
+        help="Input size to simulate in USD-equivalent terms (default: amount_usd in dex-scan.json, 1000).",
     )
     parser.add_argument(
         "--gas-units",
@@ -690,23 +837,21 @@ def main(argv: list[str] | None = None) -> int:
     except ImportError:
         pass
 
+    chosen = settings()
+
     try:
         result = scan_once(
             EthereumReadOnlyRPC(options.rpc_url),
-            amount_usd=options.amount_usd,
+            amount_usd=options.amount_usd or chosen["amount_usd"],
             gas_units=options.gas_units,
+            chosen=chosen,
         )
     except (ValueError, RuntimeError) as error:
         print(f"[DEX scanner] {error}", file=sys.stderr)
         return 1
 
     print(json.dumps(result, indent=2))
-    if not result["opportunities"]:
-        print(
-            "[DEX scanner] No positive gross dislocations found in the configured "
-            "pairs at this snapshot. This is not proof that no opportunity exists.",
-            file=sys.stderr,
-        )
+    print(f"[DEX scanner] {summary(result)}", file=sys.stderr)
     return 0
 
 

@@ -17,6 +17,7 @@ from news_panel import NewsPanel
 from quran_panel import QuranPanel
 from radar_panel import RadarPanel
 from traders_panel import TradersPanel
+from dex_panel import DexPanel
 from trade_plan_panel import TradePlanPanel
 from sensor_panel import SensorPanel
 from files_panel import FilesPanel
@@ -72,6 +73,7 @@ from actions import (
     recitation,
     trader_watch,
     trade_plan,
+    dex_intelligence,
 )
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
@@ -1394,6 +1396,27 @@ def main():
         lambda: threading.Thread(target=trade_plan.refresh, name="trade-plan", daemon=True).start())
     hud.shutdown.connect(plan_panel.hide_requested.emit)
     hud.shutdown.connect(plan_beam.hidden.emit)
+
+    # The DEX scan: each pair's price on both exchanges and whether the gap would pay, beside the HUD.
+    dex_view = DexPanel()
+    dex_view.set_anchor(hud)
+    dex_beam = Beam(dex_view, hud)
+
+    def dex_shown(report):
+        dex_view.show_scan.emit(report)
+        dex_beam.shown.emit()
+
+    def dex_hidden():
+        dex_view.hide_requested.emit()
+        dex_beam.hidden.emit()
+
+    def dex_progress(label, done, total):
+        hud.progress_changed.emit("dex", label or "", done, total)
+
+    dex_intelligence.set_listeners(on_scan=dex_shown, on_hide=dex_hidden, on_progress=dex_progress)
+    dex_view.closed.connect(dex_beam.hidden.emit)
+    hud.shutdown.connect(dex_view.hide_requested.emit)
+    hud.shutdown.connect(dex_beam.hidden.emit)
 
     hud.stop_clicked.connect(assistant.stop_speaking)
 

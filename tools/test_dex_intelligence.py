@@ -250,7 +250,8 @@ class ScanTests(TestCase):
         # $100 at an ETH price that does not divide evenly: 18+ decimal places, once refused outright.
         weth = 10**21              # 1,000 WETH (18 decimals)
         usdc = 2_345_678_901_234   # 2,345,678.901234 USDC (6 decimals): $2,345.678901234 an ETH
-        places = {dex.TOKENS["USDC"]: 6, dex.TOKENS["USDT"]: 6, dex.TOKENS["DAI"]: 18, dex.TOKENS["WETH"]: 18}
+        places = {dex.TOKENS["USDC"]: 6, dex.TOKENS["USDT"]: 6, dex.TOKENS["DAI"]: 18, dex.TOKENS["WETH"]: 18,
+                  dex.TOKENS["WBTC"]: 8}
 
         class Mainnet:
             def chain_id(self):
@@ -304,9 +305,167 @@ class ScanTests(TestCase):
                 raise AssertionError(f"Unexpected call data: {data}")
 
         report = dex.scan_once(Mainnet(), amount_usd="100")
-        self.assertEqual(report["pools_read"], 12)
+        self.assertEqual(report["pools_read"], len(dex.PAIR_CONFIGS) * len(dex.FACTORIES))
         self.assertNotIn("0x0dfe1681", asked)
         self.assertNotIn("0xd21220a7", asked)
+
+
+DECIMALS = {"USDC": 6, "USDT": 6, "DAI": 18, "WETH": 18, "WBTC": 8}
+# Dollar prices on Uniswap; SushiSwap the same but for ether, 1% dearer there.
+USD = {"USDC": 1, "USDT": 1, "DAI": 1, "WETH": 2500, "WBTC": 62500}
+
+
+class Chain:
+    """A pretend mainnet: every default pair on both exchanges, each pool holding $10m a side."""
+
+    def __init__(self, sushi_eth=1.01):
+        self.pools = {}
+        self.calls = 0
+        for index, (base, quote) in enumerate(dex.PAIR_CONFIGS):
+            for which, (_name, factory) in enumerate(dex.FACTORIES):
+                address = "0x" + f"{index * 2 + which + 1:040x}"
+                lean = sushi_eth if which == 1 else 1
+                value = {name: USD[name] * (lean if name == "WETH" else 1) for name in (base, quote)}
+                reserves = {dex.TOKENS[name]: int(10_000_000 / value[name] * 10**DECIMALS[name])
+                            for name in (base, quote)}
+                key = (factory, *sorted((dex.TOKENS[base], dex.TOKENS[quote])))
+                self.pools[key] = address
+                self.pools[address] = [reserves[token] for token in key[1:]]
+
+    def chain_id(self):
+        return 1
+
+    def block_number(self):
+        return 21_000_000
+
+    def gas_price_wei(self):
+        return 2_000_000_000   # 2 gwei
+
+    def contract_call(self, address, data, _block):
+        self.calls += 1
+        if data.startswith("0xe6a43905"):
+            first, second = "0x" + data[34:74], "0x" + data[98:138]
+            found = self.pools.get((address, *sorted((first, second))))
+            return "0x" + (found[2:] if found else "0" * 40).rjust(64, "0")
+        if data.startswith("0x0902f1ac"):
+            reserve0, reserve1 = self.pools[address]
+            return "0x" + f"{reserve0:064x}" + f"{reserve1:064x}" + "0" * 64
+        if data.startswith("0x313ce567"):
+            name = next(name for name, token in dex.TOKENS.items() if token == address)
+            return "0x" + f"{DECIMALS[name]:064x}"
+        raise AssertionError(f"Unexpected call data: {data}")
+
+
+class FullScanTests(TestCase):
+    def test_every_pair_is_priced_on_both_exchanges_with_its_gap(self):
+        steps = []
+        report = dex.scan_once(Chain(), amount_usd="1000", progress=lambda *step: steps.append(step))
+        markets = {market["pair"]: market for market in report["markets"]}
+        self.assertEqual(set(markets), {f"{base}/{quote}" for base, quote in dex.PAIR_CONFIGS})
+        self.assertAlmostEqual(float(markets["WETH/USDC"]["prices"]["Uniswap V2"]), 2500, places=2)
+        self.assertAlmostEqual(float(markets["WETH/USDC"]["prices"]["SushiSwap V2"]), 2525, places=2)
+        self.assertAlmostEqual(float(markets["WETH/USDC"]["gap_pct"]), 1.0, places=3)
+        self.assertAlmostEqual(float(markets["USDT/USDC"]["gap_pct"]), 0.0, places=3)
+        # Bitcoin's price comes through ether: 25 ETH a bitcoin at $2,500 = $62,500.
+        self.assertAlmostEqual(float(report["estimated_btc_usd"]), 62500, delta=5)
+        self.assertAlmostEqual(float(report["estimated_eth_usd"]), 2500, delta=15)
+        self.assertEqual(steps[-1][1:], (16, 16))
+
+    def test_the_breakeven_is_fees_and_gas_as_a_share_of_the_trade(self):
+        report = dex.scan_once(Chain(), amount_usd="1000")
+        gas = float(report["estimated_gas_cost_usd"])
+        self.assertAlmostEqual(gas, 2e-9 * 240_000 * float(report["estimated_eth_usd"]), places=3)
+        self.assertAlmostEqual(float(report["breakeven_gap_pct"]), 0.5991 + gas / 1000 * 100, places=3)
+
+    def test_a_one_percent_gap_on_a_deep_pool_pays_and_is_said(self):
+        report = dex.scan_once(Chain(), amount_usd="1000")
+        best = next(market for market in report["markets"] if market["pair"] == "WETH/USDC")["best"]
+        # Ether is 1% dearer on SushiSwap: bought on Uniswap and sold there, whichever token the trip starts with.
+        self.assertEqual((best["buy_base_on"], best["sell_base_on"]), ("Uniswap V2", "SushiSwap V2"))
+        self.assertGreater(float(best["estimated_net_profit_usd"]), 0)
+        said = dex.summary(report)
+        self.assertIn("Buying WETH on Uniswap V2 and selling it on SushiSwap V2 would clear about", said)
+        self.assertIn("Nothing was traded", said)
+
+    def test_no_gap_is_said_plainly(self):
+        said = dex.summary(dex.scan_once(Chain(sushi_eth=1.0), amount_usd="1000"))
+        self.assertIn("Nothing clears it right now", said)
+        self.assertNotIn("would clear", said)
+
+    def test_a_scan_is_shown_and_the_hud_told_when_it_is_done(self):
+        shown, steps = [], []
+        dex.set_listeners(on_scan=shown.append, on_progress=lambda *step: steps.append(step))
+        try:
+            with mock.patch.object(dex, "EthereumReadOnlyRPC", lambda: Chain()), \
+                    mock.patch.object(dex, "settings", lambda: {"tokens": dex.TOKENS,
+                                                                "pairs": list(dex.PAIR_CONFIGS),
+                                                                "amount_usd": dex.Decimal(1000)}):
+                said = dex.describe()
+        finally:
+            dex.set_listeners()
+        self.assertEqual(len(shown), 1)
+        self.assertIn("markets", shown[0])
+        self.assertEqual(steps[-1], ("", 0, 0))
+        self.assertIn("Uniswap and SushiSwap", said)
+
+    def test_closing_the_panel_is_heard_and_not_taken_for_a_scan(self):
+        self.assertTrue(dex.dismissed("close the dex scan"))
+        self.assertTrue(dex.dismissed("hide the DEX panel"))
+        self.assertFalse(dex.dismissed("close the trade plan"))
+        self.assertFalse(dex.asked("close the dex scan"))
+
+
+class PanelTests(TestCase):
+    def test_the_panel_rows_say_what_the_scan_found(self):
+        import os as _os
+
+        _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        import dex_panel
+
+        table = {row["pair"]: row for row in dex_panel.rows(dex.scan_once(Chain(), amount_usd="1000"))}
+        self.assertEqual(table["WETH/USDC"]["prices"], ["2,500.00", "2,525.00"])
+        self.assertTrue(table["WETH/USDC"]["clears"])
+        self.assertEqual(table["WETH/USDC"]["route"], "buy Uniswap, sell SushiSwap")
+        self.assertFalse(table["USDT/USDC"]["clears"])
+        self.assertEqual(table["USDT/USDC"]["route"], "no gap")
+        self.assertLess(table["USDT/USDC"]["net"], 0)
+        self.assertEqual(dex_panel.price_text("0.000012345678"), "0.0000123457")
+        self.assertEqual(dex_panel.money_text("-7.394"), "-$7.39")
+
+
+class SettingsTests(TestCase):
+    def test_tokens_and_pairs_come_from_the_file_and_nonsense_is_left_out(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, dex.SETTINGS_NAME)
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"tokens": {"link": "0x514910771af9ca656af840dff83e8264ecf986ca", "BAD": "nope"},
+                           "pairs": [["LINK", "WETH"], ["BAD", "WETH"], ["WETH", "WETH"]],
+                           "amount_usd": "250"}, handle)
+            with mock.patch.object(dex, "_settings_path", lambda: path):
+                chosen = dex.settings()
+        self.assertIn("LINK", chosen["tokens"])
+        self.assertNotIn("BAD", chosen["tokens"])
+        self.assertEqual(chosen["pairs"], [("LINK", "WETH")])
+        self.assertEqual(chosen["amount_usd"], dex.Decimal("250"))
+
+    def test_the_defaults_are_written_out_the_first_time(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, dex.SETTINGS_NAME)
+            with mock.patch.object(dex, "_settings_path", lambda: path):
+                chosen = dex.settings()
+            with open(path, encoding="utf-8") as handle:
+                written = json.load(handle)
+        self.assertIn(("WBTC", "WETH"), chosen["pairs"])
+        self.assertIn("WBTC", written["tokens"])
+
+    def test_the_folder_tidier_leaves_the_settings_alone(self):
+        from actions import folder_organizer
+
+        self.assertTrue(folder_organizer.is_protected(dex.SETTINGS_NAME))
 
 
 if __name__ == "__main__":

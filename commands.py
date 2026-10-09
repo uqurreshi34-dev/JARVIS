@@ -3823,7 +3823,7 @@ _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 # they may name a connected service: a protocol runs OBS's own actions
 # itself, and "initiate stream protocol" is not a request for Agent Mode.
 _SETTLED_HERE = frozenset({"protocol", "file_hologram", "house", "house_question", "camera_picture",
-                           "sensor_history", "tradingview", "dex_scan"})
+                           "sensor_history", "tradingview", "dex_scan", "dex_scan_hide"})
 
 
 def _sensor_answer(command):
@@ -3947,7 +3947,10 @@ def _fast_path(command):
     if aircraft.wanted(text):
         return _blank_result("aircraft_overhead")
 
-    # Explicit read-only market scanning; never a transaction submission.
+    # Explicit read-only market scanning; never a transaction submission. Dismissal first, as with the radar.
+    if dex_intelligence.dismissed(command):
+        return _blank_result("dex_scan_hide")
+
     if dex_intelligence.asked(command):
         return _blank_result("dex_scan")
 
@@ -5922,6 +5925,10 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "dex_scan":
         return _query(intent, dex_intelligence.describe)
+
+    if intent == "dex_scan_hide":
+        return _query(intent, lambda: "DEX scan closed, sir." if dex_intelligence.hide()
+                      else "The DEX scan isn't open, sir.")
 
     if intent == "trade_plan_hide":
         return _query(intent, lambda: "Trade plan closed, sir." if trade_plan.hide()
