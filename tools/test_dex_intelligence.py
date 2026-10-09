@@ -121,12 +121,23 @@ class DexMathTests(TestCase):
     def test_scanner_command_rejects_general_information_questions(self):
         self.assertFalse(dex.asked("what is a DEX"))
         self.assertFalse(dex.asked("buy ethereum"))
-        self.assertFalse(dex.asked("check arbitrage on gold"))
+        self.assertFalse(dex.asked("check arbitrage on gold"))   # a trade plan market: the trade plan's
+        self.assertFalse(dex.asked("what is arbitrage"))
         self.assertFalse(dex.asked("scan my downloads folder"))
         self.assertTrue(dex.asked("run the DEX scanner"))
         self.assertTrue(dex.asked("jarvis scan the dex"))
         self.assertTrue(dex.asked("any arbitrage on uniswap"))
         self.assertTrue(dex.asked("check defi price gaps"))
+
+    def test_arbitrage_is_a_whole_word_to_ask_by(self):
+        for said in ("arbitrage", "scan for arbitrage", "arbitrage scan", "any crypto arbitrage",
+                     "show me the arbitrage opportunities", "Jarvis, check arbitrage."):
+            self.assertTrue(dex.asked(said), said)
+        for said in ("scan the decks", "how is crypto doing", "crypto prices", "explain arbitrage",
+                     "close the arbitrage scan"):
+            self.assertFalse(dex.asked(said), said)
+        self.assertTrue(dex.dismissed("close the arbitrage scan"))
+        self.assertTrue(dex.dismissed("hide arbitrage"))
 
     def test_rpc_client_has_no_transaction_submission_methods(self):
         client = dex.EthereumReadOnlyRPC("https://ethereum-rpc.publicnode.com")

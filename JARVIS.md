@@ -2008,10 +2008,13 @@ state label (`Hud.progress_changed`): what it is, how far, and a moving
 bar, clear of the reply so an announcement never covers it. The trader
 board reports through it.
 
-### The DEX scanner - `actions/dex_intelligence.py`, `dex_panel.py`
-"Scan the DEX", "any arbitrage on Uniswap" -- a request needs a decentralised
-exchange named and a request to look, so "what is a DEX" is not one; "close
-the DEX scan" puts the panel away. JARVIS reads the Uniswap V2 and SushiSwap
+### The arbitrage scanner - `actions/dex_intelligence.py`, `dex_panel.py`
+"Jarvis, arbitrage", "scan for arbitrage", "any crypto arbitrage" -- a whole
+word, said plainly (speech hears "DEX" as "decks"), and nothing else in JARVIS
+does it, so it is enough alone; never "what is arbitrage", or a sentence
+naming a trade plan market ("arbitrage on gold"), which is the trade plan's.
+Typed, "scan the DEX" works too: an exchange named and a request to look.
+"Close the arbitrage scan" puts the panel away. JARVIS reads the Uniswap V2 and SushiSwap
 V2 pools at one Ethereum block for every pair in dex-scan.json (in the JARVIS
 folder, written the first time: ether (WETH) and bitcoin (WBTC) against the
 dollar coins and each other, and the dollar coins against each other; add a

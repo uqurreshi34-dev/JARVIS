@@ -1,4 +1,4 @@
-"""The DEX scan JARVIS projects: every pair's price on each exchange, the gap, and whether it would pay.
+"""The arbitrage scan JARVIS projects: every pair's price on each exchange, the gap, and whether it would pay.
 
 Built like the other panels -- frameless, translucent, anchored beside the HUD
 with the beam crossing the gap, scrolling when there are more pairs than fit:
@@ -261,7 +261,7 @@ class DexPanel(QWidget):
         self.setStyleSheet(_CONTROLS)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-        self._title = QLabel("DEX SCAN  /  ETHEREUM")
+        self._title = QLabel("ARBITRAGE SCAN  /  ETHEREUM")
         self._title.setStyleSheet("color: #5fc8f5; font: bold 11pt Consolas; letter-spacing: 2px;")
         self._subtitle = QLabel()
         self._subtitle.setStyleSheet("color: #8294a5; font: 8pt 'Segoe UI';")

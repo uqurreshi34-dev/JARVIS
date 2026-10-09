@@ -711,9 +711,12 @@ def scan_once(
     }
 
 
-# What the scanner is about, and what asking it to look sounds like. A request needs both: "scan the DEX",
-# "any arbitrage on uniswap", "check defi price gaps" -- not "what is a DEX", "buy ethereum", or arbitrage
-# on anything but the decentralised exchanges.
+# What the scanner is about. "Arbitrage" -- buying where a coin is cheaper and selling where it is dearer --
+# is a whole word and said plainly, and nothing else in JARVIS does it, so it is enough on its own: "Jarvis,
+# arbitrage", "scan for arbitrage", "any crypto arbitrage". The exchanges' names ("scan the DEX", "check
+# defi price gaps") also need a request to look. Never "what is arbitrage", "buy ethereum", or a sentence
+# naming one of the trade plan's markets ("arbitrage on gold"), which are for it.
+_ARBITRAGE = re.compile(r"\barbitrage\b")
 _DEX_SUBJECT = re.compile(
     r"\b(?:dex(?:es)?|defi|decentrali[sz]ed exchanges?|uniswap|sushi ?swap)\b")
 _DEX_LOOK = re.compile(
@@ -722,11 +725,28 @@ _DEX_LOOK = re.compile(
 _DEX_NOT = re.compile(r"\b(?:what is|what s|what does|explain|meaning of|define|buy|sell|swap my|send)\b")
 
 
+def _trade_plan_market(text: str) -> bool:
+    """Whether [text] names a market the trade plan reads (trade-plan.json): those questions are its."""
+    try:
+        from actions import trade_plan
+
+        return trade_plan.which(text) is not None
+    except Exception:  # noqa: BLE001 - no trade plan settings: nothing named
+        return False
+
+
 def asked(command: str) -> bool:
-    """Recognise a request to run the read-only DEX scanner: its subject and a request to look."""
+    """Recognise a request to run the read-only arbitrage scanner: "arbitrage", or an exchange and a request
+    to look."""
     text = " ".join(re.sub(r"[^a-z0-9 ]+", " ", str(command or "").casefold()).split())
-    return bool(_DEX_SUBJECT.search(text) and _DEX_LOOK.search(text) and not _DEX_NOT.search(text)
-                and not dismissed(text))
+
+    if _DEX_NOT.search(text) or dismissed(text):
+        return False
+
+    if _ARBITRAGE.search(text):
+        return not _trade_plan_market(text)
+
+    return bool(_DEX_SUBJECT.search(text) and _DEX_LOOK.search(text))
 
 
 _listener = None
@@ -742,9 +762,10 @@ def set_listeners(on_scan=None, on_hide=None, on_progress=None):
 
 
 def dismissed(command: str) -> bool:
-    """ "Close the DEX scan", "hide the dex panel"."""
+    """ "Close the arbitrage scan", "hide the dex panel"."""
     text = " ".join(re.sub(r"[^a-z0-9 ]+", " ", str(command or "").casefold()).split())
-    return bool(re.search(r"\b(?:close|hide|dismiss|shut|put away)\b", text) and _DEX_SUBJECT.search(text))
+    return bool(re.search(r"\b(?:close|hide|dismiss|shut|put away)\b", text)
+                and (_ARBITRAGE.search(text) or _DEX_SUBJECT.search(text)))
 
 
 def hide() -> bool:

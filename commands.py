@@ -5927,8 +5927,8 @@ def _handle_command(command, *, fast_only=False, probe=False):
         return _query(intent, dex_intelligence.describe)
 
     if intent == "dex_scan_hide":
-        return _query(intent, lambda: "DEX scan closed, sir." if dex_intelligence.hide()
-                      else "The DEX scan isn't open, sir.")
+        return _query(intent, lambda: "Arbitrage scan closed, sir." if dex_intelligence.hide()
+                      else "The arbitrage scan isn't open, sir.")
 
     if intent == "trade_plan_hide":
         return _query(intent, lambda: "Trade plan closed, sir." if trade_plan.hide()
