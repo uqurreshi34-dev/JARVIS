@@ -152,8 +152,36 @@ else:
         check(result["intent"] == "tradingview" and said.startswith("Bitcoin on the one hour chart")
               and shown == ["BTC ONE HOUR TRADINGVIEW"], f"commands: said and shown, no model call ({said!r})")
         check(commands._fast_path("close the chart")["intent"] == "hide_chart", "and 'close the chart' puts it away")
+        for said in ("close trading view", "hide the tradingview chart", "dismiss the graph", "close the charts"):
+            check(commands._fast_path(said)["intent"] == "hide_chart", f"{said!r} puts the chart away, never an app")
+        check(commands._fast_path("close the gold chart")["intent"] == "trade_plan_hide",
+              "'close the gold chart' is still the trade plan's")
     finally:
         commands.run_agent, tradingview._read = real_agent, real_read
         commands.set_chart_listener(None)
+
+# The panel itself: a Close button, and Escape, put it away and say so, so the beam goes with it.
+import os  # noqa: E402
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+try:
+    from PyQt6.QtCore import Qt  # noqa: E402
+    from PyQt6.QtGui import QKeyEvent  # noqa: E402
+    from PyQt6.QtCore import QEvent  # noqa: E402
+    from PyQt6.QtWidgets import QApplication  # noqa: E402
+
+    import chart_panel  # noqa: E402
+except Exception as error:  # noqa: BLE001
+    print(f"SKIP chart panel (could not load Qt: {error})")
+else:
+    application = QApplication.instance() or QApplication([])
+    panel = chart_panel.ChartPanel()
+    closes = []
+    panel.closed.connect(lambda: closes.append(True))
+    panel._close.click()
+    panel.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier))
+    check(panel._close.text() == "Close" and closes == [True, True] and not panel.isVisible(),
+          "the chart panel has Close, and Escape, each putting it away and saying so")
 
 sys.exit(1 if failures else 0)

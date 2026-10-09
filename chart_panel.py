@@ -8,7 +8,7 @@ from PyQt6.QtGui import (
     QPainterPath,
     QPen,
 )
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtWidgets import QPushButton, QWidget
 
 
 _WIDTH = 700
@@ -23,12 +23,24 @@ _BEAM_GAP = 74
 
 _FRAME_MS = 33
 
+# The Close button, top right, styled as the other panels' buttons.
+_CLOSE_WIDTH = 64
+_CLOSE_STYLE = """
+QPushButton {
+    background: rgba(95, 200, 245, 30); border: 1px solid rgba(95, 200, 245, 110); border-radius: 4px;
+    color: #e2ecf5; padding: 3px 10px;
+}
+QPushButton:hover { background: rgba(95, 200, 245, 60); }
+"""
+
 
 class ChartPanel(QWidget):
     """Shows a chart rendered from a spreadsheet, in the HUD's style."""
 
     show_chart = pyqtSignal(bytes, str)
     hide_chart = pyqtSignal()
+    # Put away from the panel itself (Close or Escape): the beam goes with it.
+    closed = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -46,6 +58,12 @@ class ChartPanel(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(_WIDTH, _HEIGHT)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        self._close = QPushButton("Close", self)
+        self._close.setStyleSheet(_CLOSE_STYLE)
+        self._close.setGeometry(_WIDTH - _MARGIN - _CLOSE_WIDTH, 22, _CLOSE_WIDTH, 26)
+        self._close.clicked.connect(self._close_panel)
 
         self.show_chart.connect(self._on_show)
         self.hide_chart.connect(self._on_hide)
@@ -75,6 +93,8 @@ class ChartPanel(QWidget):
         self._position()
         self.show()
         self.raise_()
+        self.activateWindow()
+        self.setFocus()
 
         self._animate.start(_FRAME_MS)
         self.update()
@@ -84,6 +104,16 @@ class ChartPanel(QWidget):
         self._image = None
         self._title = ""
         self.hide()
+
+    def _close_panel(self):
+        self._on_hide()
+        self.closed.emit()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self._close_panel()
+        else:
+            super().keyPressEvent(event)
 
     def _position(self):
         screen = self.screen().availableGeometry()
@@ -174,7 +204,7 @@ class ChartPanel(QWidget):
         heading = metrics.elidedText(
             (self._title or "CHART").upper(),
             Qt.TextElideMode.ElideRight,
-            _WIDTH - _MARGIN * 2,
+            _WIDTH - _MARGIN * 2 - _CLOSE_WIDTH - 12,
         )
 
         painter.drawText(_MARGIN, 42, heading)

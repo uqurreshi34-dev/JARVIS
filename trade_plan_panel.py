@@ -45,6 +45,8 @@ _MUTED = QColor(130, 148, 165)
 _GRID = QColor(95, 200, 245, 34)
 _GAIN = QColor(70, 205, 135)
 _LOSS = QColor(235, 95, 95)
+# The candle still forming: its own colour, this opaque, so it reads as not yet closed.
+_FORMING_ALPHA = 130
 _AMBER = QColor(235, 185, 80)
 
 _VERDICT_COLOURS = {"wait": _AMBER, "buy": _GAIN, "sell": _LOSS, "skip": _MUTED}
@@ -283,8 +285,9 @@ class _Page(QWidget):
                 painter.setPen(QPen(_tint(colour_of(line), 80), 1, Qt.PenStyle.DashLine))
                 painter.drawLine(QPointF(rect.left(), level(line["price"])), QPointF(rect.right(), level(line["price"])))
 
-        # The candles, the one still forming after them hollow: drawn so the chart reaches now, never judged
-        # on. A doji, opening and closing at the same price, is a bar across, as on any chart.
+        # The candles, the one still forming after them in its own colour but paler, as it may yet change: drawn
+        # so the chart reaches now, never judged on. A doji, opening and closing at the same price, is a bar
+        # across, as on any chart.
         for index, (_when, opened, top, bottom, closed, _label) in enumerate(drawn):
             colour = _GAIN if closed >= opened else _LOSS
             x = middle(index)
@@ -299,9 +302,10 @@ class _Page(QWidget):
             elif index < len(candles):
                 painter.fillRect(QRectF(x - width_ / 2, body_top, width_, body_bottom - body_top), colour)
             else:
-                painter.setBrush(_BACKDROP)
+                paler = QColor(colour)
+                paler.setAlpha(_FORMING_ALPHA)
+                painter.fillRect(QRectF(x - width_ / 2, body_top, width_, body_bottom - body_top), paler)
                 painter.drawRect(QRectF(x - width_ / 2, body_top, width_, body_bottom - body_top))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
 
         # Support and resistance over the candles, and the swings that make them ringed -- on the chart they
         # were found on.
@@ -397,7 +401,7 @@ class _Page(QWidget):
 
         y = rect.bottom() + 20
         return self._note(painter, y, width,
-                          ("" if plan.get("lines_from") else "Rings: the highs and lows each line runs through. ") + "Hollow candle: still forming. "
+                          ("" if plan.get("lines_from") else "Rings: the highs and lows each line runs through. ") + "Paler last candle: still forming. "
                           f"Green dashes: the buy plan. Red: the sell plan. 1 break, 2 retest, 3 go, to the target"
                           f" (T); x marks the stop. Times are UK. Next {plan['timeframe']} candle closes"
                           f" {plan['next_close']} UK.")

@@ -1973,7 +1973,7 @@ where a trader drew 4,229 and 4,114; silver resistance 61.956 and support
 60.118 (30 Sep and 6 Oct), broken on 7 Oct. The chart rings the peaks behind
 support and resistance, and `python tools/trade_plan.py gold` prints every
 line with its peaks' dates (`--save` keeps the candles too), to check
-against your own chart. The candle still forming is drawn hollow
+against your own chart. The candle still forming is drawn paler in its own colour
 after the last finished one, so the chart reaches now; only finished
 candles are judged. Your own lines (`your_levels`, by
 instrument) are always lines. For each side it finds the line in play -- one

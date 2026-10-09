@@ -933,6 +933,7 @@ def main():
             chart_beam.hidden.emit()
 
     set_chart_listener(chart_update)
+    chart.closed.connect(chart_beam.hidden.emit)
 
     # The camera view gets its own panel, projected like the others.
     view = CameraPanel()

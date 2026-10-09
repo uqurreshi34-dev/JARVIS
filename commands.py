@@ -3654,10 +3654,14 @@ _PLOT_REQUEST = re.compile(
     r"(?:\s+(?:csv|file|spreadsheet|data))?$"
 )
 
-_HIDE_CHART = frozenset({
-    "close the chart", "hide the chart", "close chart", "hide chart",
-    "close the graph", "hide the graph", "dismiss the chart",
-})
+# Putting the chart panel away: a word for closing and what the panel shows -- a chart, a graph, or a
+# TradingView readout -- in any wording: "close the chart", "hide trading view", "dismiss the graph".
+_CLOSING = re.compile(r"\b(?:close|hide|dismiss|shut|put away|clear|get rid of)\b")
+_CHART_THINGS = re.compile(r"\b(?:charts?|graphs?|tradingview|trading views?)\b")
+
+
+def _chart_dismissed(text):
+    return bool(_CLOSING.search(text) and _CHART_THINGS.search(text))
 
 
 def _plot_request(text):
@@ -3973,6 +3977,12 @@ def _fast_path(command):
     if trader_watch.wanted(text):
         return _blank_result("traders_show")
 
+    # The chart panel -- a plotted file or a TradingView readout. After the trade plan's own dismissal, so
+    # "close the gold chart" still closes that, and before applications, so "close trading view" is never
+    # taken for a program to quit.
+    if _chart_dismissed(text):
+        return _blank_result("hide_chart")
+
     # What the boards on the wifi last said: "what's the temperature in the
     # room", "is anyone in the kitchen". Rooms are the boards' own names, so
     # it only claims a question naming one of them (or "in here"), and
@@ -4250,9 +4260,6 @@ def _fast_path(command):
 
         if number:
             return _blank_result("expand_story", amount=number)
-
-    if text in _HIDE_CHART:
-        return _blank_result("hide_chart")
 
     ignore_match = _IGNORE_WORD.match(text)
 
