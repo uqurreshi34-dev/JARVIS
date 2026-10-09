@@ -13,6 +13,7 @@ from tools import sandbox  # noqa: E402
 sandbox.activate()
 
 from actions import dex_intelligence as dex  # noqa: E402
+import commands  # noqa: E402
 
 
 USDC = dex.TOKENS["USDC"]
@@ -99,6 +100,15 @@ class DexMathTests(TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "Ethereum mainnet"):
             dex.scan_once(WrongNetwork())
+
+    def test_voice_command_routes_to_read_only_scanner(self):
+        result = commands._fast_path("scan DEX opportunities")
+        self.assertEqual(result["intent"], "dex_scan")
+
+    def test_scanner_command_rejects_general_information_questions(self):
+        self.assertFalse(dex.asked("what is a DEX"))
+        self.assertFalse(dex.asked("buy ethereum"))
+        self.assertTrue(dex.asked("run the DEX scanner"))
 
     def test_rpc_client_has_no_transaction_submission_methods(self):
         client = dex.EthereumReadOnlyRPC("https://ethereum-rpc.publicnode.com")

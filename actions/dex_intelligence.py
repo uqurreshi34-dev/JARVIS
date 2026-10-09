@@ -537,6 +537,62 @@ def scan_once(
     }
 
 
+def asked(command: str) -> bool:
+    """Recognise an explicit request to run the read-only DEX scanner."""
+    text = re.sub(r"[^a-z0-9 ]+", " ", str(command or "").casefold())
+    text = " ".join(text.split())
+    patterns = (
+        r"^(?:scan|check|find|show) (?:the )?(?:ethereum )?(?:dex|defi)"
+        r"(?: arbitrage)?(?: opportunities)?(?: now)?$",
+        r"^run (?:the )?(?:ethereum )?dex scanner$",
+        r"^(?:scan|check|find) (?:decentralized|decentralised) exchange"
+        r" arbitrage(?: opportunities)?$",
+        r"^(?:what are|show me) (?:the )?dex arbitrage opportunities$",
+    )
+    return any(re.fullmatch(pattern, text) for pattern in patterns)
+
+
+def describe() -> str:
+    """Run one read-only scan and return a concise voice response."""
+    report = scan_once(EthereumReadOnlyRPC())
+    print(json.dumps(report, indent=2), flush=True)
+    opportunities = report["opportunities"]
+    block = report["snapshot_block"]
+    pool_count = report["pools_read"]
+    if not opportunities:
+        return (
+            f"I scanned {pool_count} Uniswap and SushiSwap pools at Ethereum "
+            f"block {block}, sir. No positive gross price dislocation was found "
+            "among the configured pairs in this snapshot. No trades were placed."
+        )
+
+    best = opportunities[0]
+    gross = Decimal(best["gross_profit_usd"])
+    net_value = best["estimated_net_profit_usd"]
+    route = (
+        f"{best['pair']}, buying on {best['buy_on']} and selling on "
+        f"{best['sell_on']}"
+    )
+    if net_value is None:
+        return (
+            f"The best paper-only route is {route}, sir, with an estimated "
+            f"gross difference of ${gross:.4f}. I couldn't estimate gas in USD, "
+            "so this is not a net-profit signal. No trades were placed."
+        )
+    net = Decimal(net_value)
+    if net <= 0:
+        return (
+            f"The best gross paper route is {route}, sir, but after the rough "
+            f"gas estimate it loses about ${abs(net):.4f}. No trades were placed."
+        )
+    return (
+        f"The best paper-only route is {route}, sir. The estimate is "
+        f"${gross:.4f} gross and ${net:.4f} after approximate gas for a "
+        f"${best['input_amount']} {best['input_token']} route. This is only a "
+        "reserve-ratio estimate, not an executable quote. No trades were placed."
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Read-only Ethereum DEX arbitrage scanner (paper simulation only)."

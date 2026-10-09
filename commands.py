@@ -39,6 +39,7 @@ from actions import (
     clipboard,
     contacts,
     diary,
+    dex_intelligence,
     documents,
     file_hologram,
     house,
@@ -3822,7 +3823,7 @@ _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 # they may name a connected service: a protocol runs OBS's own actions
 # itself, and "initiate stream protocol" is not a request for Agent Mode.
 _SETTLED_HERE = frozenset({"protocol", "file_hologram", "house", "house_question", "camera_picture",
-                           "sensor_history", "tradingview"})
+                           "sensor_history", "tradingview", "dex_scan"})
 
 
 def _sensor_answer(command):
@@ -3945,6 +3946,10 @@ def _fast_path(command):
     # look -- so the module decides rather than the router.
     if aircraft.wanted(text):
         return _blank_result("aircraft_overhead")
+
+    # Explicit read-only market scanning; never a transaction submission.
+    if dex_intelligence.asked(command):
+        return _blank_result("dex_scan")
 
     # The trade plan: "shall I buy or sell gold", "should I go long on
     # oil". A market from trade-plan.json and a question about trading it
@@ -5914,6 +5919,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
             return aircraft.describe()
 
         return _query(intent, sky)
+
+    if intent == "dex_scan":
+        return _query(intent, dex_intelligence.describe)
 
     if intent == "trade_plan_hide":
         return _query(intent, lambda: "Trade plan closed, sir." if trade_plan.hide()
