@@ -246,6 +246,40 @@ class RpcClientTests(TestCase):
 
 
 class ScanTests(TestCase):
+    def test_a_dollar_amount_in_weth_is_rounded_to_what_weth_can_hold(self):
+        # $100 at an ETH price that does not divide evenly: 18+ decimal places, once refused outright.
+        weth = 10**21              # 1,000 WETH (18 decimals)
+        usdc = 2_345_678_901_234   # 2,345,678.901234 USDC (6 decimals): $2,345.678901234 an ETH
+        places = {dex.TOKENS["USDC"]: 6, dex.TOKENS["USDT"]: 6, dex.TOKENS["DAI"]: 18, dex.TOKENS["WETH"]: 18}
+
+        class Mainnet:
+            def chain_id(self):
+                return 1
+
+            def block_number(self):
+                return 19_000_000
+
+            def gas_price_wei(self):
+                return 1_000_000_000
+
+            def contract_call(self, address, data, _block):
+                if data.startswith("0xe6a43905"):
+                    return "0x" + "0" * 24 + "ab" * 20
+                if data.startswith("0x0902f1ac"):
+                    first, second = sorted((dex.TOKENS["USDC"], dex.TOKENS["WETH"]))
+                    reserves = (usdc, weth) if first == dex.TOKENS["USDC"] else (weth, usdc)
+                    return "0x" + f"{reserves[0]:064x}" + f"{reserves[1]:064x}" + "0" * 64
+                if data.startswith("0x313ce567"):
+                    return "0x" + f"{places[address]:064x}"
+                raise AssertionError(f"Unexpected call data: {data}")
+
+        report = dex.scan_once(Mainnet(), amount_usd="100")
+        self.assertEqual(report["requested_trade_size_usd"], "100.00")
+        self.assertEqual(report["estimated_eth_usd"], "2345.6789")
+        self.assertEqual(dex.whole_units(dex.Decimal(100) / dex.Decimal("2345.678901234"), 18),
+                         42631580966769419)
+        self.assertEqual(dex.whole_units(dex.Decimal("1E+11"), 18), 10**29)
+
     def test_pools_are_read_without_asking_their_token_order(self):
         asked = []
 

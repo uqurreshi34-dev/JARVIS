@@ -17,7 +17,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_DOWN, Decimal, InvalidOperation, localcontext
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -297,6 +297,17 @@ def human_to_raw(amount: Decimal | str | int, decimals: int) -> int:
     return int(raw)
 
 
+def whole_units(amount: Decimal, decimals: int) -> int:
+    """A token amount in its smallest units, rounded down: $100 of WETH runs to more places than WETH has,
+    and a real swap is sized in whole units, never spending more than asked. Worked at full precision,
+    so a large amount is not rounded on the way."""
+    if not isinstance(decimals, int) or not 0 <= decimals <= 36:
+        raise ValueError("Token decimals are outside the supported range.")
+    with localcontext() as context:
+        context.prec = 100
+        return int((Decimal(amount) * (Decimal(10) ** decimals)).to_integral_value(rounding=ROUND_DOWN))
+
+
 def raw_to_decimal(amount: int, decimals: int) -> Decimal:
     if amount < 0 or not isinstance(decimals, int) or not 0 <= decimals <= 36:
         raise ValueError("Invalid token amount or decimals.")
@@ -501,7 +512,9 @@ def scan_once(
                 if token_in in (pool_one.token0, pool_one.token1)
                 else pool_two.token_decimals(token_in)
             )
-            amount_in = human_to_raw(amount_in_human, decimals)
+            amount_in = whole_units(amount_in_human, decimals)
+            if amount_in <= 0:
+                continue
 
             for first, second in ((pool_one, pool_two), (pool_two, pool_one)):
                 try:
