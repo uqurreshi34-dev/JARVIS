@@ -35,6 +35,7 @@ from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPe
 from PyQt6.QtWidgets import QWidget
 
 import hud as _hud
+import on_top
 from actions import cameras, sensors
 
 
@@ -299,6 +300,10 @@ class SensorPanel(QWidget):
             self._scroll, self._scroll_px = 0, 0.0
             self.hide()
             return
+
+        # Windows can take "always on top" away (a picture opened over the panel and closed, 12 October 2026),
+        # leaving it behind every window while it still updates; put back without taking the focus.
+        on_top.keep(self, "sensor panel")
 
         # Still and nothing pulsing: slow down to a few frames a second.
         still = self._reveal == target and self._scroll_px == aim

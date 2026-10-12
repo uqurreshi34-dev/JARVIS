@@ -1328,6 +1328,13 @@ person already home, not an arrival in each.
 exactly as the sketch does (HTTPS, JARVIS's own authority, the token), so
 the panel and the announcements can be tried without hardware.
 
+Windows can take "always on top" away from a window after it is made: the
+sensor panel went behind every open window once a picture opened over it
+and closed, still updating, only buried. `on_top.py` checks the flag
+(WS_EX_TOPMOST) as the panel animates and as the HUD reads its telemetry,
+and puts it back without taking the focus, saying so once in the console.
+`tools/test_on_top.py` (on Windows, with a real window).
+
 ### Sensor history - `actions/sensor_history.py`
 sensors.report hands every report to a recorder (`sensors.set_recorder`,
 wired in by main.py): sensor_history.record keeps each reading and each
