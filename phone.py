@@ -27,7 +27,7 @@ import threading
 import time
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 
 from werkzeug.serving import ThreadedWSGIServer
 from pywebpush import webpush, WebPushException
@@ -849,6 +849,23 @@ class PhoneServer:
 
         return secrets.compare_digest(supplied, self.token)
 
+    @staticmethod
+    def _camera_shown(text):
+        """The camera a command asked to see ("show me the room cam"), for the phone to play; else None.
+
+        The same matcher the desk uses, so the phone opens exactly what
+        the desk would show.
+        """
+        try:
+            asked = cameras.asked(text)
+        except Exception:
+            return None
+
+        if not asked or asked[0] != "show" or not asked[1]["online"]:
+            return None
+
+        return {"name": asked[1]["name"], "title": cameras.title(text, asked[1])}
+
     def _register_routes(self):
         app = self._app
 
@@ -1062,6 +1079,33 @@ class PhoneServer:
                   f"{ended}", flush=True)
             return jsonify({"ok": True, "frames": frames}), 200
 
+        @app.get("/cameras")
+        def cameras_listed():
+            """The wifi cameras, for the phone to offer: name, what each looks at, whether it is online."""
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            return jsonify({"cameras": cameras.listed()}), 200
+
+        @app.get("/camera/watch")
+        def camera_watch():
+            """A camera's live view on the phone: MJPEG, which an <img> plays as video.
+
+            Over the same HTTPS and token as everything else -- through
+            Tailscale when away from home. Watching keeps the camera live;
+            leaving the page lets it stop.
+            """
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            wanted = cameras.normal_name(request.args.get("name"))
+
+            if wanted not in {camera["name"] for camera in cameras.listed()}:
+                return jsonify({"error": "no such camera"}), 404
+
+            return Response(cameras.remote_frames(wanted), mimetype=cameras.REMOTE_MIMETYPE,
+                            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
         @app.post("/camera")
         def camera_picture():
             """A picture a camera was asked for: a JPEG, kept in memory only.
@@ -1251,6 +1295,7 @@ class PhoneServer:
                     "heard": text,
                     "reply": reply.get("spoken", ""),
                     "link": reply.get("link"),
+                    "camera": self._camera_shown(text),
                 })
 
             if reply is None:
@@ -1261,6 +1306,7 @@ class PhoneServer:
             return jsonify({
                 "heard": text,
                 "reply": reply,
+                "camera": self._camera_shown(text),
             })
 
         @app.post("/voice")
@@ -1336,6 +1382,7 @@ class PhoneServer:
                         "heard": text,
                         "reply": reply.get("spoken", ""),
                         "link": reply.get("link"),
+                        "camera": self._camera_shown(text),
                     })
 
                 if reply is None:
@@ -1346,6 +1393,7 @@ class PhoneServer:
                 return jsonify({
                     "heard": text,
                     "reply": reply,
+                    "camera": self._camera_shown(text),
                 })
 
             except Exception as error:
@@ -1601,6 +1649,62 @@ PAGE = """<!DOCTYPE html>
   display: flex;
 }
 
+/* A wifi camera's live view, from home or away: full screen, like the phone's own camera. */
+#feed {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: #000;
+  flex-direction: column;
+}
+
+#feed.open {
+  display: flex;
+}
+
+#feed-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
+  color: var(--ink);
+  letter-spacing: 3px;
+  font-size: 13px;
+}
+
+#feed-title {
+  flex: 1;
+}
+
+#feed-close {
+  background: none;
+  color: var(--ink);
+  font-size: 22px;
+  padding: 0 6px;
+}
+
+#feed-img {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  object-fit: contain;
+}
+
+#feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+#feed-note {
+  color: var(--dim);
+  text-align: center;
+  font-size: 13px;
+  padding: 12px 12px calc(16px + env(safe-area-inset-bottom));
+}
+
 #preview {
   flex: 1;
   width: 100%;
@@ -1732,7 +1836,18 @@ PAGE = """<!DOCTYPE html>
     <button id="mute" title="voice">&#128266;</button>
     <button id="locate" title="send my location">&#128205;</button>
     <button id="camera-open" title="look at something">&#128247;</button>
+    <button id="feeds-open" title="your cameras">&#127909;</button>
   </header>
+
+  <div id="feed">
+    <div id="feed-top">
+      <span id="feed-title">CAMERAS</span>
+      <button id="feed-close" type="button" title="close">&#10005;</button>
+    </div>
+    <img id="feed-img" alt="">
+    <div id="feed-list"></div>
+    <div id="feed-note"></div>
+  </div>
 
   <div id="camera">
     <video id="preview" playsinline autoplay muted></video>
@@ -2501,6 +2616,10 @@ async function submit() {
     } else if (data.reply) {
       add(data.reply, "jarvis");
 
+      if (data.camera) {
+        openFeed(data.camera.name, data.camera.title);
+      }
+
       if (data.link) {
         offerLink(
           data.link,
@@ -2595,6 +2714,88 @@ mute.addEventListener("click", () => {
   mute.classList.toggle("off", !voiceOn);
   if (!voiceOn) player.pause();
   unlockAudio();
+});
+
+// ---- the wifi cameras' live views ------------------------------------------------------------
+
+const feed = document.getElementById("feed");
+const feedImg = document.getElementById("feed-img");
+const feedTitle = document.getElementById("feed-title");
+const feedList = document.getElementById("feed-list");
+const feedNote = document.getElementById("feed-note");
+
+function stopFeed() {
+  // Without a source the stream's connection closes, and JARVIS lets the camera stop.
+  feedImg.onload = null;
+  feedImg.onerror = null;
+  feedImg.removeAttribute("src");
+  feedImg.style.display = "none";
+}
+
+function openFeed(name, title) {
+  stopFeed();
+  feedList.innerHTML = "";
+  feedTitle.textContent = title || name.toUpperCase();
+  feedNote.textContent = "Waking the camera, sir...";
+  feedImg.style.display = "block";
+  feedImg.onload = () => { feedNote.textContent = ""; };
+  feedImg.onerror = () => { feedNote.textContent = "The camera stopped sending, sir."; };
+  feedImg.src = "/camera/watch?t=" + encodeURIComponent(TOKEN) +
+    "&name=" + encodeURIComponent(name) + "&at=" + Date.now();
+  feed.classList.add("open");
+}
+
+function closeFeed() {
+  stopFeed();
+  feed.classList.remove("open");
+}
+
+async function showCameras() {
+  let listed = [];
+
+  try {
+    const res = await fetch("/cameras?t=" + encodeURIComponent(TOKEN));
+    listed = ((await res.json()).cameras) || [];
+  } catch (e) {
+    add("I couldn't reach your PC for the cameras, sir.", "oops");
+    return;
+  }
+
+  const online = listed.filter(camera => camera.online);
+
+  if (!online.length) {
+    add(listed.length ? "Your cameras are all offline, sir." : "No cameras are connected, sir.", "oops");
+    return;
+  }
+
+  if (online.length === 1) {
+    openFeed(online[0].name, (online[0].looks ? online[0].looks + " cam" : online[0].name).toUpperCase());
+    return;
+  }
+
+  stopFeed();
+  feedTitle.textContent = "CAMERAS";
+  feedNote.textContent = "";
+  feedList.innerHTML = "";
+
+  online.forEach(camera => {
+    const choice = document.createElement("button");
+    choice.type = "button";
+    choice.className = "action";
+    choice.textContent = camera.looks ? camera.name + " (" + camera.looks + ")" : camera.name;
+    choice.addEventListener("click", () => openFeed(camera.name, camera.name.toUpperCase()));
+    feedList.appendChild(choice);
+  });
+
+  feed.classList.add("open");
+}
+
+document.getElementById("feeds-open").addEventListener("click", showCameras);
+document.getElementById("feed-close").addEventListener("click", closeFeed);
+
+// A locked phone or a backgrounded tab is not watching: the stream ends, and the camera with it.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && feed.classList.contains("open")) closeFeed();
 });
 
 async function openCamera() {
@@ -3137,6 +3338,10 @@ async function stopRecording() {
 
     if (data.reply) {
       add(data.reply, "jarvis");
+
+      if (data.camera) {
+        openFeed(data.camera.name, data.camera.title);
+      }
 
       if (data.link) {
         offerLink(

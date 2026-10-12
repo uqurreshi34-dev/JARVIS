@@ -1763,6 +1763,27 @@ JARVIS_STALL_WATCH=off turns it off. `tools/test_stall_watch.py`.
 The first run with it printed nothing for the start-up freeze, though it
 was still felt; the pause report is for exactly that case.
 
+### The cameras on the phone - `phone.py`, `actions/cameras.py`
+The point of a wifi camera is not being at the desk. The phone page has a
+cameras button (the film camera in its header): with one camera online it
+plays it, with more it offers them. "Show me the room cam" said or typed on
+the phone opens the same view there -- the reply carries the camera
+(`"camera": {"name", "title"}`), matched by the desk's own cameras.asked.
+`GET /cameras` lists them; `GET /camera/watch?name=` plays one as MJPEG,
+which an `<img>` shows as video with nothing to install, over the phone
+server's own HTTPS and token -- through Tailscale when away, so nothing is
+opened to the internet and nothing new is exposed.
+
+Watching holds a lease on the camera's live view (cameras.lease), renewed
+while frames are sent; the desk's own view and the phone's are separate,
+so closing the picture on the desk does not stop the phone's. The phone
+going away -- closed, locked (the page closes the view when hidden), out
+of signal -- stops the renewals, and the camera stops streaming ten
+seconds later. Frames go to the phone at most JARVIS_REMOTE_CAMERA_FPS
+(12) a second, kinder to mobile data than the camera's 25.
+`tools/test_camera_remote.py` (the page itself was also played in Chromium
+against the real server while frames arrived).
+
 ### Who moved - `actions/presence.py`
 A PIR sees movement, not a person, so "welcome back" needs a witness. It
 is your phone, as Tailscale on the PC sees it: `tailscale status --json`

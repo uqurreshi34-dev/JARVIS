@@ -41,6 +41,7 @@ _wanted = {}        # name -> monotonic time it was asked for
 _frames = {}        # name -> (monotonic time taken, jpeg bytes)
 _polled = {}        # name -> monotonic time it last asked whether a picture was wanted
 _live = {}          # name -> monotonic time its live view stops
+_leases = {}        # name -> monotonic time the last remote viewer's lease runs out
 _live_listener = None
 
 # Live view: while a camera's picture is on screen, the camera keeps one
@@ -175,17 +176,101 @@ def stop_watching(name=None):
 
 
 def live_wanted(name):
-    """Whether camera [name] should be streaming now. Called by its poll and by its stream."""
+    """Whether camera [name] should be streaming now: shown on the desk, or watched from the phone.
+
+    Called by its poll and by its stream.
+    """
     name = _name(name)
+    now = time.monotonic()
 
     with _lock:
-        until = _live.get(name)
+        for views in (_live, _leases):
+            until = views.get(name)
 
-        if until is not None and time.monotonic() >= until:
-            del _live[name]
-            until = None
+            if until is not None and now >= until:
+                del views[name]
 
-        return until is not None
+        return name in _live or name in _leases
+
+
+# ---- watching from the phone -----------------------------------------------------------------
+
+# A phone watching a camera holds a lease on its live view, renewed while
+# it is being sent frames; a phone that goes away (locked, out of signal,
+# the page closed) stops renewing, and the camera stops streaming this long
+# after. Closing the picture on the desk does not end a phone's view.
+REMOTE_LEASE_SECONDS = 10.0
+
+# Frames sent to a phone at most this often (JARVIS_REMOTE_CAMERA_FPS): a
+# camera streams 25 a second on the wifi, and a phone on mobile data does
+# not need them all.
+REMOTE_FPS = float(os.getenv("JARVIS_REMOTE_CAMERA_FPS") or 12)
+
+# A camera that sends no frame for this long while watched has gone.
+REMOTE_FRAME_WAIT = 15.0
+
+_BOUNDARY = "jarvisframe"
+REMOTE_MIMETYPE = f"multipart/x-mixed-replace; boundary={_BOUNDARY}"
+
+
+def _renew(name, seconds):
+    _leases[name] = max(_leases.get(name, 0.0), time.monotonic() + seconds)
+
+
+def lease(name, seconds=REMOTE_LEASE_SECONDS):
+    """Keep camera [name] live for [seconds] more, for a viewer elsewhere."""
+    with _lock:
+        _renew(_name(name), seconds)
+
+
+def remote_frames(name, fps=None, wait=REMOTE_FRAME_WAIT):
+    """Camera [name]'s live view as a multipart JPEG stream (MJPEG), for a phone's <img>.
+
+    Yields each new frame, no more than [fps] a second, renewing the lease
+    while it waits and as it sends; ends when the camera sends nothing
+    for [wait] seconds. The phone going away ends the generator, and with
+    it the renewals.
+    """
+    name = _name(name)
+    gap = 1.0 / max(0.5, fps or REMOTE_FPS)
+    sent_at = None
+    sent_taken = None
+
+    while True:
+        deadline = time.monotonic() + wait
+
+        with _lock:
+            while True:
+                _renew(name, REMOTE_LEASE_SECONDS)
+                frame = _frames.get(name)
+
+                if frame is not None and (sent_taken is None or frame[0] > sent_taken):
+                    break
+
+                left = deadline - time.monotonic()
+
+                if left <= 0:
+                    return
+
+                _lock.wait(min(left, REMOTE_LEASE_SECONDS / 2))
+
+        taken, jpeg = frame
+        sent_taken = taken
+
+        if sent_at is not None:
+            pause = gap - (time.monotonic() - sent_at)
+
+            if pause > 0:
+                time.sleep(pause)
+
+        sent_at = time.monotonic()
+        yield (f"--{_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: {len(jpeg)}\r\n\r\n"
+               .encode("ascii") + jpeg + b"\r\n")
+
+
+def listed():
+    """[{"name", "looks", "online"}] of the cameras, for the phone to offer."""
+    return [{"name": camera["name"], "looks": camera["looks"], "online": camera["online"]} for camera in cameras()]
 
 
 def set_live_listener(listener):
@@ -296,6 +381,7 @@ def forget():
         _frames.clear()
         _polled.clear()
         _live.clear()
+        _leases.clear()
 
 
 # ---- which cameras there are, and what they are called ---------------------------------------
