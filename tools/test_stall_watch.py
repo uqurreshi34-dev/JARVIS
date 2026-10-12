@@ -32,7 +32,10 @@ def check(condition, label):
 
 app = QApplication.instance() or QApplication([])
 reports = []
-stall_watch.start(report=lambda seconds, hud, others: reports.append((seconds, hud, others)))
+pauses = []
+time.sleep(0.8)   # before start(): not the HUD's time, and not reported
+stall_watch.start(report=lambda seconds, hud, others: reports.append((seconds, hud, others)),
+                  report_pause=lambda seconds, threads: pauses.append((seconds, threads)))
 
 
 def run_for(seconds):
@@ -58,6 +61,25 @@ if reports:
     check(1.0 <= seconds <= 1.6, f"for about how long it was frozen ({seconds:.2f}s)")
     check(any("freeze_the_hud_on_purpose" in place for place in hud), f"and in what: {hud[-2:]}")
 
+# A thread holding Python's lock stops the watcher too: its own sleep overruns, and that is reported.
+real_sleep = stall_watch._sleep
+overran = []
+
+
+def overrunning_sleep(seconds):
+    if not overran:
+        overran.append(1)
+        real_sleep(seconds + 0.8)
+    else:
+        real_sleep(seconds)
+
+
+stall_watch._sleep = overrunning_sleep
+run_for(1.5)
+stall_watch._sleep = real_sleep
+check(len(pauses) == 1 and pauses[0][0] >= 0.7, f"a pause of the whole program is reported ({pauses[:1]})")
+
+stall_watch._print_pause(1.1, [("kokoro-voice", ["voices.py:500 _open"])])
 stall_watch._print_report(1.23, ["main.py:731 run", "speech.py:1340 start_voice"], [("kokoro-voice", ["voices.py:500 _open"])])
 
 failed = [label for ok, label in RESULTS if not ok]

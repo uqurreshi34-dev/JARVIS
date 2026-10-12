@@ -175,12 +175,19 @@ else:
     client = server._app.test_client()
     token = {"X-Jarvis-Token": "camera-test"}
 
+    # The pictures shown above left the camera's live view on: this part starts with none.
+    cameras.stop_watching()
+
     check(client.post("/camera/wanted", json={"name": "my room cam"}).status_code == 403, "/camera/wanted needs the token")
     check(client.post("/camera/wanted", json={"name": "my room cam"}, headers=token).get_json() == {"snap": False, "live": False},
           "and says no when nothing is wanted")
     cameras.want("my room cam")
     check(client.post("/camera/wanted", json={"name": "my room cam"}, headers=token).get_json() == {"snap": True, "live": False},
           "and yes when a picture is")
+    cameras.watch("my room cam")
+    check(client.post("/camera/wanted", json={"name": "my room cam"}, headers=token).get_json() == {"snap": False, "live": True},
+          "and asks for live view while its picture is shown")
+    cameras.stop_watching()
 
     picture_headers = dict(token, **{"X-Jarvis-Camera": "my room cam", "Content-Type": "image/jpeg"})
     check(client.post("/camera", data=JPEG, headers={"X-Jarvis-Camera": "my room cam"}).status_code == 403,

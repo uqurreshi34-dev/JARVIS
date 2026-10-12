@@ -1742,6 +1742,11 @@ image/png, vision()'s default, and Claude refused it, so every description
 fell to the next provider. providers.image_mime reads the type from the
 image's own first bytes (JPEG, PNG, GIF, WebP) before any provider sees it.
 
+Claude, now seeing the camera's picture, answered "nothing is happening ...
+a small round object" where Gemini had said "a smoke detector". The camera's
+prompt now asks for what a thing most likely is, and for what is in view
+when nothing moves.
+
 ### When the HUD freezes - `stall_watch.py`
 The HUD froze for a second or two at start-up, and the console said
 nothing. stall_watch keeps a timer beating on the HUD's thread and a
@@ -1749,7 +1754,14 @@ watcher on its own: past half a second without a beat it takes the HUD
 thread's stack, and when the HUD runs again prints how long it was frozen,
 where, and what the other busy threads were doing (`[JARVIS] HUD froze for
 1.6s, in: ...`), so the cause is read off the console rather than guessed.
+A thread holding Python's lock (a model loading in C) stops the watcher
+too, so it times its own sleep as well and reports when everything paused
+(`[JARVIS] everything paused for 1.1s ...`) with each busy thread's place.
+It measures from when it starts, after the imports.
 JARVIS_STALL_WATCH=off turns it off. `tools/test_stall_watch.py`.
+
+The first run with it printed nothing for the start-up freeze, though it
+was still felt; the pause report is for exactly that case.
 
 ### Who moved - `actions/presence.py`
 A PIR sees movement, not a person, so "welcome back" needs a witness. It
