@@ -12,7 +12,7 @@ from voice import (
 )
 from speech import prewarm, set_amplitude_listener, speak, set_sentence_listener
 from speech import set_speaking_listener, stop_speaking as stop_speech
-from speech import first_sound, mark_turn
+from speech import first_sound, mark_turn, start_voice
 from news_panel import NewsPanel
 from quran_panel import QuranPanel
 from radar_panel import RadarPanel
@@ -635,6 +635,9 @@ class Assistant:
         return spoken
 
     def run(self):
+        # The voice starts loading before anything is said (speech.start_voice).
+        start_voice()
+
         set_wake_listener(self._on_wake)
         set_status_listener(self._on_status)
         set_follow_up_expired_listener(self._on_follow_up_expired)

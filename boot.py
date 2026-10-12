@@ -79,13 +79,18 @@ def _voice():
 
 
 def _speech():
+    """Which voice was chosen (voices.py); BACKUP when its library is missing and Windows' voice speaks."""
+    import voices
+
+    name = voices.engine()
+    library = {"azure": "requests", "kokoro": "phonemizer", "edge": "edge_tts"}[name]
+
     try:
-        import edge_tts  # noqa: F401
+        __import__(library)
     except Exception:
-        # The Windows voice still speaks; the neural one is missing.
         return ("SPEECH (BACKUP)", READY)
 
-    return ("SPEECH", ONLINE)
+    return (f"SPEECH ({voices.LABELS[name]})", ONLINE)
 
 
 def _models():

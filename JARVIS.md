@@ -1313,6 +1313,12 @@ scroll by dragging them or with the arrows at the ends of the scroll bar
 (a touchpad's two-finger scroll works as a wheel). No beam: it
 is part of the HUD, not projected from it.
 
+A camera has no temperature, humidity or movement, so its row is drawn as
+a camera: a lens where the temperature would be, and when it last sent a
+picture ("PICTURE 2m AGO", or "NO PICTURE YET"). A board counts as a camera
+by what it does -- it has asked whether a picture is wanted
+(cameras.is_camera) -- not by its name.
+
 "Welcome back, sir" is decided for the whole house, not per room: only
 movement after every sensor has been still for `PRESENT_SECONDS`, and at
 most once every `GREET_AGAIN_SECONDS`. Walking from room to room is one
@@ -1419,6 +1425,62 @@ piece, so two sentences waited for both to be synthesised.
 _speakable_chunks starts a reply with its first sentence alone when that
 sentence is long enough to stand alone, unless the whole reply is already
 cached and plays at once.
+
+### His voice - `voices.py`, `speech.py`
+On 10 October 2026 Edge's Read Aloud service, where the Ryan voice came
+from with no key, began refusing every client with a 403 (rany2/edge-tts
+issue 490). Phrases he had said before still played in Ryan from the cache
+(%TEMP%\jarvis_tts_cache), so it looked intermittent; anything new came
+out in Windows' woman's voice, and after one of those he stayed on SPEAKING.
+
+The voice is now made by one of three engines, picked by
+JARVIS_VOICE_ENGINE in .env:
+
+- azure: Ryan from Microsoft's official Speech service, with your own
+  AZURE_SPEECH_KEY and AZURE_SPEECH_REGION (free tier 500,000 characters a
+  month). Chosen by itself when both are set. It shares Edge's cache, so
+  phrases Ryan already said cost nothing. Its sentence timings are shared
+  out by length, since Azure's REST API does not send them.
+- kokoro: Kokoro 1.0 (82M) made on this PC with onnxruntime, no key and
+  no network once downloaded. The default when Azure is not set up, so an
+  installer user hears a natural man's voice with nothing to sign up for.
+  Piper did this job first, for an afternoon, and sounded robotic and
+  angry. kokoro-onnx itself will not install on Python 3.14 (it declares
+  <3.14), so voices.py runs the model directly: espeak-ng (phonemizer,
+  with the library espeakng-loader ships) reads the words into phonemes,
+  kokoro-onnx's alphabet turns them into numbers, and the voice's style
+  row for that length goes in with them. Its files come once from
+  kokoro-onnx's GitHub release (the model, fp16 by default, 169 MB; the
+  voices, 27 MB; the alphabet from a fixed commit), each kept only if its
+  SHA-256 matches, in %LOCALAPPDATA%\JARVIS\kokoro. JARVIS_KOKORO_VOICE
+  picks the voice (default bm_george; bm_fable, bm_daniel and bm_lewis are
+  the other British men), JARVIS_KOKORO_SPEED the pace and
+  JARVIS_KOKORO_MODEL fp16 or int8. Each sentence is made on its own, so
+  its timings are exact, and one too long for the model is made in pieces
+  broken between words. A local voice is given 30 s a piece rather than
+  the network's 8, since only a hung model could take that long.
+- edge: as before, for when it works again.
+
+Whatever the engine, Kokoro stands in when it fails. speech.start_voice(),
+the first thing main.run() does, starts Kokoro loading before the greeting;
+a reply that finds it still reading itself off the disk waits up to 15 s
+for it rather than starting in another voice. Only a first run's download
+(about 200 MB) is not waited for.
+
+Windows' own voice is the last resort, used only while that download runs
+or when Kokoro cannot load. pyttsx3 is gone. Its one shared engine, handed
+to whichever thread spoke next, said the first sentence and never finished
+the second (most likely because a COM object belongs to the thread that
+made it), so JARVIS stuck on SPEAKING and everything queued behind it,
+the Bitcoin announcement included. Each sentence now gets its own SAPI
+voice on its own thread, set up for COM there and stopped by purging it.
+SAPI is asked for a man in JARVIS's language (the code from Windows' own
+locale table), then any man; JARVIS_WINDOWS_VOICE names one instead
+("George"). A deadline (10 s plus 0.2 s a character) still guards it: past
+that it is left behind and not used again that run. Prewarming stops at
+its first failure instead of printing one per phrase. Start-up prints the
+voice in use (`[JARVIS] voice: ...`) and the boot check names it.
+`tools/test_voices.py`.
 
 ### His face - `hud_face.py`
 While the HUD's state is speaking, a holographic head rises out of the
@@ -1661,7 +1723,7 @@ voice.py        hears you, checks the wake word
 transcriber.py  turns audio into text (Whisper or Vosk)
 commands.py     decides what you meant
 actions/*.py    does it
-speech.py       says the reply
+speech.py       says the reply (voices.py makes it: Azure, Kokoro or Edge)
 hud.py          shows the state
 ```
 

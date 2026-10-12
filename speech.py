@@ -13,7 +13,8 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-import pyttsx3
+
+import voices
 
 
 VOICE = os.getenv("JARVIS_VOICE") or "en-GB-RyanNeural"
@@ -23,8 +24,12 @@ VOICE = os.getenv("JARVIS_VOICE") or "en-GB-RyanNeural"
 # Both accept forms like "-8%" and "-6Hz"; set them empty for the default.
 VOICE_RATE = os.getenv("JARVIS_VOICE_RATE", "-7%")
 VOICE_PITCH = os.getenv("JARVIS_VOICE_PITCH", "-4Hz")
+# Where the voice is made -- Azure, Kokoro or Edge -- is voices.py's to say.
+# Azure and Edge speak VOICE; Kokoro has its own (JARVIS_KOKORO_VOICE).
+ENGINE = voices.engine()
+
 # edge_tts defaults to 10s connect and 60s receive. Offline that stalls a
-# reply for over a minute inside speak()'s lock, so the pyttsx3 fallback is
+# reply for over a minute inside speak()'s lock, so the fallback voice is
 # never reached. These are generous for a short reply and fail fast when
 # there is no connection.
 _NEURAL_CONNECT_TIMEOUT = 5
@@ -38,6 +43,10 @@ _neural_failed_at = 0.0
 # disconnected machine is an OS call they cannot interrupt. The attempt
 # needs a deadline that does not depend on the network stack cooperating.
 _NEURAL_SYNTHESIS_DEADLINE = 8.0
+
+# A voice made on this PC (Kokoro) cannot stall on a network; its limit is
+# only there for a model that hangs, and allows a slow CPU a long sentence.
+_LOCAL_SYNTHESIS_DEADLINE = 30.0
 # edge_tts synthesises an entire request before a single sample plays, so
 # the deadline above is really a limit on how much text one request may
 # carry. A 900-character answer cannot make it, and the voice drops to the
@@ -136,6 +145,18 @@ def _split_for_speech(text, limit=_SPOKEN_CHUNK):
 # Starting a second one behind it just stacks up stuck threads, so a new
 # attempt goes straight to the fallback until the first one lets go.
 _neural_busy = threading.Event()
+
+# How long a reply waits for Kokoro still reading its voice off the disk.
+# A first download is not waited for: the Windows voice speaks meanwhile.
+_LOCAL_LOAD_WAIT = 15.0
+
+# Windows' own voice is given this long, plus this much per character, to
+# finish (about three times its normal pace), and this long to stop once
+# asked. Set once it overruns: it is not used again that run.
+_WINDOWS_VOICE_GRACE = 10.0
+_WINDOWS_VOICE_PER_CHAR = 0.2
+_WINDOWS_VOICE_STOP_GRACE = 2.0
+_windows_voice_hung = threading.Event()
 
 # Playback chunk size; smaller means the HUD reacts more finely.
 _BLOCK = 1024
@@ -280,15 +301,19 @@ def _report_speaking(active):
 
 
 class SpeechEngine:
-    """Neural text-to-speech with caching and a local SAPI5 fallback.
+    """Neural text-to-speech with caching; Kokoro, then Windows' SAPI5 voice, stand in when it fails.
 
     While speaking, the per-block RMS of the audio is reported to an optional
     listener so a UI can pulse in time with the voice.
     """
 
-    def __init__(self, voice=VOICE, rate=175):
-        self.voice = voice
-        self.rate = rate
+    def __init__(self, voice=VOICE, engine=ENGINE):
+        self.engine = engine
+
+        # What the cache keys phrases by. Azure and Edge make the same Ryan,
+        # so a phrase either one has said plays from the cache for both.
+        self.voice = voices.local().voice_id() if engine in voices.LOCAL else voice
+        self.voice_name = voice
         self._amplitude_listener = None
         self._sentence_listener = None
 
@@ -353,6 +378,12 @@ class SpeechEngine:
             _paused.clear()
             _speaking.set()
             _report_speaking(True)
+
+            # Kokoro still reading itself off the disk at start-up: the
+            # greeting waits a second or two for it rather than going to
+            # the Windows voice.
+            if self.engine in voices.LOCAL:
+                voices.local().wait(_LOCAL_LOAD_WAIT)
 
             global _neural_failed_at
 
@@ -464,7 +495,11 @@ class SpeechEngine:
             try:
                 self._audio_for(phrase)
             except Exception as error:
-                print(f"[JARVIS] could not prewarm {phrase!r}: {error}")
+                # One failure says the voice is unreachable; the rest would
+                # each say so again, and each pay its timeout.
+                print(f"[JARVIS] could not prewarm {phrase!r}: {error}; "
+                      f"the rest are made as they are first said.")
+                return
 
             # Leave a gap so a command arriving now is not stuck behind a
             # run of back-to-back requests.
@@ -693,38 +728,18 @@ class SpeechEngine:
         metadata_partial = f"{metadata}.partial"
         sidecar_partial = f"{sidecar}.partial"
 
-        options = {
-            "boundary": "SentenceBoundary",
-        }
-
-        if VOICE_RATE:
-            options["rate"] = VOICE_RATE
-
-        if VOICE_PITCH:
-            options["pitch"] = VOICE_PITCH
-
-        communicate = edge_tts.Communicate(
-            text,
-            self.voice,
-            connect_timeout=_NEURAL_CONNECT_TIMEOUT,
-            receive_timeout=_NEURAL_RECEIVE_TIMEOUT,
-            **options,
-        )
-
         boundaries = []
 
         try:
             with open(partial, "wb") as audio:
-                for chunk in communicate.stream_sync():
-                    if chunk["type"] == "audio":
-                        audio.write(chunk["data"])
-
-                    elif chunk["type"] == "SentenceBoundary":
-                        boundaries.append({
-                            "offset": float(chunk["offset"]) / 10_000_000.0,
-                            "duration": float(chunk["duration"]) / 10_000_000.0,
-                            "text": chunk.get("text", ""),
-                        })
+                if self.engine == "edge":
+                    self._edge_to(audio, boundaries, text)
+                else:
+                    # Azure and Kokoro hand back the whole MP3 and its sentences.
+                    data, timings = voices.mp3(
+                        self.engine, text, self.voice_name, VOICE_RATE, VOICE_PITCH)
+                    audio.write(data)
+                    boundaries.extend(timings)
 
             os.replace(partial, path)
 
@@ -750,6 +765,37 @@ class SpeechEngine:
                     pass
 
             raise
+
+    def _edge_to(self, audio, boundaries, text):
+        """Stream Edge's MP3 for [text] into [audio], its sentences into [boundaries]."""
+        options = {
+            "boundary": "SentenceBoundary",
+        }
+
+        if VOICE_RATE:
+            options["rate"] = VOICE_RATE
+
+        if VOICE_PITCH:
+            options["pitch"] = VOICE_PITCH
+
+        communicate = edge_tts.Communicate(
+            text,
+            self.voice,
+            connect_timeout=_NEURAL_CONNECT_TIMEOUT,
+            receive_timeout=_NEURAL_RECEIVE_TIMEOUT,
+            **options,
+        )
+
+        for chunk in communicate.stream_sync():
+            if chunk["type"] == "audio":
+                audio.write(chunk["data"])
+
+            elif chunk["type"] == "SentenceBoundary":
+                boundaries.append({
+                    "offset": float(chunk["offset"]) / 10_000_000.0,
+                    "duration": float(chunk["duration"]) / 10_000_000.0,
+                    "text": chunk.get("text", ""),
+                })
 
     def _read_cached(self, text, path, sidecar):
         """Read a cached file, recovering once from a corrupted one.
@@ -853,6 +899,10 @@ class SpeechEngine:
         except Exception:
             pass
 
+    def _deadline(self):
+        """How long one piece of a reply may take to make: short for a network, long for this PC."""
+        return _LOCAL_SYNTHESIS_DEADLINE if self.engine in voices.LOCAL else _NEURAL_SYNTHESIS_DEADLINE
+
     def _speak_neural(self, text):
         # A reply already in the cache plays whole, at once; anything else
         # starts with its first sentence (_speakable_chunks).
@@ -861,7 +911,7 @@ class SpeechEngine:
         if len(chunks) <= 1:
             data, samplerate, boundaries = self._audio_for_bounded(
                 text,
-                _NEURAL_SYNTHESIS_DEADLINE,
+                self._deadline(),
             )
 
             if not _stop.is_set():
@@ -880,7 +930,7 @@ class SpeechEngine:
             try:
                 data, samplerate, boundaries = self._audio_for_bounded(
                     chunk,
-                    _NEURAL_SYNTHESIS_DEADLINE,
+                    self._deadline(),
                 )
             except Exception as error:
                 if _stop.is_set():
@@ -1043,24 +1093,171 @@ class SpeechEngine:
                 )
 
     def _speak_fallback(self, text):
+        """Say [text] when the chosen voice cannot: Kokoro if it is loaded, Windows' own voice if not."""
         if _stop.is_set():
+            return
+
+        # Kokoro reading itself off the disk takes a second or two: worth
+        # waiting for rather than starting the reply in another voice.
+        stand_in = voices.local()
+
+        if self.engine not in voices.LOCAL:
+            stand_in.wait(_LOCAL_LOAD_WAIT)
+
+        if self.engine not in voices.LOCAL and stand_in.ready():
+            try:
+                data, samplerate, boundaries = stand_in.audio(text)
+            except Exception as error:
+                print(f"[JARVIS] the Kokoro voice failed too ({error}); "
+                      f"using the Windows voice.")
+            else:
+                if not _stop.is_set():
+                    self._play_reactive(data, samplerate, boundaries)
+
+                return
+
+        self._speak_windows(text)
+
+    def _speak_windows(self, text):
+        """Windows' own SAPI voice: the last resort, given a deadline so it can never hold the speech lock.
+
+        On 12 October 2026 the first sentence in it was said and the second
+        never finished: stuck on SPEAKING, every later reply queued behind
+        it. pyttsx3 keeps one engine per process and hands it to whichever
+        thread speaks next, but a COM object belongs to the thread that made
+        it -- the likeliest reason the second sentence, from another thread,
+        never came back. pyttsx3 is gone: each sentence gets its own SAPI
+        voice on its own thread, set up for COM there. The deadline stays
+        for anything else that hangs: past it the voice is left behind and
+        not used again that run.
+        """
+        if _windows_voice_hung.is_set():
+            print(f"[JARVIS] no voice to say it with: {text[:60]!r}")
             return
 
         _sounding()
 
-        engine = pyttsx3.init()
-        engine.setProperty("rate", self.rate)
+        done = threading.Event()
 
-        # pyttsx3 can only be stopped from inside its own loop, so check
-        # the stop flag at every word.
-        def on_word(name, location, length):
+        def work():
+            com = None
+
+            try:
+                # SAPI is COM, and COM wants each thread that uses it set up.
+                try:
+                    import pythoncom
+
+                    pythoncom.CoInitialize()
+                    com = pythoncom
+                except ImportError:
+                    pass
+
+                voice = _sapi_voice()
+                voice.Speak(text, _SVSF_ASYNC)
+
+                while not voice.WaitUntilDone(50):
+                    if _stop.is_set():
+                        voice.Speak("", _SVSF_ASYNC | _SVSF_PURGE)
+                        break
+
+            except Exception as error:
+                print(f"[JARVIS] the Windows voice failed: {error}")
+
+            finally:
+                if com is not None:
+                    try:
+                        com.CoUninitialize()
+                    except Exception:
+                        pass
+
+                done.set()
+
+        threading.Thread(target=work, daemon=True).start()
+
+        deadline = time.monotonic() + _WINDOWS_VOICE_GRACE + _WINDOWS_VOICE_PER_CHAR * len(text)
+        stopped_at = None
+
+        while not done.wait(0.05):
+            now = time.monotonic()
+
             if _stop.is_set():
-                engine.stop()
+                stopped_at = stopped_at or now
 
-        engine.connect("started-word", on_word)
-        engine.say(text)
-        engine.runAndWait()
-        engine.stop()
+                # It stops at once; one that does not is not waited on.
+                if now - stopped_at >= _WINDOWS_VOICE_STOP_GRACE:
+                    return
+
+            if now >= deadline:
+                _windows_voice_hung.set()
+                print("[JARVIS] the Windows voice stopped responding: it is left off "
+                      "for the rest of this run, so JARVIS is not stuck speaking.")
+                return
+
+
+# SAPI's SpeakFlags: return at once, and drop whatever is still being said.
+_SVSF_ASYNC = 1
+_SVSF_PURGE = 2
+
+WINDOWS_VOICE_ENV = "JARVIS_WINDOWS_VOICE"
+
+
+def _language_code(voice=VOICE):
+    """SAPI's Language attribute for [voice]'s language ("en-GB-RyanNeural" -> "809"), or None."""
+    import locale
+
+    wanted = "_".join(str(voice).split("-")[:2])
+
+    for code, name in locale.windows_locale.items():
+        if name.casefold() == wanted.casefold():
+            return f"{code:x}"
+
+    return None
+
+
+def _choose_sapi_voice(voice, wanted=None, language=None):
+    """The SAPI voice token to speak with, or None for Windows' default.
+
+    [wanted] (JARVIS_WINDOWS_VOICE) is matched against the installed
+    voices' names ("George"); without it, a man's voice in JARVIS's
+    language is asked of SAPI, then any man's voice.
+    """
+    if wanted:
+        tokens = voice.GetVoices()
+
+        for index in range(tokens.Count):
+            token = tokens.Item(index)
+
+            if wanted.casefold() in str(token.GetDescription()).casefold():
+                return token
+
+        return None
+
+    queries = ([f"Gender=Male;Language={language}"] if language else []) + ["Gender=Male"]
+
+    for query in queries:
+        found = voice.GetVoices(query)
+
+        if found.Count:
+            return found.Item(0)
+
+    return None
+
+
+def _sapi_voice():
+    """A new SAPI voice for this thread, speaking as a man in JARVIS's language when Windows has one."""
+    import win32com.client
+
+    voice = win32com.client.Dispatch("SAPI.SpVoice")
+
+    try:
+        token = _choose_sapi_voice(voice, (os.getenv(WINDOWS_VOICE_ENV) or "").strip(), _language_code())
+
+        if token is not None:
+            voice.Voice = token
+    except Exception as error:
+        print(f"[JARVIS] could not choose a Windows voice ({error}); using its default.")
+
+    return voice
 
 
 speech = SpeechEngine()
@@ -1126,6 +1323,18 @@ def set_sentence_listener(listener):
     speech.set_sentence_listener(listener)
 
 
+def start_voice():
+    """First thing at start-up: say which voice speaks, and start Kokoro loading.
+
+    Before the greeting, not after it: a greeting that found the voice not yet
+    loaded went to the Windows voice. Loading from the disk takes a second
+    or two, which the greeting waits for; only a first run's download is
+    not waited for.
+    """
+    print(f"[JARVIS] voice: {voices.describe(speech.engine, speech.voice_name)}", flush=True)
+    voices.local().load_in_background()
+
+
 def prewarm(lines=None):
     """Warm the cache so the most common replies never wait on the network."""
     if lines is None:
@@ -1138,5 +1347,9 @@ def prewarm(lines=None):
             lines.extend(phrasebook.every_fixed_line())
         except Exception as error:
             print(f"[JARVIS] could not list phrase variants: {error}")
+
+    # Kokoro speaks, or stands in when Azure or Edge cannot: start_voice()
+    # began loading it; the phrases wait for it, so they are made in it.
+    voices.local().load()
 
     speech.prewarm(tuple(dict.fromkeys(lines)))

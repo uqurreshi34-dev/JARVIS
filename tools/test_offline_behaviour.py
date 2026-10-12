@@ -8,6 +8,7 @@ that would perform it.
 import os
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -156,15 +157,27 @@ def _check_join(failures):
         failures.append(f"joined reply was {actual!r}")
 
 
+def _let_go(release):
+    """End a test's stuck synthesis and wait for it, so it cannot clear the busy flag of the next test's."""
+    import time as clock
+
+    release.set()
+    deadline = clock.monotonic() + 5
+
+    while speech._neural_busy.is_set() and clock.monotonic() < deadline:
+        clock.sleep(0.05)
+
+
 def _check_speech_survives_a_hang(failures):
     """A neural voice that hangs must be abandoned, not waited on."""
     import time as clock
 
     engine = speech.speech
     speech._neural_failed_at = 0.0
+    release = threading.Event()
 
     def never_returns(*_args, **_kwargs):
-        clock.sleep(60)
+        release.wait(120)
 
     with (
         patch.object(engine, "_audio_for", side_effect=never_returns),
@@ -174,7 +187,9 @@ def _check_speech_survives_a_hang(failures):
         engine.speak("a phrase whose synthesis never completes")
         elapsed = clock.monotonic() - started
 
-    if elapsed > speech._NEURAL_SYNTHESIS_DEADLINE + 3:
+    _let_go(release)
+
+    if elapsed > engine._deadline() + 3:
         failures.append(
             f"a hanging synthesis blocked speech for {elapsed:.0f}s"
         )
@@ -242,7 +257,9 @@ def _check_synthesis_timeouts(failures):
     path = os.path.join(directory, "phrase.mp3")
     sidecar = os.path.join(directory, "phrase.txt")
 
-    with patch.object(speech.edge_tts, "Communicate", side_effect=record):
+    # The Edge engine's request, whichever engine .env chose for this PC.
+    with patch.object(speech.edge_tts, "Communicate", side_effect=record), \
+         patch.object(speech.speech, "engine", "edge"):
         try:
             speech.speech._synthesize_to_cache("hello", path, sidecar)
         except Exception:
@@ -276,14 +293,18 @@ def _check_no_stacked_syntheses(failures):
     speech._neural_busy.clear()
 
     attempts = []
+    release = threading.Event()
 
     def never_returns(*_args, **_kwargs):
         attempts.append(1)
-        clock.sleep(60)
+        release.wait(120)
 
+    # Only whether a second synthesis stacks up is in question here, not how
+    # long the first is given, so the deadline is short whichever voice it is.
     with (
         patch.object(engine, "_audio_for", side_effect=never_returns),
         patch.object(engine, "_speak_fallback"),
+        patch.object(engine, "_deadline", return_value=1.0),
     ):
         engine.speak("first uncached phrase")
 
@@ -306,8 +327,8 @@ def _check_no_stacked_syntheses(failures):
             "synthesis instead of falling back immediately"
         )
 
+    _let_go(release)
     speech._neural_failed_at = 0.0
-    speech._neural_busy.clear()
 
 
 def _check_cached_phrase_keeps_the_voice(failures):

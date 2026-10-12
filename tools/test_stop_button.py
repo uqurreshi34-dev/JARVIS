@@ -87,51 +87,37 @@ def _install_fake_audio():
         sys.modules.setdefault(name, MagicMock())
 
 
-class FakeEngine:
-    """pyttsx3 as far as speech.py uses it: words fire callbacks."""
+class FakeVoice:
+    """Windows' SAPI voice as far as speech.py uses it: speaks a word every 20 ms until purged."""
 
     last = None
 
     def __init__(self):
-        self._callbacks = []
-        self._text = ""
+        self._words = []
         self.stopped = False
         self.words_spoken = 0
-        FakeEngine.last = self
+        FakeVoice.last = self
 
-    def setProperty(self, *_args):
-        pass
+    def Speak(self, text, flags=0):
+        if not text and flags & 2:
+            self.stopped = True
+            return
 
-    def connect(self, name, callback):
-        self._callbacks.append(callback)
+        self._words = text.split()
+        self._started = time.monotonic()
 
-    def say(self, text):
-        self._text = text
+    def WaitUntilDone(self, milliseconds):
+        time.sleep(milliseconds / 1000.0)
 
-    def runAndWait(self):
-        for index, _word in enumerate(self._text.split()):
-            if self.stopped:
-                return
+        if self.stopped:
+            return True
 
-            for callback in self._callbacks:
-                callback("utterance", index, 1)
-
-            if self.stopped:
-                return
-
-            self.words_spoken += 1
-            time.sleep(0.02)
-
-    def stop(self):
-        self.stopped = True
+        self.words_spoken = min(len(self._words), int((time.monotonic() - self._started) / 0.02))
+        return self.words_spoken >= len(self._words)
 
 
 def _check_speech(failures):
     _install_fake_audio()
-
-    fake_pyttsx3 = types.ModuleType("pyttsx3")
-    fake_pyttsx3.init = FakeEngine
-    sys.modules["pyttsx3"] = fake_pyttsx3
 
     import speech
 
@@ -246,13 +232,14 @@ def _check_speech(failures):
         time.sleep(0.05)
 
     # The fallback voice stops at the next word.
-    with patch.object(engine, "_speak_neural", side_effect=RuntimeError("offline")):
+    with patch.object(engine, "_speak_neural", side_effect=RuntimeError("offline")), \
+         patch.object(speech, "_sapi_voice", FakeVoice):
         press_after(0.15)
         engine.speak(long_reply)
 
-        spoken = FakeEngine.last.words_spoken if FakeEngine.last else 0
+        spoken = FakeVoice.last.words_spoken if FakeVoice.last else 0
 
-        if not FakeEngine.last or not FakeEngine.last.stopped:
+        if not FakeVoice.last or not FakeVoice.last.stopped:
             failures.append("the fallback voice was not stopped")
 
         if spoken >= len(long_reply.split()):

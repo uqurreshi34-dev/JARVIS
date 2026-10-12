@@ -3,7 +3,7 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 
 ROOT = Path(SPEC).resolve().parent.parent
@@ -26,7 +26,6 @@ hiddenimports = [
     "anthropic.lib.foundry",
     "vosk",
     "whisper",
-    "pyttsx3.drivers.sapi5",
     "pythoncom",
     "win32api",
     "win32con",
@@ -45,7 +44,8 @@ for package in (
     "whisper",
     "anthropic",
     "selenium",
-    "pyttsx3",
+    "phonemizer",
+    "espeakng_loader",
     "comtypes",
     "pywinauto",
     "docx",
@@ -63,7 +63,8 @@ for package in (
 a = Analysis(
     [str(ROOT / "main.py")],
     pathex=[str(ROOT)],
-    binaries=[],
+    # espeak-ng's library, which reads Kokoro's words into phonemes.
+    binaries=collect_dynamic_libs("espeakng_loader"),
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

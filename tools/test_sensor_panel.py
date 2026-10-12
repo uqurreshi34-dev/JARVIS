@@ -350,6 +350,45 @@ said = (ROOT / "tools" / "sensor_simulator.py").read_text(encoding="utf-8")
 check(minutes == 2 and "quiet for two minutes" in said, "the simulator tells the truth about when the panel goes")
 check(re.search(r"ProxyHandler\(\{\}\)", said) is not None, "it goes straight to JARVIS, never through a proxy")
 
+# A camera is drawn as a camera: no temperature, humidity or movement, but when it last sent a picture.
+from unittest.mock import patch  # noqa: E402
+
+from actions import cameras  # noqa: E402
+
+sensors.reset()
+cameras.forget()
+sensors.report({"name": "room", "temperature": 25.8, "humidity": 52})
+sensors.report({"name": "my room cam", "event": "online"})
+settle()
+check(not cameras.is_camera("my room cam"), "a board is not a camera until it asks for pictures")
+cameras.wanted("my room cam")
+check(cameras.is_camera("my room cam") and not cameras.is_camera("room"),
+      "one that asks whether a picture is wanted is a camera; the room sensor is not")
+check(panel.camera_words("my room cam") == ("NO PICTURE", "YET"), "before its first picture it says so")
+cameras.store("my room cam", b"\xff\xd8\xff" + b"0" * 100)
+first, second = panel.camera_words("my room cam")
+check(first == "PICTURE" and second.endswith("AGO"), f"after one, how long ago ({first} {second})")
+
+drawn = []
+original = panel._paint_camera
+
+
+def spy(painter, name, *args):
+    drawn.append(name)
+    return original(painter, name, *args)
+
+
+with patch.object(panel, "_paint_camera", side_effect=spy):
+    image = frame()
+
+check(drawn == ["my room cam"], f"the camera's row is drawn as a camera, the room's as a room ({drawn})")
+check(lit(image) > 200, "and both rows are drawn")
+
+if os.getenv("JARVIS_PANEL_PICTURE"):
+    image.save(os.getenv("JARVIS_PANEL_PICTURE"))
+
+cameras.forget()
+
 panel.hide_requested.emit()
 app.processEvents()
 check(not panel.isVisible(), "shutting down hides it")

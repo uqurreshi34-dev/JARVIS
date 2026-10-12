@@ -125,11 +125,30 @@ def fetch(name, timeout=WAIT_SECONDS):
             _lock.wait(left)
 
 
+def is_camera(name):
+    """Whether board [name] is a camera: it has asked this run whether a picture is wanted.
+
+    Told by what the board does, not by its name, so the sensor panel can
+    draw a camera as a camera within a second of it starting.
+    """
+    with _lock:
+        return _name(name) in _polled
+
+
+def picture_ago(name):
+    """Seconds since camera [name] last sent a picture, or None if it has not this run."""
+    with _lock:
+        frame = _frames.get(_name(name))
+
+    return None if frame is None else time.monotonic() - frame[0]
+
+
 def forget():
     """Drop every request and picture. For tests."""
     with _lock:
         _wanted.clear()
         _frames.clear()
+        _polled.clear()
 
 
 # ---- which cameras there are, and what they are called ---------------------------------------

@@ -14,6 +14,12 @@ mouse; three show at a time and the wheel scrolls through the rest:
 
     ROOM    21.4 C  (with its last half hour as a line)   48% HUMIDITY   PRESENT
 
+A camera (one that asks JARVIS whether a picture is wanted) has no
+temperature, humidity or movement to show; its row is a camera, and when
+it last sent a picture:
+
+    MY ROOM CAM    [lens] CAMERA                          PICTURE 2m AGO
+
 Nothing here fetches anything. actions/sensors.py records each report and
 hands known() to the panel through a signal; the panel keeps a short
 history of temperatures for the trend line and works the ages out on its
@@ -29,7 +35,7 @@ from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPe
 from PyQt6.QtWidgets import QWidget
 
 import hud as _hud
-from actions import sensors
+from actions import cameras, sensors
 
 
 _WIDTH = 460                # the HUD's own width, so the two read as one
@@ -605,6 +611,11 @@ class SensorPanel(QWidget):
         heard = fitting(options, small_m, temp_x - name_x - 12)
         painter.drawText(QPointF(name_x, max(top + 44, name_line + big_m.descent() + small_m.ascent() + 5)), heard)
 
+        if cameras.is_camera(name):
+            self._paint_camera(painter, name, top, temp_x, presence_x, right, fade, small, small_m)
+            self._paint_rule(painter, top, right)
+            return
+
         # --- temperature, coloured by how it feels, and its trend
         temperature = readings.get("temperature")
         value_font = QFont("Consolas", 16, QFont.Weight.Bold)
@@ -678,9 +689,48 @@ class SensorPanel(QWidget):
             moved = fitting([f"MOVED {since} AGO", f"MOVED {since}", f"{since} AGO"], small_m, room)
             painter.drawText(QPointF(presence_x, max(top + 68, top + 56 + small_m.height())), moved)
 
+        self._paint_rule(painter, top, right)
+
+    def _paint_rule(self, painter, top, right):
         # A faint rule between rows.
         painter.setPen(QPen(self._tint(self._accent, 28), 1.0))
         painter.drawLine(QPointF(26, top + _ROW - 1), QPointF(right, top + _ROW - 1))
+
+    def camera_words(self, name):
+        """(first line, second line) for a camera's last picture: ("PICTURE", "2m AGO") or ("NO PICTURE", "YET")."""
+        since = cameras.picture_ago(name)
+
+        if since is None:
+            return "NO PICTURE", "YET"
+
+        return "PICTURE", f"{ago(since)} AGO"
+
+    def _paint_camera(self, painter, name, top, left, right_x, right, fade, small, small_m):
+        """A camera's row: a lens where the temperature would be, and when it last sent a picture."""
+        colour = self._tint(_HUMID, fade)
+
+        # --- the camera: a body with its lens, and the word
+        body = QRectF(left, top + 14, 34, 24)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(colour, 1.6))
+        painter.drawRoundedRect(body, 4, 4)
+        painter.drawRoundedRect(QRectF(left + 5, top + 10, 9, 4), 1.5, 1.5)
+        painter.drawEllipse(body.center(), 7.5, 7.5)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(colour)
+        painter.drawEllipse(body.center(), 2.6, 2.6)
+
+        painter.setFont(small)
+        painter.setPen(self._tint(_DIM, fade))
+        painter.drawText(QPointF(left, top + 56), "CAMERA")
+
+        # --- when it last sent a picture
+        first, second = self.camera_words(name)
+        room = right - right_x
+        painter.setPen(self._tint(_TEXT, fade))
+        painter.drawText(QPointF(right_x, top + 30), small_m.elidedText(first, Qt.TextElideMode.ElideRight, room))
+        painter.setPen(self._tint(_DIM, fade))
+        painter.drawText(QPointF(right_x, top + 44), small_m.elidedText(second, Qt.TextElideMode.ElideRight, room))
 
     def _paint_trend(self, painter, history, box, colour):
         values = list(history)
