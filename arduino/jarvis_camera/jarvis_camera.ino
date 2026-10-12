@@ -5,7 +5,8 @@
 //
 //   - "online" when it joins the wifi, and every 15 seconds after that, so
 //     the house hologram draws its cone out of the window;
-//   - every 3 seconds it asks whether a picture is wanted (POST /camera/wanted);
+//   - every second it asks whether a picture is wanted (POST /camera/wanted),
+//     which also tells JARVIS it is there;
 //   - only when one is does it take a picture and send it (POST /camera).
 //
 // Nothing is captured unless you ask: "show me the street". JARVIS keeps
@@ -60,7 +61,9 @@
 #define FLASH_LED_PIN 4
 
 static const unsigned long HEARTBEAT_EVERY_MS = 15UL * 1000UL;
-static const unsigned long ASK_EVERY_MS = 3UL * 1000UL;
+// Asking every second: a picture starts within a second of "show me", and JARVIS
+// counts the camera as connected the moment it asks.
+static const unsigned long ASK_EVERY_MS = 1UL * 1000UL;
 static const unsigned long WIFI_RETRY_MS = 10UL * 1000UL;
 
 // How long a TLS handshake with JARVIS may take: well under a second, where

@@ -138,9 +138,28 @@ check(cameras.fetch("my room cam", timeout=0.3) is None, "a camera that never an
 check("my room cam" not in cameras._wanted, "and the request is withdrawn")
 
 sensors._sensors["my room cam"]["seen"] -= 600
+cameras._polled.clear()       # not reported, and not asking either: gone
 said, frame = cameras.picture("show me the street")
 check(said == "The street camera isn't connected, sir." and frame is None, f"an offline camera says so ({said!r})")
+# Its poll is the camera saying it is there: one ask, and it is connected again, without waiting for its
+# next "online" -- as after JARVIS restarts, when no report has come yet.
+cameras.wanted("my room cam")
+check(next(found for found in cameras.cameras() if found["name"] == "my room cam")["online"],
+      "a camera that has just asked whether a picture is wanted counts as connected")
+cameras._polled.clear()
 sensors.report({"name": "my room cam", "event": "online"})
+
+# Closing it by name: the panel, never a program called "my room cam".
+room_cam = cameras.dismissed("close my room cam")
+check(room_cam is not None and room_cam["name"] == "my room cam"
+      and cameras.dismissed("Jarvis, hide the street please")["name"] == "my room cam"
+      and cameras.dismissed("close my room camera") is not None
+      and cameras.dismissed("close chrome") is None and cameras.dismissed("show me my room cam") is None
+      and cameras.asked("close my room cam") is None,
+      "'close my room cam' and 'hide the street' close the camera; 'close chrome' is left alone")
+check(cameras.closed_words("close my room cam", room_cam) == "Closed your room cam, sir."
+      and cameras.closed_words("hide the street", room_cam) == "Closed the street camera, sir.",
+      "and it says so in the words asked")
 
 # ---- the phone server -------------------------------------------------------------------------------
 
@@ -191,6 +210,10 @@ else:
         check(commands._fast_path("what can you see") is None
               or commands._fast_path("what can you see")["intent"] != "camera_picture",
               "and 'what can you see' is still the PC's own camera")
+        closing = commands.handle_command("close my room cam")
+        said = closing["action"]()
+        check(closing["intent"] == "camera_close" and said == "Closed your room cam, sir." and shown[-1] == (b"", ""),
+              f"commands: 'close my room cam' closes the panel, not a program ({said!r})")
     finally:
         commands.run_agent = real_agent
         commands.set_camera_listener(None)

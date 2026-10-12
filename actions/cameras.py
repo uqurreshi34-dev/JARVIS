@@ -24,8 +24,8 @@ import time
 from actions import house, sensors
 
 
-# How long a request for a picture stands. A camera polls every three
-# seconds, takes one, and sends it; longer than this and it is not coming.
+# How long a request for a picture stands. A camera polls every second,
+# takes one, and sends it; longer than this and it is not coming.
 WAIT_SECONDS = 12.0
 
 # Larger than any JPEG the camera is set to send (about 40 to 120 KB at
@@ -37,6 +37,7 @@ _JPEG_START = b"\xff\xd8\xff"
 _lock = threading.Condition()
 _wanted = {}        # name -> monotonic time it was asked for
 _frames = {}        # name -> (monotonic time taken, jpeg bytes)
+_polled = {}        # name -> monotonic time it last asked whether a picture was wanted
 
 
 def _name(name):
@@ -50,10 +51,15 @@ def want(name):
 
 
 def wanted(name):
-    """Called by the camera's poll: is a picture wanted? Answers once per request."""
+    """Called by the camera's poll: is a picture wanted? Answers once per request.
+
+    A poll is the camera saying it is there: it counts as being seen, so a camera is connected the moment
+    it asks, not only at its next "online" report -- within a second of JARVIS starting, not fifteen.
+    """
     name = _name(name)
 
     with _lock:
+        _polled[name] = time.monotonic()
         asked = _wanted.get(name)
 
         if asked is None:
@@ -141,18 +147,24 @@ def cameras():
     except Exception:
         drawn = None
 
+    with _lock:
+        polled = {name: time.monotonic() - when for name, when in _polled.items()}
+
+    def online(name):
+        board = heard.get(name)
+        return bool((board and board["seen_ago"] < house.GONE_SECONDS)
+                    or polled.get(name, house.GONE_SECONDS) < house.GONE_SECONDS)
+
     for room in (drawn or {}).get("rooms") or []:
         for camera in room.get("cameras") or []:
-            board = heard.get(camera["name"])
             found[camera["name"]] = {"name": camera["name"], "looks": camera.get("looks") or "",
-                                     "room": room["name"],
-                                     "online": bool(board and board["seen_ago"] < house.GONE_SECONDS)}
+                                     "room": room["name"], "online": online(camera["name"])}
 
-    for name, board in heard.items():
+    for name in list(heard) + list(polled):
         words = name.split()
 
         if name not in found and words and words[-1] in _CAMERA_WORDS:
-            found[name] = {"name": name, "looks": "", "room": None, "online": board["seen_ago"] < house.GONE_SECONDS}
+            found[name] = {"name": name, "looks": "", "room": None, "online": online(name)}
 
     return list(found.values())
 
@@ -242,6 +254,46 @@ def by_view(text, camera):
 def title(text, camera):
     """The panel's title for [camera]'s picture: what was asked for ("STREET CAM", "MY ROOM CAM")."""
     return f"{camera['looks'].upper()} CAM" if by_view(text, camera) else camera["name"].upper()
+
+
+_CLOSE = ("close", "hide", "dismiss", "shut", "put away", "turn off", "get rid of")
+
+
+def dismissed(text):
+    """The camera [text] asks to put away -- a closing word, then a camera by its name or what it looks at:
+    "close my room cam", "hide the street" -- or None. Matched before any program's name, so "close my
+    room cam" is never taken for an application to quit."""
+    words = _spoken_words(text)
+
+    while words and words[0] in _POLITE:
+        words = words[1:]
+
+    while words and words[-1] in ("please", "jarvis", "now", "sir"):
+        words = words[:-1]
+
+    said = " ".join(words)
+    known = cameras()
+
+    for verb in sorted(_CLOSE, key=len, reverse=True):
+        if not said.startswith(verb + " "):
+            continue
+
+        rest = said[len(verb):].strip()
+
+        for lead in ("the ", "down ", "off "):
+            if rest.startswith(lead):
+                rest = rest[len(lead):]
+
+        for camera in known:
+            if rest in _targets(camera, len(known) == 1):
+                return camera
+
+    return None
+
+
+def closed_words(text, camera):
+    """What JARVIS says having put [camera]'s picture away, in the words asked."""
+    return f"Closed {_called(camera, by_view(text, camera))}, sir."
 
 
 def _called(camera, view=True):

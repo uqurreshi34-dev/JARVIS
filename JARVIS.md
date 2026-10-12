@@ -1603,8 +1603,10 @@ starter.
 An ESP32-CAM (AI Thinker) takes a picture only when asked. It reports
 "online" to `/sensor` like any board, named after its room ("my room cam"),
 so the house plan places it and points its cone out of that room's window;
-a window's "looks" ("street") names what it sees. Every three seconds it
-asks `POST /camera/wanted` whether a picture is wanted, and only when one
+a window's "looks" ("street") names what it sees. Every second it asks
+`POST /camera/wanted` whether a picture is wanted -- which also counts as
+the camera being seen, so it is connected the moment JARVIS starts, not at
+its next "online" -- and only when one
 is does it send a JPEG to `POST /camera`, with the token and its name in
 `X-Jarvis-Camera`. JARVIS keeps the newest picture per camera in memory,
 never on disk, and checks the size before reading the body and that it is
@@ -1617,7 +1619,9 @@ words asked ("The street, sir." and STREET CAM; "Here's your room cam, sir."
 and MY ROOM CAM, as the camera may be on the desk); "what's happening on the
 street" or "what's outside" describes it through the same vision call as
 the PC's webcam. Only cameras that exist are named, so with none online the
-webcam's own commands are untouched; "close the camera" closes either.
+webcam's own commands are untouched; "close the camera" closes either, and
+"close my room cam" or "hide the street" closes it by name -- matched before
+program names, so a camera's name is never taken for an application to quit.
 The sketch finds the camera module itself (OV2640 or OV3660), keeps the
 flash LED off, takes VGA from the board's PSRAM, and builds in the Arduino
 IDE (board "AI Thinker ESP32-CAM") or with `pio run -e cam`.
