@@ -208,7 +208,18 @@ def _targets(camera, only_one):
     if only_one:
         names |= {"camera outside", "outside", "outside camera", "outdoor camera"}
 
+    # "my room cam" is also "the room cam" and "room cam": whose it is, or "the", is said either way, and
+    # "show me the room cam" asked for this camera, not the PC's own webcam (12 October 2026).
+    for name in list(names):
+        for owner in _OWNERS:
+            if name.startswith(owner + " "):
+                names.add(name[len(owner) + 1:])
+
     return names
+
+
+# Words before a camera's name that say whose it is, not which it is.
+_OWNERS = ("my", "our", "your", "the")
 
 
 _SHOW = ("show me", "show", "let me see", "bring up", "pull up", "open", "display")

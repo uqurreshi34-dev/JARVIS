@@ -72,6 +72,8 @@ SAID = {
     "let me see the street": "show",
     "show me my room cam": "show",
     "show me my room camera": "show",
+    "show me the room cam": "show",
+    "show me room cam": "show",
     "what's happening on the street": "describe",
     "what's going on in the street": "describe",
     "what's outside": "describe",
@@ -155,6 +157,7 @@ check(room_cam is not None and room_cam["name"] == "my room cam"
       and cameras.dismissed("Jarvis, hide the street please")["name"] == "my room cam"
       and cameras.dismissed("close my room camera") is not None
       and cameras.dismissed("close chrome") is None and cameras.dismissed("show me my room cam") is None
+      and cameras.dismissed("close the room cam") is not None and cameras.dismissed("close room camera") is not None
       and cameras.asked("close my room cam") is None,
       "'close my room cam' and 'hide the street' close the camera; 'close chrome' is left alone")
 check(cameras.closed_words("close my room cam", room_cam) == "Closed your room cam, sir."
