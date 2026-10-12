@@ -37,7 +37,7 @@ if str(ROOT) not in sys.path:
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, qInstallMessageHandler  # noqa: E402
+from PyQt6.QtCore import QPoint, Qt, qInstallMessageHandler  # noqa: E402
 from PyQt6.QtGui import QFont, QFontMetrics, QImage  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
@@ -388,6 +388,18 @@ if os.getenv("JARVIS_PANEL_PICTURE"):
     image.save(os.getenv("JARVIS_PANEL_PICTURE"))
 
 cameras.forget()
+
+# A window of the HUD's (12 October 2026: on its own it was left behind every window while the HUD stayed in
+# front): its own window still, docked by screen position, but owned by the HUD, so Windows keeps the two together.
+check(panel.isWindow() and panel.parentWidget() is widget
+      and bool(panel.windowFlags() & Qt.WindowType.Tool)
+      and bool(panel.windowFlags() & Qt.WindowType.WindowStaysOnTopHint),
+      "the panel belongs to the HUD, and is still its own always-on-top window")
+check(panel.windowHandle() is not None and panel.windowHandle().transientParent() is widget.windowHandle(),
+      "so the system keeps it with the HUD's window")
+check(panel.frameGeometry().top() == widget.frameGeometry().top() - panel.height() - sensor_panel._GAP
+      and panel.frameGeometry().left() == widget.frameGeometry().left(),
+      f"docked on top of the HUD, in screen positions, as before ({panel.frameGeometry()}, {widget.frameGeometry()})")
 
 panel.hide_requested.emit()
 app.processEvents()

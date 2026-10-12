@@ -19,7 +19,6 @@ from PyQt6.QtWidgets import QWidget
 
 import boot
 from hud_face import HoloFace, enabled as face_enabled
-import on_top
 
 
 IDLE = "idle"
@@ -302,9 +301,6 @@ class Hud(QWidget):
         )
 
     def _poll_telemetry(self):
-        # On top as the docked panels are kept (on_top.py): checked as slowly as the telemetry is read.
-        on_top.keep(self, "HUD")
-
         try:
             self._cpu = psutil.cpu_percent(interval=None)
             self._ram = psutil.virtual_memory().percent
