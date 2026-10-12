@@ -89,6 +89,7 @@ import boot
 from beam import Beam
 from brain_panel import BrainPanel
 from camera_panel import CameraPanel
+import stall_watch
 from chart_panel import ChartPanel
 from image_choices_panel import ImageChoicesPanel
 from image_panel import ImagePanel
@@ -904,6 +905,9 @@ def _report_fault(kind, error, trace):
 def main():
     sys.excepthook = _report_fault
     app = QApplication(sys.argv)
+
+    # Says in the console when the HUD freezes, for how long, and in what.
+    stall_watch.start()
     app.setQuitOnLastWindowClosed(True)
 
     hud = Hud()

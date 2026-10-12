@@ -321,6 +321,23 @@ else:
     check("Devices: my room cam, room." in transcriber._prompt(),
           "the boards on the wifi are named in Whisper's prompt, so 'cam' is expected")
 
+check("LIVE_MISSES_ALLOWED" in sketch and "continue;" in sketch.split("LIVE_MISSES_ALLOWED) {")[1][:200],
+      "live view carries on past a frame the camera fails to take")
+check(cameras.LIVE_READ_TIMEOUT > 8, "and JARVIS waits longer than two of the camera's own four-second waits")
+
+
+# ---- a camera's JPEG is described as a JPEG ---------------------------------------------------
+
+try:
+    import providers
+except Exception as error:
+    print(f"SKIP the image type (could not import providers: {error})")
+else:
+    check(providers.image_mime(JPEG) == "image/jpeg", "a JPEG is sent as image/jpeg, whatever the default says")
+    check(providers.image_mime(b"\x89PNG\r\n\x1a\n...") == "image/png", "a PNG as image/png")
+    check(providers.image_mime(b"RIFF0000WEBPVP8 ") == "image/webp", "a WebP as image/webp")
+    check(providers.image_mime(b"unknown", "image/jpeg") == "image/jpeg", "and unknown bytes keep the type given")
+
 cameras.set_live_listener(None)
 failed = [label for ok, label in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(failed)} of {len(RESULTS)} passed")

@@ -1145,6 +1145,34 @@ def _describe_image(
     return _strip_reasoning(content)
 
 
+# The first bytes of each image format, which say what it is whatever it was called.
+_IMAGE_SIGNATURES = (
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+def image_mime(image_bytes, named=None):
+    """The image's real type, from its own bytes; [named] only when they do not say.
+
+    A wifi camera's JPEG went to Claude labelled image/png, the default, and
+    was refused (400: "the image appears to be a image/jpeg image"), so the
+    description fell to the next provider (12 October 2026).
+    """
+    head = bytes(image_bytes[:12]) if image_bytes else b""
+
+    for signature, mime in _IMAGE_SIGNATURES:
+        if head.startswith(signature):
+            return mime
+
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+
+    return named or "image/png"
+
+
 def vision(
     prompt,
     image_bytes,
@@ -1156,6 +1184,8 @@ def vision(
     """Ask about an image, rotating providers exactly as chat does."""
     if not image_bytes:
         return None
+
+    mime = image_mime(image_bytes, mime)
 
     capable = [p for p in _pool if p.vision_model]
 
@@ -1244,6 +1274,8 @@ def vision_chat(
     """Run a multimodal chat request with provider failover."""
     if not image_bytes:
         return ""
+
+    mime = image_mime(image_bytes, mime)
 
     capable = [
         provider

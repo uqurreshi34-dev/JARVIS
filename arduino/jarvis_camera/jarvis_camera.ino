@@ -72,6 +72,12 @@ static const unsigned long HEARTBEAT_EVERY_MS = 15UL * 1000UL;
 static const unsigned long ASK_EVERY_MS = 1UL * 1000UL;
 static const unsigned long WIFI_RETRY_MS = 10UL * 1000UL;
 
+// Live view carries on past a frame the camera fails to give -- moved by
+// hand it drops some -- and stops only after this many in a row. Each
+// wait is the driver's own (up to four seconds), inside JARVIS's limit for
+// a silent stream (cameras.LIVE_READ_TIMEOUT).
+static const int LIVE_MISSES_ALLOWED = 2;
+
 // How long a TLS handshake with JARVIS may take: well under a second, where
 // the library's own limit is two minutes of silence.
 static const unsigned long HANDSHAKE_SECONDS = 10;
@@ -215,14 +221,24 @@ void streamLive() {
   unsigned long counted = started;
   unsigned long frames = 0;
   unsigned long sinceCount = 0;
+  int missed = 0;
 
   while (liveLink.connected() && !liveLink.available()) {
     camera_fb_t *frame = esp_camera_fb_get();
 
     if (!frame) {
-      Serial.println("[jarvis] live view: the camera gave no picture");
-      break;
+      missed++;
+      Serial.printf("[jarvis] live view: the camera gave no picture (%d in a row)\n", missed);
+      feedLoopWDT();
+
+      if (missed > LIVE_MISSES_ALLOWED) {
+        break;
+      }
+
+      continue;
     }
+
+    missed = 0;
 
     uint8_t header[4] = {
       (uint8_t)(frame->len >> 24), (uint8_t)(frame->len >> 16),

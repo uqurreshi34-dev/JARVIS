@@ -111,14 +111,36 @@ def _known_names():
     return _names["words"]
 
 
+def _device_names():
+    """The boards on the wifi, by the names they report ("my room cam"), for biasing the decoder.
+
+    "Show me the room cam" kept arriving as "show me the room come", which
+    no command knows, so the laptop's webcam answered instead (12 October
+    2026). Whisper had no reason to expect "cam"; told the devices that
+    exist, it does -- the same fix as for "Jarvis" and contact names, taken
+    from what is really there rather than a list of mishearings.
+    """
+    try:
+        from actions import sensors
+
+        return tuple(sorted(name for name in sensors.known() if name and name.replace(" ", "").isalnum()))
+    except Exception:
+        return ()
+
+
 def _prompt():
-    """The decoding prompt, including any names the user has taught."""
+    """The decoding prompt, including any names the user has taught and the devices on the wifi."""
     names = _known_names()
+    devices = _device_names()
+    prompt = WHISPER_PROMPT
 
-    if not names:
-        return WHISPER_PROMPT
+    if names:
+        prompt += f" Names: {', '.join(names)}."
 
-    return f"{WHISPER_PROMPT} Names: {', '.join(names)}."
+    if devices:
+        prompt += f" Devices: {', '.join(devices)}."
+
+    return prompt
 
 
 @dataclass

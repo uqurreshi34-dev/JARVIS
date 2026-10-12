@@ -1712,8 +1712,11 @@ broadcast on the wifi, nothing kept but the newest frame. A plain MJPEG
 stream from the board would have been smoother still and readable by
 anyone on the wifi, so it was not done. The panel swaps each frame in
 without moving or raising its window. A view ends by itself after
-JARVIS_CAMERA_LIVE_SECONDS (300); a stream silent for five seconds frees its
-thread; a bad frame ends it. Frames count as the camera's "online", since
+JARVIS_CAMERA_LIVE_SECONDS (300); a stream silent for ten seconds frees its
+thread; a bad frame ends it. The camera carries on past a frame it fails to
+take (moved by hand it drops some) and stops only after three in a row:
+each one had ended the stream, and the second it took to start again made
+the picture jump. Frames count as the camera's "online", since
 it cannot report while streaming. Describing ("what's on the street") still
 takes one picture. Older firmware answers "live" with a single picture.
 The console says how it went: `[JARVIS] my room cam live: 1800 frames in
@@ -1733,6 +1736,20 @@ command knows, so the laptop's webcam answered. transcriber._prompt() now
 names the boards on the wifi, as they report themselves ("Devices: my room
 cam, room."), so Whisper expects "cam" -- the same fix as for "Jarvis" and
 contact names, taken from what exists rather than a list of mishearings.
+
+Describing a wifi camera's picture sent its JPEG to Claude labelled
+image/png, vision()'s default, and Claude refused it, so every description
+fell to the next provider. providers.image_mime reads the type from the
+image's own first bytes (JPEG, PNG, GIF, WebP) before any provider sees it.
+
+### When the HUD freezes - `stall_watch.py`
+The HUD froze for a second or two at start-up, and the console said
+nothing. stall_watch keeps a timer beating on the HUD's thread and a
+watcher on its own: past half a second without a beat it takes the HUD
+thread's stack, and when the HUD runs again prints how long it was frozen,
+where, and what the other busy threads were doing (`[JARVIS] HUD froze for
+1.6s, in: ...`), so the cause is read off the console rather than guessed.
+JARVIS_STALL_WATCH=off turns it off. `tools/test_stall_watch.py`.
 
 ### Who moved - `actions/presence.py`
 A PIR sees movement, not a person, so "welcome back" needs a witness. It

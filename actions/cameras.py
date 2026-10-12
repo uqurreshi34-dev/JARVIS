@@ -55,7 +55,9 @@ _live_listener = None
 LIVE_SECONDS = float(os.getenv("JARVIS_CAMERA_LIVE_SECONDS") or 300)
 
 # A stream that sends nothing for this long has gone; its thread is freed.
-LIVE_READ_TIMEOUT = 5.0
+# Longer than a camera's own wait for a frame it fails to take (four
+# seconds) twice over, since it carries on past two of those in a row.
+LIVE_READ_TIMEOUT = 10.0
 
 _FRAME_HEADER = struct.Struct(">I")
 
