@@ -17,7 +17,9 @@ What a camera looks at comes from the house plan: a window that "looks"
 at the street names the camera that looks through it.
 """
 
+import os
 import re
+import struct
 import threading
 import time
 
@@ -38,10 +40,38 @@ _lock = threading.Condition()
 _wanted = {}        # name -> monotonic time it was asked for
 _frames = {}        # name -> (monotonic time taken, jpeg bytes)
 _polled = {}        # name -> monotonic time it last asked whether a picture was wanted
+_live = {}          # name -> monotonic time its live view stops
+_live_listener = None
+
+# Live view: while a camera's picture is on screen, the camera keeps one
+# encrypted connection open (POST /camera/live, chunked) and sends frame
+# after frame down it -- one TLS handshake for the whole view, not one a
+# picture, which is what held it to about one a second. JARVIS's own
+# authority and token, as everything else; nothing is broadcast on the
+# wifi, and nothing is kept but the newest frame, in memory.
+#
+# A view stops when the picture is put away, and on its own after this
+# long (JARVIS_CAMERA_LIVE_SECONDS), so a camera is never left streaming.
+LIVE_SECONDS = float(os.getenv("JARVIS_CAMERA_LIVE_SECONDS") or 300)
+
+# A stream that sends nothing for this long has gone; its thread is freed.
+LIVE_READ_TIMEOUT = 5.0
+
+_FRAME_HEADER = struct.Struct(">I")
+
+# A streaming camera cannot also send its "online" every 15 seconds, so its
+# frames say it for it, as often: it stays connected on the plan and the
+# sensor panel for as long as it streams.
+LIVE_HEARTBEAT_SECONDS = 15.0
 
 
 def _name(name):
     return " ".join(str(name or "").strip().casefold().split())
+
+
+def normal_name(name):
+    """[name] as cameras are kept: lower case, single spaces."""
+    return _name(name)
 
 
 def want(name):
@@ -125,6 +155,120 @@ def fetch(name, timeout=WAIT_SECONDS):
             _lock.wait(left)
 
 
+# ---- live view -------------------------------------------------------------------------------
+
+def watch(name, seconds=None):
+    """Ask camera [name] for live view, until stop_watching() or [seconds] (LIVE_SECONDS) pass."""
+    with _lock:
+        _live[_name(name)] = time.monotonic() + (LIVE_SECONDS if seconds is None else seconds)
+
+
+def stop_watching(name=None):
+    """End live view for camera [name], or for every camera."""
+    with _lock:
+        if name is None:
+            _live.clear()
+        else:
+            _live.pop(_name(name), None)
+
+
+def live_wanted(name):
+    """Whether camera [name] should be streaming now. Called by its poll and by its stream."""
+    name = _name(name)
+
+    with _lock:
+        until = _live.get(name)
+
+        if until is not None and time.monotonic() >= until:
+            del _live[name]
+            until = None
+
+        return until is not None
+
+
+def set_live_listener(listener):
+    """Register a callable taking (name, jpeg) for each live frame: the panel's update."""
+    global _live_listener
+    _live_listener = listener
+
+
+def _read_exactly(stream, count):
+    data = b""
+
+    while len(data) < count:
+        piece = stream.read(count - len(data))
+
+        if not piece:
+            return None
+
+        data += piece
+
+    return data
+
+
+def receive_live(name, stream):
+    """Take frames from camera [name]'s live stream until the view ends, the stream does, or a frame is bad.
+
+    Each frame is its length (4 bytes, big-endian) then the JPEG. Returns
+    (frames kept, seconds streamed, why it ended).
+    """
+    started = time.monotonic()
+    count = 0
+    ended = "the view was closed"
+    heard = None
+
+    while live_wanted(name):
+        try:
+            header = _read_exactly(stream, _FRAME_HEADER.size)
+        except OSError:
+            header = None
+
+        if header is None:
+            ended = "the camera stopped sending"
+            break
+
+        (length,) = _FRAME_HEADER.unpack(header)
+
+        if not 0 < length <= MAX_BYTES:
+            ended = f"a frame said it was {length} bytes"
+            break
+
+        try:
+            frame = _read_exactly(stream, length)
+        except OSError:
+            frame = None
+
+        if frame is None:
+            ended = "the camera stopped part way through a frame"
+            break
+
+        refused = store(name, frame)
+
+        if refused:
+            ended = f"a frame was {refused}"
+            break
+
+        count += 1
+        now = time.monotonic()
+
+        with _lock:
+            _polled[_name(name)] = now
+
+        if heard is None or now - heard >= LIVE_HEARTBEAT_SECONDS:
+            heard = now
+            sensors.report({"name": name, "event": "online"})
+
+        listener = _live_listener
+
+        if listener is not None:
+            try:
+                listener(_name(name), frame)
+            except Exception as error:
+                print(f"[JARVIS] could not show a live frame: {error}")
+
+    return count, time.monotonic() - started, ended
+
+
 def is_camera(name):
     """Whether board [name] is a camera: it has asked this run whether a picture is wanted.
 
@@ -149,6 +293,7 @@ def forget():
         _wanted.clear()
         _frames.clear()
         _polled.clear()
+        _live.clear()
 
 
 # ---- which cameras there are, and what they are called ---------------------------------------
@@ -348,9 +493,15 @@ def picture(text):
     if not camera["online"]:
         return f"{_first_up(_called(camera, view))} isn't connected, sir.", None
 
+    # Shown, it stays live until put away; one camera live at a time. Described, one picture is enough.
+    if kind == "show":
+        stop_watching()
+        watch(camera["name"])
+
     frame = fetch(camera["name"])
 
     if frame is None:
+        stop_watching(camera["name"])
         return f"{_first_up(_called(camera, view))} didn't send a picture, sir.", None
 
     if kind == "show":

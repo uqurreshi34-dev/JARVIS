@@ -2117,6 +2117,9 @@ def _look(question=None):
     answer, image = camera.look(question)
 
     if image and _camera_listener:
+        # The PC's own camera takes the panel: a wifi camera's live view stops rather than painting over it.
+        _end_live()
+
         try:
             _camera_listener(image, question or "Camera")
         except Exception as error:
@@ -2174,11 +2177,18 @@ def _camera_picture(command):
     puts either picture away.
     """
     request = cameras.asked(command)
+    title = cameras.title(command, request[1]) if request else "CAMERA"
+
+    # Shown, the picture is the camera's live view: each frame it streams replaces it until put away.
+    if request and request[0] == "show":
+        _live_view.update(name=cameras.normal_name(request[1]["name"]), title=title)
+
     said, frame = cameras.picture(command)
 
-    if frame is not None and _camera_listener:
-        title = cameras.title(command, request[1]) if request else "CAMERA"
+    if frame is None:
+        _live_view.clear()
 
+    if frame is not None and _camera_listener:
         try:
             _camera_listener(frame, title)
         except Exception as error:
@@ -2214,8 +2224,29 @@ def _switch_voice(command):
     return f"Switched to {voices.spoken(wanted)}, sir."
 
 
+# The camera whose live view is on screen: {"name", "title"}, or empty.
+_live_view = {}
+
+
+def _live_frame(name, frame):
+    """A frame of a camera's live view: onto the panel, if that camera's view is the one showing."""
+    view = dict(_live_view)
+
+    if view.get("name") == name and _camera_listener:
+        _camera_listener(frame, view["title"])
+
+
+cameras.set_live_listener(_live_frame)
+
+
+def _end_live():
+    cameras.stop_watching()
+    _live_view.clear()
+
+
 def _stop_looking():
     camera.release()
+    _end_live()
 
     if _camera_listener:
         try:

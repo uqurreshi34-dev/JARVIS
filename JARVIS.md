@@ -1694,6 +1694,32 @@ IDE (board "AI Thinker ESP32-CAM") or with `pio run -e cam`.
 `tools/esp32_setup.py` writes its headers too, with the wifi copied from
 the sensor's secrets so it is typed once.
 
+"The room cam", "room cam" and "my room cam" are one camera: a word saying
+whose it is ("my", "the") is optional before its name, so "show me the room
+cam" no longer opens the laptop's webcam and "close the room cam" no longer
+goes looking for a program called Camera.
+
+Live view. A camera on screen is video, not a still: "show me the street"
+asks for its live view as well as a picture (`/camera/wanted` answers
+`{"snap", "live"}`), and the camera opens one encrypted connection,
+`POST /camera/live` with a chunked body, and sends frame after frame down
+it -- each its length in four bytes, then the JPEG -- until the picture is
+put away ("close the room cam", or the PC's own camera taking the panel),
+when JARVIS answers and the connection closes. One TLS handshake for the
+whole view, where a picture a request had cost one each and held it to
+about one a second; still JARVIS's own authority and token, nothing
+broadcast on the wifi, nothing kept but the newest frame. A plain MJPEG
+stream from the board would have been smoother still and readable by
+anyone on the wifi, so it was not done. The panel swaps each frame in
+without moving or raising its window. A view ends by itself after
+JARVIS_CAMERA_LIVE_SECONDS (300); a stream silent for five seconds frees its
+thread; a bad frame ends it. Frames count as the camera's "online", since
+it cannot report while streaming. Describing ("what's on the street") still
+takes one picture. Older firmware answers "live" with a single picture.
+The console says how it went: `[JARVIS] my room cam live: 1800 frames in
+120s (15.0 a second); the view was closed`, and the board prints its frame
+rate every five seconds. `tools/test_camera_live.py`.
+
 ### Who moved - `actions/presence.py`
 A PIR sees movement, not a person, so "welcome back" needs a witness. It
 is your phone, as Tailscale on the PC sees it: `tailscale status --json`

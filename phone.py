@@ -1025,13 +1025,42 @@ class PhoneServer:
 
         @app.post("/camera/wanted")
         def camera_wanted():
-            """A camera asking whether a picture is wanted. Asked every
-            few seconds, so it answers at once and says only yes or no."""
+            """A camera asking whether a picture is wanted, and whether to stream. Asked every
+            second, so it answers at once. A camera that cannot stream takes the picture and
+            ignores "live"."""
             if not self._authorised():
                 return jsonify({"error": "unauthorised"}), 403
 
             payload = request.get_json(silent=True) or {}
-            return jsonify({"snap": cameras.wanted(payload.get("name"))}), 200
+            name = payload.get("name")
+            return jsonify({"snap": cameras.wanted(name), "live": cameras.live_wanted(name)}), 200
+
+        @app.post("/camera/live")
+        def camera_live():
+            """A camera's live view: one long upload, frame after frame, while its picture is shown.
+
+            Refused unless live view was asked for. The connection is given
+            LIVE_READ_TIMEOUT to send each piece, so a camera that drops off
+            the wifi frees its thread rather than holding it.
+            """
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            name = request.headers.get("X-Jarvis-Camera", "")
+
+            if not cameras.live_wanted(name):
+                return jsonify({"error": "not watching"}), 409
+
+            connection = request.environ.get("werkzeug.socket")
+
+            if connection is not None:
+                connection.settimeout(cameras.LIVE_READ_TIMEOUT)
+
+            frames, seconds, ended = cameras.receive_live(name, request.stream)
+            rate = frames / seconds if seconds > 0 else 0.0
+            print(f"[JARVIS] {name} live: {frames} frames in {seconds:.0f}s ({rate:.1f} a second); "
+                  f"{ended}", flush=True)
+            return jsonify({"ok": True, "frames": frames}), 200
 
         @app.post("/camera")
         def camera_picture():

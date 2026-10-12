@@ -176,10 +176,10 @@ else:
     token = {"X-Jarvis-Token": "camera-test"}
 
     check(client.post("/camera/wanted", json={"name": "my room cam"}).status_code == 403, "/camera/wanted needs the token")
-    check(client.post("/camera/wanted", json={"name": "my room cam"}, headers=token).get_json() == {"snap": False},
+    check(client.post("/camera/wanted", json={"name": "my room cam"}, headers=token).get_json() == {"snap": False, "live": False},
           "and says no when nothing is wanted")
     cameras.want("my room cam")
-    check(client.post("/camera/wanted", json={"name": "my room cam"}, headers=token).get_json() == {"snap": True},
+    check(client.post("/camera/wanted", json={"name": "my room cam"}, headers=token).get_json() == {"snap": True, "live": False},
           "and yes when a picture is")
 
     picture_headers = dict(token, **{"X-Jarvis-Camera": "my room cam", "Content-Type": "image/jpeg"})

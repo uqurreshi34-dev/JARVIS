@@ -7,7 +7,12 @@
 //     the house hologram draws its cone out of the window;
 //   - every second it asks whether a picture is wanted (POST /camera/wanted),
 //     which also tells JARVIS it is there;
-//   - only when one is does it take a picture and send it (POST /camera).
+//   - only when one is does it take a picture and send it (POST /camera);
+//   - while its picture is on screen, JARVIS asks for live view: it opens
+//     one encrypted connection (POST /camera/live) and sends frame after
+//     frame down it until JARVIS ends the view. One TLS handshake for the
+//     whole view, so it runs at the camera's pace rather than one picture
+//     a second, and nothing is broadcast on the wifi.
 //
 // Nothing is captured unless you ask: "show me the street". JARVIS keeps
 // the newest picture in memory and never writes it to disk.
@@ -90,6 +95,14 @@ unsigned long wifiLost = 0;
 bool saidOnline = false;
 bool cameraReady = false;
 
+// What JARVIS wants of the camera: one picture, or its live view. Up here
+// with the globals: the Arduino build declares every function above the
+// sketch's own code, and pictureWanted() returns one.
+struct Wanted {
+  bool snap;
+  bool live;
+};
+
 String quoted(const char *text) {
   return String("\"") + text + "\"";
 }
@@ -147,16 +160,104 @@ int reportOnline() {
   return code;
 }
 
-bool pictureWanted() {
+Wanted pictureWanted() {
   String answer;
   String json = String("{\"name\":") + quoted(SENSOR_NAME) + "}";
 
   if (postJson("/camera/wanted", json, &answer) != HTTP_CODE_OK) {
-    return false;
+    return {false, false};
   }
 
   answer.replace(" ", "");
-  return answer.indexOf("\"snap\":true") >= 0;
+  return {answer.indexOf("\"snap\":true") >= 0, answer.indexOf("\"live\":true") >= 0};
+}
+
+// Live view's own connection, kept apart from the one the polls use.
+NetworkClientSecure liveLink;
+
+// Writes all of [length] bytes, in pieces the TLS layer takes; false if the
+// connection went.
+bool writeAll(NetworkClientSecure &link, const uint8_t *data, size_t length) {
+  while (length > 0) {
+    size_t sent = link.write(data, length);
+
+    if (sent == 0) {
+      return false;
+    }
+
+    data += sent;
+    length -= sent;
+  }
+
+  return true;
+}
+
+// Live view: one POST whose body never ends until JARVIS ends it, each frame
+// sent as one chunk -- its length in four bytes, then the JPEG. JARVIS
+// answers, and closes the connection, when the picture is put away; a write
+// that fails, or an answer waiting, ends it here.
+void streamLive() {
+  if (!liveLink.connect(JARVIS_HOST, JARVIS_PORT)) {
+    Serial.println("[jarvis] live view: could not connect");
+    return;
+  }
+
+  liveLink.print(String("POST /camera/live HTTP/1.1\r\n") +
+                 "Host: " + JARVIS_HOST + ":" + JARVIS_PORT + "\r\n" +
+                 "X-Jarvis-Token: " + JARVIS_TOKEN + "\r\n" +
+                 "X-Jarvis-Camera: " + SENSOR_NAME + "\r\n" +
+                 "Content-Type: application/octet-stream\r\n" +
+                 "Transfer-Encoding: chunked\r\n" +
+                 "Connection: close\r\n\r\n");
+
+  unsigned long started = millis();
+  unsigned long counted = started;
+  unsigned long frames = 0;
+  unsigned long sinceCount = 0;
+
+  while (liveLink.connected() && !liveLink.available()) {
+    camera_fb_t *frame = esp_camera_fb_get();
+
+    if (!frame) {
+      Serial.println("[jarvis] live view: the camera gave no picture");
+      break;
+    }
+
+    uint8_t header[4] = {
+      (uint8_t)(frame->len >> 24), (uint8_t)(frame->len >> 16),
+      (uint8_t)(frame->len >> 8), (uint8_t)frame->len,
+    };
+    char size[12];
+    snprintf(size, sizeof(size), "%X\r\n", (unsigned)(frame->len + sizeof(header)));
+
+    bool sent = writeAll(liveLink, (const uint8_t *)size, strlen(size)) &&
+                writeAll(liveLink, header, sizeof(header)) &&
+                writeAll(liveLink, frame->buf, frame->len) &&
+                writeAll(liveLink, (const uint8_t *)"\r\n", 2);
+    esp_camera_fb_return(frame);
+
+    if (!sent) {
+      break;
+    }
+
+    frames++;
+    sinceCount++;
+    lastDelivered = millis();
+
+    // The loop's watchdog is fed while streaming; JARVIS counts the frames
+    // as this camera's "online", so no heartbeat is needed meanwhile.
+    feedLoopWDT();
+
+    if (millis() - counted >= 5000UL) {
+      Serial.printf("[jarvis] live view: %.1f frames a second\n", sinceCount * 1000.0 / (millis() - counted));
+      counted = millis();
+      sinceCount = 0;
+    }
+  }
+
+  writeAll(liveLink, (const uint8_t *)"0\r\n\r\n", 5);
+  liveLink.stop();
+  Serial.printf("[jarvis] live view ended: %lu frames in %lu s\n", frames, (millis() - started) / 1000UL);
 }
 
 void sendPicture() {
@@ -309,6 +410,8 @@ void setup() {
   // JARVIS's own authority: the board accepts JARVIS and nothing else.
   secure.setCACert(JARVIS_CA);
   secure.setHandshakeTimeout(HANDSHAKE_SECONDS);
+  liveLink.setCACert(JARVIS_CA);
+  liveLink.setHandshakeTimeout(HANDSHAKE_SECONDS);
 
   esp_task_wdt_config_t watchdog = {};
   watchdog.timeout_ms = WATCHDOG_MS;
@@ -353,7 +456,12 @@ void loop() {
   if (cameraReady && saidOnline && now - lastAsk >= ASK_EVERY_MS) {
     lastAsk = now;
 
-    if (pictureWanted()) {
+    Wanted wanted = pictureWanted();
+
+    if (wanted.live) {
+      streamLive();
+      lastAsk = millis();
+    } else if (wanted.snap) {
       sendPicture();
     }
   }

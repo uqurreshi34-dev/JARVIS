@@ -69,6 +69,13 @@ class CameraPanel(QWidget):
             print("[JARVIS] could not decode the picture")
             return
 
+        # A live camera sends many frames a second: once the panel is up, each one only replaces the
+        # picture, so it is not moved back or raised over whatever you are doing on every frame.
+        if self.isVisible() and self._image is not None and (title or "") == self._title:
+            self._image = image
+            self.update()
+            return
+
         self._image = image
         self._title = title or ""
 
