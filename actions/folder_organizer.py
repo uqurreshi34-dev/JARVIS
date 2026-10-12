@@ -82,6 +82,9 @@ _PROTECTED_NAMES = frozenset({
     "dex-scan.json",
     # Your own trades, as JARVIS records them (actions/trade_journal.py).
     "manual-trades.csv",
+    # The characters JARVIS's voice has sent to Google this month, so the
+    # free amount is never passed (voices.py).
+    "voice-usage.json",
 })
 
 # Files JARVIS names by date: rotated logs and the monthly token ledger.

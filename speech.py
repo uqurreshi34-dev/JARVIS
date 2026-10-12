@@ -24,7 +24,7 @@ VOICE = os.getenv("JARVIS_VOICE") or "en-GB-RyanNeural"
 # Both accept forms like "-8%" and "-6Hz"; set them empty for the default.
 VOICE_RATE = os.getenv("JARVIS_VOICE_RATE", "-7%")
 VOICE_PITCH = os.getenv("JARVIS_VOICE_PITCH", "-4Hz")
-# Where the voice is made -- Azure, Kokoro or Edge -- is voices.py's to say.
+# Where the voice is made -- Google, Azure, Kokoro or Edge -- is voices.py's to say.
 # Azure and Edge speak VOICE; Kokoro has its own (JARVIS_KOKORO_VOICE).
 ENGINE = voices.engine()
 
@@ -65,6 +65,15 @@ _SPOKEN_CHUNK = 220
 # this short ("Yes, sir."), which is better said in one breath with the next.
 _LEAD_SENTENCE_MIN = 25
 
+# A first sentence longer than this starts with its first clause alone, when
+# that clause can stand alone (_LEAD_SENTENCE_MIN). Made on this PC, Kokoro
+# takes about half as long as the speech to make it, so a long first
+# sentence ("Bitcoin is up 0.1 percent since 15:01 at sixty-two thousand,
+# six hundred pounds.") kept the HUD's words waiting two seconds for the
+# voice; its first clause waits half that, and the rest is made while it
+# plays. The break falls at a comma, where a pause sounds natural anyway.
+_LEAD_CLAUSE_AFTER = 60
+
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 _CLAUSE_END = re.compile(r"(?<=[,;:])\s+")
 
@@ -77,11 +86,18 @@ def _speakable_chunks(text, limit=_SPOKEN_CHUNK):
         return chunks
 
     sentences = _SENTENCE_END.split(chunks[0], maxsplit=1)
+    lead, rest = (sentences + [""])[:2]
 
-    if len(sentences) == 2 and len(sentences[0]) >= _LEAD_SENTENCE_MIN:
-        return [sentences[0], sentences[1]] + chunks[1:]
+    if not rest or len(lead) < _LEAD_SENTENCE_MIN:
+        lead, rest = chunks[0], ""
 
-    return chunks
+    if len(lead) > _LEAD_CLAUSE_AFTER:
+        clauses = _CLAUSE_END.split(lead, maxsplit=1)
+
+        if len(clauses) == 2 and len(clauses[0]) >= _LEAD_SENTENCE_MIN:
+            lead, rest = clauses[0], f"{clauses[1]} {rest}".strip()
+
+    return [piece for piece in (lead, rest) if piece] + chunks[1:]
 
 
 def _split_for_speech(text, limit=_SPOKEN_CHUNK):
@@ -312,7 +328,7 @@ class SpeechEngine:
 
         # What the cache keys phrases by. Azure and Edge make the same Ryan,
         # so a phrase either one has said plays from the cache for both.
-        self.voice = voices.local().voice_id() if engine in voices.LOCAL else voice
+        self.voice = voices.voice_id(engine, voice)
         self.voice_name = voice
         self._amplitude_listener = None
         self._sentence_listener = None
@@ -967,8 +983,15 @@ class SpeechEngine:
             )
 
             # The HUD counts sentences across the whole reply, not within
-            # one chunk, so each chunk's indices continue from the last.
-            spoken_sentences += len(list(boundaries or ()))
+            # one chunk, so each chunk's indices continue from the last. A
+            # chunk that is a sentence's first clause has not finished that
+            # sentence: the next chunk carries on in it.
+            finished = len(list(boundaries or ()))
+
+            if finished and not chunk.rstrip().endswith((".", "!", "?")):
+                finished -= 1
+
+            spoken_sentences += finished
 
     def _play_reactive(self, data, samplerate, boundaries, offset=0):
         """Play continuously and advance the HUD at sentence boundaries.

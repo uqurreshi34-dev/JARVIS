@@ -166,6 +166,15 @@ else:
     check(speech._speakable_chunks("Yes, sir. Opening it now.") == ["Yes, sir. Opening it now."],
           "but a first sentence too short to stand alone stays with the next")
     check(speech._speakable_chunks("Done, sir.") == ["Done, sir."], "and one sentence is one piece")
+    bitcoin = ("Bitcoin is up 0.1 percent since 15:01, at sixty-two thousand, six hundred and sixty pounds. "
+               "XRP is up 0.3 percent.")
+    check(speech._speakable_chunks(bitcoin) == ["Bitcoin is up 0.1 percent since 15:01,",
+                                               "at sixty-two thousand, six hundred and sixty pounds. "
+                                               "XRP is up 0.3 percent."],
+          "a long first sentence starts with its first clause, so the voice starts sooner")
+    check(speech._speakable_chunks("Sir, the long sentence that follows has a lot more to say than that.")
+          == ["Sir, the long sentence that follows has a lot more to say than that."],
+          "but not with a clause too short to stand alone")
     long_reply = " ".join(["This is a sentence of reasonable length for speaking."] * 12)
     check(all(len(piece) <= speech._SPOKEN_CHUNK for piece in speech._speakable_chunks(long_reply)),
           "and a long reply is still cut small enough to synthesise in time")

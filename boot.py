@@ -83,7 +83,7 @@ def _speech():
     import voices
 
     name = voices.engine()
-    library = {"azure": "requests", "kokoro": "phonemizer", "edge": "edge_tts"}[name]
+    library = {"google": "requests", "azure": "requests", "kokoro": "phonemizer", "edge": "edge_tts"}[name]
 
     try:
         __import__(library)
