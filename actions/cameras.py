@@ -232,11 +232,25 @@ def asked(text):
     return None
 
 
-def _called(camera):
-    if camera["looks"]:
+def by_view(text, camera):
+    """Whether [text] asked for [camera] by what it looks at ("show me the street"), not by its own name
+    ("show me my room cam") -- so the answer uses the words that were asked."""
+    looks = _spoken_words(camera["looks"])
+    return bool(looks) and set(looks) <= set(_spoken_words(text))
+
+
+def title(text, camera):
+    """The panel's title for [camera]'s picture: what was asked for ("STREET CAM", "MY ROOM CAM")."""
+    return f"{camera['looks'].upper()} CAM" if by_view(text, camera) else camera["name"].upper()
+
+
+def _called(camera, view=True):
+    if camera["looks"] and view:
         return f"the {camera['looks']} camera"
 
-    return camera["name"]
+    # A name is in your words ("my room cam"); said back to you, it is yours: "your room cam".
+    words = camera["name"].split()
+    return " ".join(["your" if words[0] == "my" else words[0]] + words[1:]) if words else camera["name"]
 
 
 def picture(text):
@@ -247,18 +261,20 @@ def picture(text):
         return None, None
 
     kind, camera = request
+    view = by_view(text, camera)
 
     if not camera["online"]:
-        return f"{_first_up(_called(camera))} isn't connected, sir.", None
+        return f"{_first_up(_called(camera, view))} isn't connected, sir.", None
 
     frame = fetch(camera["name"])
 
     if frame is None:
-        return f"{_first_up(_called(camera))} didn't send a picture, sir.", None
+        return f"{_first_up(_called(camera, view))} didn't send a picture, sir.", None
 
     if kind == "show":
-        looks = camera["looks"]
-        return (f"The {looks}, sir." if looks else f"Here's {_called(camera)}, sir."), frame
+        # In the words asked: "show me the street" -> "The street, sir."; "show me my room cam" -> "Here's my
+        # room cam, sir." -- the camera may be on the desk, not at its window.
+        return (f"The {camera['looks']}, sir." if view else f"Here's {_called(camera, view)}, sir."), frame
 
     return None, frame
 

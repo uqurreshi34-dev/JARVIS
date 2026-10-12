@@ -1612,7 +1612,9 @@ a JPEG. So nothing is captured until asked, and nothing is kept.
 
 "Show me the street" (or the camera's own name, "show me my room cam")
 asks the camera, waits up to twelve seconds for a picture taken after the
-asking, and shows it in the camera panel, free; "what's happening on the
+asking, and shows it in the camera panel, free -- answered and titled in the
+words asked ("The street, sir." and STREET CAM; "Here's your room cam, sir."
+and MY ROOM CAM, as the camera may be on the desk); "what's happening on the
 street" or "what's outside" describes it through the same vision call as
 the PC's webcam. Only cameras that exist are named, so with none online the
 webcam's own commands are untouched; "close the camera" closes either.

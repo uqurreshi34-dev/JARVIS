@@ -124,6 +124,16 @@ said, frame = cameras.picture("show me the street")
 check(said == "The street, sir." and frame == fresh, f"asking waits for a new picture, not the old one ({said!r})")
 check(frame != old, "taken after the asking")
 
+# Asked by its own name, it answers by its name -- "my" said back as "your" -- as it may be on the desk,
+# not at the window.
+camera_answers(data=JPEG + b"named")
+said, frame = cameras.picture("show me my room cam")
+street = next(found for found in cameras.cameras() if found["name"] == "my room cam")
+check(said == "Here's your room cam, sir." and frame == JPEG + b"named"
+      and cameras.title("show me my room cam", street) == "MY ROOM CAM"
+      and cameras.title("show me the street", street) == "STREET CAM",
+      f"asked by name, answered and titled by name; asked for the street, the street ({said!r})")
+
 check(cameras.fetch("my room cam", timeout=0.3) is None, "a camera that never answers: nothing, after a wait")
 check("my room cam" not in cameras._wanted, "and the request is withdrawn")
 

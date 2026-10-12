@@ -2176,8 +2176,7 @@ def _camera_picture(command):
     said, frame = cameras.picture(command)
 
     if frame is not None and _camera_listener:
-        looks = request[1]["looks"] if request else ""
-        title = f"{looks.upper()} CAM" if looks else (request[1]["name"].upper() if request else "CAMERA")
+        title = cameras.title(command, request[1]) if request else "CAMERA"
 
         try:
             _camera_listener(frame, title)
