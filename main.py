@@ -319,14 +319,16 @@ class Assistant:
         with self._alert_lock:
             self._interaction_open = True
 
-    def _speak_alert_locked(self, text):
+    def _speak_alert_locked(self, text, phone=True):
         """Speak one alert while holding the announcement lock.
 
         The HUD is set when the voice is actually free, not before waiting
         for it, and holds speaking until the alert has been said; then it
         returns to whatever state was asked for meanwhile, or was before.
+        With [phone] False it has already reached the phone another way.
         """
-        phone_server.announce(text)
+        if phone:
+            phone_server.announce(text)
 
         with self._voice_lock:
             self._after_announcement = self._current_state
@@ -344,8 +346,8 @@ class Assistant:
     def _flush_alerts_locked(self):
         """Speak queued alerts in order, without allowing races between them."""
         while self._queued_alerts:
-            text = self._queued_alerts.pop(0)
-            self._speak_alert_locked(text)
+            text, phone = self._queued_alerts.pop(0)
+            self._speak_alert_locked(text, phone)
 
     def _end_interaction(self):
         """Close the interaction and release anything waiting behind it."""
@@ -471,15 +473,16 @@ class Assistant:
 
         return True
 
-    def _on_alert(self, text):
+    def _on_alert(self, text, phone=True):
         """Called from a reminder's own thread when one falls due.
         Unsolicited announcements wait behind an active user interaction.
-        Once the interaction closes, they are spoken in order.
+        Once the interaction closes, they are spoken in order. [phone]
+        False: already sent to the phone, so only said here.
         """
 
         with self._alert_lock:
             if self._interaction_open:
-                self._queued_alerts.append(text)
+                self._queued_alerts.append((text, phone))
 
                 print(
                     f"[JARVIS] announcement queued until follow-up ends: "
@@ -495,7 +498,7 @@ class Assistant:
             # covers all of them. Still spoken to the room regardless,
             # since being at the desk is still the normal case. The state
             # it leaves the HUD in is decided there, once it has spoken.
-            self._speak_alert_locked(text)
+            self._speak_alert_locked(text, phone)
 
     def _on_sensor(self, payload):
         """A board on the wifi has reported. Returns what was said.
@@ -505,10 +508,17 @@ class Assistant:
         every other unprompted announcement goes through. That gate is
         what stops a doorbell interrupting a recitation.
         """
-        said = sensors.report(payload)
+        heard = sensors.examine(payload)
+        said = heard["say"]
+
+        # Movement with your phone away goes to the phone at once, with the
+        # camera in that room: not after whatever is being said at the
+        # desk, and not held back by quiet hours. Still said to the room.
+        if heard["alarm"]:
+            phone_server.alarm(said, heard["name"])
 
         if said:
-            self._on_alert(said)
+            self._on_alert(said, phone=not heard["alarm"])
 
         return said
 

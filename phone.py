@@ -34,7 +34,7 @@ from pywebpush import webpush, WebPushException
 
 import phone_tls
 import transcriber
-from actions import location, askfiles, cameras
+from actions import location, askfiles, cameras, files
 from voice import FILLERS, set_phone_active
 
 import speech
@@ -92,6 +92,19 @@ REQUEST_TIMEOUT = 60
 # collecting them. Enough for a long absence, bounded so a machine left
 # running for days doesn't grow without limit.
 MAX_NOTICES = 40
+
+# How long the push service keeps trying to reach a phone that is asleep or
+# out of signal with an alarm (movement at home while you are away), in
+# seconds. An ordinary notice is sent once and dropped if it cannot land.
+ALARM_TTL_ENV = "JARVIS_ALARM_PUSH_SECONDS"
+ALARM_TTL_SECONDS = 900
+
+# The phones that asked for notifications, in the JARVIS folder, so a
+# restart does not silently stop them until each phone asks again -- an
+# alarm that only works if the page was opened since JARVIS last started
+# is no alarm. A subscription cannot be used to send anything without
+# this PC's VAPID private key, which is never written here.
+PUSH_FILE_NAME = ".jarvis-push.json"
 
 # Maximum size of a picture sent from the phone camera.
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -656,9 +669,8 @@ class PhoneServer:
         self._notices_lock = threading.Lock()
         self._next_notice_id = 0
 
-        # Web Push subscriptions registered by the phone browser.
-        # Kept in memory deliberately: this is a single-user local assistant,
-        # and the browser can re-register whenever the server restarts.
+        # Web Push subscriptions registered by the phone browser. Read
+        # from PUSH_FILE_NAME when the server starts, written on each change.
         self._push_subscriptions = []
         self._push_lock = threading.Lock()
 
@@ -686,19 +698,7 @@ class PhoneServer:
         if not text:
             return
 
-        with self._notices_lock:
-            self._next_notice_id += 1
-
-            self._notices.append({
-                "id": self._next_notice_id,
-                "text": text,
-                "at": time.strftime("%H:%M"),
-            })
-
-            # Bounded, because a JARVIS left running for days with no
-            # phone connected should not accumulate for ever.
-            if len(self._notices) > MAX_NOTICES:
-                del self._notices[:-MAX_NOTICES]
+        self._hold(text)
 
         # Push is deliberately separate from the backlog. If push fails,
         # /notices still guarantees the phone can recover the announcement.
@@ -707,6 +707,44 @@ class PhoneServer:
             args=(text,),
             daemon=True,
         ).start()
+
+    def alarm(self, text, board):
+        """Movement at home while you are away: to the phone now, with a way to see it.
+
+        Held and pushed like any announcement, but the push is urgent, is
+        not silenced by quiet hours, and carries the camera in the room
+        board [board] is in, so tapping it opens that camera's live feed.
+        """
+        text = (text or "").strip()
+
+        if not text:
+            return
+
+        camera = cameras.beside(board)
+        self._hold(text, camera)
+
+        threading.Thread(
+            target=self._send_push,
+            args=(text, camera, True),
+            daemon=True,
+        ).start()
+
+    def _hold(self, text, camera=None):
+        """Keep [text] for the phone to collect, with the camera it offers, if any."""
+        notice = {"text": text, "at": time.strftime("%H:%M")}
+
+        if camera:
+            notice["camera"] = camera
+
+        with self._notices_lock:
+            self._next_notice_id += 1
+            notice["id"] = self._next_notice_id
+            self._notices.append(notice)
+
+            # Bounded, because a JARVIS left running for days with no
+            # phone connected should not accumulate for ever.
+            if len(self._notices) > MAX_NOTICES:
+                del self._notices[:-MAX_NOTICES]
 
     def notices_since(self, last_seen):
         """Everything announced after the caller's last seen id.
@@ -724,9 +762,14 @@ class PhoneServer:
         with self._notices_lock:
             return self._next_notice_id
 
-    def _send_push(self, text):
-        """Send an immediate Web Push notification to registered phones."""
-        if not text or not self._push_allowed():
+    def _send_push(self, text, camera=None, alarm=False):
+        """Send an immediate Web Push notification to registered phones.
+
+        An [alarm] is sent whatever the hour, marked urgent so a sleeping
+        phone is woken for it, and kept by the push service for a while if
+        the phone cannot be reached; [camera] is what tapping it opens.
+        """
+        if not text or not (alarm or self._push_allowed()):
             return
 
         private_key = os.getenv(VAPID_PRIVATE_ENV)
@@ -750,6 +793,15 @@ class PhoneServer:
             "body": text,
         }
 
+        delivery = {}
+
+        if alarm:
+            payload["alarm"] = True
+            delivery = {"ttl": self._alarm_ttl(), "headers": {"Urgency": "high"}}
+
+        if camera:
+            payload["camera"] = camera
+
         vapid_claims = {
             "sub": subject,
         }
@@ -763,6 +815,7 @@ class PhoneServer:
                     data=json.dumps(payload),
                     vapid_private_key=private_key,
                     vapid_claims=vapid_claims,
+                    **delivery,
                 )
 
             except WebPushException as error:
@@ -793,6 +846,48 @@ class PhoneServer:
                     for item in self._push_subscriptions
                     if item.get("endpoint") not in expired
                 ]
+                self._save_push_locked()
+
+    @staticmethod
+    def _push_path():
+        root = files.root()
+        return os.path.join(root, PUSH_FILE_NAME) if root else None
+
+    def _load_push(self):
+        """The subscriptions kept from earlier runs, if there are any to read."""
+        path = self._push_path()
+
+        if not path or not os.path.exists(path):
+            return
+
+        try:
+            with open(path, encoding="utf-8") as handle:
+                kept = json.load(handle)
+        except (OSError, ValueError) as error:
+            print(f"[JARVIS] could not read {PUSH_FILE_NAME}: {error}")
+            return
+
+        kept = [item for item in kept if isinstance(item, dict) and item.get("endpoint")] \
+            if isinstance(kept, list) else []
+
+        with self._push_lock:
+            known = {item.get("endpoint") for item in self._push_subscriptions}
+            self._push_subscriptions += [item for item in kept if item["endpoint"] not in known]
+
+    def _save_push_locked(self):
+        """Write the subscriptions out; called holding _push_lock. Replaced whole, never half written."""
+        path = self._push_path()
+
+        if not path:
+            return
+
+        try:
+            with open(path + ".tmp", "w", encoding="utf-8") as handle:
+                json.dump(self._push_subscriptions, handle)
+
+            os.replace(path + ".tmp", path)
+        except OSError as error:
+            print(f"[JARVIS] could not keep the phone's notifications: {error}")
 
     def set_look_handler(self, handler):
         """Register what describes a picture from the phone.
@@ -1183,6 +1278,7 @@ class PhoneServer:
                 ]
 
                 self._push_subscriptions.append(subscription)
+                self._save_push_locked()
 
             return jsonify({"ok": True})
 
@@ -1204,6 +1300,7 @@ class PhoneServer:
                     for item in self._push_subscriptions
                     if item.get("endpoint") != endpoint
                 ]
+                self._save_push_locked()
 
             return jsonify({"ok": True})
 
@@ -1437,6 +1534,16 @@ class PhoneServer:
             }
 
     @staticmethod
+    def _alarm_ttl():
+        """Seconds an alarm push may wait for the phone: JARVIS_ALARM_PUSH_SECONDS, else ALARM_TTL_SECONDS."""
+        try:
+            seconds = int(os.getenv(ALARM_TTL_ENV) or ALARM_TTL_SECONDS)
+        except ValueError:
+            seconds = ALARM_TTL_SECONDS
+
+        return max(0, seconds)
+
+    @staticmethod
     def _push_allowed():
         """Whether an announcement is allowed to buzz the phone."""
         from actions.watch import quiet_hours
@@ -1468,6 +1575,8 @@ class PhoneServer:
     def start(self):
         if self._thread and self._thread.is_alive():
             return
+
+        self._load_push()
 
         cert, key, supplied = self._certificate_pair()
 
@@ -1536,22 +1645,40 @@ self.addEventListener("push", event => {
         // Fall back to the default notification.
     }
 
+    // An alarm (movement at home while you are away) has its own tag, so
+    // a market notice arriving after it cannot replace it, and stays on
+    // screen until it is dealt with.
+    const options = {
+        body: data.body || "",
+        icon: "/?t=__TOKEN__",
+        badge: "/?t=__TOKEN__",
+        tag: data.alarm ? "jarvis-alarm" : "jarvis-notice",
+        renotify: true,
+        data: { camera: data.camera || null },
+    };
+
+    if (data.alarm) {
+        options.requireInteraction = true;
+        options.vibrate = [400, 200, 400, 200, 400];
+    }
+
     event.waitUntil(
-        self.registration.showNotification(
-            data.title || "JARVIS",
-            {
-                body: data.body || "",
-                icon: "/?t=__TOKEN__",
-                badge: "/?t=__TOKEN__",
-                tag: "jarvis-notice",
-                renotify: true,
-            }
-        )
+        self.registration.showNotification(data.title || "JARVIS", options)
     );
 });
 
 self.addEventListener("notificationclick", event => {
     event.notification.close();
+
+    // An alarm opens the camera in that room: in the page if it is open,
+    // or a new one told which camera to show.
+    const camera = (event.notification.data || {}).camera;
+    let url = "/?t=__TOKEN__";
+
+    if (camera) {
+        url += "&watch=" + encodeURIComponent(camera.name) +
+            "&title=" + encodeURIComponent(camera.title || "");
+    }
 
     event.waitUntil(
         clients.matchAll({
@@ -1560,13 +1687,13 @@ self.addEventListener("notificationclick", event => {
         }).then(existing => {
             for (const client of existing) {
                 if ("focus" in client) {
-                    return client.focus();
+                    return client.focus().then(focused => {
+                        if (camera) (focused || client).postMessage({ watch: camera });
+                    });
                 }
             }
 
-            return clients.openWindow(
-                "/?t=__TOKEN__"
-            );
+            return clients.openWindow(url);
         })
     );
 });
@@ -2577,6 +2704,10 @@ async function collectNotices() {
     if (notices.length) {
       speak(notices[notices.length - 1].text);
     }
+
+    // An alarm that arrives while you are looking at the page shows its camera.
+    const alarm = notices.filter(notice => notice.camera).pop();
+    if (alarm && !document.hidden) openFeed(alarm.camera.name, alarm.camera.title);
   } catch (e) {
     // Missing a notice is not worth surfacing as an error.
   }
@@ -2733,7 +2864,11 @@ function stopFeed() {
 }
 
 function openFeed(name, title) {
+  // Already playing this camera (the alarm's tap and its notice both ask): leave it playing.
+  if (feed.classList.contains("open") && feedImg.dataset.name === name && feedImg.getAttribute("src")) return;
+
   stopFeed();
+  feedImg.dataset.name = name;
   feedList.innerHTML = "";
   feedTitle.textContent = title || name.toUpperCase();
   feedNote.textContent = "Waking the camera, sir...";
@@ -2791,6 +2926,26 @@ async function showCameras() {
 }
 
 document.getElementById("feeds-open").addEventListener("click", showCameras);
+
+// An alarm tapped while this page was open: the service worker says which camera.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", event => {
+    const camera = (event.data || {}).watch;
+    if (camera && camera.name) openFeed(camera.name, camera.title);
+  });
+}
+
+// An alarm tapped with no page open: the address says which camera, once.
+(() => {
+  const asked = new URLSearchParams(location.search);
+  const name = asked.get("watch");
+  if (!name) return;
+  const title = asked.get("title");
+  asked.delete("watch");
+  asked.delete("title");
+  history.replaceState(null, "", location.pathname + "?" + asked.toString());
+  openFeed(name, title);
+})();
 document.getElementById("feed-close").addEventListener("click", closeFeed);
 
 // A locked phone or a backgrounded tab is not watching: the stream ends, and the camera with it.
@@ -3407,7 +3562,33 @@ box.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); unlockAudio(); submit(); }
 });
 
-registerPushWorker();
+// Notifications already allowed on this phone: JARVIS is told again on
+// every visit, quietly, so a subscription the browser has renewed, or one
+// JARVIS has lost, is put right without tapping the bell.
+async function renewPush() {
+  if (!("Notification" in window) || Notification.permission !== "granted" || !VAPID_PUBLIC_KEY) return;
+
+  try {
+    const registration = pushRegistration || await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.getSubscription();
+    if (!subscription) return;
+
+    const response = await fetch("/push/subscribe?t=" + encodeURIComponent(TOKEN), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subscription: subscription.toJSON() })
+    });
+
+    if (response.ok) {
+      notify.textContent = "\\u{1F514}";
+      notify.title = "notifications enabled";
+    }
+  } catch (e) {
+    // The bell still works by hand.
+  }
+}
+
+registerPushWorker().then(renewPush);
 ping();
 setInterval(ping, 5000);
 </script>

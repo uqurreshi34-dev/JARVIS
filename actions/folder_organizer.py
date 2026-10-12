@@ -87,6 +87,8 @@ _PROTECTED_NAMES = frozenset({
     "voice-usage.json",
     # Which voice you last chose aloud ("use the Google voice").
     "voice.json",
+    # The phones JARVIS sends notifications and alarms to (phone.py).
+    ".jarvis-push.json",
 })
 
 # Files JARVIS names by date: rotated logs and the monthly token ledger.

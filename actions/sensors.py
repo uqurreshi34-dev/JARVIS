@@ -192,7 +192,16 @@ def reset():
 
 
 def report(payload):
-    """Take one report from a board. Returns what to say, or None.
+    """Take one report from a board. Returns what to say, or None. See examine()."""
+    return examine(payload)["say"]
+
+
+def examine(payload):
+    """Take one report from a board: {"name", "say", "alarm"}.
+
+    "say" is what to say, or None; "alarm" is True when it is movement
+    with your phone away, which is worth reaching you wherever you are
+    rather than only being said to the room.
 
     The payload is whatever the board sent, and nothing in it is
     trusted to exist:
@@ -201,13 +210,13 @@ def report(payload):
         {"name": "office", "event": "motion"}
         {"name": "office", "temperature": 19.4, "humidity": 48}
 
-    Returning None is the normal case and is not a failure -- it means
+    Nothing to say is the normal case and is not a failure -- it means
     the report was recorded and there was nothing new worth saying.
     """
     global _last_greeting
 
     if not isinstance(payload, dict):
-        return None
+        return {"name": None, "say": None, "alarm": False}
 
     name = (payload.get("name") or "").strip().casefold()
 
@@ -289,10 +298,15 @@ def report(payload):
             # A history that cannot be written must not stop the announcement.
             print(f"[JARVIS] sensor history failed: {error}", flush=True)
 
-    return _news(name, event, fresh, first_time, returning) or nudge
+    # Asked once, and only of a fresh arrival: the same answer decides the
+    # words and whether they are an alarm.
+    away = event == "motion" and fresh and _whose_phone() == "away"
+    news = _news(name, event, fresh, first_time, returning, away)
+
+    return {"name": name, "say": news or nudge, "alarm": bool(news and away)}
 
 
-def _news(name, event, fresh, first_time, returning):
+def _news(name, event, fresh, first_time, returning, away):
     """What a report itself is worth saying, or None."""
     if event == "online":
         if first_time or returning:
@@ -305,7 +319,7 @@ def _news(name, event, fresh, first_time, returning):
             return None
 
         # Movement with your phone away is not you coming back.
-        if _whose_phone() == "away":
+        if away:
             return f"Movement in {_place(name)}, sir, and your phone isn't home."
 
         return "Welcome back, sir."

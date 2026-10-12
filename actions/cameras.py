@@ -273,6 +273,26 @@ def listed():
     return [{"name": camera["name"], "looks": camera["looks"], "online": camera["online"]} for camera in cameras()]
 
 
+def beside(board):
+    """{"name", "title"} of an online camera in the room board [board] is in on the house plan, or None.
+
+    What an alarm from that board offers to show: movement in my room opens the room cam.
+    """
+    try:
+        room = house.room_of(board)
+    except Exception:
+        return None
+
+    if not room:
+        return None
+
+    for camera in cameras():
+        if camera["room"] == room and camera["online"] and camera["name"] != normal_name(board):
+            return {"name": camera["name"], "title": camera["name"].upper()}
+
+    return None
+
+
 def set_live_listener(listener):
     """Register a callable taking (name, jpeg) for each live frame: the panel's update."""
     global _live_listener

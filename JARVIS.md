@@ -1784,6 +1784,32 @@ seconds later. Frames go to the phone at most JARVIS_REMOTE_CAMERA_FPS
 `tools/test_camera_remote.py` (the page itself was also played in Chromium
 against the real server while frames arrived).
 
+### The alarm on the phone - `actions/sensors.py`, `phone.py`, `main.py`
+Movement with your phone away ("Movement in your room, sir, and your
+phone isn't home") is an alarm: sensors.examine() says so beside the
+words, and main.py sends it to the phone itself, at once -- not queued
+behind whatever is being said at the desk -- while still saying it in the
+room, once, so the phone is not buzzed twice. The same gate decides it as
+decides "welcome back": a room still for ten minutes, no word spoken at
+the desk in five, so you walking out and an intruder's every step are
+not alarms; one arrival, one alarm.
+
+phone_server.alarm() pushes it whatever the quiet hours (which still
+silence ordinary notices), marked urgent so a sleeping phone is woken,
+and kept by the push service JARVIS_ALARM_PUSH_SECONDS (900) for a phone
+out of signal. It carries the online camera in the same room on the
+house plan (cameras.beside: the room cam for the room sensor); the
+notification stays until dealt with, and tapping it opens that camera's
+live feed, in the open page or a new one. A page open when it arrives
+plays the feed straight away.
+
+The phones that asked for notifications are kept in .jarvis-push.json in
+the JARVIS folder (protected from sorting), so a restart no longer stops
+them until each phone asks again; the page also tells JARVIS of its
+subscription quietly on every visit. A subscription is useless without
+this PC's VAPID private key, which is never written there.
+`tools/test_intruder_alert.py`.
+
 ### Who moved - `actions/presence.py`
 A PIR sees movement, not a person, so "welcome back" needs a witness. It
 is your phone, as Tailscale on the PC sees it: `tailscale status --json`

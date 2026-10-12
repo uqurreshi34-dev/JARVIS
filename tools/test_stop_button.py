@@ -318,7 +318,7 @@ def _check_turn(failures):
                 assistant._stop.set()
                 return None
 
-        assistant._queued_alerts[:] = list(queued)
+        assistant._queued_alerts[:] = [(text, True) for text in queued]
 
         with patch.object(main, "speak", side_effect=fake_speak), \
              patch.object(main, "stop_speech", return_value=True), \
