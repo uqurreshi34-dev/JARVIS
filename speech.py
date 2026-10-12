@@ -24,7 +24,7 @@ VOICE = os.getenv("JARVIS_VOICE") or "en-GB-RyanNeural"
 # Both accept forms like "-8%" and "-6Hz"; set them empty for the default.
 VOICE_RATE = os.getenv("JARVIS_VOICE_RATE", "-7%")
 VOICE_PITCH = os.getenv("JARVIS_VOICE_PITCH", "-4Hz")
-# Where the voice is made -- Google, Azure, Kokoro or Edge -- is voices.py's to say.
+# Where the voice is made -- Azure, Kokoro or Edge -- is voices.py's to say.
 # Azure and Edge speak VOICE; Kokoro has its own (JARVIS_KOKORO_VOICE).
 ENGINE = voices.engine()
 

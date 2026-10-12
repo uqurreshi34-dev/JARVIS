@@ -1433,22 +1433,9 @@ issue 490). Phrases he had said before still played in Ryan from the cache
 (%TEMP%\jarvis_tts_cache), so it looked intermittent; anything new came
 out in Windows' woman's voice, and after one of those he stayed on SPEAKING.
 
-The voice is now made by one of four engines, picked by
+The voice is now made by one of three engines, picked by
 JARVIS_VOICE_ENGINE in .env:
 
-- google: Google Cloud Text-to-Speech's Chirp 3 HD voices, with your own
-  GOOGLE_TTS_API_KEY (sent in the X-Goog-Api-Key header, never the URL).
-  Chosen first when the key is set. Chirp 3 HD's first 1,000,000
-  characters a month are free and the project must have billing on, so
-  JARVIS counts every character it sends (voice-usage.json in the JARVIS
-  folder, protected from the organiser) and stops at
-  GOOGLE_TTS_MONTHLY_CHARACTERS (950,000): past it Kokoro speaks until the
-  month turns, and nothing is charged. Cached phrases cost nothing.
-  GOOGLE_TTS_VOICE picks the voice (default en-GB-Chirp3-HD-Achird);
-  `python tools/voice_samples.py` asks Google which British Chirp 3 HD
-  voices it has and saves each saying a JARVIS line, in "Voice samples" in
-  the JARVIS folder, to choose by ear. Sentence timings are shared out by
-  length, as Azure's are.
 - azure: Ryan from Microsoft's official Speech service, with your own
   AZURE_SPEECH_KEY and AZURE_SPEECH_REGION (free tier 500,000 characters a
   month). Chosen by itself when both are set. It shares Edge's cache, so
@@ -1494,6 +1481,14 @@ that it is left behind and not used again that run. Prewarming stops at
 its first failure instead of printing one per phrase. Start-up prints the
 voice in use (`[JARVIS] voice: ...`) and the boot check names it.
 `tools/test_voices.py`.
+
+Google's Chirp 3 HD voices were added as a friendlier online voice and
+taken out the same day: they need a Google Cloud billing account, and
+JARVIS's voice stays free with no card anywhere. Every other online voice
+checked that needs no card ran out too soon to be the main voice (October
+2026): Groq's Orpheus 100 requests a day, ElevenLabs about ten minutes a
+month, and Gemini's speech preview has tight limits and builds the whole
+clip before playing.
 
 With Kokoro the HUD's words showed about two seconds before the voice:
 Kokoro takes roughly half as long as the speech to make it, and a reply
@@ -1744,7 +1739,7 @@ voice.py        hears you, checks the wake word
 transcriber.py  turns audio into text (Whisper or Vosk)
 commands.py     decides what you meant
 actions/*.py    does it
-speech.py       says the reply (voices.py makes it: Google, Azure, Kokoro or Edge)
+speech.py       says the reply (voices.py makes it: Azure, Kokoro or Edge)
 hud.py          shows the state
 ```
 

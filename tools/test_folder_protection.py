@@ -52,8 +52,7 @@ def check(condition, message):
 # Named in code that uses the JARVIS folder, but never kept in it: a
 # marker for spotting code in text, and files of the RAG evaluation that
 # live beside it in tools/ or in the model cache.
-# kokoro-vocab.json is Kokoro's alphabet, kept with its model in LOCALAPPDATA (voices.kokoro_folder).
-NOT_IN_THE_FOLDER = {"console.log", "rag_baseline.json", "tokenizer.json", "kokoro-vocab.json"}
+NOT_IN_THE_FOLDER = {"console.log", "rag_baseline.json", "tokenizer.json"}
 
 
 def stores():
