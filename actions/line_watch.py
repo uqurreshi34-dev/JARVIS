@@ -14,7 +14,9 @@ four-hour ATR, as the backtest's bounce counts it -- is a hit, judged as the bac
     testing       on the line, neither
 
 JARVIS says which, what to wait for each way, and where a stop would sit: beyond the candle's wick
-by the plan's `stop_atr` of the fifteen-minute ATR, room for the noise around a line. A line is
+by the plan's `stop_atr` of the fifteen-minute ATR, room for the noise around a line -- with its
+working (that candle's time, its wick and the ATR), so the figure can be checked on any chart. Each
+alert is written to the journal (jarvis-log.txt) as it is said. A line is
 said once when reached and once more if a bounce candle follows; it is said again only after price
 has moved `alert_clear_atr` four-hour ATRs away from it. Nothing is traded: this watches and says.
 """
@@ -22,7 +24,7 @@ has moved `alert_clear_atr` four-hour ATRs away from it. Nothing is traded: this
 import threading
 from datetime import datetime, timedelta, timezone
 
-from actions import gold_strategy, oanda, trade_plan
+from actions import gold_strategy, journal, oanda, trade_plan
 
 # How long after a fifteen-minute candle closes before OANDA is asked for it.
 SETTLE_SECONDS = 20
@@ -45,16 +47,19 @@ def hit(found):
     """What the last finished fifteen-minute candle did at support or resistance, or None.
 
     {"kind": "support" or "resistance", "line", "signal", "candle": (open, high, low, close), "stop",
-    "decimals"} -- the line it reached nearest, if it reached one.
+    "decimals", "when", "wick", "atr", "stop_atr"} -- the line it reached nearest, if it reached one; the
+    stop is [wick] (the candle's low at support, high at resistance) beyond by [stop_atr] times [atr],
+    the fifteen-minute ATR, and [when] is the candle's start, UK time, as charts label it.
     """
     entry = found.get("entry")
 
     if not entry or not entry.get("candles") or not found.get("atr"):
         return None
 
-    _ms, opened, high, low, closed, _label = entry["candles"][-1]
+    _ms, opened, high, low, closed, label = entry["candles"][-1]
     touch = gold_strategy.BOUNCE_TOUCH_ATR * found["atr"]
-    room = found["settings"]["stop_atr"] * (entry.get("atr") or found["atr"])
+    atr = entry.get("atr") or found["atr"]
+    room = found["settings"]["stop_atr"] * atr
     reached = [(kind, line) for kind, line in (("support", found.get("support")),
                                                ("resistance", found.get("resistance")))
                if line is not None and low <= line + touch and high >= line - touch]
@@ -74,9 +79,11 @@ def hit(found):
     else:
         signal = "testing"
 
-    stop = low - room if kind == "support" else high + room
+    wick = low if kind == "support" else high
+    stop = wick - room if kind == "support" else wick + room
     return {"kind": kind, "line": line, "signal": signal, "candle": (opened, high, low, closed),
-            "stop": stop, "decimals": found["decimals"]}
+            "stop": stop, "decimals": found["decimals"], "when": (str(label or "").split() or [""])[-1],
+            "wick": wick, "atr": atr, "stop_atr": found["settings"]["stop_atr"]}
 
 
 def words(found, reached):
@@ -97,23 +104,34 @@ def words(found, reached):
     opening = f"{found['instrument']} has reached {reached['kind']} at {line}, sir."
     signal = reached["signal"]
 
+    # The stop's working, to the instrument's own decimals whatever the sentence rounds to, so it can be
+    # checked against that candle on any chart: its wick, the ATR, and what they make.
+    def exact(value):
+        return f"{value:,.{d}f}"
+
+    candle = f"the {reached['when']} UK" if reached.get("when") else "the last"
+    times = "" if reached["stop_atr"] == 1 else f"{reached['stop_atr']:g} times "
+    working = (f" That is {candle} {timeframe} candle's {'low' if support else 'high'}, {exact(reached['wick'])},"
+               f" {'minus' if support else 'plus'} {times}its {timeframe} ATR, {exact(reached['atr'])}:"
+               f" {exact(reached['stop'])}.")
+
     if signal == "bounce":
         middle = (f" That {timeframe} candle closed back {back} it with its {near_wick} wick the longer: {winners}"
                   f" took it back -- the bounce the rule looks for. A {bounce_side} would put its stop at {stop},"
-                  f" {'under' if support else 'over'} the wick with room.")
+                  f" {'under' if support else 'over'} the wick with room." + working)
     elif signal == "pushed back":
         middle = (f" That {timeframe} candle closed back {back} it, but with its {far_wick} wick the longer: {others}"
                   f" pushed back, so wait. A bounce is a {timeframe} candle closing {back} {line} with its"
                   f" {near_wick} wick the longer; its stop would sit {beyond} that wick with room, about {stop} from"
-                  f" here.")
+                  f" here." + working)
     elif signal == "through":
         middle = (f" That {timeframe} candle closed {beyond} it. A {break_side} needs a {found['timeframe']} close"
                   f" {beyond} {line}, then the retest; until then it may yet bounce.")
     else:
         middle = (f" Wait for a {timeframe} candle to close back {back} {line} with its {near_wick} wick the longer"
                   f" -- a long {far_wick} wick means {others} pushed back, so wait. A stop would sit {beyond} the"
-                  f" wick with room, about {stop} from here. A {found['timeframe']} close {beyond} it would be a"
-                  f" break instead.")
+                  f" wick with room, about {stop} from here." + working + f" A {found['timeframe']} close"
+                  f" {beyond} it would be a break instead.")
 
     return opening + middle + " The plan is on the panel."
 
@@ -173,6 +191,8 @@ def check(client=None):
         sentence = words(found, reached)
         found["alert"] = sentence
         said.append(sentence)
+        # Kept with the time it was said, as the crypto alerts are, so any figure can be checked later.
+        journal.alert(sentence)
 
         if _show:
             _show(found, spoken)

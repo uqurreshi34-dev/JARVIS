@@ -2,9 +2,10 @@
 
 Checked, in a sandboxed JARVIS folder and without OANDA:
     what a candle at a line did -- bounce, pushed back, through, testing -- judged as the backtest does
-    the stop beyond the wick, with the plan's room
+    the stop beyond the wick, with the plan's room, and its working said: the candle, its wick, the ATR
     what is said, each way, and that a line is said once, again for a bounce, and again only once left
-    only the markets in alert_markets are read; a candle already judged is not judged again
+    only the markets in alert_markets are read; a candle already judged is not judged again; what is
+    said is written to the journal
     the panel opens with the alert at the top
 """
 
@@ -78,6 +79,21 @@ check("buyers took it back" in said["won"] and "stop at 4,091" in said["won"],
       f"a bounce: said, with its stop ({said['won'][:160]})")
 check("4-hour close below 4,107" in said["under"] and "retest" in said["under"],
       "through the line: the four-hour close decides a break")
+check("That is the 17:15 UK 15-minute candle's low, 4,106.193, minus its 15-minute ATR, 8.000: 4,098.193."
+      in said["sitting"] and "about 4,098 from here" in said["sitting"],
+      f"the stop's working is said to the full decimals, with the candle's time, as a chart shows it"
+      f" ({said['sitting'][:400]})")
+check("candle's low, 4,099.193, minus its 15-minute ATR, 8.000: 4,091.193." in said["won"]
+      and "candle's low, 4,102.193" in said["pushed"],
+      "for a bounce and a pushback too")
+capped_said = line_watch.words(found(capped), reached["capped"])
+check("candle's high, 4,232.472, plus its 15-minute ATR, 8.000: 4,240.472." in capped_said,
+      f"at resistance it is the high, plus the ATR ({capped_said[-200:]})")
+roomier = found(won)
+roomier["settings"] = {"stop_atr": 1.5}
+check("minus 1.5 times its 15-minute ATR, 8.000: 4,087.193." in line_watch.words(roomier, line_watch.hit(roomier)),
+      "a wider stop_atr is said as so many times the ATR")
+check("That is" not in said["under"], "through the line there is no stop, so no working")
 check("Wait for a 15-minute candle to close back above 4,107" in said["sitting"]
       and all(sentence.endswith("The plan is on the panel.") for sentence in said.values()),
       "on the line: what to wait for each way; every one points to the panel")
@@ -119,6 +135,13 @@ finally:
 check(sorted(set(asked_for)) == ["gold", "silver"] and len(first_look) == 1 and second_look == []
       and spoken == first_look and shown[0][1] == "gold" and shown[0][0]["alert"] == first_look[0],
       "gold and silver are read; gold at support is said and its plan opened with the alert; nothing twice")
+
+from actions import journal  # noqa: E402
+
+with open(journal._path(), encoding="utf-8") as handle:
+    logged = [line for line in handle if " alert " in line and "Gold has reached support" in line]
+check(len(logged) == 1 and logged[0].rstrip("\n").endswith(first_look[0]),
+      "the alert is written to the journal, with the time it was said, once")
 
 path = trade_plan._path(trade_plan.SETTINGS_NAME)
 with open(path, "w", encoding="utf-8") as handle:

@@ -2222,7 +2222,12 @@ longer: buyers, or sellers, took it back), **pushed back** (closed back
 beyond it but the other wick the longer: wait), **through** (closed beyond
 it: a four-hour close decides a break) or **testing**. Each says what to
 wait for and where a stop would sit: beyond the candle's wick by the plan's
-`stop_atr` (1) of the fifteen-minute ATR, room for the noise around a line.
+`stop_atr` (1) of the fifteen-minute ATR, room for the noise around a line,
+with its working to the instrument's full decimals: "That is the 20:00 UK
+15-minute candle's low, 60.13300, minus its 15-minute ATR, 0.10813:
+60.02487" -- the candle by its start, as charts label it, so the figure is
+checked on any chart in seconds. Every alert is written to jarvis-log.txt
+as an `alert` line, with the time it was said, as the crypto alerts are.
 A line is said once when reached and once more if a bounce follows; again
 only after price has been `alert_clear_atr` (1) four-hour ATRs away. It
 watches and says; it trades nothing. `tools/test_line_watch.py`.
