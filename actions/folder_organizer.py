@@ -82,10 +82,6 @@ _PROTECTED_NAMES = frozenset({
     "dex-scan.json",
     # Your own trades, as JARVIS records them (actions/trade_journal.py).
     "manual-trades.csv",
-    # Your voiceprint, and the model that compares voices with it (speaker.py);
-    # moved, JARVIS answers nobody until it is put back.
-    "voiceprint.json",
-    "voice-id-model.onnx",
 })
 
 # Files JARVIS names by date: rotated logs and the monthly token ledger.

@@ -1396,33 +1396,6 @@ said at once. Every wake is printed with what was heard (`[wake] woken by
 only when the transcript has something like the name in it
 (`_strip_wake` returns None otherwise), so "oh yeah" no longer wakes him. `tools/test_follow_up_named.py`.
 
-### Only your voice - `speaker.py`, `tools/enroll_voice.py`
-A trading video said "...Jarvis, I was a consecutively unprofitable
-trader...": the name was really said, at the start, so he woke and saved it
-as a memory. The wake word cannot tell you from a video, a phone on speaker
-or a friend; your voice can. `python tools/enroll_voice.py` records eight
-short clips of you (his name; commands as you give them), downloads the
-WeSpeaker ResNet34 speaker model once from sherpa-onnx's GitHub releases
-(26 MB, pinned by SHA-256, saved as voice-id-model.onnx) and saves your
-voiceprint -- the average of the clips' 256-number summaries -- in
-voiceprint.json, with a threshold (default 0.5). voice.py hands the check to
-the speech engine, which compares every utterance with the voiceprint
-(cosine similarity, Kaldi filterbanks computed in numpy, run with
-onnxruntime) and drops one that is not you before it is transcribed, so it
-is never sent to the cloud: `[ignored] not your voice (sounds 0.21 like
-you; 0.50 needed)`. That covers waking, follow-ups and yes/no answers
-alike. No voiceprint, or `--off`: anyone is answered, as before, and
-start-up says so. A voiceprint that cannot be used or a model that will not
-load: nobody is, until it is fixed or switched off. `--check` scores a
-clip (play the video at it); `--threshold` raises or lowers the bar. Every
-time your voice is let through, and every miss within NEAR_MISS (0.15) of
-the threshold, is logged in jarvis-log.txt with its score (`voice  yours:
-sounds 0.61 like you`); clear misses are not, or a video would fill the log.
-`--report` reads those back, so the threshold is set from how you actually
-score; `--add` records more clips -- where, or when, he missed you -- and
-adds them to the ones kept in voiceprint.json. The phone app is not
-checked: it is paired to you already. `tools/test_voice_check.py`.
-
 ### Status report - `actions/status_report.py`
 "Status report" is JARVIS on himself, with no model call: connected
 services up and down (mcp_services.configured and connected), the boards
@@ -1685,7 +1658,6 @@ whine read as a siren; the test keeps the check mostly quiet between pings.
 
 ```
 voice.py        hears you, checks the wake word
-speaker.py      checks it is your voice, once enrolled
 transcriber.py  turns audio into text (Whisper or Vosk)
 commands.py     decides what you meant
 actions/*.py    does it

@@ -127,16 +127,6 @@ class Result:
     confidence: float = None
 
 
-# Whose voice it is (speaker.py) is judged on at most this much of the
-# utterance -- the latest of it -- which is far more than it needs.
-GATE_SECONDS = 15
-
-
-def _gate_rejects(gate, audio):
-    """True when a voice check is set and [audio] is not the enrolled voice."""
-    return gate is not None and not gate(audio[-SAMPLE_RATE * GATE_SECONDS:])
-
-
 # --------------------------------------------------------------------------
 # Vosk
 # --------------------------------------------------------------------------
@@ -163,11 +153,6 @@ class VoskEngine:
         self._last_partial = ""
         self._quiet_blocks = 0
 
-        # Set by voice.py: called with each utterance's audio, False when it
-        # is not the enrolled voice (speaker.py). None checks nothing.
-        self.gate = None
-        self._heard = deque(maxlen=int(GATE_SECONDS / block_seconds) + 1)
-
     def _new_recognizer(self):
         recognizer = self._make(self._model, SAMPLE_RATE)
         recognizer.SetWords(True)
@@ -178,7 +163,6 @@ class VoskEngine:
         self._recognizer.Reset()
         self._last_partial = ""
         self._quiet_blocks = 0
-        self._heard.clear()
 
     @property
     def active(self):
@@ -197,9 +181,6 @@ class VoskEngine:
         return FORCE_ENDPOINT_SILENCE
 
     def feed(self, block):
-        if self.gate is not None:
-            self._heard.append(np.frombuffer(block, dtype=np.int16).astype(np.float32) / 32768.0)
-
         if self._recognizer.AcceptWaveform(block):
             return self._finish()
 
@@ -228,18 +209,11 @@ class VoskEngine:
 
         self._last_partial = ""
         self._quiet_blocks = 0
-        heard = np.concatenate(self._heard) if self._heard else np.zeros(0, dtype=np.float32)
-        self._heard.clear()
 
         text = payload.get("text", "").strip()
 
         if not text:
             return None
-
-        # Vosk transcribes as it hears, so the check comes after; an empty
-        # result tells the listener the utterance was not yours.
-        if _gate_rejects(self.gate, heard):
-            return Result("", None)
 
         words = payload.get("result") or []
         scores = [
@@ -315,10 +289,6 @@ class SegmentingEngine:
         self._peak = 0.0
         self._started = None
         self._smoothed = 0.0
-
-        # Set by voice.py: called with each utterance's audio, False when it
-        # is not the enrolled voice (speaker.py). None checks nothing.
-        self.gate = None
 
     def reset(self):
         self._pre_roll.clear()
@@ -409,11 +379,6 @@ class SegmentingEngine:
 
         if len(audio) < SAMPLE_RATE * _MIN_UTTERANCE_SECONDS:
             return None
-
-        # Checked before transcribing: a voice that is not yours is never
-        # sent to the cloud. An empty result tells the listener so.
-        if _gate_rejects(self.gate, audio):
-            return Result("", None)
 
         try:
             text = self._transcribe(audio)
