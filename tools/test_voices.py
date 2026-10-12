@@ -65,8 +65,14 @@ fake_sd.sleep = lambda ms: time.sleep(ms / 1000.0)
 sys.modules.setdefault("sounddevice", fake_sd)
 
 for key in ("JARVIS_VOICE_ENGINE", "AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION", "JARVIS_KOKORO_VOICE",
-            "JARVIS_KOKORO_SPEED", "JARVIS_KOKORO_MODEL"):
+            "JARVIS_KOKORO_SPEED", "JARVIS_KOKORO_MODEL", "GOOGLE_TTS_API_KEY", "GOOGLE_TTS_VOICE",
+            "GOOGLE_TTS_RATE", "GOOGLE_TTS_MONTHLY_CHARACTERS"):
     os.environ.pop(key, None)
+
+# Google's monthly count is kept in the JARVIS folder: a temporary one, never yours.
+from tools import sandbox  # noqa: E402
+
+sandbox.activate()
 
 import voices  # noqa: E402
 
@@ -86,7 +92,9 @@ def _mp3(seconds=1.0, rate=24000):
 
 
 def _env(**values):
-    clean = {key: "" for key in ("JARVIS_VOICE_ENGINE", "AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION")}
+    clean = {key: "" for key in ("JARVIS_VOICE_ENGINE", "AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION",
+                                 "GOOGLE_TTS_API_KEY", "GOOGLE_TTS_VOICE", "GOOGLE_TTS_RATE",
+                                 "GOOGLE_TTS_MONTHLY_CHARACTERS")}
     clean.update(values)
     return patch.dict(os.environ, clean)
 
@@ -108,8 +116,20 @@ with _env(AZURE_SPEECH_KEY="k", AZURE_SPEECH_REGION="uk south/evil"):
 with _env(JARVIS_VOICE_ENGINE="edge", AZURE_SPEECH_KEY="k", AZURE_SPEECH_REGION="uksouth"):
     check(voices.engine() == "edge", "JARVIS_VOICE_ENGINE picks the engine over the default")
 
-with _env(JARVIS_VOICE_ENGINE="google"):
-    check(voices.engine() == "kokoro", "Google is gone: asking for it gets the default")
+with _env(GOOGLE_TTS_API_KEY="g", AZURE_SPEECH_KEY="k", AZURE_SPEECH_REGION="uksouth"):
+    check(voices.engine() == "google", "a Google key: Google, before Azure")
+    check(voices.voice_id("google", "en-GB-RyanNeural").startswith("google:en-GB-Chirp3-HD-Achird"),
+          "its phrases are cached under its own voice, Achird by default")
+
+with _env(GOOGLE_TTS_API_KEY="g", GOOGLE_TTS_VOICE="en-GB-Chirp3-HD-Puck", GOOGLE_TTS_RATE="1.1"):
+    check(voices.google_voice() == "en-GB-Chirp3-HD-Puck" and voices.google_rate() == 1.1,
+          "GOOGLE_TTS_VOICE and GOOGLE_TTS_RATE choose the voice and its pace")
+    check(voices.voice_id("google", "") != voices.voice_id("azure", "en-GB-RyanNeural"),
+          "and another voice is cached apart")
+
+with _env(GOOGLE_TTS_VOICE="Puck; drop table", GOOGLE_TTS_RATE="9"):
+    check(voices.google_voice() == voices.DEFAULT_GOOGLE_VOICE and voices.google_rate() is None,
+          "a voice name or pace that is not one falls back to the default")
 
 check(voices.DEFAULT_KOKORO_VOICE == "bm_fable", "Kokoro speaks as Fable, chosen by ear")
 
@@ -179,6 +199,90 @@ timings = voices.estimated_boundaries("One. Two two. Three three three.", 6.0)
 check(len(timings) == 3 and abs(sum(t["duration"] for t in timings) - 6.0) < 1e-9
       and timings[1]["offset"] < timings[2]["offset"], "estimated sentences share out the whole time in order")
 check(voices.estimated_boundaries("", 3.0) == [], "no text, no sentences")
+
+
+# ---- Google ---------------------------------------------------------------------------------
+
+google_sent = {}
+
+
+def _google_answer(status, audio=b"", message=""):
+    def post(url, json=None, headers=None, timeout=None):
+        google_sent.update(url=url, json=json, headers=headers, timeout=timeout)
+        body = {"audioContent": __import__("base64").b64encode(audio).decode()} if status == 200 else \
+            {"error": {"message": message}}
+        return types.SimpleNamespace(status_code=status, json=lambda: body)
+
+    return post
+
+
+fake_google = types.ModuleType("requests")
+usage_file = os.path.join(sandbox.directory(), voices.USAGE_FILE)
+
+with _env(GOOGLE_TTS_API_KEY="google-secret", GOOGLE_TTS_MONTHLY_CHARACTERS="1000"), \
+        patch.dict(sys.modules, {"requests": fake_google}):
+    if os.path.exists(usage_file):
+        os.remove(usage_file)
+
+    fake_google.post = _google_answer(200, _mp3(2.0))
+    audio, boundaries = voices.google_mp3("First one. Second, longer one here.")
+    request = google_sent["json"]
+
+    check(google_sent["url"] == "https://texttospeech.googleapis.com/v1/text:synthesize", "Google's own endpoint")
+    check(google_sent["headers"]["X-Goog-Api-Key"] == "google-secret" and "google-secret" not in google_sent["url"],
+          "the key goes in a header, never the URL")
+    check(request["voice"] == {"languageCode": "en-GB", "name": "en-GB-Chirp3-HD-Achird"},
+          "the voice and its language")
+    check(request["audioConfig"]["audioEncoding"] == "MP3" and request["input"] == {
+        "text": "First one. Second, longer one here."}, "an MP3 of exactly the text")
+    check(google_sent["timeout"] == voices.GOOGLE_TIMEOUT, "with a time limit")
+    check(len(boundaries) == 2, "a sentence boundary for each sentence")
+    check(voices.google_used() == len("First one. Second, longer one here."), "and its characters are counted")
+
+    for status, words in ((403, "Text-to-Speech API enabled"), (429, "rate limiting"), (400, "Voice not found")):
+        fake_google.post = _google_answer(status, message="Voice not found")
+
+        try:
+            voices.google_mp3("Hi.")
+            raised = ""
+        except RuntimeError as error:
+            raised = str(error)
+
+        check(words in raised and "google-secret" not in raised, f"Google answering {status} says why: {raised!r}")
+
+    check(voices.google_used() == len("First one. Second, longer one here."), "a failure is not counted")
+
+    # The month's limit: stop before it, and let Kokoro speak.
+    fake_google.post = _google_answer(200, _mp3(1.0))
+    asked_before = dict(google_sent)
+
+    try:
+        voices.google_mp3("x" * 990)
+        check(False, "past the month's limit, Google is not asked")
+    except RuntimeError as error:
+        check("used up" in str(error), "past the month's limit, Google is not asked")
+
+    check(google_sent == asked_before, "nothing was sent")
+
+    with open(usage_file, "w", encoding="utf-8") as handle:
+        handle.write('{"month": "1999-01", "google": 999999}')
+
+    check(voices.google_used() == 0, "a new month starts from nothing")
+
+    fake_google.get = lambda url, params=None, headers=None, timeout=None: types.SimpleNamespace(
+        status_code=200, json=lambda: {"voices": [
+            {"name": "en-GB-Chirp3-HD-Puck", "ssmlGender": "MALE"},
+            {"name": "en-GB-Chirp3-HD-Kore", "ssmlGender": "FEMALE"},
+            {"name": "en-GB-Neural2-B", "ssmlGender": "MALE"}]})
+    check(voices.google_voices("en-GB") == [("en-GB-Chirp3-HD-Kore", "FEMALE"), ("en-GB-Chirp3-HD-Puck", "MALE")],
+          "Google's own list gives the Chirp 3 HD voices to sample")
+
+with _env():
+    try:
+        voices.google_mp3("Hi.")
+        check(False, "Google with no key raises")
+    except RuntimeError as error:
+        check("GOOGLE_TTS_API_KEY" in str(error), "Google with no key names the setting")
 
 
 # ---- Kokoro ----------------------------------------------------------------------------------
@@ -519,6 +623,80 @@ time.sleep(0.2)
 started = time.monotonic()
 ready = downloading.wait(10)
 check(not ready and time.monotonic() - started < 0.5, "a first download is not waited for")
+
+
+# ---- switching voice aloud ------------------------------------------------------------------
+
+with _env(GOOGLE_TTS_API_KEY="g"):
+    for said, wanted in (("use the Google voice", "google"), ("switch to Fable", "kokoro"),
+                         ("Jarvis, switch your voice to Fable please", "kokoro"), ("go back to google", "google"),
+                         ("change your voice to Achird", "google"), ("use fable", "kokoro"),
+                         ("switch back to fable please", "kokoro")):
+        check(voices.switch_asked(said) == wanted, f"{said!r} switches to {wanted}")
+
+    for said in ("switch to google chrome", "use google to find a pizza place", "google the weather",
+                 "what voice are you using", "switch on the lights", "switch to netflix", "use the voice recorder"):
+        check(voices.switch_asked(said) is None, f"{said!r} is not a voice switch")
+
+    check(voices.ready("google") is None, "Google can speak with its key")
+
+with _env():
+    check("GOOGLE_TTS_API_KEY" in (voices.ready("google") or ""), "and says what it needs without one")
+    check(voices.ready("kokoro") is None, "Fable needs nothing")
+
+choice_file = os.path.join(sandbox.directory(), voices.CHOICE_FILE)
+
+if os.path.exists(choice_file):
+    os.remove(choice_file)
+
+with _env(GOOGLE_TTS_API_KEY="g"):
+    check(voices.engine() == "google" and voices.chosen() is None, "nothing chosen aloud: the default")
+    voices.choose("kokoro")
+    check(voices.chosen() == "kokoro" and voices.engine() == "kokoro",
+          "chosen aloud, Fable wins over Google's key, and is kept for next time")
+
+with _env(GOOGLE_TTS_API_KEY="g", JARVIS_VOICE_ENGINE="google"):
+    check(voices.engine() == "kokoro", "and over .env's own choice")
+
+voices.choose("robot")
+check(voices.chosen() == "kokoro", "an unknown voice is not kept")
+
+with open(choice_file, "w", encoding="utf-8") as handle:
+    handle.write("not json")
+
+check(voices.chosen() is None, "a spoiled choice file is ignored, not a crash")
+os.remove(choice_file)
+
+check(voices.spoken("kokoro").startswith("Fable") and "Achird" in voices.spoken("google"),
+      "each voice is named as you know it")
+
+switching = speech.SpeechEngine(engine="google")
+before = switching._cache_key("Done, sir.")
+started = []
+
+with patch.object(voices, "local", lambda: voice), \
+        patch.object(voice, "load_in_background", lambda: started.append(1)):
+    switching.set_engine("kokoro")
+
+check(switching.engine == "kokoro" and switching._cache_key("Done, sir.") != before,
+      "switched, the next sentence is made and cached in the new voice")
+check(started == [1], "and Fable is made ready to speak")
+
+try:
+    import commands
+except Exception as error:
+    print(f"SKIP voice switch routing (could not import commands: {error})")
+else:
+    with _env(GOOGLE_TTS_API_KEY="g"), patch.object(speech, "speech", speech.SpeechEngine(engine="kokoro")):
+        routed = commands.handle_command("switch to the google voice", probe=True)
+        check(routed and routed.get("intent") == "voice_switch", f"'switch to the google voice' is routed here ({routed})")
+        said = commands._switch_voice("use the google voice")
+        check(said == "Switched to Google's Achird voice, sir." and speech.speech.engine == "google",
+              f"and switches at once: {said!r}")
+        check(commands._switch_voice("use the google voice").startswith("I'm already"), "asked again, says so")
+
+    if os.path.exists(choice_file):
+        os.remove(choice_file)
 
 
 # ---- Kokoro for real, when its files are on this machine ---------------------------------------

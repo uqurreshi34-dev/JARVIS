@@ -329,6 +329,7 @@ def _check_turn(failures):
              patch.object(main, "arm_follow_up") as arm, \
              patch.object(main, "FOLLOW_UP", True), \
              patch.object(main, "prewarm"), \
+             patch.object(main, "start_voice"), \
              patch.object(main, "phone_server", MagicMock()), \
              patch.object(main, "_greeting", return_value="Hello."), \
              patch.object(main, "catch_up", return_value=None):

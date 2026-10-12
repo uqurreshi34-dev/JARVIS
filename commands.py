@@ -29,6 +29,7 @@ from actions.knowledge import (
 from actions.projects import ProjectManager
 from actions.reminders import ReminderManager, describe_duration, to_seconds
 import phrases
+import voices
 from actions import (
     aircraft,
     blender,
@@ -2192,6 +2193,27 @@ def _camera_picture(command):
     return camera.describe_image(frame, command)
 
 
+def _switch_voice(command):
+    """Switch the voice now ("use the Google voice"); the reply is said in the new one."""
+    import speech
+
+    wanted = voices.switch_asked(command)
+
+    if wanted is None:
+        return "Which voice, sir?"
+
+    why_not = voices.ready(wanted)
+
+    if why_not:
+        return f"{why_not}, sir."
+
+    if speech.current_engine() == wanted:
+        return f"I'm already speaking as {voices.spoken(wanted)}, sir."
+
+    speech.switch_voice(wanted)
+    return f"Switched to {voices.spoken(wanted)}, sir."
+
+
 def _stop_looking():
     camera.release()
 
@@ -3826,6 +3848,7 @@ _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 # they may name a connected service: a protocol runs OBS's own actions
 # itself, and "initiate stream protocol" is not a request for Agent Mode.
 _SETTLED_HERE = frozenset({"protocol", "file_hologram", "house", "house_question", "camera_picture", "camera_close",
+                           "voice_switch",
                            "sensor_history", "tradingview", "dex_scan", "dex_scan_hide"})
 
 
@@ -3909,6 +3932,11 @@ def _fast_path(command):
     # Its close, by the same names, first: "close my room cam" is the panel, never a program to quit.
     if cameras.dismissed(command):
         return _blank_result("camera_close")
+
+    # Which voice speaks: "use the Google voice", "switch to Fable". Before
+    # programs, so "switch to Fable" is never a window to bring up.
+    if voices.switch_asked(command):
+        return _blank_result("voice_switch")
 
     if cameras.asked(command):
         return _blank_result("camera_picture")
@@ -5991,6 +6019,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "camera_picture":
         return _query(intent, lambda: _camera_picture(command))
+
+    if intent == "voice_switch":
+        return _query(intent, lambda: _switch_voice(command))
 
     if intent == "camera_close":
         named = cameras.dismissed(command)

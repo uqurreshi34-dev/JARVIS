@@ -24,7 +24,7 @@ VOICE = os.getenv("JARVIS_VOICE") or "en-GB-RyanNeural"
 # Both accept forms like "-8%" and "-6Hz"; set them empty for the default.
 VOICE_RATE = os.getenv("JARVIS_VOICE_RATE", "-7%")
 VOICE_PITCH = os.getenv("JARVIS_VOICE_PITCH", "-4Hz")
-# Where the voice is made -- Azure, Kokoro or Edge -- is voices.py's to say.
+# Where the voice is made -- Google, Azure, Kokoro or Edge -- is voices.py's to say.
 # Azure and Edge speak VOICE; Kokoro has its own (JARVIS_KOKORO_VOICE).
 ENGINE = voices.engine()
 
@@ -355,6 +355,18 @@ class SpeechEngine:
             os.makedirs(_CACHE_DIR, exist_ok=True)
         except OSError:
             pass
+
+    def set_engine(self, engine):
+        """Speak with [engine] from the next sentence on ("use the Google voice"). Waits for one being said."""
+        global _neural_failed_at
+
+        with self._lock:
+            self.engine = engine
+            self.voice = voices.voice_id(engine, self.voice_name)
+            _neural_failed_at = 0.0
+
+        if engine in voices.LOCAL:
+            voices.local().load_in_background()
 
     def set_amplitude_listener(self, listener):
         """Register a callable taking a float 0..1, or None to clear."""
@@ -1320,6 +1332,16 @@ def _plain(text):
 
 def speak(text):
     speech.speak(text)
+
+
+def switch_voice(engine):
+    """Change the voice now, and keep the choice for next time."""
+    voices.choose(engine)
+    speech.set_engine(engine)
+
+
+def current_engine():
+    return speech.engine
 
 
 def play_file(path):

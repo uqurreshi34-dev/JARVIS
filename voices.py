@@ -1,5 +1,13 @@
-"""Where JARVIS's voice is made: Azure, Kokoro or Edge, chosen in .env.
+"""Where JARVIS's voice is made: Google, Azure, Kokoro or Edge, chosen in .env.
 
+    google  Google Cloud Text-to-Speech's Chirp 3 HD voices: natural and
+            friendly, with a key of your own (GOOGLE_TTS_API_KEY, from a
+            Google Cloud project with the Text-to-Speech API on). The first
+            1,000,000 Chirp 3 HD characters a month are free; JARVIS counts
+            what it sends and stops at GOOGLE_TTS_MONTHLY_CHARACTERS
+            (950,000) so the free amount is never passed -- Kokoro speaks
+            for the rest of that month. GOOGLE_TTS_VOICE names the voice
+            (default en-GB-Chirp3-HD-Achird).
     azure   Microsoft's official Speech service. The same Ryan voice as
             Edge, with a key of your own: AZURE_SPEECH_KEY and
             AZURE_SPEECH_REGION from an Azure Speech resource. The free
@@ -15,21 +23,24 @@
             (rany2/edge-tts issue 490); it stays here for when it works
             again.
 
-JARVIS_VOICE_ENGINE picks one. Unset, it is azure when its key and region
-are set, and kokoro otherwise -- so a fresh install speaks in a natural
+Said aloud, the voice switches at once and stays switched ("Jarvis, use
+the Google voice", "switch to Fable"): the choice is kept in voice.json in
+the JARVIS folder and wins over .env. Otherwise JARVIS_VOICE_ENGINE picks
+one; unset, it is google when its key is set, azure when its key and
+region are, and kokoro otherwise -- so a fresh install speaks in a natural
 man's voice with nothing to sign up for.
 Whichever is chosen, Kokoro stands in when it fails (speech.py), and
 Windows' own voice only when Kokoro cannot.
 
 Piper was tried first (12 October 2026) and sounded robotic; Kokoro
-replaced it the same day. Google's Chirp 3 HD voices were added and taken
-out again: they need a billing account, and JARVIS's voices stay free.
+replaced it the same day.
 
 Every engine hands back an MP3 and when each sentence starts in it, so
 speech.py caches, plays and shows them alike, and the phone gets the
 same file.
 """
 
+import base64
 import hashlib
 import io
 import json
@@ -50,33 +61,164 @@ load_dotenv()
 
 
 ENGINE_ENV = "JARVIS_VOICE_ENGINE"
-ENGINES = ("azure", "kokoro", "edge")
+ENGINES = ("google", "azure", "kokoro", "edge")
 
 # The engines that run on this PC.
 LOCAL = ("kokoro",)
 
 # What start-up and the boot check call each one.
-LABELS = {"azure": "AZURE", "kokoro": "KOKORO", "edge": "EDGE"}
+LABELS = {"google": "GOOGLE", "azure": "AZURE", "kokoro": "KOKORO", "edge": "EDGE"}
 
 
 def engine():
-    """The engine .env asks for, or the default: azure with a key, kokoro without."""
-    chosen = (os.getenv(ENGINE_ENV) or "").strip().casefold()
+    """The engine chosen aloud (voice.json), else the one .env asks for, else google or azure with a key, kokoro."""
+    said = chosen()
 
-    if chosen in ENGINES:
-        return chosen
+    if said:
+        return said
 
-    if chosen:
-        print(f"[JARVIS] {ENGINE_ENV}={chosen!r} is not one of {', '.join(ENGINES)}; "
+    chosen_in_env = (os.getenv(ENGINE_ENV) or "").strip().casefold()
+    return _from_env(chosen_in_env)
+
+
+def _from_env(asked):
+    if asked in ENGINES:
+        return asked
+
+    if asked:
+        print(f"[JARVIS] {ENGINE_ENV}={asked!r} is not one of {', '.join(ENGINES)}; "
               f"using the default.", flush=True)
 
+    if google_configured():
+        return "google"
+
     return "azure" if azure_configured() else "kokoro"
+
+
+# ---- switching voice aloud -------------------------------------------------------------------
+
+CHOICE_FILE = "voice.json"
+
+_SWITCH = ("switch", "change", "use", "swap", "go back", "put", "talk", "speak", "try")
+
+
+def _choice_path():
+    from actions import files
+
+    root = files.root()
+    return os.path.join(root, CHOICE_FILE) if root else None
+
+
+def chosen():
+    """The engine chosen aloud and kept in voice.json, or None."""
+    try:
+        with open(_choice_path(), encoding="utf-8") as handle:
+            name = str(json.load(handle).get("engine", "")).casefold()
+    except (OSError, TypeError, ValueError, AttributeError):
+        return None
+
+    return name if name in ENGINES else None
+
+
+def choose(name):
+    """Keep engine [name] as the voice, so it is used again after a restart."""
+    path = _choice_path()
+
+    if not path or name not in ENGINES:
+        return
+
+    partial = f"{path}.partial"
+
+    try:
+        with open(partial, "w", encoding="utf-8") as handle:
+            json.dump({"engine": name}, handle)
+
+        os.replace(partial, path)
+    except OSError as error:
+        print(f"[JARVIS] could not keep the voice choice ({error})")
+
+
+def names(name):
+    """What engine [name] can be called aloud: itself, and its voice's own name ("google", "achird")."""
+    called = {name}
+
+    if name == "google":
+        called.add(google_voice().rsplit("-", 1)[-1].casefold())
+    elif name in LOCAL:
+        called.add(kokoro.voice.split("_", 1)[-1].casefold())
+    elif name in ("azure", "edge"):
+        called.add("ryan")
+
+    return called
+
+
+def spoken(name):
+    """How JARVIS names engine [name]'s voice when switching to it."""
+    if name == "google":
+        return f"Google's {google_voice().rsplit('-', 1)[-1]} voice"
+
+    if name in LOCAL:
+        return kokoro.voice.split("_", 1)[-1].title()
+
+    return "Ryan"
+
+
+def ready(name):
+    """None when engine [name] can speak, or why not."""
+    if name == "google" and not google_configured():
+        return f"Google's voice needs {GOOGLE_KEY_ENV} in .env"
+
+    if name == "azure" and not azure_configured():
+        return f"Azure's voice needs {AZURE_KEY_ENV} and {AZURE_REGION_ENV} in .env"
+
+    return None
+
+
+def switch_asked(text):
+    """The engine [text] asks to switch the voice to -- "use the Google voice", "switch to Fable" -- or None.
+
+    A switching word and one engine's name, as a whole word; "voice" alone
+    is not enough, so "what's the weather" or "Google something" never
+    switches him.
+    """
+    words = re.sub(r"[^a-z0-9\s']", " ", str(text or "").casefold()).split()
+    said = " ".join(words)
+
+    if not any(said == verb or said.startswith(verb + " ") or f" {verb} " in f" {said} " for verb in _SWITCH):
+        return None
+
+    named = [name for name in ENGINES if names(name) & set(words)]
+
+    if len(named) != 1:
+        return None
+
+    if {"voice", "voices"} & set(words):
+        return named[0]
+
+    # Without the word "voice", only the name alone after the switch: "switch to Fable", "use Google".
+    # "switch to google chrome" is a window, and "use google to find..." a search.
+    rest = said
+
+    for lead in ("jarvis ", "please ", "can you ", "could you "):
+        rest = rest[len(lead):] if rest.startswith(lead) else rest
+
+    for tail in (" please", " jarvis", " sir", " now"):
+        rest = rest[:-len(tail)] if rest.endswith(tail) else rest
+
+    for verb in ("switch back to", "switch to", "change back to", "change to", "go back to", "use"):
+        if rest.startswith(verb + " ") and rest[len(verb) + 1:].strip() in names(named[0]):
+            return named[0]
+
+    return None
 
 
 def voice_id(name, voice):
     """What the cache keys engine [name]'s phrases by: Azure and Edge share Ryan's, the others their own."""
     if name in LOCAL:
         return local().voice_id()
+
+    if name == "google":
+        return f"google:{google_voice()}:{google_rate() or ''}"
 
     return voice
 
@@ -88,6 +230,9 @@ def local():
 
 def describe(name, voice):
     """One line for start-up: which voice, and where it comes from."""
+    if name == "google":
+        return f"{google_voice()} via Google Cloud Text-to-Speech; Kokoro {kokoro.voice} stands in"
+
     if name == "azure":
         return f"{voice} via Azure Speech ({_azure_region()}); Kokoro {kokoro.voice} stands in"
 
@@ -133,6 +278,187 @@ def estimated_boundaries(text, seconds):
 
 def _seconds(mp3):
     return float(sf.info(io.BytesIO(mp3)).duration)
+
+
+# ---- Google Cloud Text-to-Speech -------------------------------------------------------------
+
+GOOGLE_KEY_ENV = "GOOGLE_TTS_API_KEY"
+GOOGLE_VOICE_ENV = "GOOGLE_TTS_VOICE"
+GOOGLE_RATE_ENV = "GOOGLE_TTS_RATE"
+GOOGLE_LIMIT_ENV = "GOOGLE_TTS_MONTHLY_CHARACTERS"
+
+GOOGLE_URL = "https://texttospeech.googleapis.com/v1"
+
+# A British man, the voice Google calls friendly. Any Chirp 3 HD voice
+# works: tools/voice_samples.py says each British man's line so you can
+# choose by ear.
+DEFAULT_GOOGLE_VOICE = "en-GB-Chirp3-HD-Achird"
+
+# Chirp 3 HD's free amount is 1,000,000 characters a month; this stops
+# short of it, so what JARVIS sends is never charged for.
+DEFAULT_GOOGLE_LIMIT = 950_000
+
+GOOGLE_TIMEOUT = (5, 20)
+
+# Characters sent to Google this month, kept in the JARVIS folder.
+USAGE_FILE = "voice-usage.json"
+
+# language-REGION-family-name, as Google names them: "en-GB-Chirp3-HD-Achird".
+_GOOGLE_VOICE = re.compile(r"^[a-z]{2,3}-[A-Z]{2}(-[A-Za-z0-9]+){2,}$")
+_usage_lock = threading.Lock()
+_limit_said = set()
+
+
+def _google_key():
+    return (os.getenv(GOOGLE_KEY_ENV) or "").strip()
+
+
+def google_configured():
+    return bool(_google_key())
+
+
+def google_voice():
+    chosen = (os.getenv(GOOGLE_VOICE_ENV) or "").strip()
+    return chosen if _GOOGLE_VOICE.match(chosen) else DEFAULT_GOOGLE_VOICE
+
+
+def google_rate():
+    return _float(os.getenv(GOOGLE_RATE_ENV), 0.25, 2.0)
+
+
+def google_limit():
+    try:
+        return max(0, int(str(os.getenv(GOOGLE_LIMIT_ENV) or DEFAULT_GOOGLE_LIMIT).replace(",", "").replace("_", "")))
+    except ValueError:
+        return DEFAULT_GOOGLE_LIMIT
+
+
+def _usage_path():
+    from actions import files
+
+    root = files.root()
+    return os.path.join(root, USAGE_FILE) if root else None
+
+
+def _month():
+    return time.strftime("%Y-%m")
+
+
+def google_used():
+    """Characters sent to Google this month."""
+    path = _usage_path()
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            saved = json.load(handle)
+    except (OSError, TypeError, ValueError):
+        return 0
+
+    if not isinstance(saved, dict) or saved.get("month") != _month():
+        return 0
+
+    try:
+        return max(0, int(saved.get("google", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _count_google(characters):
+    path = _usage_path()
+
+    if not path:
+        return
+
+    total = google_used() + characters
+    partial = f"{path}.partial"
+
+    try:
+        with open(partial, "w", encoding="utf-8") as handle:
+            json.dump({"month": _month(), "google": total}, handle)
+
+        os.replace(partial, path)
+    except OSError as error:
+        print(f"[JARVIS] could not record Google's characters ({error})")
+
+
+def _google_error(response):
+    """Google's own words for what went wrong, never the key."""
+    try:
+        return str(response.json()["error"]["message"])[:200]
+    except Exception:
+        return ""
+
+
+def google_mp3(text, voice=None, rate=None):
+    """(MP3 bytes, sentence boundaries) for [text] from Google. Raises on any failure, or at the monthly limit."""
+    if not google_configured():
+        raise RuntimeError(f"Google Text-to-Speech needs {GOOGLE_KEY_ENV} in .env")
+
+    text = str(text)
+    voice = voice or google_voice()
+    rate = rate if rate is not None else google_rate()
+
+    with _usage_lock:
+        if google_used() + len(text) > google_limit():
+            month = _month()
+
+            if month not in _limit_said:
+                _limit_said.add(month)
+                print(f"[JARVIS] Google's characters for this month are used up ({google_used():,} of "
+                      f"{google_limit():,}): Kokoro speaks until next month, so nothing is charged.", flush=True)
+
+            raise RuntimeError("this month's Google characters are used up")
+
+    import requests
+
+    config = {"audioEncoding": "MP3", "sampleRateHertz": 24000}
+
+    if rate:
+        config["speakingRate"] = rate
+
+    response = requests.post(
+        f"{GOOGLE_URL}/text:synthesize",
+        json={"input": {"text": text},
+              "voice": {"languageCode": "-".join(voice.split("-")[:2]), "name": voice},
+              "audioConfig": config},
+        headers={"X-Goog-Api-Key": _google_key(), "User-Agent": "JARVIS"},
+        timeout=GOOGLE_TIMEOUT,
+    )
+
+    if response.status_code == 403:
+        raise RuntimeError("Google refused the key (403): is the Text-to-Speech API enabled for its project, "
+                           f"with billing on? {_google_error(response)}".strip())
+
+    if response.status_code == 429:
+        raise RuntimeError("Google is rate limiting (429)")
+
+    if response.status_code != 200:
+        raise RuntimeError(f"Google answered {response.status_code}: {_google_error(response)}".strip())
+
+    try:
+        mp3 = base64.b64decode(response.json()["audioContent"])
+    except Exception as error:
+        raise RuntimeError(f"Google's answer had no audio ({type(error).__name__})")
+
+    with _usage_lock:
+        _count_google(len(text))
+
+    return mp3, estimated_boundaries(text, _seconds(mp3))
+
+
+def google_voices(language="en-GB", family="Chirp3-HD"):
+    """[(name, gender)] of Google's voices for [language] in [family], as Google lists them."""
+    import requests
+
+    response = requests.get(f"{GOOGLE_URL}/voices", params={"languageCode": language},
+                            headers={"X-Goog-Api-Key": _google_key(), "User-Agent": "JARVIS"},
+                            timeout=GOOGLE_TIMEOUT)
+
+    if response.status_code != 200:
+        raise RuntimeError(f"Google answered {response.status_code}: {_google_error(response)}".strip())
+
+    return sorted((item["name"], item.get("ssmlGender", "")) for item in response.json().get("voices", [])
+                  if f"-{family}-" in item.get("name", ""))
 
 
 # ---- Azure Speech ----------------------------------------------------------------------------
@@ -556,7 +882,10 @@ kokoro = Kokoro()
 
 
 def mp3(name, text, voice=None, rate=None, pitch=None):
-    """(MP3 bytes, sentence boundaries) for [text] from engine [name] -- azure or kokoro."""
+    """(MP3 bytes, sentence boundaries) for [text] from engine [name] -- google, azure or kokoro."""
+    if name == "google":
+        return google_mp3(text)
+
     if name == "azure":
         return azure_mp3(text, voice, rate, pitch)
 
