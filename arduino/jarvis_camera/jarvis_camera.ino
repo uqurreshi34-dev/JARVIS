@@ -38,6 +38,7 @@
 #include <HTTPClient.h>
 #include <NetworkClientSecure.h>
 #include "esp_camera.h"
+#include <esp_log.h>
 #include <esp_task_wdt.h>
 
 #include "jarvis_config.h"
@@ -280,6 +281,15 @@ void sendPicture() {
 }
 
 bool startCamera() {
+  // The camera driver's own task warns, through printf, whenever a frame
+  // arrives broken or there is no buffer free for it -- and printf needs
+  // more stack than that task has. On 12 October 2026 it overflowed
+  // (Guru Meditation, "Stack canary watchpoint triggered (cam_task)"),
+  // decoded as cam_task -> esp_log -> vfprintf -> malloc, and the board
+  // restarted in a loop. The frame is dropped by the driver either way;
+  // only the message is silenced, for that task's tag alone.
+  esp_log_level_set("cam_hal", ESP_LOG_NONE);
+
   camera_config_t config = {};
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;

@@ -1720,6 +1720,20 @@ The console says how it went: `[JARVIS] my room cam live: 1800 frames in
 120s (15.0 a second); the view was closed`, and the board prints its frame
 rate every five seconds. `tools/test_camera_live.py`.
 
+The first live view ran at about 3 to 6 frames a second, then the board
+crashed and kept restarting: "Stack canary watchpoint triggered
+(cam_task)". Decoded, the camera driver's own task was printing a warning
+("DMA overflow", when a frame arrives with no buffer free for it, or broken)
+and printf needs more stack than that task has. The sketch now silences
+that task's log tag (cam_hal) before the camera starts; the driver drops
+the frame as before, without the message that overflowed.
+
+"Show me the room cam" was heard as "show me the room come", which no
+command knows, so the laptop's webcam answered. transcriber._prompt() now
+names the boards on the wifi, as they report themselves ("Devices: my room
+cam, room."), so Whisper expects "cam" -- the same fix as for "Jarvis" and
+contact names, taken from what exists rather than a list of mishearings.
+
 ### Who moved - `actions/presence.py`
 A PIR sees movement, not a person, so "welcome back" needs a witness. It
 is your phone, as Tailscale on the PC sees it: `tailscale status --json`

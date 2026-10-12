@@ -302,6 +302,25 @@ check("frame->len >> 24" in sketch and "X-Jarvis-Token" in sketch and "X-Jarvis-
 check('\\"live\\":true' in sketch and "setCACert(JARVIS_CA)" in sketch and "liveLink.setCACert" in sketch,
       "it streams only when asked, and only to JARVIS's own certificate")
 
+check('esp_log_level_set("cam_hal", ESP_LOG_NONE)' in sketch
+      and sketch.index("esp_log_level_set") < sketch.index("esp_camera_init"),
+      "the camera driver's task is kept from printing, which overflowed its stack, before it starts")
+
+
+# ---- "the room cam" is heard as said, not as "the room come" ---------------------------------
+
+try:
+    import transcriber
+except Exception as error:
+    print(f"SKIP the transcription prompt (could not import transcriber: {error})")
+else:
+    sensors.reset()
+    check("Devices:" not in transcriber._prompt(), "with no boards, the prompt is as before")
+    sensors.report({"name": "my room cam", "event": "online"})
+    sensors.report({"name": "room", "temperature": 21.0})
+    check("Devices: my room cam, room." in transcriber._prompt(),
+          "the boards on the wifi are named in Whisper's prompt, so 'cam' is expected")
+
 cameras.set_live_listener(None)
 failed = [label for ok, label in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(failed)} of {len(RESULTS)} passed")
