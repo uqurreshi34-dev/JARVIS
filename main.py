@@ -14,8 +14,14 @@ from speech import prewarm, set_amplitude_listener, speak, set_sentence_listener
 from speech import set_speaking_listener, stop_speaking as stop_speech
 from speech import first_sound, mark_turn, start_voice
 from news_panel import NewsPanel
+from mev_panel import MevPanel
 from quran_panel import QuranPanel
 from radar_panel import RadarPanel
+from brain_panel import BrainPanel
+from chart_panel import ChartPanel
+from image_choices_panel import ImageChoicesPanel
+from image_panel import ImagePanel
+from camera_panel import CameraPanel
 from traders_panel import TradersPanel
 from dex_panel import DexPanel
 from trade_plan_panel import TradePlanPanel
@@ -38,6 +44,7 @@ from commands import (
     set_image_listener,
     set_news_listener,
     set_picture_listener,
+    set_sandbox_listener,
     toggle_brain_view,
 )
 import sys
@@ -68,6 +75,7 @@ from actions import (
     blender_fidelity,
     folder_guard,
     log_search,
+    mev_runner,
     quran,
     report_search,
     recitation,
@@ -87,12 +95,7 @@ from phone import phone_server
 from actions import mcp_services
 import boot
 from beam import Beam
-from brain_panel import BrainPanel
-from camera_panel import CameraPanel
 import stall_watch
-from chart_panel import ChartPanel
-from image_choices_panel import ImageChoicesPanel
-from image_panel import ImagePanel
 import commands
 from actions import routing_guard, memory_subjects
 
@@ -237,7 +240,8 @@ class Assistant:
         if not stop_speech():
             # Said, so a press that seemed to do nothing can be told apart
             # from one that never arrived.
-            print("[JARVIS] stop pressed between utterances; nothing was playing", flush=True)
+            print(
+                "[JARVIS] stop pressed between utterances; nothing was playing", flush=True)
 
             # Silence is not nothing to stop. A recitation fetching its
             # next verse is quiet but still running, and a page left up
@@ -670,7 +674,8 @@ class Assistant:
         # the first request that needs one; the check's SERVICES line then
         # says what really connected.
         mcp_services.connect_in_background(
-            lambda counts: self._hud.boot_updated.emit("SERVICES", *boot.services_line(*counts))
+            lambda counts: self._hud.boot_updated.emit(
+                "SERVICES", *boot.services_line(*counts))
         )
 
         self._say(_greeting())
@@ -746,7 +751,8 @@ class Assistant:
         # Encode the command log for "when did I last ask about ..." in the
         # background, so the first such question does not wait for it.
         threading.Thread(target=log_search.index_quietly, daemon=True).start()
-        threading.Thread(target=report_search.index_quietly, daemon=True).start()
+        threading.Thread(target=report_search.index_quietly,
+                         daemon=True).start()
 
         while not self._stop.is_set():
             # The HUD state is driven by voice.set_status_listener, which
@@ -815,7 +821,8 @@ class Assistant:
                 continue
 
             if not named and result.get("intent") in NAMED_ONLY_INTENTS:
-                print(f"[JARVIS] {result.get('intent')} needs his name in a follow-up; not done")
+                print(
+                    f"[JARVIS] {result.get('intent')} needs his name in a follow-up; not done")
                 self._say(phrases.pick("name_first"))
                 self._close_turn()
                 continue
@@ -1184,7 +1191,8 @@ def main():
     # The stop button appears only while there is speech to stop.
     set_speaking_listener(hud.speaking_changed.emit)
     set_confirmation_listener(
-        lambda seconds, outcome: hud.confirmation_changed.emit(float(seconds or 0.0), outcome or "")
+        lambda seconds, outcome: hud.confirmation_changed.emit(
+            float(seconds or 0.0), outcome or "")
     )
 
     # The services strip: what mcp.json lists, lit by what each really does.
@@ -1198,11 +1206,13 @@ def main():
     )
 
     # What services report as live (OBS recording, say), watched quietly.
-    mcp_services.set_flash_listener(lambda word: hud.live_flash.emit(str(word)))
+    mcp_services.set_flash_listener(
+        lambda word: hud.live_flash.emit(str(word)))
     protocols.set_flash_listener(lambda word: hud.live_flash.emit(str(word)))
     mcp_services.start_live(
         lambda key, label, active, paused, seconds, colour: hud.live_status.emit(
-            str(key), str(label), bool(active), bool(paused), float(seconds), str(colour)
+            str(key), str(label), bool(active), bool(
+                paused), float(seconds), str(colour)
         )
     )
     hud.shutdown.connect(mcp_services.stop_live)
@@ -1369,6 +1379,55 @@ def main():
     hud.shutdown.connect(radar.hide)
     hud.shutdown.connect(radar_beam.hidden.emit)
 
+    # The sandbox: the MEV scanner's console on its own panel, projected
+    # like the rest. Voice opens and closes the panel; starting the
+    # scanner is a click on ARM, never a spoken word, so a misheard
+    # command cannot begin trading. The MEV process runs in its own
+    # venv, in a scrubbed environment, with output sanitised before it
+    # reaches the display.
+    sandbox = MevPanel()
+    sandbox.set_anchor(hud)
+    sandbox_beam = Beam(sandbox, hud)
+
+    def sandbox_update(action):
+        if action == "show":
+            sandbox.show_requested.emit()
+            sandbox_beam.shown.emit()
+        else:
+            sandbox.hide_requested.emit()
+            sandbox_beam.hidden.emit()
+
+    set_sandbox_listener(sandbox_update)
+
+    # Panel to runner: both block, so off-thread.
+    sandbox.arm_clicked.connect(
+        lambda: threading.Thread(
+            target=mev_runner.arm, daemon=True).start())
+    sandbox.disarm_clicked.connect(
+        lambda: threading.Thread(
+            target=mev_runner.disarm, daemon=True).start())
+
+    # Runner to panel: signals only, since the runner emits from its own
+    # thread and Qt widgets may only be touched on the main thread.
+    def mev_event(kind, text):
+        if kind == "line":
+            sandbox.line_received.emit(text)
+        elif kind == "status":
+            sandbox.status_changed.emit(text)
+
+    mev_runner.set_listener(mev_event)
+
+    # Closing the panel or shutting JARVIS down stops the scanner.
+    sandbox.closed.connect(sandbox_beam.hidden.emit)
+    sandbox.closed.connect(
+        lambda: threading.Thread(
+            target=mev_runner.disarm, daemon=True).start())
+    hud.shutdown.connect(sandbox.hide_requested.emit)
+    hud.shutdown.connect(sandbox_beam.hidden.emit)
+    hud.shutdown.connect(
+        lambda: threading.Thread(
+            target=mev_runner.disarm, daemon=True).start())
+
     # The trader board, projected the same way. trader_watch reads the
     # exchange on its own thread and hands the board here; a refresh that
     # lands after the question was answered is announced through the same
@@ -1419,7 +1478,8 @@ def main():
     # Support and resistance watched for gold and silver (trade-plan.json's alert_markets): a finished
     # fifteen-minute candle reaching one is announced through the same gate as other announcements, and the
     # plan opens with what it did there.
-    line_watch.set_listeners(on_say=assistant._on_alert, on_show=trade_plan.present)
+    line_watch.set_listeners(on_say=assistant._on_alert,
+                             on_show=trade_plan.present)
     line_watch.start()
     hud.shutdown.connect(line_watch.stop)
 
@@ -1439,7 +1499,8 @@ def main():
     def dex_progress(label, done, total):
         hud.progress_changed.emit("dex", label or "", done, total)
 
-    dex_intelligence.set_listeners(on_scan=dex_shown, on_hide=dex_hidden, on_progress=dex_progress)
+    dex_intelligence.set_listeners(
+        on_scan=dex_shown, on_hide=dex_hidden, on_progress=dex_progress)
     dex_view.closed.connect(dex_beam.hidden.emit)
     hud.shutdown.connect(dex_view.hide_requested.emit)
     hud.shutdown.connect(dex_beam.hidden.emit)
@@ -1458,6 +1519,8 @@ def main():
     hud.shutdown.connect(choices_beam.hidden.emit)
     hud.shutdown.connect(brain.hide_brain.emit)
     hud.shutdown.connect(brain_beam.hidden.emit)
+    hud.shutdown.connect(sandbox.hide_requested.emit)
+    hud.shutdown.connect(sandbox_beam.hidden.emit)
     hud.shutdown.connect(lambda: QTimer.singleShot(400, app.quit))
     hud.closed.connect(assistant.stop)
 

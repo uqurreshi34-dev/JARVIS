@@ -398,6 +398,41 @@ already finished.
 Anything he would have announced while reciting — a market alert, a
 reminder — waits and is delivered when the session ends.
 
+## The sandbox
+
+The MEV scanner in its own panel, with its console showing live.
+
+| Say | Does |
+|---|---|
+| begin sandbox | opens the panel |
+| open sandbox | the same |
+| close sandbox | stops the scanner and closes the panel |
+
+The panel has three buttons:
+
+| Button | Does |
+|---|---|
+| ARM | starts the scanner in its own virtual environment |
+| DISARM | stops the scanner cleanly |
+| CLOSE | same as saying "close sandbox" |
+
+**Voice opens the panel; it never starts the scanner.** Only ARM does,
+and only by a click on the panel. A misheard command in the room can
+bring the console up but cannot start a single trade.
+
+The scanner follows `.env` exactly:
+
+- `SIMULATION_MODE=true` (the default) — bundles are built and logged,
+  but never submitted to the relay. Nothing is spent.
+- `SIMULATION_MODE=false` — real bundles. Only edit `.env` by hand and
+  restart JARVIS when you mean it.
+
+Every line the scanner prints is shown on the panel, with anything that
+looks like a private key redacted before display. The scanner runs in a
+minimal environment with no access to JARVIS's own variables.
+
+Closing the panel, or shutting JARVIS down, stops the scanner.
+
 ## The sky
 
 Live aircraft within twenty-five miles, spoken and then drawn on a radar

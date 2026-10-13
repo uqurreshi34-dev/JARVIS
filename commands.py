@@ -59,6 +59,7 @@ from actions import (
     markets,
     mcp_services,
     memory,
+    mev_runner,
     news,
     planner,
     proofread,
@@ -509,6 +510,13 @@ _FAST_PHRASES = (
         "disable automatic jarvis folder organization",
     ), "disable_folder_guard"),
     (("undo",), "undo_folder_organisation"),
+    (("begin sandbox", "open sandbox", "start sandbox",
+      "begin the sandbox", "open the sandbox", "start the sandbox",
+      "show me the sandbox", "show the sandbox",
+      "bring up the sandbox", "bring up sandbox"), "open_sandbox"),
+    (("close sandbox", "close the sandbox", "stop sandbox",
+      "stop the sandbox", "hide sandbox", "hide the sandbox",
+      "dismiss the sandbox", "dismiss sandbox"), "close_sandbox"),
 )
 
 _FAST_LOOKUP = {
@@ -546,6 +554,10 @@ _NEVER_FUZZY = frozenset({
 
     "enable_folder_guard",
     "disable_folder_guard",
+    # The sandbox spawns a subprocess. Only the exact phrase should reach
+    # it; a fuzzy near-miss must not be able to start or stop it.
+    "open_sandbox",
+    "close_sandbox",
 })
 
 
@@ -1665,6 +1677,43 @@ def set_picture_listener(listener):
     _picture_listener = listener
 
 
+_sandbox_listener = None
+
+
+def set_sandbox_listener(listener):
+    """Register a callable taking "show" or "hide" to control the panel."""
+    global _sandbox_listener
+    _sandbox_listener = listener
+
+
+def _sandbox_show():
+    if _sandbox_listener:
+        try:
+            _sandbox_listener("show")
+        except Exception as e:
+            print(f"[JARVIS] could not show sandbox: {e}")
+            return "I couldn't open the sandbox, sir."
+    return (
+        "Sandbox ready, sir. Press ARM on the panel to start the scanner."
+    )
+
+
+def _sandbox_hide():
+    try:
+        from actions import mev_runner
+        mev_runner.disarm()
+    except Exception as e:
+        print(f"[JARVIS] could not disarm sandbox: {e}")
+
+    if _sandbox_listener:
+        try:
+            _sandbox_listener("hide")
+        except Exception as e:
+            print(f"[JARVIS] could not hide sandbox: {e}")
+
+    return "Sandbox closed, sir."
+
+
 _camera_listener = None
 
 
@@ -2181,7 +2230,8 @@ def _camera_picture(command):
 
     # Shown, the picture is the camera's live view: each frame it streams replaces it until put away.
     if request and request[0] == "show":
-        _live_view.update(name=cameras.normal_name(request[1]["name"]), title=title)
+        _live_view.update(name=cameras.normal_name(
+            request[1]["name"]), title=title)
 
     said, frame = cameras.picture(command)
 
@@ -3708,8 +3758,10 @@ _PLOT_REQUEST = re.compile(
 
 # Putting the chart panel away: a word for closing and what the panel shows -- a chart, a graph, or a
 # TradingView readout -- in any wording: "close the chart", "hide trading view", "dismiss the graph".
-_CLOSING = re.compile(r"\b(?:close|hide|dismiss|shut|put away|clear|get rid of)\b")
-_CHART_THINGS = re.compile(r"\b(?:charts?|graphs?|tradingview|trading views?)\b")
+_CLOSING = re.compile(
+    r"\b(?:close|hide|dismiss|shut|put away|clear|get rid of)\b")
+_CHART_THINGS = re.compile(
+    r"\b(?:charts?|graphs?|tradingview|trading views?)\b")
 
 
 def _chart_dismissed(text):
@@ -3879,7 +3931,7 @@ _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 # they may name a connected service: a protocol runs OBS's own actions
 # itself, and "initiate stream protocol" is not a request for Agent Mode.
 _SETTLED_HERE = frozenset({"protocol", "file_hologram", "house", "house_question", "camera_picture", "camera_close",
-                           "voice_switch",
+                           "voice_switch", "open_sandbox", "close_sandbox",
                            "sensor_history", "tradingview", "dex_scan", "dex_scan_hide"})
 
 
@@ -3892,6 +3944,7 @@ def _sensor_answer(command):
         house.follow(asked[1])
 
     return said
+
 
 _PRESENCE = re.compile(
     r"^(?:are\s+you|r\s+u|r\s+you|are\s+u|you)\s+"
@@ -5468,7 +5521,8 @@ def _handle_command(command, *, fast_only=False, probe=False):
     # A question about JARVIS's own records, once recognised, is answered
     # from them: none of the routes below may take it. "What did my research
     # report say about deep sleep" must not start a new research run.
-    own_records = bool(result) and result["intent"] in _OWN_RECORDS | _SETTLED_HERE
+    own_records = bool(
+        result) and result["intent"] in _OWN_RECORDS | _SETTLED_HERE
 
     if not fast_only and not own_records:
 
@@ -5483,7 +5537,8 @@ def _handle_command(command, *, fast_only=False, probe=False):
         quick = mcp_services.instant(command)
 
         if quick:
-            print(f"[fast] {quick['server']} {quick['tool']} (instant, no model call)")
+            print(
+                f"[fast] {quick['server']} {quick['tool']} (instant, no model call)")
 
             return routed(_query(
                 "service_instant",
@@ -5998,6 +6053,12 @@ def _handle_command(command, *, fast_only=False, probe=False):
     if intent == "dex_scan_hide":
         return _query(intent, lambda: "Arbitrage scan closed, sir." if dex_intelligence.hide()
                       else "The arbitrage scan isn't open, sir.")
+
+    if intent == "open_sandbox":
+        return _query(intent, lambda: _sandbox_show())
+
+    if intent == "close_sandbox":
+        return _query(intent, lambda: _sandbox_hide())
 
     if intent == "trade_plan_hide":
         return _query(intent, lambda: "Trade plan closed, sir." if trade_plan.hide()
