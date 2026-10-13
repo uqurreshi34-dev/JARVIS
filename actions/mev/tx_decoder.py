@@ -26,14 +26,27 @@ SELECTORS = {
 WETH = to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
 
 
+def _to_int(v) -> int:
+    """Accept int, hex-str ('0x…'), decimal-str, bytes, or None."""
+    if v is None:
+        return 0
+    if isinstance(v, int):
+        return v
+    if isinstance(v, bytes):
+        return int.from_bytes(v, "big")
+    if isinstance(v, str):
+        return int(v, 16) if v.startswith("0x") else int(v)
+    return int(v)
+
+
 def _effective_gas_price(tx: dict) -> int:
-    """Works for both legacy (gasPrice) and EIP-1559 (maxFeePerGas) txs."""
+    """Works for both legacy (gasPrice) and EIP-1559 (maxFeePerGas) txs,
+    and both formats (int from HTTP, hex string from WebSocket)."""
     if tx.get("gasPrice"):
-        return int(tx["gasPrice"])
-    # EIP-1559: worst-case fee the sender is willing to pay
+        return _to_int(tx["gasPrice"])
     max_fee = tx.get("maxFeePerGas")
     if max_fee:
-        return int(max_fee)
+        return _to_int(max_fee)
     return 0
 
 
@@ -83,7 +96,7 @@ def decode_swap(tx: dict) -> Optional[DecodedSwap]:
         amount_in, amount_out_min, path, recipient, _deadline = decoded
     else:  # ETH-in variants
         amount_out_min, path, recipient, _deadline = decoded
-        amount_in = tx.get("value", 0)
+        amount_in = _to_int(tx.get("value", 0))
 
     path = [to_checksum_address(a) for a in path]
 
@@ -103,13 +116,13 @@ def decode_swap(tx: dict) -> Optional[DecodedSwap]:
         router=ROUTERS[to],
         function=name,
         path=path,
-        amount_in=int(amount_in),
-        amount_out_min=int(amount_out_min),
+        amount_in=_to_int(amount_in),
+        amount_out_min=_to_int(amount_out_min),
         recipient=to_checksum_address(recipient),
         is_buy=is_buy,
         base_token=base_token,
         gas_price=_effective_gas_price(tx),
-        gas=int(tx.get("gas") or 0),
+        gas=_to_int(tx.get("gas")),
         tx_hash=tx["hash"].hex() if isinstance(
             tx.get("hash"), bytes) else str(tx.get("hash")),
     )

@@ -54,21 +54,32 @@ class MempoolListener:
         return False
 
     # ---- handle a single pending tx ------------------------------------
-    async def _handle_pending(self, tx_hash_hex: str):
+    async def _handle_pending(self, tx_or_hash):
+        """Accept either a hash string or a full tx dict."""
         self._stats["raw"] += 1
         async with self._sem:
-            if self._is_duplicate(tx_hash_hex):
+            # 1) Normalise the input into (tx_dict, hash)
+            if isinstance(tx_or_hash, dict):
+                tx = tx_or_hash
+                h = tx.get("hash")
+                tx_hash = h.hex() if isinstance(h, bytes) else (h or "")
+            else:
+                tx = None
+                tx_hash = tx_or_hash
+
+            if self._is_duplicate(tx_hash):
                 self._stats["dup"] += 1
                 return
 
-            # ---- Fetch tx (or build from full object if already provided)
-            try:
-                tx = await asyncio.to_thread(
-                    self.http.eth.get_transaction, tx_hash_hex
-                )
-            except Exception:
-                self._stats["fetch_err"] += 1
-                return
+            # 2) Only fetch if the payload didn't include the tx body
+            if tx is None:
+                try:
+                    tx = await asyncio.to_thread(
+                        self.http.eth.get_transaction, tx_hash
+                    )
+                except Exception:
+                    self._stats["fetch_err"] += 1
+                    return
 
             self._stats["fetched"] += 1
 
@@ -159,9 +170,9 @@ class MempoolListener:
                         # Unfiltered subs push a hash string.
                         if isinstance(h, str):
                             await self._spawn(self._handle_pending(h))
-                        # Filtered subs may push a full tx object.
                         elif isinstance(h, dict) and h.get("hash"):
-                            await self._spawn(self._handle_pending(h["hash"]))
+                            # Pass the whole dict — no HTTP round-trip needed
+                            await self._spawn(self._handle_pending(h))
             except Exception as e:
                 print(
                     f"[mempool] disconnected: {e}  (reconnecting in {backoff}s)")
