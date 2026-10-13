@@ -52,9 +52,33 @@ class BundleExecutor:
                       None) or signed["rawTransaction"]
         return raw.hex() if isinstance(raw, bytes) else raw
 
+    def simulate_tx(self, unsigned_tx: dict) -> tuple[bool, str]:
+        """Pretend-run a transaction against current chain state.
+
+        Uses eth_call: no gas, no broadcast, no signature. Returns
+        (True, "") on success, (False, reason) on revert.
+        If we don't have the ETH to even pay for it, skip the check.
+        """
+        wallet_bal = self.w3.eth.get_balance(self.executor.address)
+        if unsigned_tx.get("value", 0) > wallet_bal:
+            return True, "skipped (unfunded wallet)"
+
+        call = {
+            "from": self.executor.address,
+            "to": unsigned_tx["to"],
+            "value": unsigned_tx.get("value", 0),
+            "data": unsigned_tx["data"],
+            "gas": unsigned_tx.get("gas", 250_000),
+        }
+        try:
+            self.w3.eth.call(call)
+            return True, ""
+        except Exception as e:
+            return False, str(e)[:200]
+
     def _build_front_tx(self, router_name: str, token_out: str,
                         amount_in_wei: int, min_out: int,
-                        gas_price: int, nonce: int,
+                        max_fee: int, tip: int, nonce: int,
                         deadline: int, gas: int = 250_000) -> dict:
         router = self.w3.eth.contract(
             address=ROUTER_BY_NAME[router_name], abi=ROUTER_ABI)
@@ -68,14 +92,16 @@ class BundleExecutor:
             "value": amount_in_wei,
             "data": data,
             "gas": gas,
-            "gasPrice": gas_price,
+            "maxFeePerGas": max_fee,
+            "maxPriorityFeePerGas": tip,
+            "type": 2,
             "nonce": nonce,
             "chainId": self.w3.eth.chain_id,
         }
 
     def _build_back_tx(self, router_name: str, token_in: str,
                        amount_in: int, min_out: int,
-                       gas_price: int, nonce: int,
+                       max_fee: int, tip: int, nonce: int,
                        deadline: int, gas: int = 250_000) -> dict:
         router = self.w3.eth.contract(
             address=ROUTER_BY_NAME[router_name], abi=ROUTER_ABI)
@@ -89,7 +115,9 @@ class BundleExecutor:
             "value": 0,
             "data": data,
             "gas": gas,
-            "gasPrice": gas_price,
+            "maxFeePerGas": max_fee,
+            "maxPriorityFeePerGas": tip,
+            "type": 2,
             "nonce": nonce,
             "chainId": self.w3.eth.chain_id,
         }
@@ -106,18 +134,57 @@ class BundleExecutor:
                            deadline: int,
                            gas: int = 250_000):
         """Returns (bundle_list, target_block, nonce_start, front, back)."""
+        # Fetch current base fee
+        latest = self.w3.eth.get_block("latest")
+        base_fee = latest.get("baseFeePerGas", self.w3.to_wei(20, "gwei"))
         nonce_start = await self.nonces.reserve(2)
         try:
-            tip = self.w3.to_wei(2, "gwei")
-            gas_price = victim_gas_price + tip
+            # --- Dynamic tip calculation ---
+            # 1) What effective tip is the victim paying?
+            #    (approximation: works for both legacy and 1559 txs)
+            victim_tip = max(victim_gas_price - base_fee, 0)
+
+            # 2) Ask the node what a competitive tip looks like right now.
+            #    This is the industry-standard source (same call used by
+            #    Alchemy, Infura, ethers.js's getFeeData).
+            try:
+                suggested_tip = int(self.w3.eth.max_priority_fee)
+            except Exception:
+                suggested_tip = self.w3.to_wei(1, "gwei")
+
+            # 3) Our bid = whoever is higher (victim or market), scaled up.
+            # Tune the multiplier once you can observe real bundle outcomes.
+            base_bid = max(victim_tip, suggested_tip)
+            our_tip = base_bid * 2
+
+            # 4) Floor and cap
+            min_tip = self.w3.to_wei(1, "gwei")
+            max_tip = self.w3.to_wei(50, "gwei")
+            our_tip = max(min_tip, min(our_tip, max_tip))
+
+            # 5) maxFee = base_fee with 2x headroom + tip
+            #    (base fee can rise ~12.5% per block; 2x is safe)
+            max_fee = base_fee * 2 + our_tip
+
+            # 6) Enforce the two EIP-1559 invariants
+            assert max_fee >= base_fee + our_tip, "max_fee too low"
+            assert our_tip <= max_fee, "tip > max_fee"
+
+            # Log the fee bid so we can see what we're paying
+            print(f"[tip] base_fee={base_fee} victim_tip={victim_tip} "
+                  f"suggested={suggested_tip} our_tip={our_tip} "
+                  f"max_fee={max_fee}")
 
             front = self._build_front_tx(
                 router_name, base_token, front_in_wei, front_min_out,
-                gas_price, nonce_start, deadline, gas,
+                max_fee, our_tip, nonce_start, deadline, gas,
             )
+            ok, reason = self.simulate_tx(front)
+            if not ok:
+                raise RuntimeError(f"front-run would revert: {reason}")
             back = self._build_back_tx(
                 router_name, base_token, back_amount_in, back_min_out,
-                gas_price, nonce_start + 1, deadline, gas,
+                max_fee, our_tip, nonce_start + 1, deadline, gas,
             )
             bundle = [
                 {"signed_transaction": self._sign(front)},

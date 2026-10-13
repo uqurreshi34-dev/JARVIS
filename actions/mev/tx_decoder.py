@@ -26,6 +26,17 @@ SELECTORS = {
 WETH = to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
 
 
+def _effective_gas_price(tx: dict) -> int:
+    """Works for both legacy (gasPrice) and EIP-1559 (maxFeePerGas) txs."""
+    if tx.get("gasPrice"):
+        return int(tx["gasPrice"])
+    # EIP-1559: worst-case fee the sender is willing to pay
+    max_fee = tx.get("maxFeePerGas")
+    if max_fee:
+        return int(max_fee)
+    return 0
+
+
 @dataclass
 class DecodedSwap:
     router: str
@@ -97,7 +108,7 @@ def decode_swap(tx: dict) -> Optional[DecodedSwap]:
         recipient=to_checksum_address(recipient),
         is_buy=is_buy,
         base_token=base_token,
-        gas_price=int(tx.get("gasPrice") or 0),
+        gas_price=_effective_gas_price(tx),
         gas=int(tx.get("gas") or 0),
         tx_hash=tx["hash"].hex() if isinstance(
             tx.get("hash"), bytes) else str(tx.get("hash")),
