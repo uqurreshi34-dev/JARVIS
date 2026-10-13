@@ -15,6 +15,7 @@ from actions.mev.tx_decoder import DecodedSwap
 from actions.mev.sandwich_math import optimal_front_run, get_amount_out
 from actions.mev.mempool_listener import MempoolListener
 from actions.mev.bundle_executor import BundleExecutor
+from actions.mev.safety import SafetyGuard
 
 load_dotenv()
 
@@ -61,6 +62,15 @@ class Orchestrator:
         self._reserves_cache: dict = {}   # pair_addr -> (r_in, r_out, ts)
         self._reserves_ttl = 3.0          # seconds
         self._on_swap_sem = asyncio.Semaphore(2)
+        self.safety = SafetyGuard(
+            max_bundle_eth=float(os.getenv("MEV_MAX_BUNDLE_ETH", "0.5")),
+            max_daily_loss_eth=float(
+                os.getenv("MEV_MAX_DAILY_LOSS_ETH", "0.1")),
+            max_consec_failures=int(os.getenv("MEV_MAX_CONSEC_FAILURES", "5")),
+            min_wallet_balance_eth=float(
+                os.getenv("MEV_MIN_WALLET_BALANCE_ETH", "0.05")),
+            enabled=os.getenv("MEV_ENABLED", "true").lower() == "true",
+        )
 
     async def _resync_after(self, target_block: int, timeout: int = 40):
         """Wait for target_block to pass, then resync the nonce manager.
@@ -76,6 +86,7 @@ class Orchestrator:
             await asyncio.sleep(2)
         n = await self.executor.nonces.resync()
         print(f"[nonce] resynced to {n} after target block {target_block}")
+        print(f"[safety] {self.safety.status()}")
 
     def _pair_for(self, factory_name: str, token_a: str, token_b: str) -> str:
         key = (factory_name, token_a.lower(), token_b.lower())
@@ -129,8 +140,13 @@ class Orchestrator:
         gas_reserve = self.http.to_wei(0.02, "ether")  # keep gas buffer
         if wallet_bal <= gas_reserve:
             return
-        max_front = int((wallet_bal - gas_reserve)
-                        * 0.5)  # use ≤50% of capital
+        max_front = int((wallet_bal - gas_reserve) * 0.5)
+
+        # Safety gate — before we spend any more effort
+        allow, reason = self.safety.check_before_bundle(max_front, wallet_bal)
+        if not allow:
+            print(f"[safety] blocked: {reason}")
+            return
 
         front_in, profit = optimal_front_run(
             victim_in=swap.amount_in,
@@ -184,10 +200,11 @@ class Orchestrator:
         try:
             resp = self.executor.submit(bundle, target)
             print(f"[bundle] result: {resp}")
+            self.safety.record_result(net_profit, success=True)
         except Exception as e:
             print(f"[bundle] submit failed: {e}")
-            # Reserved but never broadcast — hand the nonces back
             await self.executor.nonces.release(nonce_start, 2)
+            self.safety.record_result(0, success=False)
             return
 
         # Non-blocking: resync once the target block has passed, whether
