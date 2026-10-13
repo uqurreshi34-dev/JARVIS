@@ -186,6 +186,10 @@ class BundleExecutor:
                 router_name, base_token, back_amount_in, back_min_out,
                 max_fee, our_tip, nonce_start + 1, deadline, gas,
             )
+            ok2, reason2 = self.simulate_tx(back)
+            if not ok2:
+                raise RuntimeError(
+                    f"back-run would revert: {reason2}")
             bundle = [
                 {"signed_transaction": self._sign(front)},
                 {"signed_transaction": victim_raw_tx},
