@@ -2,11 +2,9 @@
 
 """Subscribe to pending transactions over raw JSON-RPC WebSocket.
 
-We bypass web3.py's async subscription API on purpose:
-- In web3 v6, `AsyncWeb3(...)` is not an async context manager; only
-  `AsyncWeb3.persistent_websocket(...)` is, and it has its own quirks.
-- Raw JSON-RPC over `websockets` is stable and gives us precise control
-  over reconnects and back-pressure.
+Uses Alchemy's `alchemy_pendingTransactions` (server-side filtered) when
+available, falling back to `newPendingTransactions` (unfiltered) if the
+free tier rejects it.
 """
 import asyncio
 import itertools
@@ -16,10 +14,13 @@ from typing import Awaitable, Callable
 import websockets
 from web3 import Web3
 
-from actions.mev.tx_decoder import decode_swap
+from actions.mev.tx_decoder import decode_swap, ROUTERS
 
 
 Handler = Callable[[dict], Awaitable[None]]
+
+# Filter target: only txs going to a known V2 router
+ROUTER_ADDRS = [a.lower() for a in ROUTERS.keys()]
 
 
 class MempoolListener:
@@ -29,27 +30,44 @@ class MempoolListener:
         self.http = Web3(Web3.HTTPProvider(http_url))
         self.on_swap = on_swap
         self._id_counter = itertools.count(1)
-        # Bound concurrency: without this, a busy mempool can spawn
-        # thousands of HTTP getTransaction calls at once and DoS your RPC.
         self._sem = asyncio.Semaphore(max_inflight)
         self._tasks: set = set()
+        # Dedup: hashes seen recently. Bounded to prevent unbounded growth.
+        self._seen: set = set()
+        self._seen_order: list = []
         self._stats = {
             "raw": 0, "fetched": 0, "fetch_err": 0,
-            "no_to": 0, "not_swap": 0, "decoded": 0,
+            "no_to": 0, "not_swap": 0, "decoded": 0, "dup": 0,
         }
+        # Set True once we confirm the filtered subscription works.
+        self._filtered = False
 
+    # ---- dedup ---------------------------------------------------------
+    def _is_duplicate(self, tx_hash: str) -> bool:
+        if tx_hash in self._seen:
+            return True
+        self._seen.add(tx_hash)
+        self._seen_order.append(tx_hash)
+        if len(self._seen_order) > 5000:
+            old = self._seen_order.pop(0)
+            self._seen.discard(old)
+        return False
+
+    # ---- handle a single pending tx ------------------------------------
     async def _handle_pending(self, tx_hash_hex: str):
         self._stats["raw"] += 1
         async with self._sem:
+            if self._is_duplicate(tx_hash_hex):
+                self._stats["dup"] += 1
+                return
+
+            # ---- Fetch tx (or build from full object if already provided)
             try:
                 tx = await asyncio.to_thread(
                     self.http.eth.get_transaction, tx_hash_hex
                 )
-            except Exception as e:
+            except Exception:
                 self._stats["fetch_err"] += 1
-                if self._stats["fetch_err"] <= 3:
-                    print(
-                        f"[mempool] get_transaction failed: {type(e).__name__}: {e}")
                 return
 
             self._stats["fetched"] += 1
@@ -73,14 +91,53 @@ class MempoolListener:
             except Exception as e:
                 print(f"[mempool] on_swap error: {type(e).__name__}: {e}")
 
-        # Print on the very first msg, then every 20 after — catches trickles
-        if self._stats["raw"] == 1 or self._stats["raw"] % 20 == 0:
-            print(f"[stats] {self._stats}")
-
     async def _spawn(self, coro):
         t = asyncio.create_task(coro)
         self._tasks.add(t)
         t.add_done_callback(self._tasks.discard)
+
+    async def _stats_loop(self, every: int = 15):
+        prev_raw = 0
+        while True:
+            await asyncio.sleep(every)
+            raw = self._stats["raw"]
+            delta = raw - prev_raw
+            prev_raw = raw
+            print(f"[stats] {self._stats}  (+{delta} since last)")
+
+    # ---- subscribe helper ----------------------------------------------
+    async def _subscribe(self, ws):
+        """Try filtered subscription first, fall back to unfiltered."""
+        sub_id = next(self._id_counter)
+        # Attempt 1: server-side filter to V2 routers only.
+        await ws.send(json.dumps({
+            "jsonrpc": "2.0", "id": sub_id,
+            "method": "eth_subscribe",
+            "params": ["alchemy_pendingTransactions", {
+                "toAddress": ROUTER_ADDRS,
+            }],
+        }))
+        ack = json.loads(await ws.recv())
+        if "result" in ack:
+            self._filtered = True
+            print(
+                f"[mempool] subscribed (FILTERED to V2 routers) id={ack['result']}")
+            return
+        print(f"[mempool] filtered subscription rejected: {ack.get('error')}")
+        print(f"[mempool] falling back to unfiltered stream")
+
+        # Attempt 2: unfiltered.
+        sub_id = next(self._id_counter)
+        await ws.send(json.dumps({
+            "jsonrpc": "2.0", "id": sub_id,
+            "method": "eth_subscribe",
+            "params": ["newPendingTransactions"],
+        }))
+        ack = json.loads(await ws.recv())
+        if "error" in ack:
+            raise RuntimeError(f"subscribe failed: {ack['error']}")
+        self._filtered = False
+        print(f"[mempool] subscribed (unfiltered) id={ack['result']}")
 
     async def run(self):
         backoff = 1
@@ -89,17 +146,8 @@ class MempoolListener:
                 async with websockets.connect(
                     self.ws_url, ping_interval=30, ping_timeout=20
                 ) as ws:
-                    sub_id = next(self._id_counter)
-                    await ws.send(json.dumps({
-                        "jsonrpc": "2.0",
-                        "id": sub_id,
-                        "method": "eth_subscribe",
-                        "params": ["newPendingTransactions"],
-                    }))
-                    ack = json.loads(await ws.recv())
-                    if "error" in ack:
-                        raise RuntimeError(f"subscribe failed: {ack['error']}")
-                    print(f"[mempool] subscribed id={ack.get('result')}")
+                    await self._subscribe(ws)
+                    asyncio.create_task(self._stats_loop())
                     backoff = 1
                     async for raw in ws:
                         try:
@@ -108,8 +156,12 @@ class MempoolListener:
                             continue
                         params = msg.get("params") or {}
                         h = params.get("result")
+                        # Unfiltered subs push a hash string.
                         if isinstance(h, str):
                             await self._spawn(self._handle_pending(h))
+                        # Filtered subs may push a full tx object.
+                        elif isinstance(h, dict) and h.get("hash"):
+                            await self._spawn(self._handle_pending(h["hash"]))
             except Exception as e:
                 print(
                     f"[mempool] disconnected: {e}  (reconnecting in {backoff}s)")

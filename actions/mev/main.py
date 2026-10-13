@@ -55,6 +55,12 @@ class Orchestrator:
         )
         self.min_profit = int(os.getenv("MIN_PROFIT_WEI", "50000000000000"))
         self.executor_addr = self.executor.executor.address
+        # Cache: pair address per (factory, token0, token1) — never changes.
+        self._pair_cache: dict = {}
+        # Cache: reserves per pair with a short TTL — changes every block.
+        self._reserves_cache: dict = {}   # pair_addr -> (r_in, r_out, ts)
+        self._reserves_ttl = 3.0          # seconds
+        self._on_swap_sem = asyncio.Semaphore(2)
 
     async def _resync_after(self, target_block: int, timeout: int = 40):
         """Wait for target_block to pass, then resync the nonce manager.
@@ -72,19 +78,38 @@ class Orchestrator:
         print(f"[nonce] resynced to {n} after target block {target_block}")
 
     def _pair_for(self, factory_name: str, token_a: str, token_b: str) -> str:
+        key = (factory_name, token_a.lower(), token_b.lower())
+        cached = self._pair_cache.get(key)
+        if cached is not None:
+            return cached
         f = self.http.eth.contract(
             address=FACTORIES[factory_name], abi=FACTORY_ABI)
-        return f.functions.getPair(token_a, token_b).call()
+        addr = f.functions.getPair(token_a, token_b).call()
+        self._pair_cache[key] = addr
+        return addr
 
     def _reserves(self, pair_addr: str, token_in: str):
+        now = time.time()
+        cached = self._reserves_cache.get(pair_addr)
+        if cached is not None:
+            r_in, r_out, ts = cached
+            if now - ts < self._reserves_ttl:
+                return r_in, r_out
         pair = self.http.eth.contract(address=pair_addr, abi=PAIR_ABI)
         r0, r1, _ = pair.functions.getReserves().call()
         t0 = pair.functions.token0().call()
         if to_checksum_address(t0) == token_in:
-            return r0, r1
-        return r1, r0
+            r_in, r_out = r0, r1
+        else:
+            r_in, r_out = r1, r0
+        self._reserves_cache[pair_addr] = (r_in, r_out, now)
+        return r_in, r_out
 
     async def on_swap(self, swap: DecodedSwap):
+        async with self._on_swap_sem:
+            await self._on_swap_inner(swap)
+
+    async def _on_swap_inner(self, swap: DecodedSwap):
         # We only target buys of a token with WETH as input (price-impact up)
         if not swap.is_buy or swap.path[0] != WETH:
             return
