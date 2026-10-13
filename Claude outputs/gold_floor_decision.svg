@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="660" viewBox="0 0 1260 660" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1260" height="660" fill="#f5f6f9"/>
+<text x="40" y="44" font-size="24" font-weight="800" fill="#1d2330">Gold at your floor (4114): what decides sell, buy or nothing</text>
+<text x="40" y="70" font-size="14.5" fill="#5d6475">Your manual rule: trade the breakout retest only, never the bounce. 15-minute candles, 1 unit, $10 stop, $30 target. Judge candle CLOSES, not wicks.</text>
+<rect x="28" y="88" width="404" height="535" rx="14" fill="#fff" stroke="#d9dce4"/>
+<text x="40" y="118" font-size="17" font-weight="800" fill="#1d2330">1. Now: on the floor</text>
+<rect x="40" y="128" width="116.0" height="0" fill="none"/>
+<text x="420" y="118" text-anchor="end" font-size="17" font-weight="800" fill="#5d6475">DO NOTHING</text>
+<line x1="40" x2="420" y1="345.0" y2="345.0" stroke="#d1179e" stroke-width="2.4"/>
+<text x="44" y="338.0" text-anchor="start" font-size="13" font-weight="700" fill="#d1179e">floor 4114</text>
+<line x1="70" x2="70" y1="180.0" y2="240.0" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="63.0" y="195.0" width="14" height="30.0" fill="#d43a4a" rx="1.5"/>
+<line x1="96" x2="96" y1="210.0" y2="270.0" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="89.0" y="225.0" width="14" height="30.0" fill="#d43a4a" rx="1.5"/>
+<line x1="122" x2="122" y1="240.0" y2="307.5" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="115.0" y="255.0" width="14" height="37.5" fill="#d43a4a" rx="1.5"/>
+<line x1="148" x2="148" y1="270.0" y2="322.5" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="141.0" y="292.5" width="14" height="22.5" fill="#d43a4a" rx="1.5"/>
+<line x1="174" x2="174" y1="300.0" y2="333.8" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="167.0" y="315.0" width="14" height="15.0" fill="#d43a4a" rx="1.5"/>
+<line x1="200" x2="200" y1="315.0" y2="420.0" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="193.0" y="322.5" width="14" height="7.5" fill="#1a9a63" rx="1.5"/>
+<line x1="226" x2="226" y1="292.5" y2="337.5" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="219.0" y="300.0" width="14" height="22.5" fill="#1a9a63" rx="1.5"/>
+<line x1="252" x2="252" y1="285.0" y2="341.2" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="245.0" y="300.0" width="14" height="30.0" fill="#d43a4a" rx="1.5"/>
+<line x1="278" x2="278" y1="307.5" y2="337.5" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="271.0" y="330.0" width="14" height="3.8" fill="#d43a4a" rx="1.5"/>
+<line x1="304" x2="304" y1="315.0" y2="341.2" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="297.0" y="322.5" width="14" height="11.2" fill="#1a9a63" rx="1.5"/>
+<line x1="330" x2="330" y1="315.0" y2="337.5" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="323.0" y="322.5" width="14" height="11.2" fill="#d43a4a" rx="1.5"/>
+<line x1="356" x2="356" y1="322.5" y2="340.5" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="349.0" y="330.0" width="14" height="3.8" fill="#1a9a63" rx="1.5"/>
+<line x1="382" x2="382" y1="322.5" y2="337.5" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="375.0" y="330.0" width="14" height="3.8" fill="#d43a4a" rx="1.5"/>
+<circle cx="200" cy="420.0" r="5" fill="none" stroke="#d43a4a" stroke-width="2.2"/>
+<text x="200" y="438.0" text-anchor="start" font-size="12.5" font-weight="700" fill="#d43a4a">wick through, closed back above:</text>
+<text x="200" y="454.0" font-size="12.5" font-weight="700" fill="#d43a4a">the floor held -- not a break</text>
+<text x="40" y="514" font-size="13.5" fill="#1d2330"><tspan font-weight="700">Buy here?</tspan> No. That's a range bounce: your rule says skip.</text>
+<text x="40" y="536" font-size="13.5" fill="#1d2330"><tspan font-weight="700">Sell here?</tspan> No. Nothing has closed below 4114.</text>
+<text x="40" y="558" font-size="13.5" fill="#1d2330"><tspan font-weight="700">So:</tspan> wait. Set an alert at 4110 and 4229.</text>
+<text x="40" y="580" font-size="13.5" fill="#1d2330"><tspan font-weight="700">A limit order now</tspan> would be a guess at the bounce.</text>
+<rect x="428" y="88" width="404" height="535" rx="14" fill="#fff" stroke="#d9dce4"/>
+<text x="440" y="118" font-size="17" font-weight="800" fill="#1d2330">2. Breaks down, comes back</text>
+<rect x="440" y="128" width="58.4" height="0" fill="none"/>
+<text x="820" y="118" text-anchor="end" font-size="17" font-weight="800" fill="#d43a4a">SELL</text>
+<line x1="440" x2="820" y1="247.8" y2="247.8" stroke="#d1179e" stroke-width="2.4"/>
+<text x="816" y="265.8" text-anchor="end" font-size="13" font-weight="700" fill="#d1179e">4114: floor, now ceiling</text>
+<line x1="470" x2="470" y1="174.4" y2="217.2" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="463.0" y="186.7" width="14" height="24.4" fill="#d43a4a" rx="1.5"/>
+<line x1="496" x2="496" y1="198.9" y2="241.7" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="489.0" y="211.1" width="14" height="24.4" fill="#d43a4a" rx="1.5"/>
+<line x1="522" x2="522" y1="229.4" y2="253.9" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="515.0" y="235.6" width="14" height="6.1" fill="#d43a4a" rx="1.5"/>
+<line x1="548" x2="548" y1="235.6" y2="296.7" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="541.0" y="241.7" width="14" height="48.9" fill="#d43a4a" rx="1.5"/>
+<line x1="574" x2="574" y1="272.2" y2="308.9" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="567.0" y="278.3" width="14" height="12.2" fill="#1a9a63" rx="1.5"/>
+<line x1="600" x2="600" y1="244.7" y2="284.4" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="593.0" y="253.9" width="14" height="24.4" fill="#1a9a63" rx="1.5"/>
+<line x1="626" x2="626" y1="241.7" y2="272.2" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="619.0" y="253.9" width="14" height="15.3" fill="#d43a4a" rx="1.5"/>
+<line x1="652" x2="652" y1="260.0" y2="315.0" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="645.0" y="269.2" width="14" height="39.7" fill="#d43a4a" rx="1.5"/>
+<line x1="678" x2="678" y1="296.7" y2="351.7" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="671.0" y="308.9" width="14" height="36.7" fill="#d43a4a" rx="1.5"/>
+<line x1="704" x2="704" y1="333.3" y2="388.3" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="697.0" y="345.6" width="14" height="30.6" fill="#d43a4a" rx="1.5"/>
+<line x1="730" x2="730" y1="363.9" y2="412.8" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="723.0" y="376.1" width="14" height="24.4" fill="#d43a4a" rx="1.5"/>
+<line x1="756" x2="756" y1="388.3" y2="437.2" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="749.0" y="400.6" width="14" height="30.6" fill="#d43a4a" rx="1.5"/>
+<circle cx="548" cy="290.6" r="5" fill="none" stroke="#d43a4a" stroke-width="2.2"/>
+<text x="548" y="312.6" text-anchor="middle" font-size="12.5" font-weight="700" fill="#d43a4a">1 close BELOW 4114</text>
+<circle cx="626" cy="241.7" r="5" fill="none" stroke="#1d2330" stroke-width="2.2"/>
+<text x="626" y="227.7" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1d2330">2 retest rejected: sell ~4112</text>
+<line x1="626" x2="750" y1="198.9" y2="198.9" stroke="#d43a4a" stroke-width="1.6" stroke-dasharray="6 4"/>
+<text x="754" y="202.9" font-size="12" fill="#d43a4a" font-weight="600">stop 4122</text>
+<line x1="626" x2="750" y1="443.3" y2="443.3" stroke="#1a9a63" stroke-width="1.6" stroke-dasharray="6 4"/>
+<text x="754" y="447.3" font-size="12" fill="#1a9a63" font-weight="600">target 4082</text>
+<text x="440" y="514" font-size="13.5" fill="#1d2330"><tspan font-weight="700">Trigger:</tspan> a 15m candle CLOSES below 4114, not a wick.</text>
+<text x="440" y="536" font-size="13.5" fill="#1d2330"><tspan font-weight="700">Entry:</tspan> price comes back up to the line and is</text>
+<text x="440" y="558" font-size="13.5" fill="#1d2330"><tspan font-weight="700"></tspan> rejected. A sell limit ~4113 is fine HERE.</text>
+<text x="440" y="580" font-size="13.5" fill="#1d2330"><tspan font-weight="700">Stop / target:</tspan> $10 above, $30 below (1:3).</text>
+<text x="440" y="602" font-size="13.5" fill="#1d2330"><tspan font-weight="700">Cancel if:</tspan> it closes back above 4114 first.</text>
+<rect x="828" y="88" width="404" height="535" rx="14" fill="#fff" stroke="#d9dce4"/>
+<text x="840" y="118" font-size="17" font-weight="800" fill="#1d2330">3. The buy is up at 4229</text>
+<rect x="840" y="128" width="144.8" height="0" fill="none"/>
+<text x="1220" y="118" text-anchor="end" font-size="17" font-weight="800" fill="#1a9a63">BUY (not now)</text>
+<line x1="840" x2="1220" y1="326.3" y2="326.3" stroke="#1f4fd8" stroke-width="2.4"/>
+<text x="1216" y="319.3" text-anchor="end" font-size="13" font-weight="700" fill="#1f4fd8">ceiling 4229</text>
+<line x1="870" x2="870" y1="412.2" y2="448.4" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="863.0" y="421.2" width="14" height="13.6" fill="#1a9a63" rx="1.5"/>
+<line x1="896" x2="896" y1="394.1" y2="430.3" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="889.0" y="398.6" width="14" height="22.6" fill="#1a9a63" rx="1.5"/>
+<line x1="922" x2="922" y1="367.0" y2="407.7" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="915.0" y="376.0" width="14" height="22.6" fill="#1a9a63" rx="1.5"/>
+<line x1="948" x2="948" y1="339.9" y2="385.1" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="941.0" y="348.9" width="14" height="27.1" fill="#1a9a63" rx="1.5"/>
+<line x1="974" x2="974" y1="285.6" y2="357.9" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="967.0" y="294.7" width="14" height="54.2" fill="#1a9a63" rx="1.5"/>
+<line x1="1000" x2="1000" y1="276.6" y2="326.3" stroke="#d43a4a" stroke-width="1.6"/>
+<rect x="993.0" y="294.7" width="14" height="22.6" fill="#d43a4a" rx="1.5"/>
+<line x1="1026" x2="1026" y1="308.2" y2="328.6" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="1019.0" y="312.7" width="14" height="4.5" fill="#1a9a63" rx="1.5"/>
+<line x1="1052" x2="1052" y1="263.0" y2="317.3" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="1045.0" y="272.1" width="14" height="40.7" fill="#1a9a63" rx="1.5"/>
+<line x1="1078" x2="1078" y1="231.4" y2="281.1" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="1071.0" y="240.4" width="14" height="31.6" fill="#1a9a63" rx="1.5"/>
+<line x1="1104" x2="1104" y1="204.2" y2="254.0" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="1097.0" y="213.3" width="14" height="27.1" fill="#1a9a63" rx="1.5"/>
+<line x1="1130" x2="1130" y1="177.1" y2="226.8" stroke="#1a9a63" stroke-width="1.6"/>
+<rect x="1123.0" y="186.2" width="14" height="27.1" fill="#1a9a63" rx="1.5"/>
+<circle cx="974" cy="294.7" r="5" fill="none" stroke="#1a9a63" stroke-width="2.2"/>
+<text x="974" y="280.7" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1a9a63">1 close ABOVE 4229</text>
+<circle cx="1026" cy="328.6" r="5" fill="none" stroke="#1d2330" stroke-width="2.2"/>
+<text x="1026" y="352.6" text-anchor="start" font-size="12.5" font-weight="700" fill="#1d2330">2 retest holds: buy ~4231</text>
+<line x1="1026" x2="1150" y1="362.5" y2="362.5" stroke="#d43a4a" stroke-width="1.6" stroke-dasharray="6 4"/>
+<text x="1154" y="366.5" font-size="12" fill="#d43a4a" font-weight="600">stop 4221</text>
+<line x1="1026" x2="1150" y1="181.6" y2="181.6" stroke="#1a9a63" stroke-width="1.6" stroke-dasharray="6 4"/>
+<text x="1154" y="185.6" font-size="12" fill="#1a9a63" font-weight="600">target 4261</text>
+<text x="840" y="514" font-size="13.5" fill="#1d2330"><tspan font-weight="700">Mirror image</tspan> of panel 2, at the ceiling.</text>
+<text x="840" y="536" font-size="13.5" fill="#1d2330"><tspan font-weight="700">Price is $115 away</tspan> from this, so it isn't live.</text>
+<text x="840" y="558" font-size="13.5" fill="#1d2330"><tspan font-weight="700">Between the lines</tspan> (4114 to 4229): no trades.</text>
+<text x="840" y="580" font-size="13.5" fill="#1d2330"><tspan font-weight="700">The bot</tspan> is separate: it trades its own</text>
+<text x="840" y="602" font-size="13.5" fill="#1d2330"><tspan font-weight="700"></tspan> tested pullback rule, not your lines.</text>
+</svg>

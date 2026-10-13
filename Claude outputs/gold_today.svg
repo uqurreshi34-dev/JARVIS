@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 560" font-family="Segoe UI, Arial, sans-serif">
+  <rect width="1000" height="560" fill="#ffffff"/>
+  <text x="500" y="34" text-anchor="middle" font-size="22" font-weight="700" fill="#1f2937">Gold now: inside your box, so no trade yet</text>
+
+  <!-- box -->
+  <rect x="60" y="130" width="560" height="260" fill="#eef2ff" stroke="none"/>
+  <line x1="60" y1="130" x2="900" y2="130" stroke="#2563eb" stroke-width="4"/>
+  <text x="66" y="120" font-size="15" fill="#2563eb" font-weight="700">CEILING 4229  (your alert)</text>
+  <line x1="60" y1="390" x2="900" y2="390" stroke="#db2777" stroke-width="4"/>
+  <text x="66" y="414" font-size="15" fill="#db2777" font-weight="700">FLOOR 4114  (your alert)</text>
+  <text x="200" y="175" font-size="15" fill="#475569" font-weight="700">THE BOX: no trades in here</text>
+
+  <!-- price path: drop near floor then rise -->
+  <polyline points="80,250 140,330 200,290 260,360 320,300 380,370 430,380 470,330 520,280 560,250 600,240"
+            fill="none" stroke="#16a34a" stroke-width="4" stroke-linejoin="round"/>
+  <circle cx="600" cy="240" r="9" fill="#16a34a"/>
+  <text x="560" y="225" font-size="14" fill="#15803d" font-weight="700">you are here, 4179</text>
+  <text x="330" y="440" font-size="13" fill="#334155">The green rise from about 4120 was a bounce off the floor:</text>
+  <text x="330" y="457" font-size="13" fill="#334155">the setup that LOST money over three years. It isn't a missed trade.</text>
+
+  <!-- scenario up -->
+  <polyline points="600,240 680,150 730,100" fill="none" stroke="#16a34a" stroke-width="3" stroke-dasharray="7 6"/>
+  <text x="740" y="80" font-size="14" fill="#15803d" font-weight="700">A. 4-hour CLOSE above 4229</text>
+  <text x="740" y="98" font-size="13" fill="#334155">then wait for the dip back to 4229,</text>
+  <text x="740" y="114" font-size="13" fill="#334155">and a green 15-min close there: BUY</text>
+
+  <!-- scenario down -->
+  <polyline points="600,240 680,350 730,440" fill="none" stroke="#dc2626" stroke-width="3" stroke-dasharray="7 6"/>
+  <text x="740" y="455" font-size="14" fill="#b91c1c" font-weight="700">B. 4-hour CLOSE below 4114</text>
+  <text x="740" y="473" font-size="13" fill="#334155">then wait for the rise back to 4114,</text>
+  <text x="740" y="489" font-size="13" fill="#334155">and a red 15-min close there: SELL</text>
+
+  <!-- middle -->
+  <text x="740" y="255" font-size="14" fill="#475569" font-weight="700">C. Stays in the box</text>
+  <text x="740" y="273" font-size="13" fill="#334155">DO NOTHING. Let JARVIS's</text>
+  <text x="740" y="289" font-size="13" fill="#334155">pullback bot handle it.</text>
+
+  <rect x="20" y="505" width="960" height="45" rx="10" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="500" y="533" text-anchor="middle" font-size="15" fill="#9a3412" font-weight="700">Your lines are fine. Only a 4-hour CLOSE beyond a line starts your setup. Wicks don't count.</text>
+</svg>

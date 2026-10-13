@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" font-family="Segoe UI, Arial, sans-serif">
+  <rect width="1000" height="600" fill="#ffffff"/>
+  <text x="500" y="32" text-anchor="middle" font-size="22" font-weight="700" fill="#1f2937">Trendlines: which way is the river flowing?</text>
+
+  <!-- Uptrend panel -->
+  <rect x="20" y="50" width="470" height="380" rx="12" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="255" y="78" text-anchor="middle" font-size="17" font-weight="700" fill="#15803d">UPTREND: higher lows</text>
+  <polyline points="50,380 110,300 150,340 220,240 260,290 330,180 370,230 440,120" fill="none" stroke="#334155" stroke-width="3" stroke-linejoin="round"/>
+  <line x1="40" y1="400" x2="470" y2="200" stroke="#16a34a" stroke-width="4"/>
+  <circle cx="150" cy="340" r="8" fill="#16a34a"/><circle cx="260" cy="290" r="8" fill="#16a34a"/><circle cx="370" cy="230" r="8" fill="#16a34a"/>
+  <text x="290" y="355" font-size="13" fill="#15803d" font-weight="700">Line joins the LOWS (2+ touches)</text>
+  <text x="290" y="373" font-size="13" fill="#334155">Each dip stops higher than the last.</text>
+  <text x="40" y="415" font-size="13" fill="#15803d" font-weight="700">Only look for BUYS. Dips to the line are chances.</text>
+
+  <!-- Downtrend panel -->
+  <rect x="510" y="50" width="470" height="380" rx="12" fill="#fef2f2" stroke="#fca5a5"/>
+  <text x="745" y="78" text-anchor="middle" font-size="17" font-weight="700" fill="#b91c1c">DOWNTREND: lower highs</text>
+  <polyline points="540,120 600,210 640,170 710,280 750,230 820,330 860,290 930,390" fill="none" stroke="#334155" stroke-width="3" stroke-linejoin="round"/>
+  <line x1="530" y1="100" x2="960" y2="320" stroke="#dc2626" stroke-width="4"/>
+  <circle cx="640" cy="170" r="8" fill="#dc2626"/><circle cx="750" cy="230" r="8" fill="#dc2626"/><circle cx="860" cy="290" r="8" fill="#dc2626"/>
+  <text x="530" y="150" font-size="13" fill="#b91c1c" font-weight="700">Line joins the HIGHS</text>
+  <text x="530" y="168" font-size="13" fill="#334155">Each bounce stops lower.</text>
+  <text x="530" y="415" font-size="13" fill="#b91c1c" font-weight="700">Only look for SELLS. Rallies to the line are chances.</text>
+
+  <!-- footer -->
+  <rect x="20" y="445" width="960" height="145" rx="12" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="40" y="473" font-size="15" font-weight="700" fill="#1e40af">How they help you (and honestly, how much)</text>
+  <text x="40" y="498" font-size="14" fill="#1f2937">1. Direction only: they stop you buying in a downtrend or selling in an uptrend. Gold on your 4-hour chart: lower highs since August = DOWNTREND.</text>
+  <text x="40" y="520" font-size="14" fill="#1f2937">2. Your bot already does this with a number, not a drawing: its 200-candle average. Above it = buys only, below = sells only. Same job, no guesswork.</text>
+  <text x="40" y="542" font-size="14" fill="#1f2937">3. Drawn lines are subjective: two traders draw two lines. Tested rules beat lines you nudge until they fit.</text>
+  <text x="40" y="568" font-size="14" fill="#1f2937" font-weight="700">Verdict: useful as a quick sense of direction on the 4-hour chart. Not needed as an extra trigger. Don't add more tools.</text>
+</svg>
