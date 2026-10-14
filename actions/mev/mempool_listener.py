@@ -15,13 +15,13 @@ import websockets
 from web3 import Web3
 
 from actions.mev.tx_decoder import decode_swap, ROUTERS
-from actions.mev.tx_decoder_v3 import decode_swap_v3
+from actions.mev.tx_decoder_v3 import decode_swap_v3, ROUTER_ADDRS_V3
 
 
 Handler = Callable[[dict], Awaitable[None]]
 
-# Filter target: only txs going to a known V2 router
-ROUTER_ADDRS = [a.lower() for a in ROUTERS.keys()]
+# Filter target: only txs going to a known router (V2 or V3).
+ROUTER_ADDRS = [a.lower() for a in ROUTERS.keys()] + ROUTER_ADDRS_V3
 
 
 class MempoolListener:
@@ -189,7 +189,8 @@ class MempoolListener:
             if "result" in ack:
                 self._filtered = True
                 print(
-                    f"[mempool] subscribed (FILTERED to V2 routers) id={ack['result']}")
+                    f"[mempool] subscribed (FILTERED to {len(ROUTER_ADDRS)} "
+                    f"routers: V2+V3) id={ack['result']}")
                 return
             print(
                 f"[mempool] filtered subscription rejected: {ack.get('error')}")

@@ -25,6 +25,9 @@ SWAP_ROUTER_01 = to_checksum_address(
 SWAP_ROUTER_02 = to_checksum_address(
     "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45")
 
+# For the mempool subscription's toAddress filter.
+ROUTER_ADDRS_V3 = [SWAP_ROUTER_01.lower(), SWAP_ROUTER_02.lower()]
+
 WETH = to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
 
 
