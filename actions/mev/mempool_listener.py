@@ -41,6 +41,11 @@ class MempoolListener:
         }
         # Set True once we confirm the filtered subscription works.
         self._filtered = False
+        # How many times the watchdog has caught a silent feed. After two,
+        # we give up on the filtered subscription entirely and use the
+        # unfiltered firehose. Reset only on process restart.
+        self._stuck_cycles = 0
+        self._last_raw_seen = 0
 
     # ---- dedup ---------------------------------------------------------
     def _is_duplicate(self, tx_hash: str) -> bool:
@@ -116,26 +121,68 @@ class MempoolListener:
             prev_raw = raw
             print(f"[stats] {self._stats}  (+{delta} since last)")
 
+    async def _watchdog(self, ws):
+        """Force a reconnect if the feed goes quiet.
+
+        Alchemy's filtered subscription on the free tier can accept the
+        subscribe request, keep the socket open, and then simply never
+        deliver another message. No error, no disconnect. This notices
+        that (V2 router traffic on mainnet never stops for 45 seconds)
+        and closes the socket, which makes run() reconnect.
+        """
+        while True:
+            await asyncio.sleep(45)
+            if ws.state.name != "OPEN":
+                return
+            now_raw = self._stats["raw"]
+            if now_raw == self._last_raw_seen:
+                self._stuck_cycles += 1
+                print(
+                    f"[mempool] WATCHDOG: feed silent for 45s "
+                    f"(raw={now_raw}, cycle #{self._stuck_cycles}). "
+                    f"Reconnecting."
+                )
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+                return
+            self._last_raw_seen = now_raw
+
     # ---- subscribe helper ----------------------------------------------
     async def _subscribe(self, ws):
-        """Try filtered subscription first, fall back to unfiltered."""
-        sub_id = next(self._id_counter)
-        # Attempt 1: server-side filter to V2 routers only.
-        await ws.send(json.dumps({
-            "jsonrpc": "2.0", "id": sub_id,
-            "method": "eth_subscribe",
-            "params": ["alchemy_pendingTransactions", {
-                "toAddress": ROUTER_ADDRS,
-            }],
-        }))
-        ack = json.loads(await ws.recv())
-        if "result" in ack:
-            self._filtered = True
+        """Try filtered subscription first, fall back to unfiltered.
+
+        After two watchdog cycles on the filtered feed, give up on it
+        entirely: it goes silent on the free tier in a way the subscribe
+        call cannot detect, and we would rather have the noisy firehose
+        than a quiet socket that never delivers.
+        """
+        # Attempt 1: server-side filter to V2 routers only — skipped
+        # permanently once it has been caught being silent twice.
+        if self._stuck_cycles < 2:
+            sub_id = next(self._id_counter)
+            await ws.send(json.dumps({
+                "jsonrpc": "2.0", "id": sub_id,
+                "method": "eth_subscribe",
+                "params": ["alchemy_pendingTransactions", {
+                    "toAddress": ROUTER_ADDRS,
+                }],
+            }))
+            ack = json.loads(await ws.recv())
+            if "result" in ack:
+                self._filtered = True
+                print(
+                    f"[mempool] subscribed (FILTERED to V2 routers) id={ack['result']}")
+                return
             print(
-                f"[mempool] subscribed (FILTERED to V2 routers) id={ack['result']}")
-            return
-        print(f"[mempool] filtered subscription rejected: {ack.get('error')}")
-        print(f"[mempool] falling back to unfiltered stream")
+                f"[mempool] filtered subscription rejected: {ack.get('error')}")
+            print(f"[mempool] falling back to unfiltered stream")
+        else:
+            print(
+                f"[mempool] filtered feed proven silent "
+                f"({self._stuck_cycles} cycles) — using unfiltered"
+            )
 
         # Attempt 2: unfiltered.
         sub_id = next(self._id_counter)
@@ -159,6 +206,9 @@ class MempoolListener:
                 ) as ws:
                     await self._subscribe(ws)
                     asyncio.create_task(self._stats_loop())
+                    asyncio.create_task(self._watchdog(ws))
+                    # Reset the last-seen counter for this fresh connection.
+                    self._last_raw_seen = self._stats["raw"]
                     backoff = 1
                     async for raw in ws:
                         try:
