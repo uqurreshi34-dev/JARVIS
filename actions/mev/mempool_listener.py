@@ -211,7 +211,7 @@ class MempoolListener:
             "method": "eth_subscribe",
             "params": [
                 "newPendingTransactions",
-                {"fullTransactions": True},
+                True,
             ],
         }))
         ack = json.loads(await ws.recv())
