@@ -15,6 +15,7 @@ import websockets
 from web3 import Web3
 
 from actions.mev.tx_decoder import decode_swap, ROUTERS
+from actions.mev.tx_decoder_v3 import decode_swap_v3
 
 
 Handler = Callable[[dict], Awaitable[None]]
@@ -37,7 +38,8 @@ class MempoolListener:
         self._seen_order: list = []
         self._stats = {
             "raw": 0, "fetched": 0, "fetch_err": 0,
-            "no_to": 0, "not_swap": 0, "decoded": 0, "dup": 0,
+            "no_to": 0, "not_swap": 0, "decoded": 0, "decoded_v3": 0,
+            "dup": 0,
         }
         # Set True once we confirm the filtered subscription works.
         self._filtered = False
@@ -92,20 +94,34 @@ class MempoolListener:
                 self._stats["no_to"] += 1
                 return
 
-            decoded = decode_swap(tx)
-            if decoded is None:
-                self._stats["not_swap"] += 1
+            # V2 first — this path is fully wired (dispatches to on_swap).
+            decoded_v2 = decode_swap(tx)
+            if decoded_v2 is not None:
+                self._stats["decoded"] += 1
+                print(f"[mempool] decoded swap (V2): {decoded_v2.function} "
+                      f"token={decoded_v2.base_token[:10]} "
+                      f"buy={decoded_v2.is_buy} "
+                      f"amount_in={decoded_v2.amount_in}")
+                try:
+                    await self.on_swap(decoded_v2)
+                except Exception as e:
+                    print(f"[mempool] on_swap error: "
+                          f"{type(e).__name__}: {e}")
                 return
 
-            self._stats["decoded"] += 1
-            print(f"[mempool] decoded swap: {decoded.function} "
-                  f"token={decoded.base_token[:10]} buy={decoded.is_buy} "
-                  f"amount_in={decoded.amount_in}")
+            # V3 — decoded and shown for observation. Not yet dispatched
+            # to on_swap: V3 sandwich math is the next session's work.
+            decoded_v3 = decode_swap_v3(tx)
+            if decoded_v3 is not None:
+                self._stats["decoded_v3"] += 1
+                print(f"[mempool] decoded swap (V3): {decoded_v3.function} "
+                      f"fee={decoded_v3.fee} "
+                      f"token={decoded_v3.base_token[:10]} "
+                      f"buy={decoded_v3.is_buy} "
+                      f"amount_in={decoded_v3.amount_in}")
+                return
 
-            try:
-                await self.on_swap(decoded)
-            except Exception as e:
-                print(f"[mempool] on_swap error: {type(e).__name__}: {e}")
+            self._stats["not_swap"] += 1
 
     async def _spawn(self, coro):
         t = asyncio.create_task(coro)
