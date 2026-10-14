@@ -8,6 +8,12 @@ display so a private key can never appear on screen.
 """
 import re
 from datetime import datetime
+from pathlib import Path
+
+# Where the running log lives: alongside memory.txt, notes.txt, and the
+# rest of JARVIS's own state — in the JARVIS data folder, not wherever
+# the process happened to be launched from.
+_LOG_PATH = Path.home() / "JARVIS" / "mev.log"
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
@@ -196,11 +202,17 @@ class MevPanel(QWidget):
         stamp = datetime.now().strftime("%H:%M:%S")
         line = f"[{stamp}] {_sanitize(text)}"
         self._log.appendPlainText(line)
+
+        # Mirror to disk so an eight-hour session is one file, not thirty
+        # screenshots. Always the same absolute path, so it lands in the
+        # JARVIS data folder regardless of where the process was launched.
         try:
-            with open("mev.log", "a", encoding="utf-8") as f:
+            _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(_LOG_PATH, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
-        except Exception:
-            pass
+        except Exception as e:
+            # Never let a log-write failure take down the panel.
+            print(f"[mev_panel] could not write log: {e}")
 
     def _on_status(self, status):
         colours = {
