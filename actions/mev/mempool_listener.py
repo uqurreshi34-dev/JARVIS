@@ -189,7 +189,7 @@ class MempoolListener:
         await ws.send(json.dumps({
             "jsonrpc": "2.0", "id": sub_id,
             "method": "eth_subscribe",
-            "params": ["newPendingTransactions"],
+            "params": ["newPendingTransactions", {"fullTransactions": True}],
         }))
         ack = json.loads(await ws.recv())
         if "error" in ack:
