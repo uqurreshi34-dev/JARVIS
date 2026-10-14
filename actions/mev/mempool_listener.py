@@ -54,6 +54,11 @@ class MempoolListener:
             "dup": 0, "throttled": 0,
         }
         self._last_raw_seen = 0
+        # Watchdog bookkeeping (leftover from earlier versions).
+        self._stuck_cycles = 0
+        # TEMP DIAG: unique (to, selector) pairs seen since startup,
+        # capped at 30. Remove the whole diag block once we're done.
+        self._diag_targets: set = set()
 
     def _rate_ok(self) -> bool:
         """True if we may process another message under the RPS cap."""
