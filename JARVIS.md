@@ -2562,8 +2562,12 @@ that are merely recited back are notes, not memory.
 python main.py
 ```
 
-Say "Jarvis" then an instruction. "Jarvis, quit" shuts down cleanly —
-Ctrl+C skips the cleanup.
+Say "Jarvis" then an instruction. "Jarvis, quit" shuts down cleanly, and
+so does Ctrl+C (or Ctrl+Break): in the Qt event loop a bare KeyboardInterrupt
+was only printed and the loop ran on, so Ctrl+C left JARVIS running; main.py
+now takes the signal and asks for the same clean shutdown, with a second
+press to force it if that hangs (`tools/test_interrupt.py`). Closing the HUD
+window quits too.
 
 **Listening: cloud first, local on the spot** - `transcriber.py`.
 `STT_ENGINE=groq` transcribes with Whisper large-v3-turbo on Groq (free

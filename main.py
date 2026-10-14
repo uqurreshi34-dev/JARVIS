@@ -47,6 +47,8 @@ from commands import (
     set_sandbox_listener,
     toggle_brain_view,
 )
+import os
+import signal
 import sys
 import threading
 import time
@@ -896,6 +898,67 @@ class Assistant:
 
 _faults_seen = set()
 
+# Set by main() to ask for a clean shutdown. _report_fault calls it when a KeyboardInterrupt reaches the
+# excepthook, so a stray Ctrl+C that lands in a Qt slot stops JARVIS rather than being printed and swallowed.
+_request_stop = None
+
+
+def _interrupt_handler(request_shutdown, force):
+    """A Ctrl+C / Ctrl+Break handler: the first interrupt asks for a clean shutdown, a second forces it.
+
+    Kept apart from the Qt wiring so it can be checked on its own.
+    """
+    asked = {"once": False}
+
+    def handle(signum=None, frame=None):
+        if asked["once"]:
+            force()
+            return
+
+        asked["once"] = True
+        request_shutdown()
+
+    return handle
+
+
+def _install_interrupt(app, hud):
+    """Make Ctrl+C stop JARVIS. In the Qt event loop a KeyboardInterrupt is printed and the loop carries on,
+    so Ctrl+C left JARVIS running (14 October 2026). This asks for the normal shutdown on the first press and
+    forces it on a second, in case the shutdown itself hangs. A bare timer keeps Python waking often enough to
+    run the handler even if every other timer has stopped -- the very case the stall watch is there for.
+    """
+    global _request_stop
+
+    def request_shutdown():
+        print("\n[JARVIS] stopping; press Ctrl+C again to force.", flush=True)
+        # Deferred onto the event loop: the handler runs between bytecodes, and the teardown belongs on the
+        # HUD's own thread. shutdown() hides the panels and quits 400 ms later (see where it is connected).
+        QTimer.singleShot(0, hud.shutdown.emit)
+
+    def force():
+        print("\n[JARVIS] forcing shutdown.", flush=True)
+        os._exit(1)
+
+    _request_stop = request_shutdown
+    handle = _interrupt_handler(request_shutdown, force)
+
+    for name in ("SIGINT", "SIGBREAK"):
+        number = getattr(signal, name, None)
+
+        if number is not None:
+            try:
+                signal.signal(number, handle)
+            except (ValueError, OSError) as error:
+                # Not the main thread, or the platform will not take it: Ctrl+C then keeps its default.
+                print(f"[JARVIS] could not install the {name} handler: {error}")
+
+    # Python runs a signal handler only when the interpreter regains control; this wakes it five times a
+    # second whatever the HUD is doing, so Ctrl+C still lands when the HUD itself has frozen.
+    pulse = QTimer(app)
+    pulse.timeout.connect(lambda: None)
+    pulse.start(200)
+    app._jarvis_interrupt_pulse = pulse   # a reference, so it is not garbage-collected
+
 
 def _report_fault(kind, error, trace):
     """A fault inside a Qt event -- a panel drawing, a click -- is reported, not fatal.
@@ -905,7 +968,12 @@ def _report_fault(kind, error, trace):
     otherwise repeat on every frame.
     """
     if issubclass(kind, KeyboardInterrupt):
-        sys.__excepthook__(kind, error, trace)
+        # In the Qt event loop a KeyboardInterrupt is only printed and the loop runs on, so on its own it
+        # never stopped JARVIS. Ask for the clean shutdown main installed instead.
+        if _request_stop is not None:
+            _request_stop()
+        else:
+            sys.__excepthook__(kind, error, trace)
         return
 
     where = traceback.extract_tb(trace)[-1] if trace else None
@@ -929,6 +997,9 @@ def main():
 
     hud = Hud()
     hud.show()
+
+    # Ctrl+C (and Ctrl+Break) stop JARVIS cleanly from here on.
+    _install_interrupt(app, hud)
 
     set_sentence_listener(
         lambda index: hud.reply_sentence_changed.emit(index)
