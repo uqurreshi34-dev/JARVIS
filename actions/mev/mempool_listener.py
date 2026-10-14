@@ -16,6 +16,7 @@ from web3 import Web3
 
 from actions.mev.tx_decoder import decode_swap, ROUTERS
 from actions.mev.tx_decoder_v3 import decode_swap_v3, ROUTER_ADDRS_V3
+from actions.mev.tx_decoder_ur import decode_swap_ur
 
 
 Handler = Callable[[dict], Awaitable[None]]
@@ -38,15 +39,14 @@ class MempoolListener:
         self._seen_order: list = []
         self._stats = {
             "raw": 0, "fetched": 0, "fetch_err": 0,
-            "no_to": 0, "not_swap": 0, "decoded": 0, "decoded_v3": 0,
+            "no_to": 0, "not_swap": 0,
+            "decoded_v2": 0, "decoded_v3": 0, "decoded_ur": 0,
             "dup": 0,
         }
-        # Set True once we confirm the filtered subscription works.
-        self._filtered = False
-        # How many times the watchdog has caught a silent feed. After two,
-        # we give up on the filtered subscription entirely and use the
-        # unfiltered firehose. Reset only on process restart.
-        self._stuck_cycles = 0
+        # Watchdog bookkeeping only. The filtered subscription proved
+        # unreliable on Alchemy's free tier, so we always subscribe
+        # unfiltered now — the watchdog only exists to notice a dead
+        # WebSocket and force a reconnect.
         self._last_raw_seen = 0
 
     # ---- dedup ---------------------------------------------------------
@@ -94,10 +94,10 @@ class MempoolListener:
                 self._stats["no_to"] += 1
                 return
 
-            # V2 first — this path is fully wired (dispatches to on_swap).
+            # Direct V2 router — fully wired (dispatches to on_swap).
             decoded_v2 = decode_swap(tx)
             if decoded_v2 is not None:
-                self._stats["decoded"] += 1
+                self._stats["decoded_v2"] += 1
                 print(f"[mempool] decoded swap (V2): {decoded_v2.function} "
                       f"token={decoded_v2.base_token[:10]} "
                       f"buy={decoded_v2.is_buy} "
@@ -109,8 +109,7 @@ class MempoolListener:
                           f"{type(e).__name__}: {e}")
                 return
 
-            # V3 — decoded and shown for observation. Not yet dispatched
-            # to on_swap: V3 sandwich math is the next session's work.
+            # Direct V3 router — decoded for observation (math next).
             decoded_v3 = decode_swap_v3(tx)
             if decoded_v3 is not None:
                 self._stats["decoded_v3"] += 1
@@ -119,6 +118,17 @@ class MempoolListener:
                       f"token={decoded_v3.base_token[:10]} "
                       f"buy={decoded_v3.is_buy} "
                       f"amount_in={decoded_v3.amount_in}")
+                return
+
+            # UniversalRouter — where most modern traffic lives.
+            decoded_ur = decode_swap_ur(tx)
+            if decoded_ur is not None:
+                self._stats["decoded_ur"] += 1
+                print(f"[mempool] decoded swap (UR): {decoded_ur.function} "
+                      f"fee={decoded_ur.fee} "
+                      f"token={decoded_ur.base_token[:10]} "
+                      f"buy={decoded_ur.is_buy} "
+                      f"amount_in={decoded_ur.amount_in}")
                 return
 
             self._stats["not_swap"] += 1
@@ -167,52 +177,29 @@ class MempoolListener:
 
     # ---- subscribe helper ----------------------------------------------
     async def _subscribe(self, ws):
-        """Try filtered subscription first, fall back to unfiltered.
+        """Subscribe to the unfiltered firehose.
 
-        After two watchdog cycles on the filtered feed, give up on it
-        entirely: it goes silent on the free tier in a way the subscribe
-        call cannot detect, and we would rather have the noisy firehose
-        than a quiet socket that never delivers.
+        The filtered alchemy_pendingTransactions subscription accepts at
+        most two toAddress entries on the free tier before going silent,
+        and modern DEX traffic splits across V2 routers, two V3 routers,
+        and UniversalRouter — five addresses, minimum. Rather than
+        juggle multiple subscriptions we take the full firehose and
+        filter client-side (which we already do via decode_*).
         """
-        # Attempt 1: server-side filter to V2 routers only — skipped
-        # permanently once it has been caught being silent twice.
-        if self._stuck_cycles < 2:
-            sub_id = next(self._id_counter)
-            await ws.send(json.dumps({
-                "jsonrpc": "2.0", "id": sub_id,
-                "method": "eth_subscribe",
-                "params": ["alchemy_pendingTransactions", {
-                    "toAddress": ROUTER_ADDRS,
-                }],
-            }))
-            ack = json.loads(await ws.recv())
-            if "result" in ack:
-                self._filtered = True
-                print(
-                    f"[mempool] subscribed (FILTERED to {len(ROUTER_ADDRS)} "
-                    f"routers: V2+V3) id={ack['result']}")
-                return
-            print(
-                f"[mempool] filtered subscription rejected: {ack.get('error')}")
-            print(f"[mempool] falling back to unfiltered stream")
-        else:
-            print(
-                f"[mempool] filtered feed proven silent "
-                f"({self._stuck_cycles} cycles) — using unfiltered"
-            )
-
-        # Attempt 2: unfiltered.
         sub_id = next(self._id_counter)
         await ws.send(json.dumps({
             "jsonrpc": "2.0", "id": sub_id,
             "method": "eth_subscribe",
-            "params": ["newPendingTransactions", {"fullTransactions": True}],
+            "params": [
+                "newPendingTransactions",
+                {"fullTransactions": True},
+            ],
         }))
         ack = json.loads(await ws.recv())
         if "error" in ack:
             raise RuntimeError(f"subscribe failed: {ack['error']}")
-        self._filtered = False
-        print(f"[mempool] subscribed (unfiltered) id={ack['result']}")
+        print(f"[mempool] subscribed (unfiltered, full tx bodies) "
+              f"id={ack['result']}")
 
     async def run(self):
         backoff = 1
