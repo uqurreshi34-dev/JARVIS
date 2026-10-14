@@ -37,6 +37,10 @@ class MempoolListener:
         # Dedup: hashes seen recently. Bounded to prevent unbounded growth.
         self._seen: set = set()
         self._seen_order: list = []
+        # TEMP DIAG: unique (to, selector) pairs seen since startup,
+        # capped at 30 so the log stays readable. Remove once we know
+        # what's actually arriving.
+        self._diag_targets: set = set()
         self._stats = {
             "raw": 0, "fetched": 0, "fetch_err": 0,
             "no_to": 0, "not_swap": 0,
@@ -130,6 +134,21 @@ class MempoolListener:
                       f"buy={decoded_ur.is_buy} "
                       f"amount_in={decoded_ur.amount_in}")
                 return
+
+            # TEMP DIAG: log the first 30 unique (to, selector) pairs
+            # that we couldn't decode. Tells us which routers are
+            # actually arriving and what their selectors look like.
+            if len(self._diag_targets) < 30:
+                to_addr = tx.get("to")
+                data = tx.get("input") or tx.get("data") or b""
+                if isinstance(data, bytes):
+                    sel = data[:4].hex() if data else ""
+                else:
+                    sel = data[2:10] if data.startswith("0x") else data[:8]
+                key = (str(to_addr).lower() if to_addr else "", sel)
+                if key not in self._diag_targets:
+                    self._diag_targets.add(key)
+                    print(f"[diag] to={to_addr} selector=0x{sel}")
 
             self._stats["not_swap"] += 1
 
