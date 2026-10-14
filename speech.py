@@ -1137,6 +1137,9 @@ class SpeechEngine:
         stand_in = voices.local()
 
         if self.engine not in voices.LOCAL:
+            # Loaded the first time it is needed, not at start-up: its import freezes the HUD for a second or
+            # two, which is worth paying only when the network voice has actually failed.
+            stand_in.load_in_background()
             stand_in.wait(_LOCAL_LOAD_WAIT)
 
         if self.engine not in voices.LOCAL and stand_in.ready():
@@ -1369,15 +1372,18 @@ def set_sentence_listener(listener):
 
 
 def start_voice():
-    """First thing at start-up: say which voice speaks, and start Kokoro loading.
+    """At start-up, say which voice speaks, and load it now only when it is the one that speaks.
 
-    Before the greeting, not after it: a greeting that found the voice not yet
-    loaded went to the Windows voice. Loading from the disk takes a second
-    or two, which the greeting waits for; only a first run's download is
-    not waited for.
+    The local voice's load imports a model that holds Python's lock for a second or two; done at boot it
+    froze the HUD mid boot animation (14 October 2026). So it is loaded here only when it is the chosen
+    voice -- the greeting waits for it, as before, and a greeting that found it unloaded went to the Windows
+    voice. When a network voice (Google, Azure, Edge) speaks, the local voice is only its stand-in, so it is
+    loaded the first time it is needed (_speak_fallback): while the network voice works, never.
     """
     print(f"[JARVIS] voice: {voices.describe(speech.engine, speech.voice_name)}", flush=True)
-    voices.local().load_in_background()
+
+    if speech.engine in voices.LOCAL:
+        voices.local().load_in_background()
 
 
 def prewarm(lines=None):
@@ -1393,8 +1399,9 @@ def prewarm(lines=None):
         except Exception as error:
             print(f"[JARVIS] could not list phrase variants: {error}")
 
-    # Kokoro speaks, or stands in when Azure or Edge cannot: start_voice()
-    # began loading it; the phrases wait for it, so they are made in it.
-    voices.local().load()
+    # When the local voice is the one that speaks, the phrases are made in it, so it is loaded first. When a
+    # network voice speaks, the phrases are made in that, and its stand-in loads only when first needed.
+    if speech.engine in voices.LOCAL:
+        voices.local().load()
 
     speech.prewarm(tuple(dict.fromkeys(lines)))

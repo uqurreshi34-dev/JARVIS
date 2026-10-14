@@ -1482,10 +1482,17 @@ JARVIS_VOICE_ENGINE in .env:
 - edge: as before, for when it works again.
 
 Whatever the engine, Kokoro stands in when it fails. speech.start_voice(),
-the first thing main.run() does, starts Kokoro loading before the greeting;
-a reply that finds it still reading itself off the disk waits up to 15 s
-for it rather than starting in another voice. Only a first run's download
-(about 200 MB) is not waited for.
+the first thing main.run() does, starts Kokoro loading before the greeting
+-- but only when Kokoro is the voice that speaks, because its model import
+holds Python's lock for a second or two, and on the boot path that froze
+the HUD mid boot animation (14 October 2026, caught by stall_watch). When a
+network voice (Google, Azure, Edge) speaks, Kokoro is only its stand-in, so
+it loads the first time that voice fails (speech._speak_fallback starts the
+load and waits for it, about 2 s from the disk): while the network voice
+works, Kokoro is never imported and the HUD never pays for it. When Kokoro
+is the chosen voice a reply that finds it still reading itself off the disk
+waits up to 15 s for it rather than starting in another voice. Only a first
+run's download (about 200 MB) is not waited for.
 
 Windows' own voice is the last resort, used only while that download runs
 or when Kokoro cannot load. pyttsx3 is gone. Its one shared engine, handed
