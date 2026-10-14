@@ -72,18 +72,41 @@ class Orchestrator:
             enabled=os.getenv("MEV_ENABLED", "true").lower() == "true",
         )
 
-    async def _resync_after(self, target_block: int, timeout: int = 40):
-        """Wait for target_block to pass, then resync the nonce manager.
+    async def _resync_after(self, target_block: int, outcome: dict,
+                            timeout: int = 40):
+        """Wait for target_block to pass, then report the outcome and resync.
 
-        This is the safety net: whatever happened to our bundle, the chain
-        is the source of truth. Resyncing here prevents the local counter
-        from drifting out of sync with on-chain state.
+        Compares the wallet balance now against what it was before we
+        submitted. A rise means the sandwich landed and paid off; a fall
+        means it landed but cost us money; no change means it never got
+        included (we were outbid, or the block moved past us).
         """
         start = time.time()
         while self.http.eth.block_number <= target_block:
             if time.time() - start > timeout:
                 break
             await asyncio.sleep(2)
+
+        after = self.http.eth.get_balance(self.executor_addr)
+        delta = after - outcome["balance_before"]
+        expected = outcome["expected_profit"]
+
+        if delta > 0:
+            print(f"[outcome] WIN  target={target_block} "
+                  f"nonce={outcome['nonce_start']} "
+                  f"profit={self.http.from_wei(delta, 'ether'):.6f} ETH "
+                  f"(expected ~{self.http.from_wei(expected, 'ether'):.6f})")
+            self.safety.record_result(delta, success=True)
+        elif delta < 0:
+            print(f"[outcome] LOSS target={target_block} "
+                  f"nonce={outcome['nonce_start']} "
+                  f"lost={self.http.from_wei(-delta, 'ether'):.6f} ETH")
+            self.safety.record_result(delta, success=False)
+        else:
+            print(f"[outcome] MISS target={target_block} "
+                  f"nonce={outcome['nonce_start']} "
+                  f"(bundle not included; balance unchanged)")
+
         n = await self.executor.nonces.resync()
         print(f"[nonce] resynced to {n} after target block {target_block}")
         print(f"[safety] {self.safety.status()}")
@@ -197,19 +220,28 @@ class Orchestrator:
         print(f"[bundle] submitting target={target} nonce={nonce_start} "
               f"net_profit={net_profit}")
 
+        # Snapshot the wallet balance right before submitting, so we can
+        # measure the actual delta once the target block passes. Done
+        # here (not earlier) because a minute of mempool work can move
+        # the balance from gas on other bundles.
+        balance_before = self.http.eth.get_balance(self.executor_addr)
+
         try:
             resp = self.executor.submit(bundle, target)
             print(f"[bundle] result: {resp}")
-            self.safety.record_result(net_profit, success=True)
         except Exception as e:
             print(f"[bundle] submit failed: {e}")
             await self.executor.nonces.release(nonce_start, 2)
             self.safety.record_result(0, success=False)
             return
 
-        # Non-blocking: resync once the target block has passed, whether
-        # the bundle landed or not.
-        asyncio.create_task(self._resync_after(target))
+        # Non-blocking: report the outcome once the target block passes.
+        outcome = {
+            "nonce_start": nonce_start,
+            "balance_before": balance_before,
+            "expected_profit": net_profit,
+        }
+        asyncio.create_task(self._resync_after(target, outcome))
 
     async def run(self):
         print(f"[orchestrator] executor={self.executor_addr}")

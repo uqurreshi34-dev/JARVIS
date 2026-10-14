@@ -69,8 +69,19 @@ class SafetyGuard:
         return True, ""
 
     def record_result(self, net_profit_wei: int, success: bool):
-        """Call after every bundle submission. Success resets the failure
-        counter; failure increments it and may halt on the Nth in a row."""
+        """Call once per bundle, with its real outcome.
+
+        Counts toward the consecutive-failure halt:
+          - A landed bundle that lost money (systematic bugs like a
+            honeypot token or wrong router).
+          - A relay rejection (broken submission path).
+
+        Does NOT count:
+          - A bundle that never got included (outbid, block moved past).
+            That's normal competition, not a bug.
+
+        A success resets the counter.
+        """
         self._roll_day_if_needed()
         self._today_pnl_wei += net_profit_wei
 
@@ -80,7 +91,7 @@ class SafetyGuard:
             self._consec_failures += 1
             if self._consec_failures >= self.max_consec_failures:
                 self._halted = True
-                self._halted_reason = f"{self._consec_failures} consecutive failures"
+                self._halted_reason = f"{self._consec_failures} consecutive landed losses"
                 print(f"[safety] HALTED: {self._halted_reason}")
 
     def status(self) -> dict:
