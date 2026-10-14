@@ -9,6 +9,7 @@ free tier rejects it.
 import asyncio
 import itertools
 import json
+import time
 from typing import Awaitable, Callable
 
 import websockets
@@ -27,7 +28,8 @@ ROUTER_ADDRS = [a.lower() for a in ROUTERS.keys()] + ROUTER_ADDRS_V3
 
 class MempoolListener:
     def __init__(self, ws_url: str, http_url: str, on_swap: Handler,
-                 max_inflight: int = 64):
+                 max_inflight: int = 64,
+                 max_rps: float = 22.0):
         self.ws_url = ws_url
         self.http = Web3(Web3.HTTPProvider(http_url))
         self.on_swap = on_swap
@@ -37,21 +39,32 @@ class MempoolListener:
         # Dedup: hashes seen recently. Bounded to prevent unbounded growth.
         self._seen: set = set()
         self._seen_order: list = []
-        # TEMP DIAG: unique (to, selector) pairs seen since startup,
-        # capped at 30 so the log stays readable. Remove once we know
-        # what's actually arriving.
-        self._diag_targets: set = set()
+        # Sliding-window rate limiter. Chainstack free tier caps at
+        # 25 RPS; at 100+ msg/sec on mainnet, exceeding the cap means
+        # the provider silently drops messages we never see. The
+        # limiter makes that deliberate: we drop excess and count it,
+        # so the numbers stay honest.
+        self._max_rps = max_rps
+        self._window_start = time.monotonic()
+        self._window_count = 0
         self._stats = {
             "raw": 0, "fetched": 0, "fetch_err": 0,
             "no_to": 0, "not_swap": 0,
             "decoded_v2": 0, "decoded_v3": 0, "decoded_ur": 0,
-            "dup": 0,
+            "dup": 0, "throttled": 0,
         }
-        # Watchdog bookkeeping only. The filtered subscription proved
-        # unreliable on Alchemy's free tier, so we always subscribe
-        # unfiltered now — the watchdog only exists to notice a dead
-        # WebSocket and force a reconnect.
         self._last_raw_seen = 0
+
+    def _rate_ok(self) -> bool:
+        """True if we may process another message under the RPS cap."""
+        now = time.monotonic()
+        if now - self._window_start >= 1.0:
+            self._window_start = now
+            self._window_count = 0
+        if self._window_count < self._max_rps:
+            self._window_count += 1
+            return True
+        return False
 
     # ---- dedup ---------------------------------------------------------
     def _is_duplicate(self, tx_hash: str) -> bool:
@@ -68,6 +81,9 @@ class MempoolListener:
     async def _handle_pending(self, tx_or_hash):
         """Accept either a hash string or a full tx dict."""
         self._stats["raw"] += 1
+        if not self._rate_ok():
+            self._stats["throttled"] += 1
+            return
         async with self._sem:
             # 1) Normalise the input into (tx_dict, hash)
             if isinstance(tx_or_hash, dict):
