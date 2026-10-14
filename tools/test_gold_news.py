@@ -65,6 +65,31 @@ check(gold_news.blocking(utc(2026, 10, 14, 10, 0), dict(SETTINGS, news_impact=["
 check([event[3] for event in gold_news.today(utc(2026, 10, 14), utc(2026, 10, 15), SETTINGS, found)] == ["CPI m/m"],
       "the day's matching events, for the morning's word")
 
+# ---- the morning's word: releases that share a time are one event, windows are the real edges ----------
+CPI = [(utc(2026, 10, 14, 12, 30), "USD", "High", title)
+       for title in ("CPI m/m", "CPI y/y", "Core CPI m/m", "Core CPI y/y")]
+check(gold_news.brief(CPI, SETTINGS) ==
+      "Gold today, sir: four figures at 13:30 (CPI m/m, CPI y/y, Core CPI m/m and Core CPI y/y)."
+      " No new gold trades from 13:00 to 14:00.",
+      f"four figures at one time are one event, one window ({gold_news.brief(CPI, SETTINGS)})")
+check(gold_news.brief(CPI[:1], SETTINGS) ==
+      "Gold today, sir: CPI m/m at 13:30. No new gold trades from 13:00 to 14:00.",
+      "a lone release is named on its own")
+two = CPI[:1] + [(utc(2026, 10, 14, 17, 30), "USD", "High", "Retail sales")]
+check(gold_news.brief(two, SETTINGS) ==
+      "Gold today, sir: CPI m/m at 13:30 and Retail sales at 18:30."
+      " No new gold trades 13:00 to 14:00 and 18:00 to 19:00.",
+      f"two separate times give two windows ({gold_news.brief(two, SETTINGS)})")
+near = CPI[:1] + [(utc(2026, 10, 14, 13, 10), "USD", "High", "Fed speaks")]
+check(gold_news.brief(near, SETTINGS) ==
+      "Gold today, sir: CPI m/m at 13:30 and Fed speaks at 14:10. No new gold trades from 13:00 to 14:40.",
+      f"windows that touch merge into one span ({gold_news.brief(near, SETTINGS)})")
+check(gold_news.brief([], SETTINGS) == "", "nothing due, nothing said")
+many = [(utc(2026, 10, 14, 12, 30), "USD", "High", f"Figure {n}") for n in range(6)]
+check("6 releases at 13:30" in gold_news.brief(many, SETTINGS)
+      and "Figure" not in gold_news.brief(many, SETTINGS),
+      "beyond a handful, the count stands in for the list")
+
 asked = []
 clock = {"now": 1000.0}
 

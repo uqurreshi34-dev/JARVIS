@@ -600,11 +600,10 @@ class GoldTrader:
             window_end = (day + timedelta(hours=end)).replace(tzinfo=timezone.utc) - offset \
                 + timedelta(minutes=chosen["news_minutes_before"])
             ahead = gold_news.today(window_start, window_end, chosen, found)
+            word = gold_news.brief(ahead, chosen)
 
-            if ahead:
-                named = "; ".join(f"{title} at {gold_strategy.uk_time(when):%H:%M}" for when, _currency, _impact, title in ahead)
-                self._say(f"Gold today, sir: {named}. No new gold trades from {chosen['news_minutes_before']} "
-                          f"minutes before each to {chosen['news_minutes_after']} after.")
+            if word:
+                self._say(word)
 
         event = gold_news.blocking(now, chosen, found)
 
