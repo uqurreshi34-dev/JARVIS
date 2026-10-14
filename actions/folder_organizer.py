@@ -89,6 +89,8 @@ _PROTECTED_NAMES = frozenset({
     "voice.json",
     # The phones JARVIS sends notifications and alarms to (phone.py).
     ".jarvis-push.json",
+    # Records mev logs from mempool scanning
+    "mev.log",
 })
 
 # Files JARVIS names by date: rotated logs and the monthly token ledger.
@@ -99,7 +101,8 @@ _PROTECTED_PATTERNS = (
     # hold the same keys and tokens, so they stay where they are too.
     re.compile(r"^mcp\.json\..+$", re.IGNORECASE),
     # SQLite's own companions to a database it is writing.
-    re.compile(r"^(?:sensor-history|jarvis-vectors)\.sqlite-(?:journal|wal|shm)$", re.IGNORECASE),
+    re.compile(
+        r"^(?:sensor-history|jarvis-vectors)\.sqlite-(?:journal|wal|shm)$", re.IGNORECASE),
     # The trade plan's candles, one file a market, kept to check its lines against (tools/trade_plan.py --save).
     re.compile(r"^trade-plan-candles(?:-[a-z0-9_]+)?\.csv$", re.IGNORECASE),
 )
@@ -113,6 +116,7 @@ def is_protected(name):
         name in {value.casefold() for value in _PROTECTED_NAMES}
         or any(pattern.match(name) for pattern in _PROTECTED_PATTERNS)
     )
+
 
 _REQUEST_RE = re.compile(
     r"\b(?:organise|organize)\b.*\b(?:folder|directory)\b",

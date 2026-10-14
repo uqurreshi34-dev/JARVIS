@@ -7,6 +7,7 @@ click on this panel. Log lines from the subprocess are sanitised before
 display so a private key can never appear on screen.
 """
 import re
+from datetime import datetime
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
@@ -192,7 +193,14 @@ class MevPanel(QWidget):
         self.closed.emit()
 
     def _on_line(self, text):
-        self._log.appendPlainText(_sanitize(text))
+        stamp = datetime.now().strftime("%H:%M:%S")
+        line = f"[{stamp}] {_sanitize(text)}"
+        self._log.appendPlainText(line)
+        try:
+            with open("mev.log", "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
 
     def _on_status(self, status):
         colours = {
