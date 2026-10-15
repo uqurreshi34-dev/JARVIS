@@ -110,6 +110,10 @@ DEFAULTS = {
     # The markets watched in the background (actions/line_watch.py), by the names in "markets": when a
     # finished fifteen-minute candle reaches support or resistance, JARVIS says so and opens the plan. []: none.
     "alert_markets": ["gold", "silver"],
+    # The markets in the Signal Desk (actions/signal_desk.py), by the names in "markets": while JARVIS runs,
+    # each is read after every fifteen-minute close and a setup confirming is said (actions/signal_watch.py),
+    # and a briefing is kept after every four-hour close. []: none, and no watching.
+    "signal_markets": ["gold", "silver", "platinum", "copper", "crude oil", "brent crude", "natural gas"],
     # A line is said again only once price has been this many four-hour ATRs away from it.
     "alert_clear_atr": 1.0,
     # The stop: beyond the retest's wick by this many ATRs.
@@ -180,7 +184,7 @@ def settings():
             chosen[name] = chosen[name] or dict(default)
         elif name in ("utc_candles", "mid_prices"):
             chosen[name] = value if isinstance(value, bool) else default
-        elif name == "alert_markets":
+        elif name in ("alert_markets", "signal_markets"):
             given = value if isinstance(value, list) else default
             chosen[name] = [" ".join(str(spoken).casefold().split()) for spoken in given
                             if " ".join(str(spoken).casefold().split()) in chosen["markets"]]

@@ -85,6 +85,7 @@ from actions import (
     trade_plan,
     dex_intelligence,
     line_watch,
+    signal_watch,
 )
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
@@ -1568,6 +1569,13 @@ def main():
                              on_show=trade_plan.present)
     line_watch.start()
     hud.shutdown.connect(line_watch.stop)
+
+    # Every Signal Desk market (trade-plan.json's signal_markets) read after each fifteen-minute close: a
+    # setup confirming is said, unasked, through the same gate, and a briefing is kept after each four-hour
+    # close.
+    signal_watch.set_listeners(on_say=assistant._on_alert, on_show=trade_plan.present)
+    signal_watch.start()
+    hud.shutdown.connect(signal_watch.stop)
 
     # The DEX scan: each pair's price on both exchanges and whether the gap would pay, beside the HUD.
     dex_view = DexPanel()
