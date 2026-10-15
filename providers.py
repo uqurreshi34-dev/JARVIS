@@ -1,8 +1,9 @@
 """Talk to whichever LLM provider is configured, and rotate when one caps out.
 
-Both Groq and Gemini expose OpenAI-compatible endpoints, so a single client
-drives either. Set LLM_PROVIDER in .env to choose the primary; any other
-provider with a key present is used automatically as a fallback.
+Groq, Gemini and DeepSeek expose OpenAI-compatible endpoints, so a single
+client drives any of them. Set LLM_PROVIDER in .env to choose the primary;
+any other provider with a key present is used automatically as a fallback,
+in the order PROVIDERS lists them.
 """
 
 import base64
@@ -31,6 +32,9 @@ load_dotenv()
 # rather than burning a failed request on every command.
 _COOLDOWN_SECONDS = 15 * 60
 
+# What a provider's thinking setting (its thinking_env) may say: off, or how hard to think.
+_THINKING = ("off", "low", "medium", "high", "max")
+
 
 PROVIDERS = {
     "groq": {
@@ -54,6 +58,18 @@ PROVIDERS = {
         "default_vision_model": "gemini-3.6-flash",
         "reasoning": True,
         "default_reasoning_effort": "low",
+    },
+    # DeepSeek's own API (platform.deepseek.com): paid per use, cheap, no free
+    # credit -- a topped-up balance pays for it. Its Flash model thinks by
+    # default, which costs output tokens and seconds before a spoken answer, so
+    # DEEPSEEK_THINKING decides: off unless set to low, medium, high or max. It
+    # has no vision model, so pictures go to the others.
+    "deepseek": {
+        "base_url": "https://api.deepseek.com",
+        "key_env": "DEEPSEEK_API_KEY",
+        "model_env": "DEEPSEEK_MODEL",
+        "default_model": "deepseek-flash",
+        "thinking_env": "DEEPSEEK_THINKING",
     },
     "claude": {
         "kind": "anthropic",
@@ -192,11 +208,34 @@ def is_transient_error(error):
     )
 
 
+def is_out_of_credit(error):
+    """True when the account has no money left to pay for the request.
+
+    DeepSeek answers 402 "Insufficient Balance" once its topped-up balance is
+    spent, and Anthropic says the credit balance is too low. Neither clears on
+    its own, but the next provider is paid for separately (or free), so the
+    request should move on rather than fail the command.
+    """
+    if getattr(error, "status_code", None) == 402:
+        return True
+
+    text = str(error).casefold()
+
+    return (
+        "error code: 402" in text
+        or "insufficient balance" in text
+        or "insufficient_balance" in text
+        or "credit balance" in text
+        or "payment required" in text
+    )
+
+
 def should_failover(error):
     return (
         is_rate_limit(error)
         or is_model_unavailable(error)
         or is_permission_error(error)
+        or is_out_of_credit(error)
         or is_transient_error(error)
     )
 
@@ -347,6 +386,23 @@ class Provider:
             or config.get("default_vision_model")
         )
         self.vision_reasoning = config.get("vision_reasoning", False)
+
+        # A provider that switches thinking on and off per request (DeepSeek):
+        # None for the rest, else "off" or how hard to think.
+        thinking_env = config.get("thinking_env")
+        self.thinking = None
+
+        if thinking_env:
+            chosen = (os.getenv(thinking_env) or "off").strip().casefold()
+
+            if chosen not in _THINKING:
+                print(
+                    f"[JARVIS] {self.name} has invalid {thinking_env} "
+                    f"{chosen!r}; thinking off"
+                )
+                chosen = "off"
+
+            self.thinking = chosen
 
         if self.kind == "anthropic":
             base_url_env = config.get("base_url_env")
@@ -581,6 +637,16 @@ class Provider:
         if effort and self.reasoning:
             kwargs["reasoning_effort"] = effort
 
+        # Thinking switched per request. Off by default: hidden reasoning is
+        # billed as output and delays a spoken answer. When it is on, a caller
+        # that asks for an effort gets it; otherwise the setting's own.
+        # extra_body, because the SDK does not know the parameter by name.
+        if self.thinking == "off":
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        elif self.thinking:
+            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+            kwargs["reasoning_effort"] = reasoning_effort or self.thinking
+
         try:
             response = self._client.chat.completions.create(**kwargs)
 
@@ -602,6 +668,14 @@ class Provider:
                 print(
                     f"[JARVIS] {self.name} rejected reasoning_effort; retrying")
                 retried.pop("reasoning_effort")
+                changed = True
+
+            # The thinking switch is only an optimisation; a provider that
+            # refuses it still answers without it.
+            if "extra_body" in retried and _is_parameter_error(error):
+                print(
+                    f"[JARVIS] {self.name} rejected the thinking setting; retrying")
+                retried.pop("extra_body")
                 changed = True
 
             if not changed:
@@ -850,6 +924,7 @@ def _is_parameter_error(error):
     return (
         "reasoning_effort" in text
         or "reasoning_format" in text
+        or "thinking" in text
         or "unknown parameter" in text
     )
 
@@ -966,6 +1041,8 @@ def chat(messages, response_format=None, temperature=0, max_tokens=None,
 
             if is_rate_limit(error):
                 reason = "rate limited"
+            elif is_out_of_credit(error):
+                reason = "out of credit"
             elif is_permission_error(error):
                 reason = f"access denied ({provider.model})"
             else:
@@ -1247,6 +1324,8 @@ def vision(
 
             if is_rate_limit(error):
                 reason = "rate limited"
+            elif is_out_of_credit(error):
+                reason = "out of credit"
             elif is_permission_error(error):
                 reason = f"access denied ({provider.vision_model})"
             else:
@@ -1430,6 +1509,9 @@ def vision_chat(
 
             if is_rate_limit(error):
                 reason = "rate limited"
+
+            elif is_out_of_credit(error):
+                reason = "out of credit"
 
             elif is_permission_error(error):
                 reason = (

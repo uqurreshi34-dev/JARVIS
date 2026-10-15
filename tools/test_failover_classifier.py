@@ -60,6 +60,10 @@ class _InternalServerError(Exception):
     status_code = 500
 
 
+class _PaymentRequired(Exception):
+    status_code = 402
+
+
 class _BadRequestError(Exception):
     status_code = 400
 
@@ -77,6 +81,14 @@ _CASES = (
     # Already handled before this change; here so a future edit to the
     # classifiers cannot quietly drop them.
     (Exception("429 rate_limit_exceeded"), True, "rate limit"),
+
+    # Out of money: DeepSeek's balance spent, Anthropic's credit gone. The next
+    # provider is paid for separately, so the request moves on.
+    (_PaymentRequired("Insufficient Balance"), True, "402 status code"),
+    (Exception("Error code: 402 - {'error': {'message': 'Insufficient Balance'}}"), True,
+     "DeepSeek's insufficient balance"),
+    (Exception("Your credit balance is too low to access the Anthropic API."), True,
+     "Anthropic's credit balance too low"),
     (Exception("404 model_not_found"), True, "model retired"),
     (Exception("403 forbidden"), True, "no access to this model"),
 

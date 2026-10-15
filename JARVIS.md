@@ -71,6 +71,17 @@ timers, and compound sequences made from those local actions. A general
 knowledge answer, semantic compound task, research task, or camera request
 needs the configured model machinery.
 
+**The providers** (`providers.py`): LLM_PROVIDER is tried first, then every
+other provider with a key, in the order PROVIDERS lists them: Groq and
+Gemini (free tiers), DeepSeek (paid per use, cheap, a topped-up balance at
+platform.deepseek.com), Claude via Foundry, then Anthropic's own API. One
+that is rate limited, refused, out of credit (DeepSeek's 402 "Insufficient
+Balance", Anthropic's "credit balance is too low") or down is rested for 15
+minutes and the request moves to the next. DeepSeek's Flash model thinks by
+default, which is billed as output and delays a spoken answer, so JARVIS
+switches it off unless DEEPSEEK_THINKING says low, medium, high or max.
+`tools/test_deepseek_provider.py`, `tools/test_failover_classifier.py`.
+
 **When adding a capability, put deterministic phrases on the free path when they can be resolved safely and unambiguously.** 
 An intent that only the model can reach is slower and costs money on every use.
 Do not force semantic tasks into the phrase table just to avoid a model request.
@@ -894,7 +905,8 @@ about JARVIS's own records is never taken by the routes that run after the
 fast path, so asking about a research report cannot start a research run.
 
 Research is provider-agnostic and uses the normal JARVIS provider chain:
-Claude first, then Groq, then Gemini when failover is required. The research
+the primary (LLM_PROVIDER) first, then Groq, Gemini and DeepSeek when
+failover is required. The research
 workflow is not hard-coded to particular companies, subjects or websites.
 
 A research request can be as natural as:
