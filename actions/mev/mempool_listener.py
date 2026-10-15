@@ -134,7 +134,7 @@ class MempoolListener:
                           f"{type(e).__name__}: {e}")
                 return
 
-            # Direct V3 router — decoded for observation (math next).
+            # Direct V3 router — decoded and dispatched.
             decoded_v3 = decode_swap_v3(tx)
             if decoded_v3 is not None:
                 self._stats["decoded_v3"] += 1
@@ -143,6 +143,11 @@ class MempoolListener:
                       f"token={decoded_v3.base_token[:10]} "
                       f"buy={decoded_v3.is_buy} "
                       f"amount_in={decoded_v3.amount_in}")
+                try:
+                    await self.on_swap(decoded_v3)
+                except Exception as e:
+                    print(f"[mempool] on_swap error: "
+                          f"{type(e).__name__}: {e}")
                 return
 
             # UniversalRouter — where most modern traffic lives.
@@ -154,6 +159,11 @@ class MempoolListener:
                       f"token={decoded_ur.base_token[:10]} "
                       f"buy={decoded_ur.is_buy} "
                       f"amount_in={decoded_ur.amount_in}")
+                try:
+                    await self.on_swap(decoded_ur)
+                except Exception as e:
+                    print(f"[mempool] on_swap error: "
+                          f"{type(e).__name__}: {e}")
                 return
 
             # TEMP DIAG: log the first 30 unique (to, selector) pairs
@@ -242,6 +252,7 @@ class MempoolListener:
               f"id={ack['result']}")
 
     async def run(self):
+        asyncio.create_task(self._stats_loop())
         backoff = 1
         while True:
             try:
@@ -249,7 +260,6 @@ class MempoolListener:
                     self.ws_url, ping_interval=30, ping_timeout=20
                 ) as ws:
                     await self._subscribe(ws)
-                    asyncio.create_task(self._stats_loop())
                     asyncio.create_task(self._watchdog(ws))
                     # Reset the last-seen counter for this fresh connection.
                     self._last_raw_seen = self._stats["raw"]
