@@ -355,6 +355,10 @@ def side_plan(side, line, candles, atr, rsis, lines, chosen, broke=None, decimal
     return {
         "side": side, "line": price, "touches": line["touches"], "yours": line["yours"], "stage": stage,
         "broke_at": candles[broke][0] if broke is not None else None,
+        # When the confirmation candle closed -- the moment the setup became live -- so a reader can see how
+        # fresh it is. A setup is live from that close until the next one.
+        "confirmed_at": (candles[confirmed][0] + timedelta(seconds=GRANULARITY_SECONDS[chosen["granularity"]])
+                         if confirmed is not None else None),
         "steps": steps, "entry": round(entry, d), "entry_working": entry_working,
         "stop": round(stop, d), "stop_working": stop_working,
         "target": round(target, d), "target_working": target_working, "next_line": following["price"] if following else None,
@@ -410,12 +414,13 @@ def _uk(moment, form="%d %b %H:%M"):
     return gold_strategy.uk_time(moment.astimezone(timezone.utc)).strftime(form)
 
 
-def plan(candles, price, chosen, market, live=True, lines=None, line_atr=None, lines_from=None):
+def plan(candles, price, chosen, market, live=True, lines=None, line_atr=None, lines_from=None, named=None):
     """The plan from [candles] (oldest first, finished ones only) and the price now.
 
     [market]: {"name", "instrument", "decimals"} -- what it is called, OANDA's name, and its decimal places.
     [lines], [line_atr] and [lines_from]: lines drawn on another chart, its ATR and its timeframe's words --
     the four-hour chart's lines, timed on fifteen-minute candles -- instead of lines from these candles.
+    [named]: that chart's (support, resistance) prices, so this page trades the same two lines it does.
     """
     d = market["decimals"]
     if len(candles) < max(30, 2 * chosen["swing_strength"] + 2):
@@ -430,8 +435,17 @@ def plan(candles, price, chosen, market, live=True, lines=None, line_atr=None, l
         # Their swings were on the other chart's candles: no index here.
         lines = [dict(line, last=-1) for line in lines]
 
-    resistance = chart_lines.latest(lines, "high")
-    support = chart_lines.latest(lines, "low")
+    if named is None:
+        resistance = chart_lines.latest(lines, "high")
+        support = chart_lines.latest(lines, "low")
+    else:
+        # The other chart chose its support and resistance by when price last turned there; with those
+        # indexes gone, choosing again here picked by list order, and the fifteen-minute page traded a broken
+        # 92.996 while the four-hour one traded 95.138 (WTI, 15 October 2026). Take its choice as made.
+        support, resistance = (next((line for line in lines if line.get("kind") == kind and line["price"] == at), None)
+                               if at is not None else None
+                               for kind, at in (("low", named[0]), ("high", named[1])))
+
     named = [line for line in (support, resistance) if line]
 
     plans = {}
@@ -503,9 +517,19 @@ def _waiting_for(side_plan_, timeframe=""):
 
     if gone:
         d = side_plan_["decimals"]
-        said += f" (the last {side_plan_['side']} setup, at {gone['line']:,.{d}f}, came and went at {gone['when']} UK)"
+        said += _gone_words(gone, side_plan_["side"], d)
 
     return said
+
+
+def _gone_words(gone, side, d):
+    """The setup that has passed, said beside the plan that followed it -- or beside no plan at all, so a
+    setup live an hour ago does not vanish from the page without a word."""
+    if not gone:
+        return ""
+
+    return (f" (the last {side} setup, at {gone['line']:,.{d}f}, confirmed at {gone['when']} UK and has passed:"
+            f" entry was {gone['entry']:,.{d}f})")
 
 
 def _stage_words(side_plan_, timeframe=""):
@@ -574,8 +598,9 @@ def _verdict(plans, price, support, resistance, chosen, market):
 
     timeframe = GRANULARITY_WORDS.get(chosen["granularity"], "")
     waits = [f"{side.title()} plan: wait for {_waiting_for(plans[side], timeframe)}." if plans[side] else
-             f"{side.title()} plan: none -- no line {'above' if side == 'buy' else 'below'} the price to break."
-             for side in ("buy", "sell") if plans[side] or support or resistance]
+             f"{side.title()} plan: none -- no line {'above' if side == 'buy' else 'below'} the price to break"
+             + _gone_words(plans.get(side + "_passed"), side, d) + "."
+             for side in ("buy", "sell") if plans[side] or plans.get(side + "_passed") or support or resistance]
     return "wait", " ".join([f"Nothing to do yet: {where}"] + waits)
 
 
@@ -700,7 +725,7 @@ def entry_plan(client, found, chosen, market, price, live):
         raise PlanError(f"OANDA sent no {GRANULARITY_WORDS[shorter['granularity']]} candles")
 
     shown = plan(candles, price, shorter, market, live, lines=found["levels"], line_atr=found["atr"],
-                 lines_from=found["timeframe"])
+                 lines_from=found["timeframe"], named=(found["support"], found["resistance"]))
     shown["forming"] = _forming(client, market["instrument"], shorter["granularity"], chosen["utc_candles"],
                                 chosen["mid_prices"])
     return shown

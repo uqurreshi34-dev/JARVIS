@@ -228,8 +228,28 @@ check(gone["buy"] is None and gone["buy_passed"]["line"] == ceiling and gone["bu
       "a candle later, that setup has been and gone: kept as history, not chased")
 ahead = tp.plan(made(later), ceiling + 20, dict(chosen, your_levels={"XAU_USD": [ceiling + 80.0]}), GOLD)
 check(ahead["buy"]["stage"] == "break" and ahead["buy"]["line"] == ceiling + 80 and ahead["buy"]["passed"]
-      and "came and went" in ahead["headline"],
+      and "confirmed at" in ahead["headline"] and "has passed" in ahead["headline"],
       f"and the plan moves on to the next line to break ({ahead['headline'][:120]})")
+
+solo = tp.plan(made(later), ceiling + 20, chosen, GOLD)
+check(solo["buy"] is None and "Buy plan: none" in solo["headline"]
+      and f"the last buy setup, at {ceiling:,.2f}, confirmed at" in solo["headline"] and "has passed" in solo["headline"],
+      f"with no line left to wait on, the setup that passed is still said, not dropped ({solo['headline'][-160:]})")
+live = tp.plan(made(confirmed), ceiling + 12, dict(chosen, rsi_high=99, rsi_low=1), GOLD)["buy"]
+check(live["confirmed_at"] == made(confirmed)[-1][0] + timedelta(hours=4),
+      "a live setup carries when its confirmation candle closed")
+
+# The fifteen-minute page trades the lines the four-hour page chose, not a choice of its own: two highs with
+# their indexes gone, the older and lower one first in the list, as a broken 92.996 sat before 95.138 on WTI.
+older = {"price": 4040.0, "kind": "high", "touches": 2, "yours": False, "last": 5, "swings": []}
+newer = {"price": 4100.0, "kind": "high", "touches": 2, "yours": False, "last": 50, "swings": []}
+floor = {"price": 4000.0, "kind": "low", "touches": 2, "yours": False, "last": 40, "swings": []}
+mine = tp.plan(made(base), 4060, chosen, GOLD, lines=[floor, older, newer], line_atr=10.0, named=(4000.0, 4100.0))
+check(mine["resistance"] == 4100.0 and mine["support"] == 4000.0,
+      f"the shorter page keeps the longer page's support and resistance ({mine['support']}, {mine['resistance']})")
+none_above = tp.plan(made(base), 4060, chosen, GOLD, lines=[floor, older], line_atr=10.0, named=(4000.0, None))
+check(none_above["resistance"] is None and none_above["support"] == 4000.0,
+      "and where the longer page has no resistance, neither does the shorter")
 
 failed = base + [(4050, 4062, 4048, 4060), (4060, ceiling + 6, 4058, ceiling + 4), (ceiling + 4, ceiling + 5, 4070, 4072)]
 check(tp.plan(made(failed), 4072, chosen, GOLD)["buy"]["stage"] == "break", "a break that closed back inside is no break")

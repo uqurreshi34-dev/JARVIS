@@ -3,8 +3,8 @@
     python tools/signal_desk.py
 
 Nothing is traded. Nothing is sent anywhere. It writes a plain-text
-briefing and one chart image per market into ~/JARVIS/signal-desk/, and
-prints the briefing so you can read it right here.
+briefing and, for each market, a 4-hour chart and a 15-minute chart into
+~/JARVIS/signal-desk/, and prints the briefing so you can read it here.
 """
 
 import sys
@@ -43,38 +43,136 @@ MARKETS = (
 )
 
 
+HOW_TO_READ = """\
+How to read this
+----------------
+Every signal follows one rule: a line breaks, price comes back to test
+it, and a candle closes back through it. The stop sits beyond the
+retest's wick; the target sits just short of the next line (three times
+the risk when no line is in the way). Under 2 : 1 reward to risk, the
+plan says skip. The edge is in the ratio and the discipline, not in any
+single call.
+
+A setup is live from the close that confirms it until the next close on
+that timeframe -- up to 4 hours on the 4-hour chart, 15 minutes on the
+15-minute one. After that it is shown as passed, with the entry it had,
+and is not chased.
+
+Nothing on earth can promise a market will move a certain way. These
+are signals, read from OANDA's own candles, and any trade taken on
+them can lose money. Size small. Expect losses. That is what trading
+is.
+
+Two charts per market:
+  4-hour     the map. Support and resistance, drawn from the last two
+             highs or lows that held on this timeframe. The plan and
+             the verdict live here.
+  15-minute  the trigger. The SAME lines, on finer candles, so the
+             break, retest and confirmation show as they happen --
+             often hours before the 4-hour chart registers them. The
+             entry, stop and target come from this page.
+
+The 15-minute chart can never disagree with the 4-hour about a level,
+because it draws the same lines. It can only be ahead on timing.
+
+Rules, not a forecast.
+"""
+
+
+def _age(when):
+    """How long ago a confirmation closed, as '3h 53m ago'. Empty when unknown.
+
+    Negative gaps (clock skew, a candle from the future) are clamped to
+    zero rather than shown as '-4m ago'.
+    """
+    if when is None:
+        return ""
+
+    minutes = max(0, int(
+        (datetime.now(timezone.utc) - when).total_seconds() // 60))
+
+    if minutes < 60:
+        return f"{minutes}m ago"
+
+    return f"{minutes // 60}h {minutes % 60}m ago"
+
+
 def glance(results):
-    """One line for the top of the file: what to look at, or that nothing is on."""
-    live = [
-        (name, found)
-        for name, found in results
-        if found is not None and found["verdict"] in ("buy", "sell")
-    ]
+    """One line for the top of the file: what is live, and on which timeframe."""
+    live = []
+
+    for name, found in results:
+        if found is None or found["verdict"] not in ("buy", "sell"):
+            continue
+
+        side = found["verdict"]
+        plan = found.get(side)
+
+        if plan is None:
+            continue
+
+        # Is the trigger timeframe also confirmed, or only the map?
+        entry = found.get("entry")
+        entry_plan = entry.get(side) if entry else None
+
+        triggered = bool(
+            entry_plan
+            and entry_plan["stage"] == "ready"
+        )
+
+        live.append((name, found, side, plan, triggered))
 
     if not live:
-        return "Nothing on today. Every market is between its lines."
+        return "Nothing live: no setup has confirmed on its last 4-hour close."
 
-    parts = [
-        f"{found['instrument']} {found['verdict'].upper()} "
-        f"(entry {found[found['verdict']]['entry']:,.{found['decimals']}f}, "
-        f"stop {found[found['verdict']]['stop']:,.{found['decimals']}f}, "
-        f"target {found[found['verdict']]['target']:,.{found['decimals']}f})"
-        for _name, found in live
-    ]
+    parts = []
+    any_triggered = False
+
+    for _name, found, side, plan, triggered in live:
+        d = found["decimals"]
+        tag = "triggered" if triggered else "4h only"
+
+        # A triggered setup is live because the 15-minute candle
+        # confirmed it, so that is the confirmation to age. A 4h-only
+        # setup has no 15-minute confirmation yet, so age the 4-hour
+        # one. Either way the timestamp is the candle's close, set in
+        # trade_plan.side_plan.
+        entry = found.get("entry")
+        entry_plan = entry.get(side) if entry else None
+        source = entry_plan if (triggered and entry_plan) else plan
+
+        age = _age(source.get("confirmed_at"))
+        freshness = f", confirmed {age}" if age else ""
+
+        parts.append(
+            f"{found['instrument']} {side.upper()} "
+            f"({tag}: entry {plan['entry']:,.{d}f}, "
+            f"stop {plan['stop']:,.{d}f}, "
+            f"target {plan['target']:,.{d}f}{freshness})"
+        )
+
+        if triggered:
+            any_triggered = True
 
     next_close = live[0][1].get("next_close") or "soon"
 
     if len(parts) == 1:
-        return f"One setup live: {parts[0]}. Next 4-hour close {next_close} UK."
+        opening = "One setup live" if any_triggered else "One setup confirmed on the 4-hour"
+        return f"{opening}: {parts[0]}. Next 4-hour close {next_close} UK."
 
+    opening = (
+        f"{len(parts)} setups live"
+        if any_triggered
+        else f"{len(parts)} setups confirmed on the 4-hour"
+    )
     return (
-        f"{len(parts)} setups live: " + "; ".join(parts) +
+        f"{opening}: " + "; ".join(parts) +
         f". Next 4-hour close {next_close} UK."
     )
 
 
-def block_for(found, chart_name):
-    """One market, one paragraph, with its chart named below."""
+def block_for(found, chart_4h, chart_15m):
+    """One market, one paragraph, with both chart names below."""
     places = found["decimals"]
     verdict = found["verdict"].upper()
 
@@ -93,25 +191,81 @@ def block_for(found, chart_name):
         lines.append(
             f"  RSI:         {found['rsi']:.0f}  ({found['rsi_zone']})")
 
-    lines.append(f"  Verdict:     {found['headline']}")
+    lines.append(f"  4-hour:      {found['headline']}")
 
-    for side in ("buy", "sell"):
-        plan = found.get(side)
+    # The 4-hour plan's own freshness, when it is the one live: the
+    # close of the candle that confirmed it, to the minute. Without
+    # this the block cannot tell a setup that confirmed on the last
+    # close from one confirmed overnight -- the glance line at the
+    # top of the file says, but a reader of the block alone does not.
+    if found["verdict"] in ("buy", "sell"):
+        live_plan = found.get(found["verdict"])
 
-        if not plan or plan["stage"] != "ready":
-            continue
+        if live_plan and live_plan["stage"] == "ready":
+            when = live_plan.get("confirmed_at")
+            age = _age(when)
 
+            if age:
+                stamp = trade_plan._uk(when, "%H:%M")
+                lines[-1] += f"  confirmed {stamp} UK ({age})"
+
+    entry = found.get("entry")
+
+    if entry is not None:
+        lines.append(f"  15-minute:   {entry['headline']}")
+
+        for side in ("buy", "sell"):
+            plan = entry.get(side)
+
+            if not plan or plan["stage"] != "ready":
+                continue
+
+            when = plan.get("confirmed_at")
+            age = _age(when)
+            freshness = ""
+
+            if age:
+                stamp = trade_plan._uk(when, "%H:%M")
+                freshness = f"  confirmed {stamp} UK ({age})"
+
+            lines.append(
+                f"  {side.upper()}:  entry {plan['entry']:,.{places}f},  "
+                f"stop {plan['stop']:,.{places}f},  "
+                f"target {plan['target']:,.{places}f},  "
+                f"R:R {plan['ratio']:.2f}{freshness}"
+            )
+
+    elif found.get("entry_error"):
         lines.append(
-            f"  {side.upper()}:  entry {plan['entry']:,.{places}f},  "
-            f"stop {plan['stop']:,.{places}f},  "
-            f"target {plan['target']:,.{places}f},  "
-            f"R:R {plan['ratio']:.2f}"
-        )
+            f"  15-minute:   could not be read ({found['entry_error']})")
 
-    if chart_name:
-        lines.append(f"  Chart:       {chart_name}")
+    if chart_4h:
+        lines.append(f"  Chart 4h:    {chart_4h}")
+
+    if chart_15m:
+        lines.append(f"  Chart 15m:   {chart_15m}")
 
     return "\n".join(lines)
+
+
+def label_for(found, kind, value):
+    """A line's label, saying whether the price has moved past it.
+
+    A resistance line the price is now above has been broken; a support
+    line the price is now below has been broken. Saying so is the difference
+    between a chart that reads right and one that reads wrong, even when
+    both are technically correct.
+    """
+    price = found["price"]
+    text = f"{value:,.{found['decimals']}f}"
+
+    if kind == "resistance" and price > value:
+        return f"broken resistance {text}"
+
+    if kind == "support" and price < value:
+        return f"broken support {text}"
+
+    return f"{kind} {text}"
 
 
 def chart_png(found, path):
@@ -148,11 +302,6 @@ def chart_png(found, path):
     price_highs = [c[2] for c in candles]
     candle_range = max(price_highs) - min(price_lows)
 
-    # What the y-range must contain. Support and resistance always;
-    # entry and stop always when a plan is ready; target only when it
-    # is near enough that including it will not squash the candles
-    # (a target 15% away would otherwise flatten everything into a
-    # strip at the bottom of the chart).
     extras = [found.get("support"), found.get("resistance")]
 
     for side in ("buy", "sell"):
@@ -195,17 +344,14 @@ def chart_png(found, path):
                                facecolor=colour, edgecolor=colour,
                                linewidth=0, zorder=3))
 
-    # Priority: 0 = the plan's actionable levels, 1 = where the price is
-    # now, 2 = the support and resistance context. Lower number wins a
-    # clash; the loser gets pushed aside and a connector drawn.
     items = []
 
     if found.get("resistance") is not None:
-        items.append((2, f"resistance {found['resistance']:,.{d}f}",
+        items.append((2, label_for(found, "resistance", found["resistance"]),
                       found["resistance"], "#ff6b6b", "--"))
 
     if found.get("support") is not None:
-        items.append((2, f"support {found['support']:,.{d}f}",
+        items.append((2, label_for(found, "support", found["support"]),
                       found["support"], "#4fe39a", "--"))
 
     items.append((1, f"now {found['price']:,.{d}f}",
@@ -219,12 +365,21 @@ def chart_png(found, path):
 
         colour = "#4fe39a" if side == "buy" else "#ff6b6b"
 
-        for name in ("entry", "stop", "target"):
-            items.append((0, f"{side.upper()} {name} {plan[name]:,.{d}f}",
-                          plan[name], colour, "-."))
+        # How long since the confirmation candle closed. Shown on the
+        # entry label only: the entry is the price the confirmation set,
+        # so its age is the setup's age. Stop and target share the same
+        # moment; saying it three times is noise on a chart.
+        age = _age(plan.get("confirmed_at"))
+        suffix = f" ({age})" if age else ""
 
-    # Vertical layout. min_gap is roughly one label's height plus a
-    # touch of breathing room, as a share of the visible price range.
+        for name in ("entry", "stop", "target"):
+            label = f"{side.upper()} {name} {plan[name]:,.{d}f}"
+
+            if name == "entry":
+                label += suffix
+
+            items.append((0, label, plan[name], colour, "-."))
+
     min_gap = (high - low) * 0.06
     placed = []
 
@@ -232,13 +387,6 @@ def chart_png(found, path):
         return all(abs(y - taken) >= min_gap for taken in placed)
 
     def place(anchor):
-        """A y near anchor that clears the labels already placed.
-
-        Tries upward first -- a label usually belongs just above its
-        line -- then downward if the top of the chart is reached. If
-        neither fits, uses the anchor and takes the collision: better
-        than a label missing entirely.
-        """
         y = anchor
 
         for _ in range(40):
@@ -260,8 +408,6 @@ def chart_png(found, path):
 
     label_x = len(candles) + 1.0
 
-    # Actionable levels first (priority 0), then "now", then the rest.
-    # The line is always drawn at its true price; only the text moves.
     for priority, text, value, colour, style in sorted(items, key=lambda t: t[0]):
         on_chart = low <= value <= high
 
@@ -269,8 +415,6 @@ def chart_png(found, path):
             ax.axhline(value, color=colour, linewidth=1.3,
                        linestyle=style, alpha=0.85, zorder=4)
 
-        # An off-chart level gets its label at the edge with an arrow,
-        # so the reader knows the price is real but not yet reached.
         if value > high:
             shown_y = place(high * 0.985)
             shown_text = f" {text} \u2191 "
@@ -281,7 +425,6 @@ def chart_png(found, path):
             shown_y = place(value)
             shown_text = f" {text} "
 
-        # A short diagonal connector, only when the label had to move.
         if on_chart and abs(shown_y - value) > min_gap * 0.4:
             ax.plot([label_x - 0.9, label_x], [value, shown_y],
                     color=colour, linewidth=0.8, alpha=0.55, zorder=5)
@@ -335,20 +478,34 @@ def main():
             results.append((name, None))
             continue
 
-        chart_name = f"{base}-{name.replace(' ', '-')}.png"
-        drew = chart_png(found, folder / chart_name)
+        stem = name.replace(" ", "-")
+
+        chart_4h = f"{base}-{stem}.png"
+        if not chart_png(found, folder / chart_4h):
+            chart_4h = None
+
+        chart_15m = None
+        entry = found.get("entry")
+
+        if entry is not None:
+            candidate = f"{base}-{stem}-15m.png"
+
+            if chart_png(entry, folder / candidate):
+                chart_15m = candidate
+
+        found["_chart_4h"] = chart_4h
+        found["_chart_15m"] = chart_15m
         results.append((name, found))
 
-        print(f"{name}:  {found['verdict'].upper()}")
-
-        if not drew:
-            chart_name = None
-
-        # Store the chart's name alongside the plan so the text can point at it.
-        found["_chart"] = chart_name
+        marker = "BUY" if found["verdict"] == "buy" else (
+            "SELL" if found["verdict"] == "sell" else found["verdict"].upper())
+        print(f"{name}:  {marker}")
 
     pieces = [
         f"JARVIS Signal Desk  --  {stamp}",
+        "=" * 64,
+        "",
+        HOW_TO_READ,
         "=" * 64,
         "",
         glance(results),
@@ -361,13 +518,9 @@ def main():
         if found is None:
             continue
 
-        pieces.append(block_for(found, found.get("_chart")))
+        pieces.append(block_for(found, found.get("_chart_4h"),
+                                found.get("_chart_15m")))
         pieces.append("")
-
-    pieces.append(
-        "Rules, not a forecast. Figures come from OANDA's own candles. "
-        "Nothing here is advice."
-    )
 
     text = "\n".join(pieces)
     path = folder / f"{base}.txt"
