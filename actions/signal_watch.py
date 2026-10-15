@@ -6,7 +6,11 @@ each market in trade-plan.json's `signal_markets` is read exactly as that questi
 fifteen-minute one -- is said once, with its entry, stop, target and how long it stays live, and the
 plan opens. It goes to the phone as every unprompted announcement does, and into the journal. A setup
 is live only until the next close on its own chart, so each is said once, when it confirms (or, for
-one already live when JARVIS starts, then).
+one still live when JARVIS starts, then) -- and never once that close has passed.
+
+A market is open when OANDA has a candle forming for it now. OANDA goes on quoting the last price
+while a market is shut (weekends, the daily break), so a price alone does not say it is open; a
+candle forming does. Shut, it is neither read for setups nor briefed.
 
 After every four-hour close a Signal Desk briefing is kept as well (actions/signal_desk.py), with
 charts for the markets that have a setup, so there is a record of what was live and when.
@@ -92,9 +96,25 @@ def words(found, page, side, plan):
     return said
 
 
-def check(client=None, brief=False):
+def is_open(found):
+    """Whether [found]'s market is trading now: a price, and a candle forming on either page."""
+    entry = found.get("entry") or {}
+    return bool(found.get("live") and (found.get("forming") or entry.get("forming")))
+
+
+def lapsed(page, plan, now):
+    """Whether [plan]'s setup is past the next close on its own chart, so no longer live."""
+    if not plan.get("confirmed_at"):
+        return False
+
+    step = timedelta(seconds=trade_plan.GRANULARITY_SECONDS[page["granularity"]])
+    return plan["confirmed_at"] + step <= now
+
+
+def check(client=None, brief=False, now=None):
     """One look at every Signal Desk market: say any setup newly confirmed, open the first one's plan, and
     -- with [brief] -- keep a briefing. Returns what was said, a list of sentences."""
+    now = now or datetime.now(timezone.utc)
     chosen = trade_plan.settings()
     markets = chosen.get("signal_markets") or ()
 
@@ -104,16 +124,19 @@ def check(client=None, brief=False):
     results = signal_desk.scan(markets, client)
 
     # The markets shut (a weekend): nothing has happened, so nothing to say or keep.
-    if not any(found and found.get("live") for _name, found in results):
+    if not any(found and is_open(found) for _name, found in results):
         return []
 
     said, first = [], None
 
     for name, found in results:
-        if not found or not found.get("live"):
+        if not found or not is_open(found):
             continue
 
         for page, side, plan in live(found):
+            if lapsed(page, plan, now):
+                continue
+
             key = (found["symbol"], page["granularity"], side, plan["line"], plan.get("confirmed_at"))
 
             if key in _told:
@@ -139,7 +162,7 @@ def check(client=None, brief=False):
             _say(sentence)
 
     # A day on, every setup said has long since passed its next close.
-    day_ago = datetime.now(timezone.utc) - timedelta(days=1)
+    day_ago = now - timedelta(days=1)
 
     for key in [key for key in _told if key[4] is not None and key[4] < day_ago]:
         _told.discard(key)

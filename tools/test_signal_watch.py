@@ -10,7 +10,8 @@ Without OANDA: the markets are read by a stand-in that returns plans made here. 
 - a buy or sell setup on either page is said, with its figures and until when it is live; a skip is not;
   the fifteen-minute page says whether the four-hour chart agrees;
 - each setup is said once, the first one's plan opens, everything said is journalled;
-- markets shut (a weekend): nothing said, no briefing;
+- markets shut (a weekend, the daily break) -- a price still quoted but no candle forming: nothing said,
+  no briefing; a setup past its next close is never said, as after a restart over the weekend;
 - the briefing on a four-hour close draws charts only for markets with a setup;
 - signal_markets is in the settings, all seven by default, and none means no watching.
 """
@@ -76,15 +77,18 @@ def page(verdict, granularity="H4", **plans):
             "buy": plans.get("buy"), "sell": plans.get("sell")}
 
 
-def market(name, symbol, verdict="wait", entry=None, live=True, decimals=3, **plans):
-    found = dict(page(verdict, **plans), instrument=name, symbol=symbol, decimals=decimals, live=live,
+FORMING = [0, 1.0, 1.0, 1.0, 1.0, "15 Oct 21:45"]
+
+
+def market(name, symbol, verdict="wait", entry=None, live=True, decimals=3, forming=FORMING, **plans):
+    found = dict(page(verdict, **plans), instrument=name, symbol=symbol, decimals=decimals, live=live, forming=forming,
                  price=100.0, entry=entry, rsi=None, headline=f"{name}: {verdict}", next_close="22:00")
     return found
 
 
 wti_buy = setup("buy", 95.138, 98.853, 93.797, 114.022, 3.0)
 wti = market("West Texas Oil", "WTICO_USD", "buy", buy=wti_buy)
-copper_15 = setup("sell", 6.43318, 6.42, 6.46, 6.31, 2.75, utc(2026, 10, 15, 20, 30))
+copper_15 = setup("sell", 6.43318, 6.42, 6.46, 6.31, 2.75, utc(2026, 10, 15, 20, 45))
 copper = market("Copper", "XCU_USD", "wait", decimals=5,
                 entry=page("sell", "M15", sell=copper_15))
 skipped = market("Natural Gas", "NATGAS_USD", "skip", buy=setup("buy", 3.262, 3.27, 3.2, 3.3, 0.5))
@@ -95,7 +99,7 @@ check("West Texas Oil: a buy setup has confirmed on the 4-hour chart, at 95.138"
       and "In near 98.853, stop 93.797, target 114.022, 3.0 to 1" in said and "until the next 4-hour close, 22:00 UK" in said,
       f"a four-hour setup is said with its figures and until when it is live ({said})")
 said = signal_watch.words(copper, copper["entry"], "sell", copper_15)
-check("on the 15-minute chart" in said and "21:45 UK" in said and "has not confirmed it yet" in said,
+check("on the 15-minute chart" in said and "22:00 UK" in said and "has not confirmed it yet" in said,
       f"a fifteen-minute setup says when it lapses and that the four-hour chart has not confirmed it ({said})")
 check(signal_watch.live(skipped) == [] and signal_watch.live(quiet) == [], "a skip, or nothing, is no setup")
 
@@ -104,11 +108,14 @@ spoken, shown, journalled, written = [], [], [], []
 signal_watch.set_listeners(on_say=spoken.append, on_show=lambda found, command: shown.append((found["symbol"], command)))
 
 
-def look(results, brief=False):
+NOW = utc(2026, 10, 15, 20, 45, 45)    # the look after the 20:45 UTC close: WTI live to 21:00, copper too
+
+
+def look(results, brief=False, now=NOW):
     with patch.object(signal_desk, "scan", lambda markets, client=None: results), \
          patch.object(signal_watch.journal, "alert", journalled.append), \
          patch.object(signal_desk, "write", lambda results, every_chart=True: written.append(every_chart) or ("x", "")):
-        return signal_watch.check(brief=brief)
+        return signal_watch.check(brief=brief, now=now)
 
 
 signal_watch._told.clear()
@@ -125,7 +132,16 @@ check(written == [False], "on a four-hour close a briefing is kept, charts only 
 
 shut = market("Gold", "XAU_USD", "buy", live=False, buy=setup("buy", 4100.0, 4110.0, 4090.0, 4170.0, 3.0))
 written.clear()
-check(look([("gold", shut)], brief=True) == [] and written == [], "markets shut: nothing said, no briefing")
+check(look([("gold", shut)], brief=True) == [] and written == [], "no price: nothing said, no briefing")
+quoted = market("Gold", "XAU_USD", "buy", forming=None, buy=setup("buy", 4100.0, 4110.0, 4090.0, 4170.0, 3.0))
+check(look([("gold", quoted)], brief=True) == [] and written == [],
+      "a price still quoted but no candle forming -- the weekend: nothing said, no briefing")
+
+signal_watch._told.clear()
+spoken.clear()
+weekend = utc(2026, 10, 17, 12, 0, 45)
+check(look([("crude oil", wti)], now=weekend) == [] and spoken == [],
+      "a setup whose next close has passed is never said -- JARVIS started on Saturday, Friday's setup is not news")
 
 # ---- the briefing: charts only for markets with a setup ----------------------------------------------
 drawn = []
