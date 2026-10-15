@@ -36,12 +36,23 @@ _COOLDOWN_SECONDS = 15 * 60
 # What a provider's thinking setting (its thinking_env) may say: off, or how hard to think.
 _THINKING = ("off", "low", "medium", "high", "max")
 
+# How long to wait for a reply before moving to the next provider. Without a limit the client libraries
+# wait ten minutes, three times over, so a provider that stalls held a spoken question for half an hour. Each
+# provider has its own limit (its timeout_env, else default_timeout) for an ordinary reply; a request allowed
+# to write a lot (max_tokens) gets longer, at this many tokens a second -- as slow as any provider writes -- so
+# a long report or script is not cut off. The libraries' own retries are cut to one, so a stalled provider
+# costs at most twice its limit before the next is asked.
+_SLOW_TOKENS_PER_SECOND = 20
+_CLIENT_RETRIES = 1
+
 
 PROVIDERS = {
     "groq": {
         "base_url": "https://api.groq.com/openai/v1",
         "key_env": "GROQ_API_KEY",
         "model_env": "GROQ_MODEL",
+        "timeout_env": "GROQ_TIMEOUT_SECONDS",
+        "default_timeout": 30,
         "default_model": "openai/gpt-oss-20b",
         # Vision needs a model that accepts images; the text default does not.
         "vision_env": "GROQ_VISION_MODEL",
@@ -54,6 +65,8 @@ PROVIDERS = {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "key_env": "GEMINI_API_KEY",
         "model_env": "GEMINI_MODEL",
+        "timeout_env": "GEMINI_TIMEOUT_SECONDS",
+        "default_timeout": 45,
         "default_model": "gemini-3.6-flash",
         "vision_env": "GEMINI_VISION_MODEL",
         "default_vision_model": "gemini-3.6-flash",
@@ -69,6 +82,8 @@ PROVIDERS = {
         "base_url": "https://api.deepseek.com",
         "key_env": "DEEPSEEK_API_KEY",
         "model_env": "DEEPSEEK_MODEL",
+        "timeout_env": "DEEPSEEK_TIMEOUT_SECONDS",
+        "default_timeout": 45,
         "default_model": "deepseek-flash",
         "thinking_env": "DEEPSEEK_THINKING",
         # JSON Output is json_object only, and needs "json" in the prompt.
@@ -79,6 +94,8 @@ PROVIDERS = {
         "base_url_env": "ANTHROPIC_FOUNDRY_BASE_URL",
         "key_env": "ANTHROPIC_FOUNDRY_API_KEY",
         "model_env": "ANTHROPIC_FOUNDRY_MODEL",
+        "timeout_env": "ANTHROPIC_FOUNDRY_TIMEOUT_SECONDS",
+        "default_timeout": 60,
         "default_model": "claude-opus-5",
         "vision_env": "ANTHROPIC_FOUNDRY_VISION_MODEL",
         "default_vision_model": "claude-opus-5",
@@ -96,6 +113,8 @@ PROVIDERS = {
         "kind": "anthropic",
         "key_env": "ANTHROPIC_API_KEY",
         "model_env": "ANTHROPIC_MODEL",
+        "timeout_env": "ANTHROPIC_TIMEOUT_SECONDS",
+        "default_timeout": 60,
         "default_model": "claude-opus-5",
         "vision_env": "ANTHROPIC_VISION_MODEL",
         "default_vision_model": "claude-opus-5",
@@ -394,6 +413,24 @@ class Provider:
         # sent json_object with the schema written into the prompt instead.
         self.json_schema = config.get("json_schema", True)
 
+        # Seconds to wait for an ordinary reply before the next provider is asked.
+        self.timeout = float(config.get("default_timeout", 60))
+        timeout_env = config.get("timeout_env")
+
+        if timeout_env and os.getenv(timeout_env):
+            try:
+                chosen = float(os.getenv(timeout_env))
+            except ValueError:
+                chosen = 0.0
+
+            if chosen > 0:
+                self.timeout = chosen
+            else:
+                print(
+                    f"[JARVIS] {self.name} has invalid {timeout_env} "
+                    f"{os.getenv(timeout_env)!r}; waiting {self.timeout:g}s"
+                )
+
         # A provider that switches thinking on and off per request (DeepSeek):
         # None for the rest, else "off" or how hard to think.
         thinking_env = config.get("thinking_env")
@@ -425,6 +462,8 @@ class Provider:
                 self._client = AnthropicFoundry(
                     api_key=api_key,
                     base_url=base_url,
+                    timeout=self.timeout,
+                    max_retries=_CLIENT_RETRIES,
                 )
 
             elif Anthropic is None:
@@ -436,11 +475,17 @@ class Provider:
             else:
                 # No base URL configured means Anthropic's own endpoint,
                 # which the plain client already knows.
-                self._client = Anthropic(api_key=api_key)
+                self._client = Anthropic(
+                    api_key=api_key,
+                    timeout=self.timeout,
+                    max_retries=_CLIENT_RETRIES,
+                )
         else:
             self._client = OpenAI(
                 api_key=api_key,
                 base_url=config["base_url"],
+                timeout=self.timeout,
+                max_retries=_CLIENT_RETRIES,
             )
 
         self._resting_until = 0.0
@@ -458,6 +503,10 @@ class Provider:
 
     def wake(self):
         self._resting_until = 0.0
+
+    def limit(self, max_tokens=None):
+        """Seconds to wait for one reply: this provider's limit, plus time to write [max_tokens] slowly."""
+        return self.timeout + (max_tokens or 0) / _SLOW_TOKENS_PER_SECOND
 
     def _system(self, text):
         """The system prompt, marked for prompt caching.
@@ -628,6 +677,7 @@ class Provider:
             "model": self.model,
             "messages": messages,
             "temperature": temperature,
+            "timeout": self.limit(max_tokens),
         }
 
         if max_tokens:
@@ -899,6 +949,8 @@ class Provider:
                     "effort": self.answer_effort,
                 }
 
+            # Not streamed, so nothing arrives until the whole turn is written.
+            kwargs["timeout"] = self.limit(max_tokens)
             response = self._send_anthropic(kwargs, stream=False)
             usage.record(self.name, self.model, "agent", response)
 
@@ -919,12 +971,18 @@ class Provider:
             "tools": tools,
             "tool_choice": "auto",
             "max_tokens": max_tokens,
+            "timeout": self.limit(max_tokens),
         }
 
         effort = self.default_effort
 
         if effort and self.reasoning:
             kwargs["reasoning_effort"] = effort
+
+        # DeepSeek: thinking stays off for tool calls whatever DEEPSEEK_THINKING says. With it on, every later
+        # turn must send the model's reasoning back, which these turns do not, and DeepSeek refuses them.
+        if self.thinking is not None:
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
         response = self._client.chat.completions.create(**kwargs)
         usage.record(self.name, self.model, "agent", response)
@@ -1152,6 +1210,7 @@ def _describe_image(
     kwargs = {
         "model": provider.vision_model,
         "max_tokens": max_tokens,
+        "timeout": provider.limit(max_tokens),
         "temperature": 0.2,
         "messages": [
             {
@@ -1476,6 +1535,7 @@ def vision_chat(
                     "model": provider.vision_model,
                     "messages": multimodal_messages,
                     "max_tokens": max_tokens,
+                    "timeout": provider.limit(max_tokens),
                 }
 
                 effort = (

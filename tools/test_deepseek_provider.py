@@ -11,7 +11,11 @@ No network: the client is replaced by one that records the request. Checked:
 - a spent balance (402) moves the request to the next provider instead of failing the command;
 - a structured request (the command interpreter's strict json_schema) is sent as DeepSeek's json_object with
   the schema written into the system prompt -- its JSON mode takes no schema and needs the word "json" in the
-  prompt, which the interpreter's prompt never had -- while Groq and Gemini keep the strict schema.
+  prompt, which the interpreter's prompt never had -- while Groq and Gemini keep the strict schema;
+- every provider waits only so long for a reply (its own limit, longer for a request allowed to write a lot)
+  and its client retries once, not twice, so a stalled provider hands over to the next quickly;
+- tool-calling turns keep DeepSeek's thinking off whatever DEEPSEEK_THINKING says: with it on, DeepSeek
+  refuses later turns that do not send its reasoning back.
 """
 
 import json
@@ -38,6 +42,7 @@ os.environ.pop("ANTHROPIC_API_KEY", None)
 os.environ.pop("DEEPSEEK_THINKING", None)
 os.environ.pop("DEEPSEEK_MODEL", None)
 
+import openai  # noqa: E402
 import providers  # noqa: E402
 
 RESULTS = []
@@ -167,6 +172,57 @@ with patch.object(providers, "_pool", [first, second]), patch.object(providers.u
     check(providers.chat([{"role": "user", "content": "Hello"}]) == "Still here, sir.",
           "a 402 'Insufficient Balance' moves to the next provider")
     check(first.resting, "and the spent one rests rather than being asked again at once")
+
+# ---- how long each provider is waited for ---------------------------------------------------------
+fresh = providers.Provider("deepseek", providers.PROVIDERS["deepseek"], "test")
+check(fresh.timeout == 45 and fresh._client.max_retries == providers._CLIENT_RETRIES == 1
+      and float(fresh._client.timeout) == 45,
+      f"DeepSeek is waited for 45 seconds, and its client retries once ({fresh._client.timeout}, "
+      f"{fresh._client.max_retries})")
+check(providers.Provider("groq", providers.PROVIDERS["groq"], "test").timeout == 30,
+      "each provider has its own limit: Groq, the quickest, 30 seconds")
+
+with patch.dict(os.environ, {"DEEPSEEK_TIMEOUT_SECONDS": "20"}):
+    check(providers.Provider("deepseek", providers.PROVIDERS["deepseek"], "test").timeout == 20,
+          "DEEPSEEK_TIMEOUT_SECONDS sets it")
+
+with patch.dict(os.environ, {"DEEPSEEK_TIMEOUT_SECONDS": "soon"}):
+    check(providers.Provider("deepseek", providers.PROVIDERS["deepseek"], "test").timeout == 45,
+          "and a value that is not a number leaves the default")
+
+with patch.object(providers.usage, "record"):
+    timed = deepseek()
+    timed.chat([{"role": "user", "content": "Capital of France?"}])
+    check(timed._client.asked[-1]["timeout"] == 45, "a short question is waited for 45 seconds")
+    timed.chat([{"role": "user", "content": "Write the report."}], max_tokens=6000)
+    check(timed._client.asked[-1]["timeout"] == 45 + 6000 / providers._SLOW_TOKENS_PER_SECOND,
+          "a request allowed to write 6,000 tokens is given time to write them")
+
+    agent = deepseek("high")
+    agent._client = Client()
+    agent.agent_turn([{"role": "user", "content": "check my calendar"}], tools=[], max_tokens=1800)
+    sent = agent._client.asked[-1]
+    check(sent.get("extra_body") == {"thinking": {"type": "disabled"}} and "reasoning_effort" not in sent,
+          "a tool-calling turn keeps thinking off even with DEEPSEEK_THINKING=high")
+    check(sent.get("timeout") == 45 + 1800 / providers._SLOW_TOKENS_PER_SECOND, "and has its limit too")
+
+
+# A provider that stalls past its limit hands over to the next.
+class Stalls(Client):
+    def create(self, **kwargs):
+        self.asked.append(kwargs)
+        raise openai.APITimeoutError(request=None)
+
+
+stalled = deepseek()
+stalled._client = Stalls()
+backup = deepseek()
+backup.name = "next"
+backup._client = Client(answer="Here instead, sir.")
+
+with patch.object(providers, "_pool", [stalled, backup]), patch.object(providers.usage, "record"):
+    check(providers.chat([{"role": "user", "content": "Hello"}]) == "Here instead, sir.",
+          "a provider that times out hands the question to the next")
 
 failed = [label for ok, label in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(failed)} of {len(RESULTS)} passed")

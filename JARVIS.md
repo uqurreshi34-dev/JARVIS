@@ -83,6 +83,15 @@ switches it off unless DEEPSEEK_THINKING says low, medium, high or max.
 Its JSON mode takes no schema and needs the word "json" in the prompt, so
 a structured request (the command interpreter's strict json_schema) goes
 to it as json_object with the schema written into the system prompt.
+Tool-calling turns keep its thinking off whatever the setting, as DeepSeek
+refuses later turns that do not send its reasoning back.
+
+Each provider is waited for only so long: its own limit (GROQ_TIMEOUT_SECONDS
+30, GEMINI_ and DEEPSEEK_ 45, Claude 60), plus time to write slowly whatever
+max_tokens allows, so a long report is not cut off. The client libraries
+retry once, not twice. Before this they waited ten minutes, three times
+over, so one stalled provider could hold a spoken question for half an hour;
+now a stall hands the question to the next provider within about a minute.
 `tools/test_deepseek_provider.py`, `tools/test_failover_classifier.py`.
 
 **When adding a capability, put deterministic phrases on the free path when they can be resolved safely and unambiguously.** 
