@@ -92,6 +92,10 @@ max_tokens allows, so a long report is not cut off. The client libraries
 retry once, not twice. Before this they waited ten minutes, three times
 over, so one stalled provider could hold a spoken question for half an hour;
 now a stall hands the question to the next provider within about a minute.
+
+Every failover line ends with the provider's own reason (providers.said:
+one line, shortened, anything that looks like a key blanked), so "groq rate
+limited" says which limit -- per minute, per day, or a request too large.
 `tools/test_deepseek_provider.py`, `tools/test_failover_classifier.py`.
 
 **When adding a capability, put deterministic phrases on the free path when they can be resolved safely and unambiguously.** 
@@ -1083,8 +1087,12 @@ renaming images to Images or IMAGES never has the filesystem server, which
 compares paths letter by letter, refuse the folder it was given.
 
 Services connect at start-up, in the background and side by side, rather
-than on the first request that needs one; the start-up check's SERVICES
-line is updated to what really connected ("SERVICES (2/3)" with OBS closed).
+than on the first request that needs one -- once the boot animation has
+played (boot.DURATION, 4.6 s), not during it: loading their client library
+held the HUD still for about a second mid-animation. The start-up check's
+SERVICES line says READY (configured, connecting on first use); the
+services strip shows what connected ("SERVICES (2/3)" with OBS closed).
+A request that needs a service sooner connects it itself.
 
 The tools join Agent Mode. A command naming a configured service goes to
 Agent Mode directly, skipping the command interpreter, and ordinary Agent

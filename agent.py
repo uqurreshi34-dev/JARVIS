@@ -794,7 +794,8 @@ def _run_with_provider(provider, task, report, fix, code_task, actions=False):
 
         except Exception as error:
             print(
-                f"[JARVIS] {provider.name} agent request failed: {error}"
+                f"[JARVIS] {provider.name} agent request failed -- "
+                f"{providers.said(error)}"
             )
 
             if providers.should_failover(error):

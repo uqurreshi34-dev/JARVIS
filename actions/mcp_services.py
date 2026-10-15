@@ -1278,10 +1278,19 @@ def context_for(tool_names):
     )
 
 
-def connect_in_background(done=None):
-    """Connect every service now, off the caller's thread, so the first
-    request does not wait for it. [done] is called with status() after."""
+def connect_in_background(done=None, delay=0.0):
+    """Connect every service off the caller's thread, so the first request
+    does not wait for it. [done] is called with status() after.
+
+    [delay] seconds first: connecting loads the services' client library,
+    which held the HUD still for about a second when it ran during the boot
+    animation (15 October 2026). A request that needs a service before then
+    connects it itself -- tools() is locked, so the two never both connect.
+    """
     def work():
+        if delay > 0:
+            time.sleep(delay)
+
         try:
             tools()
         except Exception as error:

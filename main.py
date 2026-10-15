@@ -672,12 +672,17 @@ class Assistant:
         # nothing waits for it. After the phone link, so that line is true.
         self._start_boot()
 
-        # Connected services come up now, in the background, rather than on
-        # the first request that needs one; the check's SERVICES line then
-        # says what really connected.
+        # Connected services come up in the background rather than on the
+        # first request that needs one -- once the boot animation has played,
+        # not during it: loading their client library held the HUD still for
+        # about a second mid-animation. The check's SERVICES line says READY
+        # (configured, connecting on first use) and the services strip shows
+        # what connected; while the check is still on screen, its line is
+        # updated to what really connected.
         mcp_services.connect_in_background(
             lambda counts: self._hud.boot_updated.emit(
-                "SERVICES", *boot.services_line(*counts))
+                "SERVICES", *boot.services_line(*counts)),
+            delay=boot.DURATION if boot.enabled() else 0.0,
         )
 
         self._say(_greeting())

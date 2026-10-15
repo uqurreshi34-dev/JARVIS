@@ -224,6 +224,34 @@ with patch.object(providers, "_pool", [stalled, backup]), patch.object(providers
     check(providers.chat([{"role": "user", "content": "Hello"}]) == "Here instead, sir.",
           "a provider that times out hands the question to the next")
 
+# ---- every failover says why, in the provider's own words ------------------------------------------
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+limited = deepseek()
+limited.name = "groq"
+limited._client = Client(error=Exception(
+    "Error code: 429 - Rate limit reached for model openai/gpt-oss-20b on tokens per minute (TPM): "
+    "Limit 8000, Used 7200, Requested 6400. Key gsk_abcdefghijklmnop1234"))
+answers = deepseek()
+answers.name = "gemini"
+answers._client = Client(answer="Juventus, sir.")
+printed = io.StringIO()
+
+with patch.object(providers, "_pool", [limited, answers]), patch.object(providers.usage, "record"), \
+        contextlib.redirect_stdout(printed):
+    providers.chat([{"role": "user", "content": "Most successful Italian team?"}])
+
+line = printed.getvalue()
+check("groq rate limited; switching to gemini -- Exception: Error code: 429" in line
+      and "tokens per minute" in line,
+      f"the failover line carries the provider's own reason ({line.strip()[:160]})")
+check("gsk_" not in line and "[key]" in line, "with anything that looks like a key blanked out")
+
+long_error = Exception("x" * 1000 + "\n\nsecond line")
+check(len(providers.said(long_error)) < 300 and "\n" not in providers.said(long_error),
+      "and kept to one short line")
+
 failed = [label for ok, label in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(failed)} of {len(RESULTS)} passed")
 sys.exit(1 if failed else 0)

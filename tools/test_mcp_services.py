@@ -643,6 +643,32 @@ for _ in range(200):
 
 check(finished == [(1, 2)], f"and reports what connected when it is done ({finished})")
 
+# Started at boot, it waits for the boot animation to play first (main.py passes boot.DURATION): loading the
+# services' client library held the HUD still mid-animation (15 October 2026).
+from unittest import mock  # noqa: E402
+
+waited = []
+
+with mock.patch.object(mcp_services, "tools", lambda: waited.append(_time_for_connect.monotonic())), \
+     mock.patch.object(mcp_services, "summary", lambda: (0, 0)):
+    started = _time_for_connect.monotonic()
+    delayed = []
+    mcp_services.connect_in_background(delayed.append, delay=0.6)
+    _time_for_connect.sleep(0.3)
+    check(not waited and not delayed, "with a delay, nothing connects until it has passed")
+
+    for _ in range(100):
+        if delayed:
+            break
+        _time_for_connect.sleep(0.05)
+
+    check(delayed == [(0, 0)] and waited and waited[0] - started >= 0.6,
+          "and then it connects and reports as before")
+
+main_source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+check("delay=boot.DURATION if boot.enabled() else 0.0" in main_source,
+      "JARVIS connects its services once the boot animation has played")
+
 # ---- live status, watched quietly (OBS's REC light) --------------------------------------
 
 STATUS = os.path.join(folder, "record-status.json")

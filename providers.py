@@ -128,6 +128,28 @@ PROVIDERS = {
 _PRIMARY = (os.getenv("LLM_PROVIDER") or "groq").strip().casefold()
 
 
+# Anything in an error that looks like a key, blanked before it is printed: OpenAI and DeepSeek style (sk-),
+# Groq (gsk_), Google (AIza). Providers usually mask them already; this makes sure.
+_KEY_LIKE = re.compile(r"\b(?:sk-|gsk_|AIza)[A-Za-z0-9_\-]{6,}")
+
+# How much of a provider's message is printed.
+_SAID_CHARACTERS = 240
+
+
+def said(error):
+    """What a provider said when it refused, for the console: one line, shortened, with any key blanked.
+
+    "groq rate limited" alone left the cause to guesswork (15 October 2026): a per-minute cap, a daily one,
+    or a request too large for the free tier all read the same. The provider's own words say which.
+    """
+    text = _KEY_LIKE.sub("[key]", " ".join(str(error).split()))
+
+    if len(text) > _SAID_CHARACTERS:
+        text = text[:_SAID_CHARACTERS - 3] + "..."
+
+    return f"{type(error).__name__}: {text}" if text else type(error).__name__
+
+
 def is_rate_limit(error):
     """True when an error is a quota or rate limit rejection."""
     name = type(error).__name__.casefold()
@@ -1145,10 +1167,10 @@ def chat(messages, response_format=None, temperature=0, max_tokens=None,
             if remaining:
                 print(
                     f"[JARVIS] {provider.name} {reason}; "
-                    f"switching to {order[index + 1].name}"
+                    f"switching to {order[index + 1].name} -- {said(error)}"
                 )
             else:
-                print(f"[JARVIS] {provider.name} {reason}, no fallback left")
+                print(f"[JARVIS] {provider.name} {reason}, no fallback left -- {said(error)}")
 
     raise last_error
 
@@ -1401,7 +1423,7 @@ def vision(
 
             if not should_failover(error):
                 print(
-                    f"[JARVIS] {provider.name} could not see the image: {error}")
+                    f"[JARVIS] {provider.name} could not see the image -- {said(error)}")
 
                 # Not a provider-health problem, so it is not rested. But
                 # the next provider may still manage the picture -- one
@@ -1427,10 +1449,13 @@ def vision(
             if len(order) - index - 1:
                 print(
                     f"[JARVIS] {provider.name} {reason} for vision; "
-                    f"trying {order[index + 1].name}"
+                    f"trying {order[index + 1].name} -- {said(error)}"
                 )
+            else:
+                print(f"[JARVIS] {provider.name} {reason} for vision -- {said(error)}")
 
-    print(f"[JARVIS] no provider could see the image: {last_error}")
+    print("[JARVIS] no provider could see the image"
+          + (f" -- {said(last_error)}" if last_error is not None else ""))
 
     return None
 
@@ -1589,7 +1614,7 @@ def vision_chat(
             if not should_failover(error):
                 print(
                     f"[JARVIS] {provider.name} could not process "
-                    f"multimodal refinement: {error}"
+                    f"multimodal refinement -- {said(error)}"
                 )
 
                 # As in vision(): not rested, but not fatal to the whole
@@ -1621,12 +1646,17 @@ def vision_chat(
                 print(
                     f"[JARVIS] {provider.name} {reason} for "
                     "multimodal refinement; trying "
-                    f"{order[index + 1].name}"
+                    f"{order[index + 1].name} -- {said(error)}"
+                )
+            else:
+                print(
+                    f"[JARVIS] {provider.name} {reason} for multimodal "
+                    f"refinement -- {said(error)}"
                 )
 
     print(
-        "[JARVIS] no provider could process multimodal refinement: "
-        f"{last_error}"
+        "[JARVIS] no provider could process multimodal refinement"
+        + (f" -- {said(last_error)}" if last_error is not None else "")
     )
 
     return ""
