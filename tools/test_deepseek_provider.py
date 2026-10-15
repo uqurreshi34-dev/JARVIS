@@ -8,8 +8,13 @@ No network: the client is replaced by one that records the request. Checked:
 - DeepSeek is asked for deepseek-flash with thinking switched off by default -- hidden reasoning is billed
   as output and delays a spoken answer -- and DEEPSEEK_THINKING switches it on at a given effort;
 - it has no vision model, so pictures never go to it;
-- a spent balance (402) moves the request to the next provider instead of failing the command.
+- a spent balance (402) moves the request to the next provider instead of failing the command;
+- a structured request (the command interpreter's strict json_schema) is sent as DeepSeek's json_object with
+  the schema written into the system prompt -- its JSON mode takes no schema and needs the word "json" in the
+  prompt, which the interpreter's prompt never had -- while Groq and Gemini keep the strict schema.
 """
+
+import json
 
 import os
 import sys
@@ -95,6 +100,38 @@ with patch.object(providers.usage, "record"):
     check(deepseek("very").thinking == "off", "a setting it does not know leaves thinking off")
 
 check(plain.vision_model is None, "no vision model, so pictures go to the others")
+
+SCHEMA = {"type": "object", "properties": {"intent": {"type": "string"}}, "required": ["intent"]}
+STRICT = {"type": "json_schema", "json_schema": {"name": "jarvis_command", "strict": True, "schema": SCHEMA}}
+ASKED = [{"role": "system", "content": "You are JARVIS's interpreter."},
+         {"role": "user", "content": "open notepad"}]
+
+with patch.object(providers.usage, "record"):
+    structured = deepseek()
+    structured._client = Client(answer='{"intent": "open_app"}')
+    structured.chat(ASKED, response_format=STRICT)
+    sent = structured._client.asked[-1]
+    system = sent["messages"][0]["content"]
+    check(sent.get("response_format") == {"type": "json_object"},
+          f"DeepSeek is asked for json_object, not the json_schema it refuses ({sent.get('response_format')})")
+    check(system.startswith("You are JARVIS's interpreter.") and "json" in system.casefold()
+          and json.dumps(SCHEMA, separators=(",", ":")) in system,
+          "with the schema, and the word json, added to the end of the system prompt")
+    check(ASKED[0]["content"] == "You are JARVIS's interpreter.", "the caller's own messages are left untouched")
+
+    bare = deepseek()
+    bare._client = Client(answer='{"intent": "open_app"}')
+    bare.chat([{"role": "user", "content": "open notepad"}], response_format=STRICT)
+    first = bare._client.asked[-1]["messages"][0]
+    check(first["role"] == "system" and "JSON Schema" in first["content"],
+          "with no system prompt, one carrying the schema is put first")
+
+    groq = providers.Provider("groq", providers.PROVIDERS["groq"], "test")
+    groq._client = Client(answer='{"intent": "open_app"}')
+    groq.chat(ASKED, response_format=STRICT)
+    check(groq._client.asked[-1].get("response_format") == STRICT
+          and groq._client.asked[-1]["messages"] == ASKED,
+          "Groq still gets the strict schema, and the prompt as it was")
 
 
 class Refuses(Client):

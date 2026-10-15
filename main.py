@@ -936,7 +936,17 @@ def _install_interrupt(app, hud):
         QTimer.singleShot(0, hud.shutdown.emit)
 
     def force():
-        print("\n[JARVIS] forcing shutdown.", flush=True)
+        # Straight to the console: print goes through debug_output's queue, and its writer thread never gets
+        # to the line before os._exit ends the process. None when there is no console (a windowed build).
+        console = sys.__stdout__
+
+        if console is not None:
+            try:
+                console.write("\n[JARVIS] forcing shutdown.\n")
+                console.flush()
+            except (OSError, ValueError):
+                pass
+
         os._exit(1)
 
     _request_stop = request_shutdown

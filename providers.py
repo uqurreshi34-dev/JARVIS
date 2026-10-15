@@ -7,6 +7,7 @@ in the order PROVIDERS lists them.
 """
 
 import base64
+import json
 import os
 import re
 import time
@@ -70,6 +71,8 @@ PROVIDERS = {
         "model_env": "DEEPSEEK_MODEL",
         "default_model": "deepseek-flash",
         "thinking_env": "DEEPSEEK_THINKING",
+        # JSON Output is json_object only, and needs "json" in the prompt.
+        "json_schema": False,
     },
     "claude": {
         "kind": "anthropic",
@@ -387,6 +390,10 @@ class Provider:
         )
         self.vision_reasoning = config.get("vision_reasoning", False)
 
+        # Whether the endpoint takes a strict json_schema; one that does not is
+        # sent json_object with the schema written into the prompt instead.
+        self.json_schema = config.get("json_schema", True)
+
         # A provider that switches thinking on and off per request (DeepSeek):
         # None for the rest, else "off" or how hard to think.
         thinking_env = config.get("thinking_env")
@@ -625,6 +632,13 @@ class Provider:
 
         if max_tokens:
             kwargs["max_tokens"] = max_tokens
+
+        if response_format and not self.json_schema \
+                and response_format.get("type") == "json_schema":
+            # DeepSeek: JSON mode without a schema, so the schema goes in the
+            # prompt -- which also carries the word "json" its JSON mode needs.
+            kwargs["messages"] = _schema_in_prompt(messages, response_format)
+            response_format = {"type": "json_object"}
 
         if response_format:
             kwargs["response_format"] = response_format
@@ -916,6 +930,26 @@ class Provider:
         usage.record(self.name, self.model, "agent", response)
 
         return response
+
+
+def _schema_in_prompt(messages, response_format):
+    """[messages] with the json_schema [response_format] asks for written into the system prompt.
+
+    For an endpoint whose JSON mode takes no schema (DeepSeek): the model is told the shape in words, and
+    the word "json" its JSON mode requires is there. Added to the end of the system prompt, so the unchanged
+    start of it can still be served from the provider's prompt cache.
+    """
+    schema = (response_format.get("json_schema") or {}).get("schema") or {}
+    note = ("Reply with only a JSON object, with no other text, matching this JSON Schema:\n"
+            + json.dumps(schema, separators=(",", ":")))
+    messages = [dict(message) for message in messages]
+
+    for message in messages:
+        if message.get("role") == "system" and isinstance(message.get("content"), str):
+            message["content"] = f"{message['content']}\n\n{note}"
+            return messages
+
+    return [{"role": "system", "content": note}] + messages
 
 
 def _is_parameter_error(error):

@@ -80,6 +80,9 @@ Balance", Anthropic's "credit balance is too low") or down is rested for 15
 minutes and the request moves to the next. DeepSeek's Flash model thinks by
 default, which is billed as output and delays a spoken answer, so JARVIS
 switches it off unless DEEPSEEK_THINKING says low, medium, high or max.
+Its JSON mode takes no schema and needs the word "json" in the prompt, so
+a structured request (the command interpreter's strict json_schema) goes
+to it as json_object with the schema written into the system prompt.
 `tools/test_deepseek_provider.py`, `tools/test_failover_classifier.py`.
 
 **When adding a capability, put deterministic phrases on the free path when they can be resolved safely and unambiguously.** 
