@@ -69,7 +69,7 @@ class Orchestrator:
                 os.getenv("MEV_MAX_DAILY_LOSS_ETH", "0.1")),
             max_consec_failures=int(os.getenv("MEV_MAX_CONSEC_FAILURES", "5")),
             min_wallet_balance_eth=float(
-                os.getenv("MEV_MIN_WALLET_BALANCE_ETH", "0.05")),
+                os.getenv("MEV_MIN_WALLET_BALANCE_ETH", "0.001")),
             enabled=os.getenv("MEV_ENABLED", "true").lower() == "true",
         )
 
