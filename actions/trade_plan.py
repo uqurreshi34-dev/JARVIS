@@ -101,8 +101,8 @@ DEFAULTS = {
     # market: on gold's four-hour chart of 8 October 2026 it drew 4,223.5 and 4,107.2, where a trader drew
     # 4,229 and 4,114 by eye.
     "peak_atr": 2.0,
-    # How far back the highs and lows are looked for: about two weeks of four-hour candles. A trader takes
-    # the latest that line up, and lines older than this have had their time.
+    # How long a line lasts once price has closed through it: about two weeks of four-hour candles, time
+    # enough for the break to be retested. A line price has not closed through stays, however old.
     "lookback_candles": 60,
     "peak_candles": 12,
     # Your own lines, by OANDA's name for the market: always drawn and used.

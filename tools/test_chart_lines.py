@@ -8,6 +8,8 @@ Checked:
 - fifteen-minute candles build into four-hour ones as OANDA's day has them
   (from 17:00 New York, summer and winter), and the
   backtest's lines use only four-hour candles finished by then;
+- a line lasts while price has not closed through it, however old its highs;
+  once crossed, it stays for [lookback] candles, for the retest, then goes;
 - the room rule: a sell aimed through a floor that has held is not taken,
   the same sell with nothing in its way is, and rules without it are
   unchanged; the rule has its own key for gold-trader.json.
@@ -48,6 +50,37 @@ space, line = chart_lines.room("buy", 4124.0, lines, 6.0)
 check(space == 50.0 and line["price"] == 4180.0, "a buy's room: up to the ceiling, less the buffer")
 check(chart_lines.room("buy", 4200.0, lines, 6.0) == (None, None), "nothing in the way: no line, no limit")
 check(chart_lines.room("sell", 4103.0, lines, 6.0)[0] < 0, "selling on top of a floor: negative room")
+
+# ---- how long a line lasts ------------------------------------------------------------------------------
+BEGIN = datetime(2026, 8, 3, 1, tzinfo=timezone.utc)
+
+
+def flat_with(spikes, crossed=None, count=100):
+    """Candles flat at 100, highs of 130 at [spikes], and one close at 140 at [crossed]."""
+    rows = []
+
+    for index in range(count):
+        high = 130.0 if index in spikes else 101.0
+        close = 140.0 if index == crossed else 100.0
+        rows.append((BEGIN + timedelta(hours=4 * index), 100.0, max(high, close + 1), 99.0, close))
+
+    return rows
+
+
+def ceiling(candles):
+    found = chart_lines.levels(candles, 2.0, 3, lookback=60)
+    return next((line for line in found if line["kind"] == "high" and abs(line["price"] - 130) < 1), None)
+
+
+check(ceiling(flat_with((10, 20))) is not None,
+      "highs 80 and 90 candles ago that price never closed above: still the ceiling, though both are older than"
+      " the lookback")
+check(ceiling(flat_with((10, 20), crossed=30)) is None, "closed through 70 candles ago: it has had its time")
+check(ceiling(flat_with((10, 20), crossed=70)) is not None,
+      "closed through 30 candles ago: kept, broken, for the retest")
+check(ceiling(flat_with((70, 80))) is not None and chart_lines.levels(flat_with((10, 20), crossed=30), 2.0, 3) != [],
+      "recent highs are a line as ever, and with no lookback nothing is dropped")
+
 
 # ---- four-hour candles, finished ones only ------------------------------------------------------------
 

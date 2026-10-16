@@ -649,9 +649,9 @@ class _Page(QWidget):
         rows = [
             ("Lines", f"Resistance runs through the two most recent highs within {chosen['merge_atr']:g} ATR of"
                       f" each other with no candle closing above them in between -- price was resisted there;"
-                      f" support through the two most recent such lows. Only the last"
-                      f" {chosen.get('lookback_candles', 0)} candles count, and a line the price has since crossed"
-                      f" is marked broken. A high is a candle higher than the {chosen['swing_strength']} either side"
+                      f" support through the two most recent such lows. A line stays until a candle closes through"
+                      f" it, however old, and is then marked broken, kept {chosen.get('lookback_candles', 0)}"
+                      f" candles for the retest. A high is a candle higher than the {chosen['swing_strength']} either side"
                       f" that stands out: price rose at least {chosen.get('peak_atr', 0):g} ATR to reach it and fell"
                       f" as far from it, each within {chosen.get('peak_candles', 0)} candles -- a wobble in a range"
                       f" is not a high, and one high alone is not a line. Your own lines (amber) come from"

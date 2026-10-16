@@ -59,13 +59,19 @@ def swings(candles, strength, prominence=0.0, window=None):
 def levels(candles, merge, strength, touches=2, yours=(), prominence=0.0, window=None, lookback=None):
     """The lines, lowest first: [{"price", "kind", "touches", "yours", "last", "swings"}].
 
-    As a trader draws them. Going back from now, each high (of the last [lookback] candles, all if None)
-    is paired with the next earlier high within [merge] of it that price has respected -- no candle closed
-    above the higher of the two between them. The pair is a resistance line, at their average; a pair of
+    As a trader draws them. Going back from now, each high is paired with the next earlier high within
+    [merge] of it that price has respected -- no candle closed above the higher of the two between them. The pair is a resistance line, at their average; a pair of
     lows the same way, with no close below between them, is a support line. Each high or low makes one
     line at most, so the most recent pair comes first. "kind" is "high" (resistance) or "low" (support),
     None for your own lines; "last" the index of the later peak; "swings" [(index, price)] of both, so a
     chart can ring them. [touches] is kept for callers: a line is always at least two peaks.
+
+    [lookback] (all candles if None): how long a line lasts once price has closed through it. A line stays
+    for as long as no candle has closed beyond it -- an old ceiling price has not broken is still the
+    ceiling, as a trader keeps it drawn -- and, once one has, for [lookback] candles after, long enough for
+    the break to be retested. One crossed longer ago than that has had its time. Counting only the peaks
+    of the last [lookback] candles instead dropped a line the market had not broken, as gold's 4,222 did
+    on 16 October 2026 when its first high aged out.
     """
     found = [{"price": float(level), "kind": None, "touches": 0, "yours": True, "last": -1, "swings": []}
              for level in yours]
@@ -73,7 +79,7 @@ def levels(candles, merge, strength, touches=2, yours=(), prominence=0.0, window
 
     for kind in ("high", "low"):
         recent = sorted(((index, price) for index, price, which in peaks(candles, strength, prominence, window)
-                         if which == kind and index >= first), reverse=True)
+                         if which == kind), reverse=True)
         used = set()
 
         for later, (index, price) in enumerate(recent):
@@ -108,7 +114,25 @@ def levels(candles, merge, strength, touches=2, yours=(), prominence=0.0, window
                                       "yours": False, "last": index, "swings": pair})
                     break
 
-    return sorted(found, key=lambda line: line["price"])
+    return sorted((line for line in found if line["yours"] or not _crossed_before(candles, line, first)),
+                  key=lambda line: line["price"])
+
+
+def _crossed_before(candles, line, first):
+    """Whether a candle closed through [line] after its later peak, and before candle [first]: broken long
+    enough ago to have had its time. Through: above the highest of its highs, or below the lowest of its lows."""
+    if not first:
+        return False
+
+    if line["kind"] == "high":
+        edge = max(price for _index, price in line["swings"])
+        crossed = (index for index in range(line["last"] + 1, len(candles)) if candles[index][4] > edge)
+    else:
+        edge = min(price for _index, price in line["swings"])
+        crossed = (index for index in range(line["last"] + 1, len(candles)) if candles[index][4] < edge)
+
+    broke = next(crossed, None)
+    return broke is not None and broke < first
 
 
 def zones(candles, merge, strength, touches, yours=(), prominence=0.0, window=None):
