@@ -38,10 +38,36 @@ FACTORY_ABI = [
      "outputs": [{"name": "", "type": "address"}]},
 ]
 
-UNI_FACTORY = to_checksum_address("0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f")
+# Base factories. Same _pair_for lookup works for all the Uniswap V2
+# forks except Aerodrome, which uses getPool(a, b, stable) instead of
+# getPair(a, b) — that one is handled separately below.
+UNI_FACTORY = to_checksum_address(
+    "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6")
 SUSHI_FACTORY = to_checksum_address(
-    "0xC0AEe478e3658e2610c5F7A4A2E1777cE9e4f2Ac")
-FACTORIES = {"uniswap_v2": UNI_FACTORY, "sushiswap": SUSHI_FACTORY}
+    "0x71524B4f93c58fcbF659783284E38825f0622859")
+AERODROME_FACTORY = to_checksum_address(
+    "0x420DD381b31aEf6683db6B902084cB0FFECe40Da")
+BASESWAP_FACTORY = to_checksum_address(
+    "0xFDa619b6d20975be80A10332cD39b9a4b0FAa8BB")
+PANCAKESWAP_FACTORY = to_checksum_address(
+    "0x02a84c1b3BBD7401a5f7fa98a384EBC70bB5749E")
+
+FACTORIES = {
+    "uniswap_v2": UNI_FACTORY,
+    "sushiswap": SUSHI_FACTORY,
+    "aerodrome": AERODROME_FACTORY,
+    "baseswap": BASESWAP_FACTORY,
+    "pancakeswap": PANCAKESWAP_FACTORY,
+}
+
+# Aerodrome's factory has a different signature.
+AERO_FACTORY_ABI = [
+    {"name": "getPool", "type": "function", "stateMutability": "view",
+     "inputs": [{"name": "tokenA", "type": "address"},
+                {"name": "tokenB", "type": "address"},
+                {"name": "stable", "type": "bool"}],
+     "outputs": [{"name": "pool", "type": "address"}]},
+]
 
 
 class Orchestrator:
@@ -103,9 +129,27 @@ class Orchestrator:
         key = (factory_name, token_a.lower(), token_b.lower())
         if key in self._pair_cache:
             return self._pair_cache[key]
-        f = self.http.eth.contract(
-            address=FACTORIES[factory_name], abi=FACTORY_ABI)
-        addr = f.functions.getPair(token_a, token_b).call()
+
+        if factory_name == "aerodrome":
+            # Aerodrome uses getPool(a, b, stable). Try volatile first
+            # (that's what we sandwich), fall back to stable.
+            f = self.http.eth.contract(
+                address=FACTORIES[factory_name], abi=AERO_FACTORY_ABI)
+            addr = "0x" + "0" * 40
+            try:
+                addr = f.functions.getPool(token_a, token_b, False).call()
+            except Exception:
+                pass
+            if int(addr, 16) == 0:
+                try:
+                    addr = f.functions.getPool(token_a, token_b, True).call()
+                except Exception:
+                    addr = "0x" + "0" * 40
+        else:
+            f = self.http.eth.contract(
+                address=FACTORIES[factory_name], abi=FACTORY_ABI)
+            addr = f.functions.getPair(token_a, token_b).call()
+
         self._pair_cache[key] = addr
         return addr
 
@@ -169,8 +213,9 @@ class Orchestrator:
             await self._handle_v2(swap, max_front, ur=False)
 
     async def _handle_v2(self, swap, max_front, ur):
-        factory = "uniswap_v2" if (
-            ur or swap.router == "uniswap_v2") else "sushiswap"
+        # UR V2 swaps don't name the underlying DEX, so default to Uniswap.
+        # Direct router swaps already carry the correct name.
+        factory = "uniswap_v2" if ur else swap.router
         pair = self._pair_for(factory, WETH, swap.base_token)
         if int(pair, 16) == 0:
             return
@@ -198,10 +243,8 @@ class Orchestrator:
 
         our_out = get_amount_out(front_in, r_in, r_out)
         deadline = int(time.time()) + 60
-        router_name = "uniswap_v2" if (
-            ur or swap.router == "uniswap_v2") else "sushiswap"
         await self._build_and_submit(
-            router_name=router_name,
+            router_name=factory,
             swap=swap,
             front_in=front_in,
             front_min_out=int(our_out * 0.98),

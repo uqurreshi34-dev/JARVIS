@@ -29,6 +29,12 @@ UNISWAP_V2_ROUTER = to_checksum_address(
     "0x4752ba5DBC251Ed37A0A4C9F979A0525FdA0e489")
 SUSHISWAP_ROUTER = to_checksum_address(
     "0x6BDED42c0d1e1C3E1F14Dc78cE49b8a65D9E0bD8")
+AERODROME_ROUTER = to_checksum_address(
+    "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43")
+BASESWAP_ROUTER = to_checksum_address(
+    "0x327Df1E6de05895d2ab08513aaDD9313Fe505d86")
+PANCAKESWAP_ROUTER = to_checksum_address(
+    "0x8cFe327CEc66d1C090Dd72bd0FF11d690C33a2Eb")
 UNISWAP_V3_ROUTER_01 = to_checksum_address(
     "0x2626664c2603336E57B271c5C0b26F421741e481")
 UNISWAP_V3_ROUTER_02 = to_checksum_address(
@@ -41,6 +47,9 @@ UNIVERSAL_ROUTER_NEW = to_checksum_address(
 ROUTER_BY_NAME = {
     "uniswap_v2": UNISWAP_V2_ROUTER,
     "sushiswap": SUSHISWAP_ROUTER,
+    "aerodrome": AERODROME_ROUTER,
+    "baseswap": BASESWAP_ROUTER,
+    "pancakeswap": PANCAKESWAP_ROUTER,
     "uniswap_v3": UNISWAP_V3_ROUTER_01,
     "uniswap_v3_02": UNISWAP_V3_ROUTER_02,
     "universal_router": UNIVERSAL_ROUTER_NEW,
