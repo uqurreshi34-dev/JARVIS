@@ -318,14 +318,13 @@ class Orchestrator:
     async def _build_and_submit(self, *, router_name, swap, front_in,
                                 front_min_out, back_amount_in, back_min_out,
                                 fee_tier, net_profit, deadline):
-        try:
-            raw = self.http.eth.get_raw_transaction(swap.tx_hash)
-            victim_raw = raw.hex() if isinstance(raw, bytes) else raw
-            if not victim_raw.startswith("0x"):
-                victim_raw = "0x" + victim_raw
-        except Exception as e:
-            print(f"[bundle] cannot fetch victim raw: {e}")
-            return
+        # On Base there is no Flashbots relay, so we never submit the
+        # victim's raw tx — the front and back go out as ordinary txs
+        # and the victim is already in the mempool. Fetching its raw
+        # body was blocking every bundle: `eth_getRawTransactionByHash`
+        # is not supported for Flashblocks pre-confirmed txs on Base.
+        # The placeholder satisfies the bundle shape; submit() ignores it.
+        victim_raw = "0x"
 
         try:
             bundle, target, nonce_start, _f, _b = await self.executor.build_bundle(
