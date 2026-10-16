@@ -206,16 +206,21 @@ class BundleExecutor:
     # --- fee logic ------------------------------------------------------
     def _fee_bid(self, victim_gas_price: int):
         latest = self.w3.eth.get_block("latest")
-        base_fee = latest.get("baseFeePerGas", self.w3.to_wei(20, "gwei"))
+        base_fee = latest.get("baseFeePerGas", self.w3.to_wei(0.01, "gwei"))
         victim_tip = max(victim_gas_price - base_fee, 0)
         try:
             suggested_tip = int(self.w3.eth.max_priority_fee)
         except Exception:
-            suggested_tip = self.w3.to_wei(1, "gwei")
+            suggested_tip = base_fee // 10
+
+        # On Base, priority fees are tiny. Bid 1.5x the victim's effective
+        # tip, floor to 0.001 gwei (still meaningful on Base), cap at
+        # 0.1 gwei (expensive but never catastrophic).
         base_bid = max(victim_tip, suggested_tip)
-        our_tip = base_bid * 2
-        our_tip = max(self.w3.to_wei(1, "gwei"),
-                      min(our_tip, self.w3.to_wei(50, "gwei")))
+        our_tip = int(base_bid * 1.5)
+        min_tip = self.w3.to_wei(0.001, "gwei")
+        max_tip = self.w3.to_wei(0.1, "gwei")
+        our_tip = max(min_tip, min(our_tip, max_tip))
         max_fee = base_fee * 2 + our_tip
         return base_fee, our_tip, max_fee
 
@@ -307,7 +312,23 @@ class BundleExecutor:
             raise
 
     def submit(self, bundle, target_block: int):
-        if self.simulation or flashbot is None:
+        if self.simulation:
             return {"simulated": True, "target": target_block}
-        return self.w3.flashbots.send_bundle(
-            bundle, target_block_number=target_block)
+        # Base has no Flashbots. We broadcast front then back as regular
+        # txs. The victim is already in the mempool; the sequencer orders
+        # by gas price. Front is sent first so it lands before the victim.
+        front_raw = bundle[0]["signed_transaction"]
+        back_raw = bundle[2]["signed_transaction"]
+        try:
+            h_front = self.w3.eth.send_raw_transaction(front_raw)
+            h_back = self.w3.eth.send_raw_transaction(back_raw)
+            return {"front": h_front.hex(), "back": h_back.hex()}
+        except Exception as e:
+            return {"error": str(e)[:200]}
+
+    # mainnet
+    # def submit(self, bundle, target_block: int):
+    #     if self.simulation or flashbot is None:
+    #         return {"simulated": True, "target": target_block}
+    #     return self.w3.flashbots.send_bundle(
+    #         bundle, target_block_number=target_block)

@@ -227,28 +227,17 @@ class MempoolListener:
 
     # ---- subscribe helper ----------------------------------------------
     async def _subscribe(self, ws):
-        """Subscribe to the unfiltered firehose.
-
-        The filtered alchemy_pendingTransactions subscription accepts at
-        most two toAddress entries on the free tier before going silent,
-        and modern DEX traffic splits across V2 routers, two V3 routers,
-        and UniversalRouter — five addresses, minimum. Rather than
-        juggle multiple subscriptions we take the full firehose and
-        filter client-side (which we already do via decode_*).
-        """
+        """Subscribe to Base's pre-confirmed Flashblock transactions."""
         sub_id = next(self._id_counter)
         await ws.send(json.dumps({
             "jsonrpc": "2.0", "id": sub_id,
             "method": "eth_subscribe",
-            "params": [
-                "newPendingTransactions",
-                True,
-            ],
+            "params": ["newFlashblockTransactions"],
         }))
         ack = json.loads(await ws.recv())
         if "error" in ack:
             raise RuntimeError(f"subscribe failed: {ack['error']}")
-        print(f"[mempool] subscribed (unfiltered, full tx bodies) "
+        print(f"[mempool] subscribed (Flashblocks pre-confirmed txs) "
               f"id={ack['result']}")
 
     async def run(self):
@@ -270,13 +259,22 @@ class MempoolListener:
                         except Exception:
                             continue
                         params = msg.get("params") or {}
-                        h = params.get("result")
-                        # Unfiltered subs push a hash string.
-                        if isinstance(h, str):
-                            await self._spawn(self._handle_pending(h))
-                        elif isinstance(h, dict) and h.get("hash"):
-                            # Pass the whole dict — no HTTP round-trip needed
-                            await self._spawn(self._handle_pending(h))
+                        result = params.get("result")
+
+                        # Case 1: Standard subscription pushes a hash string
+                        if isinstance(result, str):
+                            await self._spawn(self._handle_pending(result))
+
+                        # Case 2: Flashblocks & standard full-body subscriptions push a dict
+                        elif isinstance(result, dict):
+                            # If the dict has a 'hash', it's a full transaction object
+                            if result.get("hash"):
+                                await self._spawn(self._handle_pending(result))
+                            # If not, it might be a Flashblock update.
+                            # We check for a 'transactions' list inside it.
+                            elif "transactions" in result:
+                                for tx_hash in result["transactions"]:
+                                    await self._spawn(self._handle_pending(tx_hash))
             except Exception as e:
                 print(
                     f"[mempool] disconnected: {e}  (reconnecting in {backoff}s)")
