@@ -30,7 +30,10 @@ from actions.mev.tx_decoder import _to_int, _effective_gas_price
 WETH = to_checksum_address("0x4200000000000000000000000000000000000006")
 
 UNIVERSAL_ROUTERS = (
-    to_checksum_address("0x198ef79f1f515f02dfe9e3115ed9fc07183f02fc"),  # Base
+    to_checksum_address("0x198ef79f1f515f02dfe9e3115ed9fc07183f02fc"),
+    to_checksum_address("0x66a9893cc07d91d95644aedd05d03f95e1dba8af"),
+    to_checksum_address("0xfdf682f51fe81aa4898f0ae2163d8a55c127fbc7"),
+    to_checksum_address("0x6fF5693b99212Da76ad316178A184AB56D299b43"),
 )
 
 # Backwards-compat alias for the older name.

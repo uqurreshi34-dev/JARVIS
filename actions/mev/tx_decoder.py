@@ -7,14 +7,13 @@ from eth_abi import decode as abi_decode
 from eth_utils import to_checksum_address
 
 # Router addresses (checksummed)
+# Router addresses (checksummed)
 UNISWAP_V2_ROUTER = to_checksum_address(
     "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24")
 SUSHISWAP_ROUTER = to_checksum_address(
-    "0x6BDED42c0d1e1C3E1F14Dc78cE49b8a65D9E0bD8")
+    "0x6BDED42c6DA8FBf0d2bA55B2fa120C5e0c8D7891")
 AERODROME_ROUTER = to_checksum_address(
     "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43")
-BASESWAP_ROUTER = to_checksum_address(
-    "0xBE6D8f0d05cC4be24d5167a3eF062215bE6d18a5")
 PANCAKESWAP_ROUTER = to_checksum_address(
     "0x8cFe327CEc66d1C090Dd72bd0FF11d690C33a2Eb")
 
@@ -24,7 +23,6 @@ ROUTERS = {
     UNISWAP_V2_ROUTER: "uniswap_v2",
     SUSHISWAP_ROUTER: "sushiswap",
     AERODROME_ROUTER: "aerodrome",
-    BASESWAP_ROUTER: "baseswap",
     PANCAKESWAP_ROUTER: "pancakeswap",
 }
 
@@ -36,8 +34,11 @@ SELECTORS = {
     "0xfb3bdb41": ("swapETHForExactTokens",    ["uint256", "address[]", "address", "uint256"]),
     "0x18cbafe5": ("swapExactTokensForETH",    ["uint256", "uint256", "address[]", "address", "uint256"]),
     "0x4a25d94a": ("swapTokensForExactETH",    ["uint256", "uint256", "address[]", "address", "uint256"]),
+    # --- FoT variants, hit constantly on Base ---
+    "0xb6f9de95": ("swapExactETHForTokensSupportingFeeOnTransferTokens", ["uint256", "address[]", "address", "uint256"]),
+    "0x5c11d795": ("swapExactTokensForTokensSupportingFeeOnTransferTokens", ["uint256", "uint256", "address[]", "address", "uint256"]),
+    "0x791ac947": ("swapExactTokensForETHSupportingFeeOnTransferTokens", ["uint256", "uint256", "address[]", "address", "uint256"]),
 }
-
 WETH = to_checksum_address("0x4200000000000000000000000000000000000006")
 
 
@@ -109,9 +110,13 @@ def decode_swap(tx: dict) -> Optional[DecodedSwap]:
     if name in ("swapExactTokensForTokens", "swapTokensForExactTokens",
                 "swapExactTokensForETH", "swapTokensForExactETH"):
         amount_in, amount_out_min, path, recipient, _deadline = decoded
-    else:  # ETH-in variants
+    elif name in ("swapExactETHForTokens",
+                  "swapETHForExactTokens",
+                  "swapExactETHForTokensSupportingFeeOnTransferTokens"):
         amount_out_min, path, recipient, _deadline = decoded
         amount_in = _to_int(tx.get("value", 0))
+    else:
+        return None
 
     path = [to_checksum_address(a) for a in path]
 

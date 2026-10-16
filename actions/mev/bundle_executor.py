@@ -28,11 +28,9 @@ WETH = to_checksum_address("0x4200000000000000000000000000000000000006")
 UNISWAP_V2_ROUTER = to_checksum_address(
     "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24")
 SUSHISWAP_ROUTER = to_checksum_address(
-    "0x6BDED42c0d1e1C3E1F14Dc78cE49b8a65D9E0bD8")
+    "0x6BDED42c6DA8FBf0d2bA55B2fa120C5e0c8D7891")
 AERODROME_ROUTER = to_checksum_address(
     "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43")
-BASESWAP_ROUTER = to_checksum_address(
-    "0xBE6D8f0d05cC4be24d5167a3eF062215bE6d18a5")
 PANCAKESWAP_ROUTER = to_checksum_address(
     "0x8cFe327CEc66d1C090Dd72bd0FF11d690C33a2Eb")
 UNISWAP_V3_ROUTER_01 = to_checksum_address(
@@ -48,7 +46,6 @@ ROUTER_BY_NAME = {
     "uniswap_v2": UNISWAP_V2_ROUTER,
     "sushiswap": SUSHISWAP_ROUTER,
     "aerodrome": AERODROME_ROUTER,
-    "baseswap": BASESWAP_ROUTER,
     "pancakeswap": PANCAKESWAP_ROUTER,
     "uniswap_v3": UNISWAP_V3_ROUTER_01,
     "uniswap_v3_02": UNISWAP_V3_ROUTER_02,

@@ -47,8 +47,6 @@ SUSHI_FACTORY = to_checksum_address(
     "0x71524B4f93c58fcbF659783284E38825f0622859")
 AERODROME_FACTORY = to_checksum_address(
     "0x420DD381b31aEf6683db6B902084cB0FFECe40Da")
-BASESWAP_FACTORY = to_checksum_address(
-    "0xFDa619b6d20975be80A10332cD39b9a4b0FAa8BB")
 PANCAKESWAP_FACTORY = to_checksum_address(
     "0x02a84c1b3BBD7401a5f7fa98a384EBC70bB5749E")
 
@@ -56,7 +54,6 @@ FACTORIES = {
     "uniswap_v2": UNI_FACTORY,
     "sushiswap": SUSHI_FACTORY,
     "aerodrome": AERODROME_FACTORY,
-    "baseswap": BASESWAP_FACTORY,
     "pancakeswap": PANCAKESWAP_FACTORY,
 }
 
