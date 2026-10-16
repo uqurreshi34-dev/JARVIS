@@ -142,6 +142,15 @@ GRANULARITY_WORDS = {"M15": "15-minute", "M30": "30-minute", "H1": "1-hour", "H2
 # RSI's middle: above it momentum is with buyers, below it with sellers.
 RSI_MIDDLE = 50
 
+# RSI and ATR are written to four places, as OANDA's own chart writes its indicators, so either can be
+# checked against it to the last digit; prices keep the market's own decimals.
+INDICATOR_PLACES = 4
+
+
+def indicator(value):
+    """RSI or ATR as OANDA's chart writes it: '52.5779'. A dash when there is none."""
+    return "-" if value is None else f"{value:,.{INDICATOR_PLACES}f}"
+
 
 class PlanError(Exception):
     """The chart could not be read."""
@@ -488,10 +497,10 @@ def plan(candles, price, chosen, market, live=True, lines=None, line_atr=None, l
         "granularity": chosen["granularity"], "timeframe": GRANULARITY_WORDS[chosen["granularity"]],
         "candle_seconds": GRANULARITY_SECONDS[chosen["granularity"]],
         "price": round(price, d), "live": live, "lines_from": lines_from,
-        "line_atr": round(line_atr, d) if line_atr else None,
+        "line_atr": round(line_atr, max(d, INDICATOR_PLACES)) if line_atr else None,
         "read": _uk(candles[-1][0] + step), "next_close": _uk(next_close, "%H:%M"),
         "read_utc": (candles[-1][0] + step).astimezone(timezone.utc).strftime("%H:%M UTC"),
-        "atr": round(atr, d), "rsi": rsis[-1], "rsi_zone": rsi_zone(rsis[-1], chosen),
+        "atr": round(atr, max(d, INDICATOR_PLACES)), "rsi": rsis[-1], "rsi_zone": rsi_zone(rsis[-1], chosen),
         "rsi_high": chosen["rsi_high"], "rsi_low": chosen["rsi_low"],
         "candles": [[_ms(start), opened, high, low, closed, _uk(start)]
                     for start, opened, high, low, closed in shown],
@@ -575,7 +584,7 @@ def _verdict(plans, price, support, resistance, chosen, market):
                             f" the next line, under {chosen['min_reward']:g} : 1: the rules say skip it.")
 
         if not found["rsi_ok"]:
-            return "skip", (f"A {side} setup confirmed at {found['line']:,.{d}f}, but RSI is {found['rsi']:.0f}, outside"
+            return "skip", (f"A {side} setup confirmed at {found['line']:,.{d}f}, but RSI is {indicator(found['rsi'])}, outside"
                             f" the range the rules want: skip it.")
 
         return side, (f"{side.title()} setup confirmed at {found['line']:,.{d}f}: in near {found['entry']:,.{d}f}, stop"
@@ -818,7 +827,7 @@ def describe(found):
     """A few sentences for the voice; the panel carries the chart and the figures."""
     places = 0 if found["price"] >= 1000 else found["decimals"]
     price = f"{found['price']:,.{places}f}" + ("" if found["live"] else ", the market closed")
-    rsi = f" RSI is {found['rsi']:.0f}, {found['rsi_zone'].split(':')[0]}." if found["rsi"] is not None else ""
+    rsi = f" RSI is {indicator(found['rsi'])}, {found['rsi_zone'].split(':')[0]}." if found["rsi"] is not None else ""
     shorter = found.get("entry")
     timed = ""
 

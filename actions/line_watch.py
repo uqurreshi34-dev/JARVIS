@@ -112,7 +112,7 @@ def words(found, reached):
     candle = f"the {reached['when']} UK" if reached.get("when") else "the last"
     times = "" if reached["stop_atr"] == 1 else f"{reached['stop_atr']:g} times "
     working = (f" That is {candle} {timeframe} candle's {'low' if support else 'high'}, {exact(reached['wick'])},"
-               f" {'minus' if support else 'plus'} {times}its {timeframe} ATR, {exact(reached['atr'])}:"
+               f" {'minus' if support else 'plus'} {times}its {timeframe} ATR, {trade_plan.indicator(reached['atr'])}:"
                f" {exact(reached['stop'])}.")
 
     if signal == "bounce":

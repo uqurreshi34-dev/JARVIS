@@ -79,19 +79,19 @@ check("buyers took it back" in said["won"] and "stop at 4,091" in said["won"],
       f"a bounce: said, with its stop ({said['won'][:160]})")
 check("4-hour close below 4,107" in said["under"] and "retest" in said["under"],
       "through the line: the four-hour close decides a break")
-check("That is the 17:15 UK 15-minute candle's low, 4,106.193, minus its 15-minute ATR, 8.000: 4,098.193."
+check("That is the 17:15 UK 15-minute candle's low, 4,106.193, minus its 15-minute ATR, 8.0000: 4,098.193."
       in said["sitting"] and "about 4,098 from here" in said["sitting"],
       f"the stop's working is said to the full decimals, with the candle's time, as a chart shows it"
       f" ({said['sitting'][:400]})")
-check("candle's low, 4,099.193, minus its 15-minute ATR, 8.000: 4,091.193." in said["won"]
+check("candle's low, 4,099.193, minus its 15-minute ATR, 8.0000: 4,091.193." in said["won"]
       and "candle's low, 4,102.193" in said["pushed"],
       "for a bounce and a pushback too")
 capped_said = line_watch.words(found(capped), reached["capped"])
-check("candle's high, 4,232.472, plus its 15-minute ATR, 8.000: 4,240.472." in capped_said,
+check("candle's high, 4,232.472, plus its 15-minute ATR, 8.0000: 4,240.472." in capped_said,
       f"at resistance it is the high, plus the ATR ({capped_said[-200:]})")
 roomier = found(won)
 roomier["settings"] = {"stop_atr": 1.5}
-check("minus 1.5 times its 15-minute ATR, 8.000: 4,087.193." in line_watch.words(roomier, line_watch.hit(roomier)),
+check("minus 1.5 times its 15-minute ATR, 8.0000: 4,087.193." in line_watch.words(roomier, line_watch.hit(roomier)),
       "a wider stop_atr is said as so many times the ATR")
 check("That is" not in said["under"], "through the line there is no stop, so no working")
 check("Wait for a 15-minute candle to close back above 4,107" in said["sitting"]

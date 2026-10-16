@@ -251,6 +251,13 @@ none_above = tp.plan(made(base), 4060, chosen, GOLD, lines=[floor, older], line_
 check(none_above["resistance"] is None and none_above["support"] == 4000.0,
       "and where the longer page has no resistance, neither does the shorter")
 
+# RSI and ATR to four places, as OANDA's own chart writes them, wherever they are said or shown.
+check(tp.indicator(52.57794) == "52.5779" and tp.indicator(28.63241) == "28.6324" and tp.indicator(None) == "-",
+      "RSI and ATR written to four places, as OANDA writes them")
+said = tp.describe(dict(tp.plan(made(base), 4060, chosen, GOLD), entry=None))
+shown_rsi = tp.plan(made(base), 4060, chosen, GOLD)["rsi"]
+check(f"RSI is {shown_rsi:.4f}," in said, f"and JARVIS says RSI so ({said[-90:]})")
+
 failed = base + [(4050, 4062, 4048, 4060), (4060, ceiling + 6, 4058, ceiling + 4), (ceiling + 4, ceiling + 5, 4070, 4072)]
 check(tp.plan(made(failed), 4072, chosen, GOLD)["buy"]["stage"] == "break", "a break that closed back inside is no break")
 

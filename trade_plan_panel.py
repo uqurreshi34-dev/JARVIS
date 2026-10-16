@@ -84,6 +84,11 @@ def _price(value, decimals):
     return f"{value:,.{decimals}f}"
 
 
+def _indicator(value):
+    """RSI or ATR to four places, as OANDA's chart writes them (actions/trade_plan.py)."""
+    return "-" if value is None else f"{value:,.4f}"
+
+
 def _tint(colour, alpha):
     shade = QColor(colour)
     shade.setAlpha(alpha)
@@ -179,7 +184,7 @@ class _Page(QWidget):
             y = self._wrapped(painter, 0, y + 2, width,
                               f"The lines are the {plan['lines_from']} chart's; these {plan['timeframe']} candles only"
                               f" time the trade. Break, retest and confirmation show here sooner, and the stop is sized"
-                              f" by this chart's smaller ATR ({_price(plan['atr'], plan['decimals'])}) -- a tighter"
+                              f" by this chart's smaller ATR ({_indicator(plan['atr'])}) -- a tighter"
                               f" stop and a better reward : risk, at the cost of more false starts.",
                               _font(9), _ACCENT) + 4
 
@@ -562,7 +567,7 @@ class _Page(QWidget):
         y = rect.bottom() + 8
 
         if plan["rsi"] is not None:
-            y = self._wrapped(painter, 0, y, width, f"RSI now {plan['rsi']:.0f}: {plan['rsi_zone']}.",
+            y = self._wrapped(painter, 0, y, width, f"RSI now {_indicator(plan['rsi'])}: {plan['rsi_zone']}.",
                               _font(9, bold=True), _TEXT) + 2
 
         return self._note(painter, y, width, f"Buying wants RSI above 50 but under {plan['rsi_high']}; selling,"
@@ -581,7 +586,7 @@ class _Page(QWidget):
         if gone:
             d = self.plan["decimals"]
             verdict = ("worth taking" if gone["worth"] and gone["rsi_ok"]
-                       else "the rules would have skipped it" + (f" (RSI {gone['rsi']:.0f})" if not gone["rsi_ok"]
+                       else "the rules would have skipped it" + (f" (RSI {_indicator(gone['rsi'])})" if not gone["rsi_ok"]
                                                                  and gone["rsi"] is not None else
                                                                  f" ({gone['ratio']:.2f} : 1)"))
             y = self._note(painter, y, width,
@@ -631,7 +636,7 @@ class _Page(QWidget):
         ]
 
         if found.get("rsi") is not None:
-            rows.append(("RSI then", f"{found['rsi']:.0f} -- " + ("in range" if found["rsi_ok"] else "out of range")))
+            rows.append(("RSI then", f"{_indicator(found['rsi'])} -- " + ("in range" if found["rsi_ok"] else "out of range")))
 
         y += 4
 
@@ -656,12 +661,12 @@ class _Page(QWidget):
                       f" as far from it, each within {chosen.get('peak_candles', 0)} candles -- a wobble in a range"
                       f" is not a high, and one high alone is not a line. Your own lines (amber) come from"
                       f" trade-plan.json, under {self.plan['symbol']}."),
-            ("ATR (14)", f"{_price(self.plan['atr'], self.plan['decimals'])}: how far {self.plan['instrument']}"
+            ("ATR (14)", f"{_indicator(self.plan['atr'])}: how far {self.plan['instrument']}"
                          f" typically moves in one {self.plan['timeframe']}"
                          f" candle. The stop sits {chosen['stop_atr']:g} ATR beyond the retest, so ordinary noise"
                          f" does not reach it."),
             ("Target", f"{chosen['target_buffer_atr']:g} ATR"
-                       + (f" of the {self.plan['lines_from']} chart ({_price(self.plan['line_atr'], self.plan['decimals'])})"
+                       + (f" of the {self.plan['lines_from']} chart ({_indicator(self.plan['line_atr'])})"
                           if self.plan.get("lines_from") else "")
                        + " short of the next line: price often turns just before a line, so the target does not ask"
                          " it to touch."),
@@ -802,7 +807,7 @@ class TradePlanPanel(QWidget):
         self._title.setText(f"{shown['instrument'].upper()}  /  {shown['timeframe'].upper()} PLAN"
                             if plan else f"{shown['instrument'].upper()}  /  ENTRY CANDLES")
         price = _price(shown["price"], shown["decimals"]) + ("" if shown["live"] else " (market closed: last close)")
-        self._subtitle.setText(f"{shown['symbol']}  -  price {price}  -  ATR {_price(shown['atr'], shown['decimals'])}"
+        self._subtitle.setText(f"{shown['symbol']}  -  price {price}  -  ATR {_indicator(shown['atr'])}"
                                f"  -  last candle closed {shown['read']} UK ({shown.get('read_utc', '')})"
                                f"  -  the one forming closes {shown['next_close']} UK")
 

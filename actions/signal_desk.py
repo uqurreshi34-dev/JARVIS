@@ -158,7 +158,10 @@ def block_for(found, chart_4h, chart_15m):
 
     if found["rsi"] is not None:
         lines.append(
-            f"  RSI:         {found['rsi']:.0f}  ({found['rsi_zone']})")
+            f"  RSI:         {trade_plan.indicator(found['rsi'])}  ({found['rsi_zone']})")
+
+    if found.get("atr") is not None:
+        lines.append(f"  ATR:         {trade_plan.indicator(found['atr'])}")
 
     lines.append(f"  4-hour:      {found['headline']}")
 
