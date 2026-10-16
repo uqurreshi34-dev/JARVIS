@@ -230,8 +230,15 @@ class Orchestrator:
         if front_in == 0:
             return
 
-        gas_price = swap.gas_price + self.http.to_wei(2, "gwei")
-        gas_cost = gas_price * 800_000
+        # Base gas is fractions of a gwei, not whole gweis. The old
+        # "+2 gwei" assumed mainnet and overestimated the bundle's
+        # gas cost by ~100x, which made every candidate look unprofitable.
+        latest = self.http.eth.get_block("latest")
+        base_fee = latest.get("baseFeePerGas", self.http.to_wei(0.01, "gwei"))
+        # generous on Base, still tiny
+        our_tip = self.http.to_wei(0.1, "gwei")
+        gas_price = base_fee + our_tip
+        gas_cost = gas_price * 800_000             # 800k = both txs together
         net_profit = profit - gas_cost
         print(f"[cand] V2 {swap.base_token[:8]} victim_in={swap.amount_in} "
               f"front={front_in} gross={profit} net={net_profit}")
@@ -274,8 +281,15 @@ class Orchestrator:
         if front_in == 0:
             return
 
-        gas_price = swap.gas_price + self.http.to_wei(2, "gwei")
-        gas_cost = gas_price * 800_000
+        # Base gas is fractions of a gwei, not whole gweis. The old
+        # "+2 gwei" assumed mainnet and overestimated the bundle's
+        # gas cost by ~100x, which made every candidate look unprofitable.
+        latest = self.http.eth.get_block("latest")
+        base_fee = latest.get("baseFeePerGas", self.http.to_wei(0.01, "gwei"))
+        # generous on Base, still tiny
+        our_tip = self.http.to_wei(0.1, "gwei")
+        gas_price = base_fee + our_tip
+        gas_cost = gas_price * 800_000             # 800k = both txs together
         net_profit = profit - gas_cost
         print(f"[cand] V3 {swap.base_token[:8]} fee={state['fee']} "
               f"victim_in={swap.amount_in} front={front_in} "
