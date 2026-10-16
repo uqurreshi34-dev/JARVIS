@@ -23,16 +23,16 @@ try:
 except Exception:
     flashbot = None
 
-WETH = to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+WETH = to_checksum_address("0x4200000000000000000000000000000000000006")
 
 UNISWAP_V2_ROUTER = to_checksum_address(
-    "0x4752ba5DBC251Ed37A0A4C9F979A0525FdA0e489")
+    "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24")
 SUSHISWAP_ROUTER = to_checksum_address(
     "0x6BDED42c0d1e1C3E1F14Dc78cE49b8a65D9E0bD8")
 AERODROME_ROUTER = to_checksum_address(
     "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43")
 BASESWAP_ROUTER = to_checksum_address(
-    "0x327Df1E6de05895d2ab08513aaDD9313Fe505d86")
+    "0xBE6D8f0d05cC4be24d5167a3eF062215bE6d18a5")
 PANCAKESWAP_ROUTER = to_checksum_address(
     "0x8cFe327CEc66d1C090Dd72bd0FF11d690C33a2Eb")
 UNISWAP_V3_ROUTER_01 = to_checksum_address(
@@ -40,9 +40,9 @@ UNISWAP_V3_ROUTER_01 = to_checksum_address(
 UNISWAP_V3_ROUTER_02 = to_checksum_address(
     "0x2626664c2603336E57B271c5C0b26F421741e481")
 UNIVERSAL_ROUTER_OLD = to_checksum_address(
-    "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD")
+    "0x198ef79f1f515f02dfe9e3115ed9fc07183f02fc")
 UNIVERSAL_ROUTER_NEW = to_checksum_address(
-    "0x6ff5693b99212da76ad316178a184ab56d299b43")
+    "0x198ef79f1f515f02dfe9e3115ed9fc07183f02fc")
 
 ROUTER_BY_NAME = {
     "uniswap_v2": UNISWAP_V2_ROUTER,
@@ -182,15 +182,9 @@ class BundleExecutor:
                       token_out: str, fee: int,
                       amount_in: int, min_out: int,
                       deadline: int) -> bytes:
-        if router_name == "uniswap_v3_02":
-            abi = V3_SINGLE_ABI_02
-            params = (WETH, to_checksum_address(token_out), fee,
-                      self.executor_contract, amount_in, min_out, 0)
-        else:
-            abi = V3_SINGLE_ABI_01
-            params = (WETH, to_checksum_address(token_out), fee,
-                      self.executor_contract, deadline,
-                      amount_in, min_out, 0)
+        abi = V3_SINGLE_ABI_02
+        params = (WETH, to_checksum_address(token_out), fee,
+                  self.executor_contract, amount_in, min_out, 0)
         router = self.w3.eth.contract(address=router_addr, abi=abi)
         return router.functions.exactInputSingle(params).build_transaction(
             {"value": 0})["data"]
@@ -199,15 +193,9 @@ class BundleExecutor:
                       token_in: str, fee: int,
                       amount_in: int, min_out: int,
                       deadline: int) -> bytes:
-        if router_name == "uniswap_v3_02":
-            abi = V3_SINGLE_ABI_02
-            params = (to_checksum_address(token_in), WETH, fee,
-                      self.executor_contract, amount_in, min_out, 0)
-        else:
-            abi = V3_SINGLE_ABI_01
-            params = (to_checksum_address(token_in), WETH, fee,
-                      self.executor_contract, deadline,
-                      amount_in, min_out, 0)
+        abi = V3_SINGLE_ABI_02
+        params = (to_checksum_address(token_in), WETH, fee,
+                  self.executor_contract, amount_in, min_out, 0)
         router = self.w3.eth.contract(address=router_addr, abi=abi)
         return router.functions.exactInputSingle(params).build_transaction(
             {"value": 0})["data"]

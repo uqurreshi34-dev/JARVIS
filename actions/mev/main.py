@@ -18,7 +18,7 @@ from actions.mev.v3_pool import V3PoolReader
 
 load_dotenv()
 
-WETH = to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+WETH = to_checksum_address("0x4200000000000000000000000000000000000006")
 Q96 = 2 ** 96
 
 PAIR_ABI = [

@@ -20,15 +20,16 @@ from eth_utils import to_checksum_address
 from actions.mev.tx_decoder import _to_int, _effective_gas_price
 
 
+WETH = to_checksum_address("0x4200000000000000000000000000000000000006")
+
+# On Base there is only one V3 router (SwapRouter02)
 SWAP_ROUTER_01 = to_checksum_address(
-    "0x2626664c2603336E57B271c5C0b26F421741e481")  # Uniswap V3 Router on Base
+    "0x2626664c2603336E57B271c5C0b26F421741e481")
 SWAP_ROUTER_02 = to_checksum_address(
-    "0x2626664c2603336E57B271c5C0b26F421741e481")  # Use the same one for both
+    "0x2626664c2603336E57B271c5C0b26F421741e481")
 
 # For the mempool subscription's toAddress filter.
 ROUTER_ADDRS_V3 = [SWAP_ROUTER_01.lower(), SWAP_ROUTER_02.lower()]
-
-WETH = to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
 
 
 # --- SwapRouter (original) ----------------------------------------------
@@ -158,10 +159,7 @@ def decode_swap_v3(tx: dict) -> Optional[DecodedSwapV3]:
         return None
     to = to_checksum_address(to)
 
-    if to == SWAP_ROUTER_01:
-        router_name = "uniswap_v3"
-        table, decode_fn = _SELECTORS_SR01, _decode_sr01
-    elif to == SWAP_ROUTER_02:
+    if to == SWAP_ROUTER_02:
         router_name = "uniswap_v3_02"
         table, decode_fn = _SELECTORS_SR02, _decode_sr02
     else:

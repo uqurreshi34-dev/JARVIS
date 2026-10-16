@@ -8,7 +8,7 @@ from eth_utils import to_checksum_address
 
 # Router addresses (checksummed)
 UNISWAP_V2_ROUTER = to_checksum_address(
-    "0x4752ba5DBC251Ed37A0A4C9F979A0525FdA0e489")
+    "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24")
 SUSHISWAP_ROUTER = to_checksum_address(
     "0x6BDED42c0d1e1C3E1F14Dc78cE49b8a65D9E0bD8")
 AERODROME_ROUTER = to_checksum_address(
@@ -38,7 +38,7 @@ SELECTORS = {
     "0x4a25d94a": ("swapTokensForExactETH",    ["uint256", "uint256", "address[]", "address", "uint256"]),
 }
 
-WETH = to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+WETH = to_checksum_address("0x4200000000000000000000000000000000000006")
 
 
 def _to_int(v) -> int:

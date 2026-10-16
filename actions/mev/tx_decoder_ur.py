@@ -27,18 +27,14 @@ from eth_utils import to_checksum_address
 from actions.mev.tx_decoder import _to_int, _effective_gas_price
 
 
-# Two UniversalRouters are live on mainnet. The 0x3fC91A... one is
-# the original (2023); 0x66a9893c... is the current one that most
-# traffic routes through as of 2024.
+WETH = to_checksum_address("0x4200000000000000000000000000000000000006")
+
 UNIVERSAL_ROUTERS = (
-    to_checksum_address("0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD"),
-    to_checksum_address("0x6ff5693b99212da76ad316178a184ab56d299b43"),
+    to_checksum_address("0x198ef79f1f515f02dfe9e3115ed9fc07183f02fc"),  # Base
 )
 
 # Backwards-compat alias for the older name.
 UNIVERSAL_ROUTER = UNIVERSAL_ROUTERS[0]
-
-WETH = to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
 
 # execute(bytes,bytes[],uint256) — the deadline form, by far the most common
 _EXECUTE_DEADLINE = "0x3593564c"
