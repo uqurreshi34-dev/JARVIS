@@ -57,7 +57,7 @@ class MempoolListener:
         # Watchdog bookkeeping (leftover from earlier versions).
         self._stuck_cycles = 0
         # TEMP DIAG: unique (to, selector) pairs seen since startup,
-        # capped at 30. Remove the whole diag block once we're done.
+        # capped at 300. Remove the whole diag block once we're done.
         self._diag_targets: set = set()
 
     def _rate_ok(self) -> bool:
@@ -166,10 +166,10 @@ class MempoolListener:
                           f"{type(e).__name__}: {e}")
                 return
 
-            # TEMP DIAG: log the first 30 unique (to, selector) pairs
+            # TEMP DIAG: log the first 300 unique (to, selector) pairs
             # that we couldn't decode. Tells us which routers are
             # actually arriving and what their selectors look like.
-            if len(self._diag_targets) < 30:
+            if len(self._diag_targets) < 300:
                 to_addr = tx.get("to")
                 data = tx.get("input") or tx.get("data") or b""
                 if isinstance(data, bytes):
@@ -232,7 +232,7 @@ class MempoolListener:
         await ws.send(json.dumps({
             "jsonrpc": "2.0", "id": sub_id,
             "method": "eth_subscribe",
-            "params": ["newFlashblockTransactions"],
+            "params": ["newFlashblockTransactions", True],
         }))
         ack = json.loads(await ws.recv())
         if "error" in ack:

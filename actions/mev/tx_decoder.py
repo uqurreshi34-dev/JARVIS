@@ -10,15 +10,15 @@ from eth_utils import to_checksum_address
 UNISWAP_V2_ROUTER = to_checksum_address(
     "0x4752ba5DBC251Ed37A0A4C9F979A0525FdA0e489")
 SUSHISWAP_ROUTER = to_checksum_address(
-    "0x6BDED42c0d1e1C3E1F14Dc78cE49b8a65D9E0bD8")  # Sushi on Base
+    "0x6BDED42c0d1e1C3E1F14Dc78cE49b8a65D9E0bD8")
 AERODROME_ROUTER = to_checksum_address(
     "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43")
 BASESWAP_ROUTER = to_checksum_address(
-    "0x327Df1E6de05895d2ab08513aaDD9313Fe505d86")
+    "0xBE6D8f0d05cC4be24d5167a3eF062215bE6d18a5")
 PANCAKESWAP_ROUTER = to_checksum_address(
     "0x8cFe327CEc66d1C090Dd72bd0FF11d690C33a2Eb")
 
-# All three of these are Uniswap V2 forks and use the same function
+# All of these are Uniswap V2 forks and use the same function
 # selectors, so they slot straight into the SELECTORS table below.
 ROUTERS = {
     UNISWAP_V2_ROUTER: "uniswap_v2",
