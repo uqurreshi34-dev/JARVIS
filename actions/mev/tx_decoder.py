@@ -128,9 +128,8 @@ def decode_swap(tx: dict) -> Optional[DecodedSwap]:
         is_buy = False
         base_token = path[0]
     else:
-        # Token→Token; treat as buy of path[-1]
-        is_buy = True
-        base_token = path[-1]
+        # Token→Token; WETH not in the path. Not sandwichable.
+        return None
 
     return DecodedSwap(
         router=ROUTERS[to],
