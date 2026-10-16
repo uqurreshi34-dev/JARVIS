@@ -16,8 +16,7 @@ from web3 import Web3
 from eth_utils import to_checksum_address
 
 
-V3_FACTORY = to_checksum_address(
-    "0x1F98431c8aD98523631AE4a59f267346ea31F984")
+V3_FACTORY = to_checksum_address("0x33128a8fC17869897dcE68Ed026d694621f6FDfD")
 
 FACTORY_ABI = [
     {"name": "getPool", "type": "function", "stateMutability": "view",

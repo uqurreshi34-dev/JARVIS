@@ -8,9 +8,9 @@ from eth_utils import to_checksum_address
 
 # Router addresses (checksummed)
 UNISWAP_V2_ROUTER = to_checksum_address(
-    "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D")
+    "0x4752ba5DBC251Ed37A0A4C9F979A0525FdA0e489")
 SUSHISWAP_ROUTER = to_checksum_address(
-    "0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F")
+    "0x6BDED42c0d1e1C3E1F14Dc78cE49b8a65D9E0bD8")  # Sushi on Base
 ROUTERS = {UNISWAP_V2_ROUTER: "uniswap_v2", SUSHISWAP_ROUTER: "sushiswap"}
 
 # Function selectors → (name, abi_types)

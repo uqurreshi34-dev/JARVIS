@@ -5,3 +5,4 @@ eth-utils>=2.3.0
 flashbots>=1.1.1
 python-dotenv>=1.0.0
 websockets>=12.0,<13.0
+py-solc-x>=0.10.0

@@ -46,9 +46,9 @@ FACTORIES = {"uniswap_v2": UNI_FACTORY, "sushiswap": SUSHI_FACTORY}
 
 class Orchestrator:
     def __init__(self):
-        self.http = Web3(Web3.HTTPProvider(os.getenv("ETHEREUM_HTTP_URL")))
+        self.http = Web3(Web3.HTTPProvider(os.getenv("BASE_HTTP_URL")))
         self.executor = BundleExecutor(
-            http_url=os.getenv("ETHEREUM_HTTP_URL"),
+            http_url=os.getenv("BASE_HTTP_URL"),
             executor_key=os.getenv("EXECUTOR_PRIVATE_KEY"),
             relay_key=os.getenv("FLASHBOTS_RELAY_SIGNING_KEY"),
             executor_address=os.getenv("SANDWICH_EXECUTOR_ADDRESS"),
@@ -64,7 +64,7 @@ class Orchestrator:
         self._reserves_ttl = 3.0
         self._on_swap_sem = asyncio.Semaphore(2)
         self.safety = SafetyGuard(
-            max_bundle_eth=float(os.getenv("MEV_MAX_BUNDLE_ETH", "0.5")),
+            max_bundle_eth=float(os.getenv("MEV_MAX_BUNDLE_ETH", "0.005")),
             max_daily_loss_eth=float(
                 os.getenv("MEV_MAX_DAILY_LOSS_ETH", "0.1")),
             max_consec_failures=int(os.getenv("MEV_MAX_CONSEC_FAILURES", "5")),
@@ -127,7 +127,7 @@ class Orchestrator:
     # --- shared pre-checks ---------------------------------------------
     def _wallet_cap(self):
         wallet_bal = self.http.eth.get_balance(self.executor_addr)
-        gas_reserve = self.http.to_wei(0.02, "ether")
+        gas_reserve = self.http.to_wei(0.0005, "ether")
         if wallet_bal <= gas_reserve:
             return 0, wallet_bal
         return int((wallet_bal - gas_reserve) * 0.5), wallet_bal
@@ -150,7 +150,7 @@ class Orchestrator:
             "uniswap_v3", "uniswap_v3_02") or function.startswith("V3_")
         is_ur = router == "universal_router"
 
-        if swap.amount_in < self.http.to_wei(0.1, "ether"):
+        if swap.amount_in < self.http.to_wei(0.001, "ether"):
             return
 
         max_front, wallet_bal = self._wallet_cap()
@@ -316,8 +316,8 @@ class Orchestrator:
         print(f"[orchestrator] contract={self.executor.executor_contract}")
         print(f"[orchestrator] simulation={self.executor.simulation}")
         listener = MempoolListener(
-            ws_url=os.getenv("ETHEREUM_WS_URL"),
-            http_url=os.getenv("ETHEREUM_HTTP_URL"),
+            ws_url=os.getenv("BASE_WS_URL"),
+            http_url=os.getenv("BASE_HTTP_URL"),
             on_swap=self.on_swap,
         )
         await listener.run()

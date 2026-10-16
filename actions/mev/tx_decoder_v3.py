@@ -21,9 +21,9 @@ from actions.mev.tx_decoder import _to_int, _effective_gas_price
 
 
 SWAP_ROUTER_01 = to_checksum_address(
-    "0xE592427A0AEce92De3Edee1F18E0157C05861564")
+    "0x2626664c2603336E57B271c5C0b26F421741e481")  # Uniswap V3 Router on Base
 SWAP_ROUTER_02 = to_checksum_address(
-    "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45")
+    "0x2626664c2603336E57B271c5C0b26F421741e481")  # Use the same one for both
 
 # For the mempool subscription's toAddress filter.
 ROUTER_ADDRS_V3 = [SWAP_ROUTER_01.lower(), SWAP_ROUTER_02.lower()]
