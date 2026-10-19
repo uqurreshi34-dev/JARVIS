@@ -11,6 +11,7 @@ kept in memory, never written to disk, and replaced by the next.
 Said aloud, and never a model call to show one:
 
     show me the street / show me the street camera / show me my room cam
+    show me all the cameras / show my cameras            (every camera at once)
     what's happening on the street / what's outside      (described: a model call)
 
 What a camera looks at comes from the house plan: a window that "looks"
@@ -622,3 +623,63 @@ def picture(text):
 
 def _first_up(text):
     return text[:1].upper() + text[1:]
+
+
+def here_words(text, camera):
+    """What JARVIS says showing [camera], in the words asked: "The street, sir." or "Here's your room cam, sir." """
+    view = by_view(text, camera)
+    return f"The {camera['looks']}, sir." if view else f"Here's {_called(camera, view)}, sir."
+
+
+# ---- every camera at once ---------------------------------------------------------------------
+
+# "Show me all the cameras", "show my cameras", "show every camera": always more than one -- plural, or
+# "all" or "every" -- so "show me the camera" and "open the camera" stay the PC's own webcam.
+_EVERY = (r"(?:all\s+(?:of\s+)?(?:the\s+|my\s+|our\s+)?(?:cameras|cams|camera\s+feeds|feeds)"
+          r"|(?:the\s+|my\s+|our\s+)?(?:cameras|cams|camera\s+feeds)"
+          r"|every\s+(?:camera|cam))")
+_ALL_SHOWN = re.compile(r"^(?:show\s+me|show|let\s+me\s+see|bring\s+up|pull\s+up|open|display)\s+" + _EVERY + "$")
+_ALL_CLOSED = re.compile(r"^(?:" + "|".join(verb.replace(" ", r"\s+") for verb in _CLOSE) + r")\s+" + _EVERY + "$")
+
+
+def _plain(text):
+    words = _spoken_words(text)
+
+    while words and words[0] in _POLITE:
+        words = words[1:]
+
+    while words and words[-1] in ("please", "jarvis", "now", "right", "sir"):
+        words = words[:-1]
+
+    return " ".join(words)
+
+
+def all_asked(text):
+    """Whether [text] asks to see every camera at once: "show me all the cameras", "show my cameras"."""
+    return bool(_ALL_SHOWN.match(_plain(text)))
+
+
+def all_dismissed(text):
+    """Whether [text] puts every camera away: "close all the cameras", "hide my cameras"."""
+    return bool(_ALL_CLOSED.match(_plain(text)))
+
+
+def online():
+    """The cameras connected now, in the order cameras() gives them."""
+    return [camera for camera in cameras() if camera["online"]]
+
+
+def gone():
+    """The cameras that have reported themselves this run and are not connected now: unplugged, or off the
+    wifi. Not a camera the house plan only draws, which no board has yet claimed."""
+    heard = sensors.known()
+    return [camera for camera in cameras() if not camera["online"] and camera["name"] in heard]
+
+
+def watch_all(names, seconds=None):
+    """Live view for every camera in [names] at once -- the grid -- and for no other."""
+    with _lock:
+        _live.clear()
+
+    for name in names:
+        watch(name, seconds)

@@ -37,6 +37,7 @@ from commands import (
     select_image_choice,
     set_brain_listener,
     set_camera_listener,
+    set_camera_grid_listener,
     set_confirmation_listener,
     set_chart_listener,
     set_choices_listener,
@@ -1061,6 +1062,18 @@ def main():
             view_beam.hidden.emit()
 
     set_camera_listener(camera_update)
+
+    # Every camera at once, in the same panel: a tile each, tapped to make one big, BACK to return.
+    def camera_grid_update(event, payload):
+        if event == "grid":
+            view.show_grid.emit(payload)
+            view_beam.shown.emit()
+        elif event == "frame":
+            view.grid_frame.emit(payload[0], payload[1])
+        elif event == "focus":
+            view.focus_camera.emit(payload or "")
+
+    set_camera_grid_listener(camera_grid_update)
 
     # The fetched-image panel gets its own beam too, same as camera/chart.
     # Named "photo" rather than "picture" to avoid reading like the news

@@ -1,4 +1,6 @@
-// JARVIS camera: an ESP32-CAM (AI Thinker) that takes a picture only when asked.
+// JARVIS camera: an ESP32-CAM (AI Thinker), or an ESP32-S3-CAM, that takes a
+// picture only when asked. The same sketch for both: the S3's camera pins and
+// name are chosen below by the chip it is built for (PlatformIO env "s3cam").
 //
 // It reports to JARVIS over HTTPS, checking JARVIS's certificate against
 // JARVIS's own certificate authority (setCACert) -- never setInsecure().
@@ -44,6 +46,36 @@
 #include "jarvis_config.h"
 #include "jarvis_secrets.h"
 
+// The S3 board is a second camera, with its own name: jarvis_secrets.h names
+// the first ("my room cam"), and this one is called by what it watches. Say
+// "show me the house cam", or "show me all the cameras" for both at once.
+#ifdef JARVIS_CAMERA_NAME_HOUSE
+#undef SENSOR_NAME
+#define SENSOR_NAME "house cam"
+#endif
+
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+// ESP32-S3-CAM (Goouuu, ESP32-S3-N16R8): the camera's pins, as Espressif's
+// ESP32-S3-EYE and the boards that copy it wire them. No power-down or reset
+// pin, and no white flash LED (its RGB light, on 48, is left alone).
+#define PWDN_GPIO_NUM -1
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM 15
+#define SIOD_GPIO_NUM 4
+#define SIOC_GPIO_NUM 5
+#define Y9_GPIO_NUM 16
+#define Y8_GPIO_NUM 17
+#define Y7_GPIO_NUM 18
+#define Y6_GPIO_NUM 12
+#define Y5_GPIO_NUM 10
+#define Y4_GPIO_NUM 8
+#define Y3_GPIO_NUM 9
+#define Y2_GPIO_NUM 11
+#define VSYNC_GPIO_NUM 6
+#define HREF_GPIO_NUM 7
+#define PCLK_GPIO_NUM 13
+#define FLASH_LED_PIN -1
+#else
 // AI Thinker ESP32-CAM: the camera's pins, fixed by the board.
 #define PWDN_GPIO_NUM 32
 #define RESET_GPIO_NUM -1
@@ -65,6 +97,7 @@
 // The bright white LED beside the lens. Kept off: a camera looking out of
 // a window at night would only see its own reflection.
 #define FLASH_LED_PIN 4
+#endif
 
 static const unsigned long HEARTBEAT_EVERY_MS = 15UL * 1000UL;
 // Asking every second: a picture starts within a second of "show me", and JARVIS
@@ -347,6 +380,9 @@ bool startCamera() {
 
   if (problem != ESP_OK) {
     Serial.printf("[jarvis] the camera did not start (0x%x): is its ribbon pushed in and latched?\n", problem);
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+    Serial.println("[jarvis] (ESP32-S3: if the ribbon is in, this board's camera pins differ from the S3-EYE's)");
+#endif
     return false;
   }
 
@@ -425,10 +461,16 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
-  pinMode(FLASH_LED_PIN, OUTPUT);
-  digitalWrite(FLASH_LED_PIN, LOW);
+  if (FLASH_LED_PIN >= 0) {
+    pinMode(FLASH_LED_PIN, OUTPUT);
+    digitalWrite(FLASH_LED_PIN, LOW);
+  }
 
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+  Serial.print("[jarvis] ESP32-S3-CAM as ");
+#else
   Serial.print("[jarvis] ESP32-CAM as ");
+#endif
   Serial.println(SENSOR_NAME);
 
   cameraReady = startCamera();

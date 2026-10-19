@@ -645,10 +645,17 @@ recorded: JARVIS keeps the newest picture in memory and nothing on disk.
 |---|---|
 | show me the street | asks the camera for a picture and shows it (**free**) |
 | show me my room cam | the same, by the camera's own name |
+| show me the house cam | the ESP32-S3-CAM, by its name |
+| show me all the cameras / show my cameras | every camera live at once, a tile each; tap one to make it big, BACK for them all |
 | what's happening on the street / what's outside | describes the picture (a model call) |
-| close the camera | puts the picture away |
+| close the camera / close all the cameras | puts the picture (or every camera) away |
 
 What a camera looks at is the "looks" of its room's window in house.json.
+
+Two boards, one sketch (arduino/jarvis_camera): `pio run -e cam -t upload` for the
+ESP32-CAM ("my room cam"), `pio run -e s3cam -t upload` for the ESP32-S3-CAM ("house
+cam"), plugged into its USB-C socket marked TTL. On the phone, the cameras button
+opens the same grid.
 
 ## Is he there
 

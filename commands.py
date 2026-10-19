@@ -1715,12 +1715,28 @@ def _sandbox_hide():
 
 
 _camera_listener = None
+_camera_grid_listener = None
 
 
 def set_camera_listener(listener):
     """Register a callable taking (png bytes, caption)."""
     global _camera_listener
     _camera_listener = listener
+
+
+def set_camera_grid_listener(listener):
+    """Register a callable taking (event, payload) for every camera at once: ("grid", [{"name", "title"}])
+    opens the grid, ("frame", (name, jpeg)) is a tile's new frame, ("focus", name) enlarges one."""
+    global _camera_grid_listener
+    _camera_grid_listener = listener
+
+
+def _tell_grid(event, payload):
+    if _camera_grid_listener:
+        try:
+            _camera_grid_listener(event, payload)
+        except Exception as error:
+            print(f"[JARVIS] could not show the cameras: {error}")
 
 
 _brain_listener = None
@@ -2228,6 +2244,11 @@ def _camera_picture(command):
     request = cameras.asked(command)
     title = cameras.title(command, request[1]) if request else "CAMERA"
 
+    # Every camera already on screen: that one is made big, and the others keep streaming for "back".
+    if request and request[0] == "show" and _grid and cameras.normal_name(request[1]["name"]) in _grid:
+        _tell_grid("focus", cameras.normal_name(request[1]["name"]))
+        return cameras.here_words(command, request[1])
+
     # Shown, the picture is the camera's live view: each frame it streams replaces it until put away.
     if request and request[0] == "show":
         _live_view.update(name=cameras.normal_name(
@@ -2277,9 +2298,18 @@ def _switch_voice(command):
 # The camera whose live view is on screen: {"name", "title"}, or empty.
 _live_view = {}
 
+# Every camera on screen at once, by name, while the grid is up; empty otherwise.
+_grid = []
+
+_NUMBERS = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
+
 
 def _live_frame(name, frame):
-    """A frame of a camera's live view: onto the panel, if that camera's view is the one showing."""
+    """A frame of a camera's live view: onto its tile in the grid, or onto the panel if its view is showing."""
+    if name in _grid:
+        _tell_grid("frame", (name, frame))
+        return
+
     view = dict(_live_view)
 
     if view.get("name") == name and _camera_listener:
@@ -2289,9 +2319,37 @@ def _live_frame(name, frame):
 cameras.set_live_listener(_live_frame)
 
 
+def _camera_grid(command):
+    """Every connected camera live at once, each a tile; tapping one makes it big, and back returns."""
+    showing = cameras.online()
+
+    if not showing:
+        return "Your cameras are all offline, sir." if cameras.gone() else "No cameras are connected, sir."
+
+    if len(showing) == 1:
+        # One camera is not a grid: it is shown as asking for it by name would.
+        return _camera_picture(f"show me {showing[0]['name']}")
+
+    _end_live()
+    names = [cameras.normal_name(camera["name"]) for camera in showing]
+    _grid.extend(names)
+    cameras.watch_all(names)
+    _tell_grid("grid", [{"name": name, "title": name.upper()} for name in names])
+
+    away = [camera["name"] for camera in cameras.gone()]
+    said = f"Here are your {_NUMBERS.get(len(names), len(names))} cameras, sir."
+    return said + (f" {_first_upper(' and '.join(away))} {'is' if len(away) == 1 else 'are'} offline."
+                   if away else "")
+
+
+def _first_upper(text):
+    return text[:1].upper() + text[1:]
+
+
 def _end_live():
     cameras.stop_watching()
     _live_view.clear()
+    _grid.clear()
 
 
 def _stop_looking():
@@ -3931,6 +3989,7 @@ _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 # they may name a connected service: a protocol runs OBS's own actions
 # itself, and "initiate stream protocol" is not a request for Agent Mode.
 _SETTLED_HERE = frozenset({"protocol", "file_hologram", "house", "house_question", "camera_picture", "camera_close",
+                           "camera_grid",
                            "voice_switch", "open_sandbox", "close_sandbox",
                            "sensor_history", "tradingview", "dex_scan", "dex_scan_hide"})
 
@@ -4014,8 +4073,12 @@ def _fast_path(command):
     # "what's happening on the street". Only cameras that exist are named,
     # so with none, the PC's own webcam commands are left as they are.
     # Its close, by the same names, first: "close my room cam" is the panel, never a program to quit.
-    if cameras.dismissed(command):
+    if cameras.dismissed(command) or cameras.all_dismissed(command):
         return _blank_result("camera_close")
+
+    # Every camera at once: "show me all the cameras". Plural, so "show me the camera" stays the webcam's.
+    if cameras.all_asked(command):
+        return _blank_result("camera_grid")
 
     # Which voice speaks: "use the Google voice", "switch to Fable". Before
     # programs, so "switch to Fable" is never a window to bring up.
@@ -6112,12 +6175,17 @@ def _handle_command(command, *, fast_only=False, probe=False):
     if intent == "camera_picture":
         return _query(intent, lambda: _camera_picture(command))
 
+    if intent == "camera_grid":
+        return _query(intent, lambda: _camera_grid(command))
+
     if intent == "voice_switch":
         return _query(intent, lambda: _switch_voice(command))
 
     if intent == "camera_close":
         named = cameras.dismissed(command)
+        every = cameras.all_dismissed(command)
         return _query(intent, lambda: _stop_looking() and (cameras.closed_words(command, named) if named
+                                                           else "Cameras closed, sir." if every
                                                            else "Camera off, sir."))
 
     if intent == "sensor_history":

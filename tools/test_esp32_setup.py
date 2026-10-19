@@ -248,7 +248,8 @@ for sketch in ("jarvis_sensor", "jarvis_camera"):
 for sketch in ("jarvis_sensor", "jarvis_camera"):
     ini = (ROOT / "arduino" / sketch / "platformio.ini").read_text(encoding="utf-8")
     filters = [line.split("=", 1)[1].split() for line in ini.splitlines() if line.startswith("build_src_filter")]
-    check(filters == [[f"+<{sketch}.ino.cpp>"]],
+    # One filter for each board it builds for (the camera: the ESP32-CAM and the ESP32-S3-CAM).
+    check(filters and all(each == [f"+<{sketch}.ino.cpp>"] for each in filters),
           f"{sketch}: PlatformIO builds the converted sketch, and nothing else in the folder ({filters})")
 
 if os.environ.get("WRITE_CONFIG_TO"):

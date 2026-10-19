@@ -961,6 +961,38 @@ class PhoneServer:
 
         return {"name": asked[1]["name"], "title": cameras.title(text, asked[1])}
 
+    @staticmethod
+    def _cameras_shown(text):
+        """Every connected camera, when a command asked for them all ("show me all the cameras"), for the
+        phone to play as a grid; else None. Only for two or more: one alone is played as _camera_shown
+        plays a camera asked for by name."""
+        try:
+            if not cameras.all_asked(text):
+                return None
+
+            showing = cameras.online()
+        except Exception:
+            return None
+
+        if len(showing) < 2:
+            return None
+
+        return [{"name": camera["name"], "title": camera["name"].upper()} for camera in showing]
+
+    def _camera_or_grid(self, text):
+        """{"camera": one camera to play} or {"cameras": every camera, as a grid}, for a reply."""
+        grid = self._cameras_shown(text)
+
+        if grid:
+            return {"camera": None, "cameras": grid}
+
+        if cameras.all_asked(text):
+            alone = cameras.online()
+            return {"camera": ({"name": alone[0]["name"], "title": alone[0]["name"].upper()} if alone else None),
+                    "cameras": None}
+
+        return {"camera": self._camera_shown(text), "cameras": None}
+
     def _register_routes(self):
         app = self._app
 
@@ -1198,7 +1230,12 @@ class PhoneServer:
             if wanted not in {camera["name"] for camera in cameras.listed()}:
                 return jsonify({"error": "no such camera"}), 404
 
-            return Response(cameras.remote_frames(wanted), mimetype=cameras.REMOTE_MIMETYPE,
+            # A tile in the phone's grid asks for fewer frames than one camera full screen: several
+            # streams at once, on mobile data.
+            fps = request.args.get("fps", type=float)
+            fps = min(cameras.REMOTE_FPS, max(1.0, fps)) if fps else None
+
+            return Response(cameras.remote_frames(wanted, fps=fps), mimetype=cameras.REMOTE_MIMETYPE,
                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
         @app.post("/camera")
@@ -1392,7 +1429,7 @@ class PhoneServer:
                     "heard": text,
                     "reply": reply.get("spoken", ""),
                     "link": reply.get("link"),
-                    "camera": self._camera_shown(text),
+                    **self._camera_or_grid(text),
                 })
 
             if reply is None:
@@ -1403,7 +1440,7 @@ class PhoneServer:
             return jsonify({
                 "heard": text,
                 "reply": reply,
-                "camera": self._camera_shown(text),
+                **self._camera_or_grid(text),
             })
 
         @app.post("/voice")
@@ -1479,7 +1516,7 @@ class PhoneServer:
                         "heard": text,
                         "reply": reply.get("spoken", ""),
                         "link": reply.get("link"),
-                        "camera": self._camera_shown(text),
+                        **self._camera_or_grid(text),
                     })
 
                 if reply is None:
@@ -1490,7 +1527,7 @@ class PhoneServer:
                 return jsonify({
                     "heard": text,
                     "reply": reply,
-                    "camera": self._camera_shown(text),
+                    **self._camera_or_grid(text),
                 })
 
             except Exception as error:
@@ -1825,6 +1862,59 @@ PAGE = """<!DOCTYPE html>
   padding: 16px;
 }
 
+/* Every camera at once: a tile each, tapped to fill the screen; back returns to them all. */
+#feed-list.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  align-content: start;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.feed-tile {
+  position: relative;
+  background: #05080d;
+  border: 1px solid rgba(95, 200, 245, 0.35);
+  border-radius: 10px;
+  overflow: hidden;
+  padding: 0;
+  aspect-ratio: 4 / 3;
+}
+
+.feed-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.feed-tile span {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 6px 10px;
+  background: rgba(8, 14, 21, 0.75);
+  color: var(--ink);
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-align: left;
+}
+
+#feed-back {
+  display: none;
+  background: none;
+  color: var(--ink);
+  font-size: 15px;
+  letter-spacing: 2px;
+  padding: 0 6px;
+}
+
+#feed-back.shown {
+  display: inline-block;
+}
+
 #feed-note {
   color: var(--dim);
   text-align: center;
@@ -1968,6 +2058,7 @@ PAGE = """<!DOCTYPE html>
 
   <div id="feed">
     <div id="feed-top">
+      <button id="feed-back" type="button" title="all cameras">&#8249; BACK</button>
       <span id="feed-title">CAMERAS</span>
       <button id="feed-close" type="button" title="close">&#10005;</button>
     </div>
@@ -2747,7 +2838,9 @@ async function submit() {
     } else if (data.reply) {
       add(data.reply, "jarvis");
 
-      if (data.camera) {
+      if (data.cameras && data.cameras.length) {
+        openGrid(data.cameras);
+      } else if (data.camera) {
         openFeed(data.camera.name, data.camera.title);
       }
 
@@ -2855,35 +2948,83 @@ const feedTitle = document.getElementById("feed-title");
 const feedList = document.getElementById("feed-list");
 const feedNote = document.getElementById("feed-note");
 
+const feedBack = document.getElementById("feed-back");
+
+// The cameras the grid last showed, so BACK can open it again.
+let gridCameras = [];
+
+function watchUrl(name, fps) {
+  return "/camera/watch?t=" + encodeURIComponent(TOKEN) + "&name=" + encodeURIComponent(name) +
+    (fps ? "&fps=" + fps : "") + "&at=" + Date.now();
+}
+
+function stopTiles() {
+  // Each tile's stream closes with its source, and JARVIS lets that camera stop when nothing watches it.
+  feedList.querySelectorAll("img").forEach(img => img.removeAttribute("src"));
+  feedList.innerHTML = "";
+  feedList.classList.remove("grid");
+}
+
 function stopFeed() {
   // Without a source the stream's connection closes, and JARVIS lets the camera stop.
   feedImg.onload = null;
   feedImg.onerror = null;
   feedImg.removeAttribute("src");
   feedImg.style.display = "none";
+  stopTiles();
 }
 
-function openFeed(name, title) {
+// Every camera at once, a tile each at a few frames a second; tapping one opens it full screen.
+function openGrid(listed) {
+  gridCameras = listed.slice();
+  stopFeed();
+  feedImg.dataset.name = "";
+  feedBack.classList.remove("shown");
+  feedTitle.textContent = "CAMERAS";
+  feedNote.textContent = "Tap a camera to make it big, sir.";
+  feedList.classList.add("grid");
+
+  listed.forEach(camera => {
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = "feed-tile";
+    const img = document.createElement("img");
+    img.alt = camera.title || camera.name;
+    img.src = watchUrl(camera.name, 4);
+    const label = document.createElement("span");
+    label.textContent = camera.title || camera.name.toUpperCase();
+    tile.appendChild(img);
+    tile.appendChild(label);
+    tile.addEventListener("click", () => openFeed(camera.name, camera.title, true));
+    feedList.appendChild(tile);
+  });
+
+  feed.classList.add("open");
+}
+
+function openFeed(name, title, fromGrid) {
   // Already playing this camera (the alarm's tap and its notice both ask): leave it playing.
   if (feed.classList.contains("open") && feedImg.dataset.name === name && feedImg.getAttribute("src")) return;
 
   stopFeed();
+  feedBack.classList.toggle("shown", !!fromGrid);
   feedImg.dataset.name = name;
-  feedList.innerHTML = "";
   feedTitle.textContent = title || name.toUpperCase();
   feedNote.textContent = "Waking the camera, sir...";
   feedImg.style.display = "block";
   feedImg.onload = () => { feedNote.textContent = ""; };
   feedImg.onerror = () => { feedNote.textContent = "The camera stopped sending, sir."; };
-  feedImg.src = "/camera/watch?t=" + encodeURIComponent(TOKEN) +
-    "&name=" + encodeURIComponent(name) + "&at=" + Date.now();
+  feedImg.src = watchUrl(name);
   feed.classList.add("open");
 }
 
 function closeFeed() {
   stopFeed();
+  feedBack.classList.remove("shown");
   feed.classList.remove("open");
 }
+
+feedBack.addEventListener("click", () => openGrid(gridCameras));
 
 async function showCameras() {
   let listed = [];
@@ -2908,21 +3049,7 @@ async function showCameras() {
     return;
   }
 
-  stopFeed();
-  feedTitle.textContent = "CAMERAS";
-  feedNote.textContent = "";
-  feedList.innerHTML = "";
-
-  online.forEach(camera => {
-    const choice = document.createElement("button");
-    choice.type = "button";
-    choice.className = "action";
-    choice.textContent = camera.looks ? camera.name + " (" + camera.looks + ")" : camera.name;
-    choice.addEventListener("click", () => openFeed(camera.name, camera.name.toUpperCase()));
-    feedList.appendChild(choice);
-  });
-
-  feed.classList.add("open");
+  openGrid(online.map(camera => ({ name: camera.name, title: camera.name.toUpperCase() })));
 }
 
 document.getElementById("feeds-open").addEventListener("click", showCameras);
@@ -3494,7 +3621,9 @@ async function stopRecording() {
     if (data.reply) {
       add(data.reply, "jarvis");
 
-      if (data.camera) {
+      if (data.cameras && data.cameras.length) {
+        openGrid(data.cameras);
+      } else if (data.camera) {
         openFeed(data.camera.name, data.camera.title);
       }
 
