@@ -486,12 +486,17 @@ bool joinWifi() {
 //
 // Every few seconds: the newest frame, decoded and letterboxed to the model's
 // 256 x 256 as Ultralytics trains it (grey bars, the aspect kept), run through
-// the model, and what it found above DETECT_SCORE sent to JARVIS (POST
+// the model, and what it found above its score sent to JARVIS (POST
 // /camera/seen) -- when it changes, and every DETECT_REPEAT_MS while anything
 // is in view. Names and scores and where each is (0 to 1 across the picture),
 // never the picture: JARVIS decides what is worth saying.
 
-static const float DETECT_SCORE = 0.40f;
+// How sure the model must be. Someone is said aloud, so a person must be
+// clear; small things -- a cup in a hand -- score lower at 256 x 256, and
+// at 0.40 a cup held up to the camera was never reported (19 October
+// 2026). 0.25 is FEMTO-ML's own example's threshold.
+static const float DETECT_SCORE_PERSON = 0.40f;
+static const float DETECT_SCORE_OTHER = 0.25f;
 static const unsigned long DETECT_GAP_MS = 1000UL;       // rest between runs
 static const unsigned long DETECT_REPEAT_MS = 15000UL;
 static const int DETECT_MAX = 12;
@@ -543,13 +548,10 @@ int readOutput(Seen *seen, int width, int height) {
   for (int d = 0; d < 300 && found < DETECT_MAX; ++d) {
     const float *row = tensor_output0[d];
 
-    if (row[4] < DETECT_SCORE) {
-      continue;
-    }
-
     int label = (int)row[5];
 
-    if (label < 0 || label >= LABEL_COUNT) {
+    if (label < 0 || label >= LABEL_COUNT ||
+        row[4] < (label == 0 ? DETECT_SCORE_PERSON : DETECT_SCORE_OTHER)) {
       continue;
     }
 
