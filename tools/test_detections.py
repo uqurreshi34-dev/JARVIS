@@ -14,7 +14,7 @@ Without a camera: reports are made here as the sketch sends them. Checked:
 - "mute the camera alerts" stops the saying (it is still journalled), "unmute" starts it;
 - "what has the house cam detected" and "is anyone on the house cam" are answered free, in words:
   "Your house cam sees a person and two cups, sir."; a stale report says so; a camera that only takes
-  pictures is not claimed;
+  pictures is not claimed; a board that can is told to take a look then, and the answer is that look;
 - the phone server's /camera/seen: the token, the size, a report;
 - the sketch: detection only in the s3detect build, beside live view, and labels from the model;
 - tools/femto_build.py: the labels header, and the model it expects.
@@ -180,6 +180,45 @@ check(detections.summary(house) == "Nothing your house cam recognises is in view
 detections._latest["house cam"]["at"] -= 600
 check("last reported 10 minutes ago" in detections.summary(house), "a stale report says how old it is")
 
+# ---- asked: a look taken now --------------------------------------------------------------------------------
+
+import threading  # noqa: E402
+
+detections.forget()
+detections.record("house cam", report())
+check(detections.look_now(house) == "Nothing your house cam recognises is in view, sir." and not detections.look_wanted("house cam"),
+      "a board that has never looked on request is answered from its last report, at once")
+
+
+def fresh(*objects, now=()):
+    looked = report(*now)
+    return dict(report(*objects), fresh=True, now=looked["objects"])
+
+
+check(detections.record("house cam", fresh()) is None and detections.record("house cam", {**report(), "fresh": True, "now": "x"})
+      == "not a report", "a look taken on request is kept, and a bad one refused")
+
+
+def board():
+    for _ in range(200):
+        if detections.look_wanted("house cam"):
+            # sure of nothing yet -- it has only just been held up -- but this look saw it
+            detections.record("house cam", fresh(now=(("laptop", 0.55),)))
+            return
+        time.sleep(0.01)
+
+
+threading.Thread(target=board, daemon=True).start()
+answer = detections.look_now(house)
+check(answer == "Your house cam sees a laptop, sir." and not detections.look_wanted("house cam"),
+      f"asked, the board is told to look, and the answer is what that look saw ({answer!r})")
+with patch.object(detections, "LOOK_WAIT", 0.2):
+    started = time.monotonic()
+    answer = detections.look_now(house)
+check(time.monotonic() - started < 1 and answer == "Nothing your house cam recognises is in view, sir.",
+      f"a look that does not come is waited for only so long, then what the board is sure of answers ({answer!r})")
+detections.forget()
+
 # ---- through commands, and the phone ---------------------------------------------------------------------
 
 try:
@@ -214,6 +253,12 @@ if phone is not None:
     check(client.post("/camera/seen", json={"objects": "dog"}, headers=headers).status_code == 400, "refuses a bad report")
     check(client.post("/camera/seen", json=report(("dog", 0.7)), headers=headers).status_code == 200
           and detections.latest("house cam")["objects"][0]["label"] == "dog", "and keeps a good one")
+    detections._look_wanted["house cam"] = time.monotonic()
+    asked = client.post("/camera/wanted", json={"name": "house cam"}, headers=headers).get_json() or {}
+    detections._look_wanted.clear()
+    told = client.post("/camera/wanted", json={"name": "house cam"}, headers=headers).get_json() or {}
+    check(asked.get("look") is True and told.get("look") is False,
+          "/camera/wanted tells the board to take a look when JARVIS has been asked what it sees")
     with patch.object(server, "_send_push") as pushed:
         server.sighting("Someone's in view of your house cam, sir.", "house cam")
         for _ in range(50):

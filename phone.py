@@ -1194,7 +1194,9 @@ class PhoneServer:
 
             payload = request.get_json(silent=True) or {}
             name = payload.get("name")
-            return jsonify({"snap": cameras.wanted(name), "live": cameras.live_wanted(name)}), 200
+            # "look": take a detection look now and report it, asked what it sees (actions/detections.py)
+            return jsonify({"snap": cameras.wanted(name), "live": cameras.live_wanted(name),
+                            "look": detections.look_wanted(name)}), 200
 
         @app.post("/camera/live")
         def camera_live():

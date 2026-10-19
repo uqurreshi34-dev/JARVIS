@@ -13,6 +13,8 @@ latest report from each camera, in memory only, and:
                                                     the next -- only not over you while you talk)
     answers, free, what a camera has detected       "what has the house cam detected"
                                                     "is anyone on the house cam"
+                                                    (from a look it takes when asked: its last
+                                                    report can be from before you pointed it)
     stops and starts saying so                      "mute the camera alerts" / "unmute ..."
 
 Which things are said unasked is JARVIS_DETECT_ANNOUNCE: "all" (the default) or the model's names,
@@ -46,15 +48,22 @@ AWAY_SECONDS = float(os.getenv("JARVIS_DETECT_AWAY") or 30)
 # A report older than this is not what the camera sees now.
 FRESH_SECONDS = 30.0
 
+# Asked what a camera sees, JARVIS has it take a look and waits this long for it (a look is about
+# three seconds); a board too old to look on request is answered from its last report at once.
+LOOK_WAIT = float(os.getenv("JARVIS_DETECT_LOOK_WAIT") or 6)
+
 # A report is refused past this many things, or with a name longer than this.
 MAX_OBJECTS = 50
 MAX_LABEL = 40
 
 _lock = threading.Lock()
+_looked = threading.Condition(_lock)   # a look taken on request has come in
 _latest = {}          # camera -> {"at", "objects", "ms"}
 _present = {}         # (camera, label) -> {"last": monotonic time last in view, "said": how many said}
 _pending = {}         # sentence waiting to be said -> (camera, {label: count}, monotonic time)
 _answered = set()     # sentences an answer has already covered: not said after it
+_look_wanted = {}     # camera -> monotonic time JARVIS asked it to look now
+_can_look = set()     # cameras that have answered a request to look (sketches from 20 October 2026)
 _muted = False
 _say = None
 _phone = None
@@ -105,7 +114,11 @@ def _clean(payload):
 
 
 def record(name, payload):
-    """A camera's report: kept as its latest, and anything worth saying said. Returns None, or why refused."""
+    """A camera's report: kept as its latest, and anything worth saying said. Returns None, or why refused.
+
+    "objects" is what the board is sure of (seen over its last few looks: what is announced);
+    a look taken because JARVIS asked also carries "fresh": true and "now", what that one look
+    saw -- the answer to the question."""
     camera = cameras.normal_name(name)
 
     if not camera:
@@ -116,12 +129,26 @@ def record(name, payload):
     if objects is None:
         return "not a report"
 
+    fresh = isinstance(payload, dict) and payload.get("fresh") is True
+    seen_now = _clean({"objects": payload.get("now")}) if fresh else None
+
+    if fresh and seen_now is None:
+        return "not a report"
+
     took = payload.get("ms")
     now = time.monotonic()
 
     with _lock:
+        before = _latest.get(camera, {})
         _latest[camera] = {"at": now, "objects": objects,
-                           "ms": int(took) if isinstance(took, (int, float)) and not isinstance(took, bool) else None}
+                           "ms": int(took) if isinstance(took, (int, float)) and not isinstance(took, bool) else None,
+                           "now": seen_now if fresh else before.get("now"),
+                           "looked": now if fresh else before.get("looked")}
+
+        if fresh:
+            _can_look.add(camera)
+            _look_wanted.pop(camera, None)
+            _looked.notify_all()
         counts = {}
 
         for item in objects:
@@ -250,11 +277,37 @@ def latest(name):
     if report is None:
         return None
 
-    return {"objects": list(report["objects"]), "ms": report["ms"], "ago": time.monotonic() - report["at"]}
+    return {"objects": list(report["objects"]), "ms": report["ms"], "ago": time.monotonic() - report["at"],
+            "now": list(report["now"]) if report.get("now") is not None else None,
+            "looked": report.get("looked")}
 
 
-def summary(camera):
-    """What [camera] ({"name", ...}) has detected, as a sentence."""
+def look_wanted(name):
+    """Whether JARVIS has asked [name] to take a look now (told to it on its next /camera/wanted)."""
+    with _lock:
+        return cameras.normal_name(name) in _look_wanted
+
+
+def look_now(camera):
+    """What [camera] sees now, as a sentence: from a look it takes on being asked, waited for up to
+    LOOK_WAIT -- "Nothing is in view" was said of a laptop already held up (19 October 2026),
+    because the board reports only once it is sure of a thing. A board that cannot look on
+    request, or one that does not answer in time, is answered from its last report."""
+    name = camera["name"]
+    asked = time.monotonic()
+
+    with _looked:
+        if name in _can_look:
+            _look_wanted[name] = asked
+            _looked.wait_for(lambda: (_latest.get(name, {}).get("looked") or 0) >= asked, timeout=LOOK_WAIT)
+            _look_wanted.pop(name, None)
+
+    return summary(camera, since=asked)
+
+
+def summary(camera, since=None):
+    """What [camera] ({"name", ...}) has detected, as a sentence. With [since], what a look taken
+    after then saw, if there is one, rather than only what the board is sure of."""
     report = latest(camera["name"])
     who = _yours(camera["name"])
 
@@ -268,8 +321,10 @@ def summary(camera):
         return f"{who[:1].upper() + who[1:]} last reported {when}, sir; its detection may have stopped."
 
     counts = {}
+    looked = since is not None and report.get("looked") is not None and report["looked"] >= since
+    objects = report["now"] if looked else report["objects"]
 
-    for item in sorted(report["objects"], key=lambda item: -item["score"]):
+    for item in sorted(objects, key=lambda item: -item["score"]):
         counts[item["label"]] = counts.get(item["label"], 0) + 1
 
     # A sighting still waiting to be said that this answer covers -- you asked as the cup came
@@ -358,4 +413,6 @@ def forget():
         _present.clear()
         _pending.clear()
         _answered.clear()
+        _look_wanted.clear()
+        _can_look.clear()
         _muted = False

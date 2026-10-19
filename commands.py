@@ -6188,7 +6188,7 @@ def _handle_command(command, *, fast_only=False, probe=False):
         return _query(intent, lambda: _camera_grid(command))
 
     if intent == "camera_detections":
-        return _query(intent, lambda: detections.summary(detections.asked(command)))
+        return _query(intent, lambda: detections.look_now(detections.asked(command)))
 
     if intent == "camera_alerts":
         return _query(intent, lambda: detections.set_muted(detections.muting_asked(command)))

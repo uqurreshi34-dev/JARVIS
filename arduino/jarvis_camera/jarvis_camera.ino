@@ -161,6 +161,7 @@ bool cameraReady = false;
 struct Wanted {
   bool snap;
   bool live;
+  bool look;   // JARVIS has been asked what this camera sees: report the next look as it is
 };
 
 String quoted(const char *text) {
@@ -225,11 +226,12 @@ Wanted pictureWanted() {
   String json = String("{\"name\":") + quoted(SENSOR_NAME) + "}";
 
   if (postJson("/camera/wanted", json, &answer) != HTTP_CODE_OK) {
-    return {false, false};
+    return {false, false, false};
   }
 
   answer.replace(" ", "");
-  return {answer.indexOf("\"snap\":true") >= 0, answer.indexOf("\"live\":true") >= 0};
+  return {answer.indexOf("\"snap\":true") >= 0, answer.indexOf("\"live\":true") >= 0,
+          answer.indexOf("\"look\":true") >= 0};
 }
 
 // Live view's own connection, kept apart from the one the polls use.
@@ -515,6 +517,10 @@ void run_model(void);
 NetworkClientSecure detectLink;
 bool detectReady = false;
 
+// Set by the loop (core 1) when JARVIS asks what this camera sees; the next
+// look is reported as that look saw it, whatever it is sure of yet.
+volatile bool lookWanted = false;
+
 // Which picture column (or row) each of the model's columns (rows) takes, or
 // -1 for the grey bars: the same sums as ever, done once for each of the 256
 // rather than for every pixel.
@@ -776,17 +782,28 @@ String kinds(const Seen *seen, int count) {
   return said;
 }
 
-void sendSeen(const Seen *seen, int count, unsigned long took) {
-  String json = String("{\"name\":") + quoted(SENSOR_NAME) + ",\"ms\":" + String(took) + ",\"objects\":[";
-
+static void addObjects(String &json, const Seen *seen, int count) {
   for (int i = 0; i < count; ++i) {
     char item[160];
     snprintf(item, sizeof(item), "%s{\"label\":\"%s\",\"score\":%.3f,\"box\":[%.3f,%.3f,%.3f,%.3f]}",
              i ? "," : "", LABELS[seen[i].label], seen[i].score, seen[i].x1, seen[i].y1, seen[i].x2, seen[i].y2);
     json += item;
   }
+}
 
-  json += "]}";
+// What the board is sure of; and, when JARVIS asked, what this one look saw.
+void sendSeen(const Seen *seen, int count, unsigned long took, const Seen *now = nullptr, int nowCount = 0) {
+  String json = String("{\"name\":") + quoted(SENSOR_NAME) + ",\"ms\":" + String(took) + ",\"objects\":[";
+  addObjects(json, seen, count);
+  json += "]";
+
+  if (now) {
+    json += ",\"fresh\":true,\"now\":[";
+    addObjects(json, now, nowCount);
+    json += "]";
+  }
+
+  json += "}";
 
   HTTPClient https;
   String url = String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + "/camera/seen";
@@ -924,11 +941,23 @@ void detectTask(void *) {
     unsigned long took = millis() - started;
     unsigned long ready = started - asked;   // the picture taken, decoded and letterboxed
 
-    Seen seen[DETECT_MAX];
-    int count = steadyOnes(seen, readOutput(seen, width, height));
+    Seen seen[DETECT_MAX], looked[DETECT_MAX];
+    int lookedCount = readOutput(looked, width, height);
+    memcpy(seen, looked, sizeof(Seen) * lookedCount);
+    int count = steadyOnes(seen, lookedCount);
     String now = kinds(seen, count);
-    Serial.printf("[jarvis] detection: %s in %lu ms, the picture ready in %lu ms\n",
-                  now.length() ? now.c_str() : "nothing", took, ready);
+
+    // This look as the model saw it, with its scores -- what a threshold is set from.
+    String scores;
+
+    for (int i = 0; i < lookedCount; ++i) {
+      char one[48];
+      snprintf(one, sizeof(one), "%s%s %.2f", i ? ", " : "", LABELS[looked[i].label], looked[i].score);
+      scores += one;
+    }
+
+    Serial.printf("[jarvis] detection: %s in %lu ms, the picture ready in %lu ms (this look: %s)\n",
+                  now.length() ? now.c_str() : "nothing", took, ready, scores.length() ? scores.c_str() : "nothing");
 
 #if FEMTO_PROFILE
     // PlatformIO env "s3profile": where those milliseconds went, node by node.
@@ -937,7 +966,12 @@ void detectTask(void *) {
     Serial.print(profile);
 #endif
 
-    if (now != lastKinds || (count > 0 && millis() - lastSent >= DETECT_REPEAT_MS)) {
+    if (lookWanted) {
+      lookWanted = false;
+      sendSeen(seen, count, took, looked, lookedCount);
+      lastKinds = now;
+      lastSent = millis();
+    } else if (now != lastKinds || (count > 0 && millis() - lastSent >= DETECT_REPEAT_MS)) {
       sendSeen(seen, count, took);
       lastKinds = now;
       lastSent = millis();
@@ -1039,6 +1073,12 @@ void loop() {
     lastAsk = now;
 
     Wanted wanted = pictureWanted();
+
+#ifdef JARVIS_DETECT
+    if (wanted.look) {
+      lookWanted = true;
+    }
+#endif
 
     if (wanted.live) {
       streamLive();
