@@ -10,8 +10,9 @@ needs, and writes labels.h -- the 80 names the model knows -- from the model's o
 
 What FEMTO-ML itself does about speed and scores (its changes of October 2026, in FEMTO-ML, not here):
 each conv runs in blocks of output channels whose filters fit in a buffer of internal SRAM, which the
-sketch gives it once wifi is up (takeFastBuffer); a class score above 0.5 is no longer clamped to 0.5;
-SiLU is one table lookup wherever it occurs; and the sources carry a step timer (env s3profile).
+sketch gives it once wifi is up (takeFastBuffer), on both cores (set_cores); a class score above 0.5
+is no longer clamped to 0.5; SiLU and the final Sigmoid are table lookups; values are quantized where
+they are made rather than moved as floats first; and the sources carry a step timer (env s3profile).
 
 Two changes from FEMTO-ML's defaults, both so detection runs beside the camera's live view without
 taking from it:

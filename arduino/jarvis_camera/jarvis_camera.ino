@@ -558,6 +558,44 @@ bool fillInput(const uint8_t *bgr, int width, int height) {
   return true;
 }
 
+// How much two boxes overlap: the shared area over the area of either.
+static float overlap(const Seen &a, const Seen &b) {
+  float w = fminf(a.x2, b.x2) - fmaxf(a.x1, b.x1), h = fminf(a.y2, b.y2) - fmaxf(a.y1, b.y1);
+
+  if (w <= 0 || h <= 0) {
+    return 0;
+  }
+
+  float shared = w * h;
+  float either = (a.x2 - a.x1) * (a.y2 - a.y1) + (b.x2 - b.x1) * (b.y2 - b.y1) - shared;
+  return either > 0 ? shared / either : 0;
+}
+
+// One name for one thing: the model can call the same box two things -- an
+// open laptop also "tv" (19 October 2026) -- and only the surer is kept.
+// Never a person: someone on a couch is a person and a couch, both there.
+static const float DETECT_SAME_BOX = 0.80f;
+
+int oneNameEach(Seen *seen, int count) {
+  int kept = 0;
+
+  for (int i = 0; i < count; ++i) {
+    bool beaten = false;
+
+    for (int j = 0; j < count && !beaten; ++j) {
+      beaten = j != i && seen[i].label != 0 && seen[j].label != 0 && seen[j].label != seen[i].label &&
+               (seen[j].score > seen[i].score || (seen[j].score == seen[i].score && j < i)) &&
+               overlap(seen[i], seen[j]) >= DETECT_SAME_BOX;
+    }
+
+    if (!beaten) {
+      seen[kept++] = seen[i];
+    }
+  }
+
+  return kept;
+}
+
 // The model's boxes are in its 256 x 256 letterbox; JARVIS is told where
 // they are in the picture, 0 to 1 across and down.
 int readOutput(Seen *seen, int width, int height) {
@@ -584,7 +622,7 @@ int readOutput(Seen *seen, int width, int height) {
     found++;
   }
 
-  return found;
+  return oneNameEach(seen, found);
 }
 
 // What was seen, in one word per kind, sorted: "cup,person" -- so a change in
@@ -695,6 +733,11 @@ void detectTask(void *) {
 
     if (!esp_nn_conv_s8_simd_fast_size()) {
       takeFastBuffer();
+      // The convolutions on both cores: a worker on core 1 takes half of each
+      // layer's rows. Core 1 runs the sketch's loop -- heartbeats, pictures, live
+      // view -- which mostly waits on the network, so it has the time; live view
+      // and detection share it while both run.
+      Serial.printf("[jarvis] detection: convolutions on %d cores\n", esp_nn_conv_s8_simd_set_cores(2));
     }
 
     unsigned long asked = millis();
