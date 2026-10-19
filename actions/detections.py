@@ -7,16 +7,20 @@ latest report from each camera, in memory only, and:
 
     says, unasked, what comes into view             "Someone's in view of your house cam, sir."
                                                     "Someone and a cup are in view of your house cam, sir."
+                                                    "Three bottles are in view of your house cam, sir."
                                                     (to the phone at once, tapping it opens the camera;
-                                                    said aloud as other alerts are, once a turn ends)
+                                                    said aloud at once, even between a question and
+                                                    the next -- only not over you while you talk)
     answers, free, what a camera has detected       "what has the house cam detected"
                                                     "is anyone on the house cam"
     stops and starts saying so                      "mute the camera alerts" / "unmute ..."
 
 Which things are said unasked is JARVIS_DETECT_ANNOUNCE: "all" (the default) or the model's names,
-"person,cat". Someone is said at most once every ANNOUNCE_GAP seconds for each camera, anything
-else once every OTHER_GAP, so someone standing in view, or a cup on the desk, is not announced at
-every run.
+"person,cat"; JARVIS_DETECT_IGNORE names things never said unasked ("sink,dining table": what the
+model takes the furniture for), though still answered when asked. A thing is said when it comes
+into view, and again only once it has been out of view for AWAY_SECONDS -- so a cup the model
+misses for a look or two is not news, but a cup put down and picked up a minute later is -- and
+when more of it come into view than were said ("A bottle", then "Three bottles").
 """
 
 import os
@@ -31,9 +35,13 @@ from actions import cameras, journal
 ANNOUNCE = tuple(name.strip().casefold() for name in
                  (os.getenv("JARVIS_DETECT_ANNOUNCE") or "all").split(",") if name.strip())
 
-# Someone is said again for a camera only after this long; anything else, after OTHER_GAP.
-ANNOUNCE_GAP = float(os.getenv("JARVIS_DETECT_ANNOUNCE_GAP") or 120)
-OTHER_GAP = float(os.getenv("JARVIS_DETECT_OTHER_GAP") or 300)
+# Never said unasked, by the model's own names.
+IGNORE = tuple(name.strip().casefold() for name in
+               (os.getenv("JARVIS_DETECT_IGNORE") or "").split(",") if name.strip())
+
+# How long a thing must have been out of view to be news again. The board reports every change
+# and, while anything is in view, every 15 seconds, so a thing still there is never this stale.
+AWAY_SECONDS = float(os.getenv("JARVIS_DETECT_AWAY") or 30)
 
 # A report older than this is not what the camera sees now.
 FRESH_SECONDS = 30.0
@@ -44,7 +52,7 @@ MAX_LABEL = 40
 
 _lock = threading.Lock()
 _latest = {}          # camera -> {"at", "objects", "ms"}
-_announced = {}       # (camera, label) -> monotonic time last said
+_present = {}         # (camera, label) -> {"last": monotonic time last in view, "said": how many said}
 _muted = False
 _say = None
 _phone = None
@@ -59,7 +67,7 @@ def set_listeners(on_say=None, on_phone=None):
 
 
 def _worth_saying(label):
-    return "all" in ANNOUNCE or label in ANNOUNCE
+    return ("all" in ANNOUNCE or label in ANNOUNCE) and label not in IGNORE
 
 
 def _clean(payload):
@@ -110,8 +118,6 @@ def record(name, payload):
     now = time.monotonic()
 
     with _lock:
-        before = _latest.get(camera)
-        was = {item["label"] for item in before["objects"]} if before else set()
         _latest[camera] = {"at": now, "objects": objects,
                            "ms": int(took) if isinstance(took, (int, float)) and not isinstance(took, bool) else None}
         counts = {}
@@ -122,14 +128,18 @@ def record(name, payload):
         due = {}
 
         for label, count in counts.items():
-            if label in was or not _worth_saying(label):
-                continue
+            seen = _present.get((camera, label))
 
-            said = _announced.get((camera, label))
-            gap = ANNOUNCE_GAP if label == "person" else OTHER_GAP
+            # Out of view long enough: news again. A miss of a look or two is not.
+            if seen is None or now - seen["last"] > AWAY_SECONDS:
+                seen = {"last": now, "said": 0}
 
-            if said is None or now - said >= gap:
-                _announced[(camera, label)] = now
+            seen["last"] = now
+            _present[(camera, label)] = seen
+
+            # More of it than was said -- or, back in view, any -- is said.
+            if count > seen["said"] and _worth_saying(label):
+                seen["said"] = count
                 due[label] = count
 
         quiet = _muted
@@ -318,5 +328,5 @@ def forget():
 
     with _lock:
         _latest.clear()
-        _announced.clear()
+        _present.clear()
         _muted = False

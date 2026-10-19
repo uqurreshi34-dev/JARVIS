@@ -625,13 +625,14 @@ int readOutput(Seen *seen, int width, int height) {
   return oneNameEach(seen, found);
 }
 
-// What was seen, in one word per kind, sorted: "cup,person" -- so a change in
-// what is there is told at once, and the same things are not told every run.
+// What was seen, one word per kind and how many when more than one, sorted:
+// "bottle x3,cup,person" -- so a change in what is there, or in how many, is
+// told at once, and the same things are not told every run.
 String kinds(const Seen *seen, int count) {
-  bool present[LABEL_COUNT] = {false};
+  uint8_t present[LABEL_COUNT] = {0};
 
   for (int i = 0; i < count; ++i) {
-    present[seen[i].label] = true;
+    present[seen[i].label]++;
   }
 
   String said;
@@ -639,6 +640,10 @@ String kinds(const Seen *seen, int count) {
   for (int label = 0; label < LABEL_COUNT; ++label) {
     if (present[label]) {
       said += (said.length() ? "," : "") + String(LABELS[label]);
+
+      if (present[label] > 1) {
+        said += " x" + String(present[label]);
+      }
     }
   }
 

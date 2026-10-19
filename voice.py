@@ -442,6 +442,11 @@ def disarm():
     _armed_until = 0.0
 
 
+def user_talking():
+    """True while someone is mid-sentence to the microphone: what is said now would be lost."""
+    return bool(getattr(engine, "active", False))
+
+
 def listen():
     """Block until an addressed command is heard, then return it."""
     engine.reset()

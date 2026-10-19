@@ -9,6 +9,7 @@ from voice import (
     set_level_listener,
     set_status_listener,
     set_wake_listener,
+    user_talking,
 )
 from speech import prewarm, set_amplitude_listener, speak, set_sentence_listener
 from speech import set_speaking_listener, stop_speaking as stop_speech
@@ -49,6 +50,7 @@ from commands import (
     toggle_brain_view,
 )
 import os
+import queue
 import signal
 import sys
 import threading
@@ -180,6 +182,11 @@ class Assistant:
         self._alert_lock = threading.RLock()
         self._interaction_open = False
         self._queued_alerts = []
+
+        # What the cameras recognise, said in order on a thread of their own, so the board
+        # reporting it is answered at once rather than after JARVIS has said it.
+        self._sightings = queue.Queue()
+        threading.Thread(target=self._say_sightings, name="sightings", daemon=True).start()
 
         # The HUD stop button ends the spoken part of a turn. Actions are
         # never touched; only what JARVIS was going to say is dropped.
@@ -508,6 +515,32 @@ class Assistant:
             # since being at the desk is still the normal case. The state
             # it leaves the HUD in is decided there, once it has spoken.
             self._speak_alert_locked(text, phone)
+
+    def _on_sighting(self, text):
+        """What a camera has just recognised: said now, even with a follow-up window open.
+
+        Other announcements wait for the whole turn to end, so as not to talk over a
+        conversation. A sighting is only news while it is true: held until the window
+        closed, "A cup is in view" came after you had asked about the cup (19 October
+        2026). So it waits only while you are mid-sentence, and is said straight after
+        your answer then; the listener throws away what the microphone hears while
+        JARVIS speaks, as it does for any announcement. It has gone to the phone already.
+        """
+        self._sightings.put(text)
+
+    def _say_sightings(self):
+        while True:
+            text = self._sightings.get()
+
+            try:
+                with self._alert_lock:
+                    if self._interaction_open and user_talking():
+                        self._queued_alerts.append((text, False))
+                        continue
+
+                    self._speak_alert_locked(text, phone=False)
+            except Exception as error:   # noqa: BLE001 - one bad sighting must not stop the rest
+                print(f"[JARVIS] could not say a sighting: {error}", flush=True)
 
     def _on_sensor(self, payload):
         """A board on the wifi has reported. Returns what was said.
@@ -1594,8 +1627,7 @@ def main():
     # What the house cam recognises on its own board: what comes into view reaches the phone at once, with
     # the camera to open, and is said aloud through the same gate as other announcements -- held while a
     # turn is open, said as it ends (19 October 2026: held, a restart lost it unsaid).
-    detections.set_listeners(on_say=lambda text: assistant._on_alert(text, phone=False),
-                             on_phone=phone_server.sighting)
+    detections.set_listeners(on_say=assistant._on_sighting, on_phone=phone_server.sighting)
 
     # The DEX scan: each pair's price on both exchanges and whether the gap would pay, beside the HUD.
     dex_view = DexPanel()

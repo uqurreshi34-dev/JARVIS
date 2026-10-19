@@ -7,9 +7,10 @@ Without a camera: reports are made here as the sketch sends them. Checked:
 - a report is kept, and a bad one refused: not a list, a score out of range, a box that is not four
   numbers from 0 to 1, too many things;
 - what comes into view is said once, in one sentence, someone first -- "Someone and two cups are in
-  view of your house cam, sir." -- to the phone at once with the camera to open, aloud through the
-  gate, and journalled; not again while it stays, nor within its gap (ANNOUNCE_GAP for someone,
-  OTHER_GAP for anything else); JARVIS_DETECT_ANNOUNCE can narrow it to some things;
+  view of your house cam, sir." -- to the phone at once with the camera to open, aloud, and
+  journalled; not again while it stays, nor after a look or two missed, but again once it has been
+  out of view for AWAY_SECONDS, and when more of it come than were said ("Three bottles");
+  JARVIS_DETECT_ANNOUNCE narrows it to some things, JARVIS_DETECT_IGNORE leaves some out;
 - "mute the camera alerts" stops the saying (it is still journalled), "unmute" starts it;
 - "what has the house cam detected" and "is anyone on the house cam" are answered free, in words:
   "Your house cam sees a person and two cups, sir."; a stale report says so; a camera that only takes
@@ -76,35 +77,59 @@ with patch.object(detections.journal, "alert", written.append):
           "a bad report is refused")
     check(len(said) == 1, "the refused reports said nothing")
 
-    detections.record("house cam", report(("person", 0.88), ("cup", 0.81), ("cup", 0.6)))
+    detections.record("house cam", report(("person", 0.88), ("cup", 0.81)))
     check(said[-1] == "Someone's in view of your house cam, sir." and len(said) == 2,
           f"someone coming into view is said; the cup, already there, is not said again ({said[-1]})")
     detections.record("house cam", report(("person", 0.9), ("cup", 0.8)))
     check(len(said) == 2, "not again while they stay in view")
     detections.record("house cam", report(("cup", 0.8)))
     detections.record("house cam", report(("person", 0.7)))
-    check(len(said) == 2, f"nor when they step back in within {detections.ANNOUNCE_GAP:.0f} seconds")
-    detections._announced[("house cam", "person")] -= detections.ANNOUNCE_GAP + 1
-    detections.record("house cam", report(("cup", 0.8)))
-    detections.record("house cam", report(("person", 0.7)))
-    check(len(said) == 3, "and again once that has passed")
+    check(len(said) == 2, "nor when the model misses someone for a look and finds them again")
 
-    detections._announced.clear()
+    def away(*labels):
+        for label in labels:
+            detections._present[("house cam", label)]["last"] -= detections.AWAY_SECONDS + 1
+
+    detections.record("house cam", report(("cup", 0.8)))
+    away("person")
+    detections.record("house cam", report(("cup", 0.8), ("person", 0.7)))
+    check(len(said) == 3 and said[-1] == "Someone's in view of your house cam, sir.",
+          f"but again once they have been away {detections.AWAY_SECONDS:.0f} seconds ({said[-1]})")
+
+    detections.record("house cam", report(("bottle", 0.6)))
+    check(said[-1] == "A bottle is in view of your house cam, sir.", f"one bottle ({said[-1]})")
+    detections.record("house cam", report(("bottle", 0.6), ("bottle", 0.5), ("bottle", 0.5)))
+    check(said[-1] == "Three bottles are in view of your house cam, sir.",
+          f"then three: more of them than were said is said ({said[-1]})")
+    count = len(said)
+    detections.record("house cam", report(("bottle", 0.6), ("bottle", 0.5)))
+    detections.record("house cam", report(("bottle", 0.6), ("bottle", 0.5), ("bottle", 0.5)))
+    check(len(said) == count, "but the model's count flickering between two and three is not news")
+
+    detections._present.clear()
     detections.record("house cam", report())
     detections.record("house cam", report(("cup", 0.8), ("person", 0.9), ("cup", 0.7)))
     check(said[-1] == "Someone and two cups are in view of your house cam, sir.",
           f"what arrives together is said together, someone first ({said[-1]})")
     detections.record("house cam", report())
-    detections._announced[("house cam", "person")] -= detections.ANNOUNCE_GAP + 1
+    away("person")
     detections.record("house cam", report(("cup", 0.8), ("person", 0.9)))
     check(said[-1] == "Someone's in view of your house cam, sir.",
-          f"a cup back within {detections.OTHER_GAP:.0f} seconds is not said again; someone is ({said[-1]})")
+          f"a cup back within {detections.AWAY_SECONDS:.0f} seconds is not said again; someone is ({said[-1]})")
     with patch.object(detections, "ANNOUNCE", ("person",)):
-        detections._announced.clear()
+        detections._present.clear()
         detections.record("house cam", report())
         count = len(said)
         detections.record("house cam", report(("dog", 0.8)))
         check(len(said) == count, "narrowed to people, a dog is not said")
+    with patch.object(detections, "IGNORE", ("sink",)):
+        detections._present.clear()
+        count = len(said)
+        detections.record("house cam", report(("sink", 0.5), ("cup", 0.8)))
+        check(len(said) == count + 1 and said[-1] == "A cup is in view of your house cam, sir.",
+              f"a sink, ignored, is left out of what is said ({said[-1]})")
+        house_cam = next(camera for camera in cameras.cameras() if camera["name"] == "house cam")
+        check("sink" in detections.summary(house_cam), "but still answered when asked")
     check(detections.arrival_words("house cam", {"person": 2}) == "Two people are in view of your house cam, sir.",
           "two people are two people")
 
@@ -116,7 +141,7 @@ with patch.object(detections.journal, "alert", written.append):
           and detections.muting_asked("mute the music") is None and detections.muting_asked("show the camera") is None,
           "'mute the camera alerts' and 'unmute the camera alerts', and nothing else")
     detections.set_muted(True)
-    detections._announced.clear()
+    detections._present.clear()
     detections.record("house cam", report())
     written.clear()
     count, sent = len(said), len(phoned)
