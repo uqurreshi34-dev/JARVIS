@@ -8,11 +8,17 @@ C:\\Users\\<you>\\Projects\\FEMTO-ML. This runs its six stages on the model it s
 (examples/esp32_yolo26n/yolo26n_q.onnx) for the ESP32-S3 with SIMD, copies the esp-nn kernels it
 needs, and writes labels.h -- the 80 names the model knows -- from the model's own metadata.
 
+What FEMTO-ML itself does about speed and scores (its changes of October 2026, in FEMTO-ML, not here):
+each conv runs in blocks of output channels whose filters fit in a buffer of internal SRAM, which the
+sketch gives it once wifi is up (takeFastBuffer); a class score above 0.5 is no longer clamped to 0.5;
+SiLU is one table lookup wherever it occurs; and the sources carry a step timer (env s3profile).
+
 Two changes from FEMTO-ML's defaults, both so detection runs beside the camera's live view without
 taking from it:
 
 - the arena's fast internal memory budget is 0: all of the model's working memory goes in the
-  board's 8 MB PSRAM, and the internal RAM stays for the wifi and the encrypted connections;
+  board's 8 MB PSRAM, and the internal RAM stays for the wifi and the encrypted connections (and
+  the filters' buffer, which the sketch takes only while enough stays free for them);
 - its orchestrator (build_model.py) is not used, as it stops at once on a doubled --debug flag;
   its stages are called directly, in the same order.
 
@@ -34,6 +40,9 @@ DEFAULT_FEMTO = ROOT.parent / "FEMTO-ML"
 MODEL = Path("examples") / "esp32_yolo26n" / "yolo26n_q.onnx"
 KERNELS = ("esp_nn_conv_s8_simd.c", "esp_nn_conv_s8_simd.h",
            "esp_nn_depthwise_conv_s8_simd.c", "esp_nn_depthwise_conv_s8_simd.h")
+# The step timer the s3profile build switches on: FEMTO-ML's own from October 2026. A
+# FEMTO-ML from before then has none, and the sources are made without it.
+OPTIONAL = ("femto_profile.c", "femto_profile.h")
 
 # The model's input, as the sketch letterboxes to it (jarvis_camera.ino, MODEL_SIZE).
 INPUT = [1, 3, 256, 256]
@@ -115,6 +124,10 @@ def build(femto, model, out):
 
     for name in KERNELS:
         shutil.copy2(kernels / name, out / name)
+
+    for name in OPTIONAL:
+        if (kernels / name).is_file():
+            shutil.copy2(kernels / name, out / name)
 
     (out / "labels.h").write_text(labels_header(names), encoding="ascii")
 

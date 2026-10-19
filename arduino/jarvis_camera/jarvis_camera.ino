@@ -51,6 +51,7 @@
 // FEMTO-ML into detect/ by tools/femto_build.py. It runs on the other core,
 // beside everything above: pictures and live view carry on as before.
 #include "img_converters.h"
+#include "esp_heap_caps.h"
 #include "model.h"
 #include "labels.h"
 #endif
@@ -494,7 +495,10 @@ bool joinWifi() {
 // How sure the model must be. Someone is said aloud, so a person must be
 // clear; small things -- a cup in a hand -- score lower at 256 x 256, and
 // at 0.40 a cup held up to the camera was never reported (19 October
-// 2026). 0.25 is FEMTO-ML's own example's threshold.
+// 2026). 0.25 is FEMTO-ML's own example's threshold. Scores above 0.5 are
+// real only from FEMTO-ML's class-logit fix (fuse.py, October 2026): before
+// it every confident detection read 0.500, so these thresholds, both below
+// 0.5, pass exactly what they passed then.
 static const float DETECT_SCORE_PERSON = 0.40f;
 static const float DETECT_SCORE_OTHER = 0.25f;
 static const unsigned long DETECT_GAP_MS = 1000UL;       // rest between runs
@@ -510,28 +514,44 @@ void run_model(void);
 NetworkClientSecure detectLink;
 bool detectReady = false;
 
+// Which picture column (or row) each of the model's columns (rows) takes, or
+// -1 for the grey bars: the same sums as ever, done once for each of the 256
+// rather than for every pixel.
+static void letterboxMap(int16_t *map, int length, int shown, int pad, float scale) {
+  for (int i = 0; i < MODEL_SIZE; ++i) {
+    int source = (int)((i - pad) / scale);
+    map[i] = (i < pad || i >= pad + shown || source < 0 || source >= length) ? -1 : (int16_t)source;
+  }
+}
+
 // The frame as the model wants it: RGB / 255, channels first, letterboxed.
 bool fillInput(const uint8_t *bgr, int width, int height) {
   float scale = fminf((float)MODEL_SIZE / width, (float)MODEL_SIZE / height);
   int shown_w = (int)(width * scale), shown_h = (int)(height * scale);
   int pad_x = (MODEL_SIZE - shown_w) / 2, pad_y = (MODEL_SIZE - shown_h) / 2;
   const float grey = 114.0f / 255.0f;
+  static int16_t column[MODEL_SIZE], row[MODEL_SIZE];
+  static float level[256];
+
+  letterboxMap(column, width, shown_w, pad_x, scale);
+  letterboxMap(row, height, shown_h, pad_y, scale);
+
+  for (int v = 0; v < 256; ++v) {
+    level[v] = v / 255.0f;
+  }
 
   for (int y = 0; y < MODEL_SIZE; ++y) {
     for (int x = 0; x < MODEL_SIZE; ++x) {
-      int sx = (int)((x - pad_x) / scale), sy = (int)((y - pad_y) / scale);
-
-      if (x < pad_x || y < pad_y || x >= pad_x + shown_w || y >= pad_y + shown_h ||
-          sx < 0 || sy < 0 || sx >= width || sy >= height) {
+      if (row[y] < 0 || column[x] < 0) {
         tensor_images[0][y][x] = tensor_images[1][y][x] = tensor_images[2][y][x] = grey;
         continue;
       }
 
       // The camera library's "RGB888" is blue, green, red in memory.
-      const uint8_t *px = bgr + (sy * width + sx) * 3;
-      tensor_images[0][y][x] = px[2] / 255.0f;
-      tensor_images[1][y][x] = px[1] / 255.0f;
-      tensor_images[2][y][x] = px[0] / 255.0f;
+      const uint8_t *px = bgr + (row[y] * width + column[x]) * 3;
+      tensor_images[0][y][x] = level[px[2]];
+      tensor_images[1][y][x] = level[px[1]];
+      tensor_images[2][y][x] = level[px[0]];
     }
   }
 
@@ -618,6 +638,41 @@ void sendSeen(const Seen *seen, int count, unsigned long took) {
   }
 }
 
+// FEMTO-ML runs each conv in blocks of output channels whose filters fit in
+// one buffer of internal SRAM, rather than streaming every filter from PSRAM
+// for every pixel (esp_nn_conv_s8_simd.c, "Fast buffer"): the bigger the
+// buffer, the fewer the blocks. Taken once wifi is up, and only while enough
+// internal SRAM stays free for the TLS connections to JARVIS, which mbedTLS
+// makes in internal SRAM; failing that, 16 KB of PSRAM, small enough for a
+// block to stay in the data cache.
+static const size_t DETECT_KEEP_INTERNAL = 96 * 1024;
+
+void takeFastBuffer() {
+  static const int sizes[] = {49152, 32768, 24576, 16384, 8192};
+  size_t free_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+
+  for (int size : sizes) {
+    if (free_before < size + DETECT_KEEP_INTERNAL ||
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < (size_t)size) {
+      continue;
+    }
+
+    void *buffer = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+
+    if (buffer) {
+      esp_nn_conv_s8_simd_set_fast_buf(buffer, size);
+      Serial.printf("[jarvis] detection: %d KB of internal SRAM for the model's filters, %u bytes left\n",
+                    size / 1024, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+      return;
+    }
+  }
+
+  void *buffer = heap_caps_malloc(16384, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  esp_nn_conv_s8_simd_set_fast_buf(buffer, buffer ? 16384 : 0);
+  Serial.printf("[jarvis] detection: only %u bytes of internal SRAM free, so 16 KB of PSRAM for the model's filters\n",
+                (unsigned)free_before);
+}
+
 void detectTask(void *) {
   // A decoded frame: VGA at three bytes a pixel, in PSRAM, kept for the run.
   size_t rgb_size = 640 * 480 * 3;
@@ -638,6 +693,11 @@ void detectTask(void *) {
       continue;
     }
 
+    if (!esp_nn_conv_s8_simd_fast_size()) {
+      takeFastBuffer();
+    }
+
+    unsigned long asked = millis();
     camera_fb_t *frame = esp_camera_fb_get();
 
     if (!frame) {
@@ -657,11 +717,20 @@ void detectTask(void *) {
     unsigned long started = millis();
     run_model();
     unsigned long took = millis() - started;
+    unsigned long ready = started - asked;   // the picture taken, decoded and letterboxed
 
     Seen seen[DETECT_MAX];
     int count = readOutput(seen, width, height);
     String now = kinds(seen, count);
-    Serial.printf("[jarvis] detection: %s in %lu ms\n", now.length() ? now.c_str() : "nothing", took);
+    Serial.printf("[jarvis] detection: %s in %lu ms, the picture ready in %lu ms\n",
+                  now.length() ? now.c_str() : "nothing", took, ready);
+
+#if FEMTO_PROFILE
+    // PlatformIO env "s3profile": where those milliseconds went, node by node.
+    static char profile[3072];
+    femto_prof_report(profile, sizeof(profile));
+    Serial.print(profile);
+#endif
 
     if (now != lastKinds || (count > 0 && millis() - lastSent >= DETECT_REPEAT_MS)) {
       sendSeen(seen, count, took);
