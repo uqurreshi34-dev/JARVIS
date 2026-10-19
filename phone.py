@@ -34,7 +34,7 @@ from pywebpush import webpush, WebPushException
 
 import phone_tls
 import transcriber
-from actions import location, askfiles, cameras, files
+from actions import location, askfiles, cameras, detections, files
 from voice import FILLERS, set_phone_active
 
 import speech
@@ -1205,6 +1205,26 @@ class PhoneServer:
             print(f"[JARVIS] {name} live: {frames} frames in {seconds:.0f}s ({rate:.1f} a second); "
                   f"{ended}", flush=True)
             return jsonify({"ok": True, "frames": frames}), 200
+
+        @app.post("/camera/seen")
+        def camera_seen():
+            """What a camera recognised on its own board (YOLO26n, the house cam flashed as s3detect):
+            names, scores and where each is, never a picture. Kept in memory; anyone coming into view
+            is said aloud and sent to the phone, as other alerts are (actions/detections.py)."""
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            if request.content_length is None or request.content_length > 32 * 1024:
+                return jsonify({"error": "too large"}), 413
+
+            payload = request.get_json(silent=True)
+            name = request.headers.get("X-Jarvis-Camera") or (payload or {}).get("name") or ""
+            refused = detections.record(name, payload)
+
+            if refused:
+                return jsonify({"error": refused}), 400
+
+            return jsonify({"ok": True}), 200
 
         @app.get("/cameras")
         def cameras_listed():

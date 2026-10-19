@@ -46,6 +46,24 @@
 #include "jarvis_config.h"
 #include "jarvis_secrets.h"
 
+#ifdef JARVIS_DETECT
+// On-board detection (PlatformIO env "s3detect"): YOLO26n, compiled to C by
+// FEMTO-ML into detect/ by tools/femto_build.py. It runs on the other core,
+// beside everything above: pictures and live view carry on as before.
+#include "img_converters.h"
+#include "model.h"
+#include "labels.h"
+#endif
+
+// One thing detection found. Up here, and whatever the build, as Wanted is:
+// the Arduino build declares every function above the sketch's own code --
+// those inside #ifdef JARVIS_DETECT too -- and some of them take one.
+struct Seen {
+  int label;
+  float score;
+  float x1, y1, x2, y2;
+};
+
 // The S3 board is a second camera, with its own name: jarvis_secrets.h names
 // the first ("my room cam"), and this one is called by what it watches. Say
 // "show me the house cam", or "show me all the cameras" for both at once.
@@ -367,7 +385,13 @@ bool startCamera() {
   if (psramFound()) {
     config.frame_size = FRAMESIZE_VGA;
     config.jpeg_quality = 12;
+#ifdef JARVIS_DETECT
+    // One frame more: detection holds one while it decodes, and live view
+    // still has two to swap between.
+    config.fb_count = 3;
+#else
     config.fb_count = 2;
+#endif
     config.fb_location = CAMERA_FB_IN_PSRAM;
   } else {
     config.frame_size = FRAMESIZE_QVGA;
@@ -457,6 +481,214 @@ bool joinWifi() {
   return true;
 }
 
+#ifdef JARVIS_DETECT
+// ---- detection --------------------------------------------------------------
+//
+// Every few seconds: the newest frame, decoded and letterboxed to the model's
+// 256 x 256 as Ultralytics trains it (grey bars, the aspect kept), run through
+// the model, and what it found above DETECT_SCORE sent to JARVIS (POST
+// /camera/seen) -- when it changes, and every DETECT_REPEAT_MS while anything
+// is in view. Names and scores and where each is (0 to 1 across the picture),
+// never the picture: JARVIS decides what is worth saying.
+
+static const float DETECT_SCORE = 0.40f;
+static const unsigned long DETECT_GAP_MS = 1000UL;       // rest between runs
+static const unsigned long DETECT_REPEAT_MS = 15000UL;
+static const int DETECT_MAX = 12;
+static const int MODEL_SIZE = 256;
+
+extern "C" {
+int activations_init(void);
+void run_model(void);
+}
+
+NetworkClientSecure detectLink;
+bool detectReady = false;
+
+// The frame as the model wants it: RGB / 255, channels first, letterboxed.
+bool fillInput(const uint8_t *bgr, int width, int height) {
+  float scale = fminf((float)MODEL_SIZE / width, (float)MODEL_SIZE / height);
+  int shown_w = (int)(width * scale), shown_h = (int)(height * scale);
+  int pad_x = (MODEL_SIZE - shown_w) / 2, pad_y = (MODEL_SIZE - shown_h) / 2;
+  const float grey = 114.0f / 255.0f;
+
+  for (int y = 0; y < MODEL_SIZE; ++y) {
+    for (int x = 0; x < MODEL_SIZE; ++x) {
+      int sx = (int)((x - pad_x) / scale), sy = (int)((y - pad_y) / scale);
+
+      if (x < pad_x || y < pad_y || x >= pad_x + shown_w || y >= pad_y + shown_h ||
+          sx < 0 || sy < 0 || sx >= width || sy >= height) {
+        tensor_images[0][y][x] = tensor_images[1][y][x] = tensor_images[2][y][x] = grey;
+        continue;
+      }
+
+      // The camera library's "RGB888" is blue, green, red in memory.
+      const uint8_t *px = bgr + (sy * width + sx) * 3;
+      tensor_images[0][y][x] = px[2] / 255.0f;
+      tensor_images[1][y][x] = px[1] / 255.0f;
+      tensor_images[2][y][x] = px[0] / 255.0f;
+    }
+  }
+
+  return true;
+}
+
+// The model's boxes are in its 256 x 256 letterbox; JARVIS is told where
+// they are in the picture, 0 to 1 across and down.
+int readOutput(Seen *seen, int width, int height) {
+  float scale = fminf((float)MODEL_SIZE / width, (float)MODEL_SIZE / height);
+  float pad_x = (MODEL_SIZE - width * scale) / 2, pad_y = (MODEL_SIZE - height * scale) / 2;
+  int found = 0;
+
+  for (int d = 0; d < 300 && found < DETECT_MAX; ++d) {
+    const float *row = tensor_output0[d];
+
+    if (row[4] < DETECT_SCORE) {
+      continue;
+    }
+
+    int label = (int)row[5];
+
+    if (label < 0 || label >= LABEL_COUNT) {
+      continue;
+    }
+
+    seen[found].label = label;
+    seen[found].score = row[4];
+    seen[found].x1 = fmaxf(0.0f, fminf(1.0f, (row[0] - pad_x) / scale / width));
+    seen[found].y1 = fmaxf(0.0f, fminf(1.0f, (row[1] - pad_y) / scale / height));
+    seen[found].x2 = fmaxf(0.0f, fminf(1.0f, (row[2] - pad_x) / scale / width));
+    seen[found].y2 = fmaxf(0.0f, fminf(1.0f, (row[3] - pad_y) / scale / height));
+    found++;
+  }
+
+  return found;
+}
+
+// What was seen, in one word per kind, sorted: "cup,person" -- so a change in
+// what is there is told at once, and the same things are not told every run.
+String kinds(const Seen *seen, int count) {
+  bool present[LABEL_COUNT] = {false};
+
+  for (int i = 0; i < count; ++i) {
+    present[seen[i].label] = true;
+  }
+
+  String said;
+
+  for (int label = 0; label < LABEL_COUNT; ++label) {
+    if (present[label]) {
+      said += (said.length() ? "," : "") + String(LABELS[label]);
+    }
+  }
+
+  return said;
+}
+
+void sendSeen(const Seen *seen, int count, unsigned long took) {
+  String json = String("{\"name\":") + quoted(SENSOR_NAME) + ",\"ms\":" + String(took) + ",\"objects\":[";
+
+  for (int i = 0; i < count; ++i) {
+    char item[160];
+    snprintf(item, sizeof(item), "%s{\"label\":\"%s\",\"score\":%.3f,\"box\":[%.3f,%.3f,%.3f,%.3f]}",
+             i ? "," : "", LABELS[seen[i].label], seen[i].score, seen[i].x1, seen[i].y1, seen[i].x2, seen[i].y2);
+    json += item;
+  }
+
+  json += "]}";
+
+  HTTPClient https;
+  String url = String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + "/camera/seen";
+
+  if (!https.begin(detectLink, url)) {
+    return;
+  }
+
+  https.setTimeout(8000);
+  https.addHeader("Content-Type", "application/json");
+  https.addHeader("X-Jarvis-Token", JARVIS_TOKEN);
+  https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
+  int code = https.POST(json);
+  https.end();
+
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("[jarvis] detection: JARVIS answered %d\n", code);
+  }
+}
+
+void detectTask(void *) {
+  // A decoded frame: VGA at three bytes a pixel, in PSRAM, kept for the run.
+  size_t rgb_size = 640 * 480 * 3;
+  uint8_t *rgb = (uint8_t *)heap_caps_malloc(rgb_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  String lastKinds = "";
+  unsigned long lastSent = 0;
+
+  if (!rgb) {
+    Serial.println("[jarvis] detection: no memory for a decoded frame");
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(DETECT_GAP_MS));
+
+    if (WiFi.status() != WL_CONNECTED) {
+      continue;
+    }
+
+    camera_fb_t *frame = esp_camera_fb_get();
+
+    if (!frame) {
+      continue;
+    }
+
+    int width = frame->width, height = frame->height;
+    bool decoded = (size_t)width * height * 3 <= rgb_size &&
+                   fmt2rgb888(frame->buf, frame->len, frame->format, rgb);
+    esp_camera_fb_return(frame);
+
+    if (!decoded) {
+      continue;
+    }
+
+    fillInput(rgb, width, height);
+    unsigned long started = millis();
+    run_model();
+    unsigned long took = millis() - started;
+
+    Seen seen[DETECT_MAX];
+    int count = readOutput(seen, width, height);
+    String now = kinds(seen, count);
+    Serial.printf("[jarvis] detection: %s in %lu ms\n", now.length() ? now.c_str() : "nothing", took);
+
+    if (now != lastKinds || (count > 0 && millis() - lastSent >= DETECT_REPEAT_MS)) {
+      sendSeen(seen, count, took);
+      lastKinds = now;
+      lastSent = millis();
+    }
+  }
+}
+
+void startDetection() {
+  int problem = activations_init();
+
+  if (problem) {
+    Serial.printf("[jarvis] detection off: the model's memory could not be had (%d)\n", problem);
+    return;
+  }
+
+  detectLink.setCACert(JARVIS_CA);
+  detectLink.setHandshakeTimeout(HANDSHAKE_SECONDS);
+
+  // Core 0, below the wifi's own tasks; pictures and live view run on core 1.
+  if (xTaskCreatePinnedToCore(detectTask, "detect", 16384, nullptr, 1, nullptr, 0) == pdPASS) {
+    detectReady = true;
+    Serial.printf("[jarvis] detection on: YOLO26n, %d kinds of thing; %u bytes of PSRAM left\n",
+                  LABEL_COUNT, (unsigned)ESP.getFreePsram());
+  }
+}
+#endif
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -494,6 +726,12 @@ void setup() {
   lastDelivered = millis();
   WiFi.setAutoReconnect(true);
   joinWifi();
+
+#ifdef JARVIS_DETECT
+  if (cameraReady) {
+    startDetection();
+  }
+#endif
 }
 
 void loop() {

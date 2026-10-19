@@ -37,6 +37,7 @@ from actions import (
     camera,
     cameras,
     charts,
+    detections,
     clipboard,
     contacts,
     diary,
@@ -3989,7 +3990,7 @@ _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 # they may name a connected service: a protocol runs OBS's own actions
 # itself, and "initiate stream protocol" is not a request for Agent Mode.
 _SETTLED_HERE = frozenset({"protocol", "file_hologram", "house", "house_question", "camera_picture", "camera_close",
-                           "camera_grid",
+                           "camera_grid", "camera_detections", "camera_alerts",
                            "voice_switch", "open_sandbox", "close_sandbox",
                            "sensor_history", "tradingview", "dex_scan", "dex_scan_hide"})
 
@@ -4075,6 +4076,14 @@ def _fast_path(command):
     # Its close, by the same names, first: "close my room cam" is the panel, never a program to quit.
     if cameras.dismissed(command) or cameras.all_dismissed(command):
         return _blank_result("camera_close")
+
+    # What a camera recognised on its own board: "what has the house cam detected", "is anyone on the
+    # house cam" -- free, from its last report -- and "mute the camera alerts".
+    if detections.muting_asked(command) is not None:
+        return _blank_result("camera_alerts")
+
+    if detections.asked(command):
+        return _blank_result("camera_detections")
 
     # Every camera at once: "show me all the cameras". Plural, so "show me the camera" stays the webcam's.
     if cameras.all_asked(command):
@@ -6177,6 +6186,12 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "camera_grid":
         return _query(intent, lambda: _camera_grid(command))
+
+    if intent == "camera_detections":
+        return _query(intent, lambda: detections.summary(detections.asked(command)))
+
+    if intent == "camera_alerts":
+        return _query(intent, lambda: detections.set_muted(detections.muting_asked(command)))
 
     if intent == "voice_switch":
         return _query(intent, lambda: _switch_voice(command))

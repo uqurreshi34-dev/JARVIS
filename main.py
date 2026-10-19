@@ -87,6 +87,7 @@ from actions import (
     dex_intelligence,
     line_watch,
     signal_watch,
+    detections,
 )
 from actions.battery import battery_monitor
 from actions.watch import watcher, catch_up
@@ -1589,6 +1590,10 @@ def main():
     signal_watch.set_listeners(on_say=assistant._on_alert, on_show=trade_plan.present)
     signal_watch.start()
     hud.shutdown.connect(signal_watch.stop)
+
+    # What the house cam recognises on its own board: someone coming into view is said, through the same
+    # gate as other announcements, and so reaches the phone too.
+    detections.set_listeners(on_say=assistant._on_alert)
 
     # The DEX scan: each pair's price on both exchanges and whether the gap would pay, beside the HUD.
     dex_view = DexPanel()

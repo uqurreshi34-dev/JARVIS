@@ -652,6 +652,21 @@ recorded: JARVIS keeps the newest picture in memory and nothing on disk.
 
 What a camera looks at is the "looks" of its room's window in house.json.
 
+### What the house cam recognises
+
+Flashed as `s3detect`, the house cam runs YOLO26n (FEMTO-ML) on its own board,
+beside its live view, and tells JARVIS what it sees -- never the picture.
+
+| Say | Does |
+|---|---|
+| (nothing) | "Someone's in view of your house cam, sir." -- to the room and the phone |
+| what has the house cam detected / is anyone on the house cam | what it sees now (**free**) |
+| mute the camera alerts / unmute the camera alerts | stops or starts saying so |
+
+Once: `pip install onnx numpy`, then `python tools/femto_build.py` (FEMTO-ML cloned
+beside JARVIS), then `pio run -e s3detect -t upload` from arduino/jarvis_camera.
+`pio run -e s3cam -t upload` goes back to the camera without detection.
+
 Two boards, one sketch (arduino/jarvis_camera): `pio run -e cam -t upload` for the
 ESP32-CAM ("my room cam"), `pio run -e s3cam -t upload` for the ESP32-S3-CAM ("house
 cam"), plugged into its USB-C socket marked TTL. On the phone, the cameras button
