@@ -363,6 +363,11 @@ class Assistant:
         """Speak queued alerts in order, without allowing races between them."""
         while self._queued_alerts:
             text, phone = self._queued_alerts.pop(0)
+
+            # a camera sighting your question has just been answered with
+            if detections.answered(text):
+                continue
+
             self._speak_alert_locked(text, phone)
 
     def _end_interaction(self):
@@ -536,6 +541,9 @@ class Assistant:
                 with self._alert_lock:
                     if self._interaction_open and user_talking():
                         self._queued_alerts.append((text, False))
+                        continue
+
+                    if detections.answered(text):
                         continue
 
                     self._speak_alert_locked(text, phone=False)
@@ -1625,8 +1633,8 @@ def main():
     hud.shutdown.connect(signal_watch.stop)
 
     # What the house cam recognises on its own board: what comes into view reaches the phone at once, with
-    # the camera to open, and is said aloud through the same gate as other announcements -- held while a
-    # turn is open, said as it ends (19 October 2026: held, a restart lost it unsaid).
+    # the camera to open, and is said aloud at once -- held only while you are mid-sentence, and not said
+    # at all if your question has just been answered with it (Assistant._on_sighting).
     detections.set_listeners(on_say=assistant._on_sighting, on_phone=phone_server.sighting)
 
     # The DEX scan: each pair's price on both exchanges and whether the gap would pay, beside the HUD.

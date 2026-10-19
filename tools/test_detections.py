@@ -122,6 +122,17 @@ with patch.object(detections.journal, "alert", written.append):
         count = len(said)
         detections.record("house cam", report(("dog", 0.8)))
         check(len(said) == count, "narrowed to people, a dog is not said")
+    detections._present.clear()
+    detections.record("house cam", report())
+    detections.record("house cam", report(("cup", 0.8)))
+    sentence = said[-1]
+    house_cam = next(camera for camera in cameras.cameras() if camera["name"] == "house cam")
+    detections.summary(house_cam)
+    check(sentence == "A cup is in view of your house cam, sir." and detections.answered(sentence)
+          and not detections.answered(sentence),
+          "a sighting your question was just answered with is not said again after the answer, once")
+    detections.record("house cam", report(("cup", 0.8), ("bottle", 0.7)))
+    check(not detections.answered(said[-1]), "but one the answer did not cover still is")
     with patch.object(detections, "IGNORE", ("sink",)):
         detections._present.clear()
         count = len(said)

@@ -53,6 +53,8 @@ MAX_LABEL = 40
 _lock = threading.Lock()
 _latest = {}          # camera -> {"at", "objects", "ms"}
 _present = {}         # (camera, label) -> {"last": monotonic time last in view, "said": how many said}
+_pending = {}         # sentence waiting to be said -> (camera, {label: count}, monotonic time)
+_answered = set()     # sentences an answer has already covered: not said after it
 _muted = False
 _say = None
 _phone = None
@@ -150,6 +152,12 @@ def record(name, payload):
     sentence = arrival_words(camera, due)
     journal.alert(sentence)
 
+    with _lock:
+        for old in [old for old, (_, _, at) in _pending.items() if now - at > 120]:
+            del _pending[old]
+
+        _pending[sentence] = (camera, dict(due), now)
+
     if not quiet:
         if _phone:
             try:
@@ -223,6 +231,17 @@ def _listed(parts):
     return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
+def answered(sentence):
+    """True, once, if [sentence] is a sighting an answer has already covered: not to be said."""
+    with _lock:
+        if sentence in _answered:
+            _answered.discard(sentence)
+            return True
+
+        _pending.pop(sentence, None)
+        return False
+
+
 def latest(name):
     """{"objects", "ms", "ago"} -- camera [name]'s latest report and its age in seconds -- or None."""
     with _lock:
@@ -252,6 +271,14 @@ def summary(camera):
 
     for item in sorted(report["objects"], key=lambda item: -item["score"]):
         counts[item["label"]] = counts.get(item["label"], 0) + 1
+
+    # A sighting still waiting to be said that this answer covers -- you asked as the cup came
+    # into view, and were told -- is not said again straight after it (19 October 2026).
+    with _lock:
+        for sentence, (where, said, _) in list(_pending.items()):
+            if where == camera["name"] and all(counts.get(label, 0) >= n for label, n in said.items()):
+                _answered.add(sentence)
+                del _pending[sentence]
 
     if not counts:
         return f"Nothing {who} recognises is in view, sir."
@@ -329,4 +356,6 @@ def forget():
     with _lock:
         _latest.clear()
         _present.clear()
+        _pending.clear()
+        _answered.clear()
         _muted = False

@@ -605,10 +605,25 @@ static float overlap(const Seen &a, const Seen &b) {
   return either > 0 ? shared / either : 0;
 }
 
-// One name for one thing: the model can call the same box two things -- an
-// open laptop also "tv" (19 October 2026) -- and only the surer is kept.
-// Never a person: someone on a couch is a person and a couch, both there.
+// How much of the smaller box lies inside the other.
+static float inside(const Seen &a, const Seen &b) {
+  float w = fminf(a.x2, b.x2) - fmaxf(a.x1, b.x1), h = fminf(a.y2, b.y2) - fmaxf(a.y1, b.y1);
+
+  if (w <= 0 || h <= 0) {
+    return 0;
+  }
+
+  float smaller = fminf((a.x2 - a.x1) * (a.y2 - a.y1), (b.x2 - b.x1) * (b.y2 - b.y1));
+  return smaller > 0 ? w * h / smaller : 0;
+}
+
+// One name, and one box, for one thing: the model can call the same box two
+// things -- an open laptop also "tv" -- or give one thing two boxes, one in
+// the other -- "two laptops" for one (19 October 2026) -- and only the surer
+// is kept. Two different things are never a person: someone on a couch is a
+// person and a couch, both there.
 static const float DETECT_SAME_BOX = 0.50f;   // 0.80 let a laptop and a "tv" through (19 October)
+static const float DETECT_BOX_INSIDE = 0.80f;
 
 int oneNameEach(Seen *seen, int count) {
   int kept = 0;
@@ -617,9 +632,15 @@ int oneNameEach(Seen *seen, int count) {
     bool beaten = false;
 
     for (int j = 0; j < count && !beaten; ++j) {
-      beaten = j != i && seen[i].label != 0 && seen[j].label != 0 && seen[j].label != seen[i].label &&
-               (seen[j].score > seen[i].score || (seen[j].score == seen[i].score && j < i)) &&
-               overlap(seen[i], seen[j]) >= DETECT_SAME_BOX;
+      if (j == i || !(seen[j].score > seen[i].score || (seen[j].score == seen[i].score && j < i))) {
+        continue;
+      }
+
+      if (seen[j].label == seen[i].label) {
+        beaten = overlap(seen[i], seen[j]) >= DETECT_SAME_BOX || inside(seen[i], seen[j]) >= DETECT_BOX_INSIDE;
+      } else {
+        beaten = seen[i].label != 0 && seen[j].label != 0 && overlap(seen[i], seen[j]) >= DETECT_SAME_BOX;
+      }
     }
 
     if (!beaten) {
@@ -636,11 +657,14 @@ int oneNameEach(Seen *seen, int count) {
 // single look. Requiring two looks running (the first try) threw the bottles
 // away with the guesses. So, over the last three looks:
 //   someone is reported when seen in this look or the last one;
-//   anything else when seen in two of the last three, and kept, with its last
-//   boxes, until it has been missed twice running.
+//   anything else when seen in two of the last three -- or at once, when the
+//   model is sure of it (DETECT_SURE) -- and kept, with its last boxes, until
+//   it has been missed twice running.
+static const float DETECT_SURE = 0.60f;
 struct Track {
   uint8_t hits;        // this look and the two before, one bit each
   uint8_t count;       // boxes kept from the last look it was seen in
+  bool shown;          // reported after the last look
   Seen boxes[3];
 };
 
@@ -668,17 +692,26 @@ int steadyOnes(Seen *seen, int count) {
     Track &track = tracks[label];
     track.hits = ((track.hits << 1) | (now[label] ? 1 : 0)) & 7;
 
+    float best = 0;
+
     if (now[label]) {
       track.count = 0;
 
-      for (int i = 0; i < count && track.count < 3; ++i) {
+      for (int i = 0; i < count; ++i) {
         if (seen[i].label == label) {
-          track.boxes[track.count++] = seen[i];
+          best = fmaxf(best, seen[i].score);
+
+          if (track.count < 3) {
+            track.boxes[track.count++] = seen[i];
+          }
         }
       }
     }
 
-    bool sure = label == 0 ? (track.hits & 3) != 0 : __builtin_popcount(track.hits) >= 2;
+    bool sure = label == 0 ? (track.hits & 3) != 0
+                           : (__builtin_popcount(track.hits) >= 2 || best >= DETECT_SURE ||
+                              (track.shown && (track.hits & 3)));
+    track.shown = sure;
 
     for (int k = 0; sure && k < track.count && found < DETECT_MAX; ++k) {
       kept[found++] = track.boxes[k];
