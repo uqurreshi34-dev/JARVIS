@@ -30,7 +30,7 @@ import re
 import threading
 import time
 
-from actions import cameras, journal
+from actions import cameras, files, journal
 
 
 # Things said unasked when they come into view, by the model's own names; "all" for everything it knows.
@@ -53,6 +53,11 @@ FRESH_SECONDS = 30.0
 # from its last report, and not asked again for NO_LOOK_RETRY seconds.
 LOOK_WAIT = float(os.getenv("JARVIS_DETECT_LOOK_WAIT") or 6)
 NO_LOOK_RETRY = 600.0
+# The cameras that have ever reported a detection, one name a line in JARVIS's folder: a board
+# reports only when what it sees changes, so after a restart, with nothing new in view, "what has
+# my house cam detected" was not known to be the house cam's and was left to the model, which
+# said it had no access to the camera feed (20 October 2026).
+DETECTING_FILE = "jarvis-detecting-cameras.txt"
 
 # A report is refused past this many things, or with a name longer than this.
 MAX_OBJECTS = 50
@@ -66,9 +71,52 @@ _pending = {}         # sentence waiting to be said -> (camera, {label: count}, 
 _answered = set()     # sentences an answer has already covered: not said after it
 _look_wanted = {}     # camera -> monotonic time JARVIS asked it to look now
 _cannot_look = {}     # camera -> monotonic time it last failed to answer a request to look
+_detecting = None     # the names in DETECTING_FILE, read on first use
 _muted = False
 _say = None
 _phone = None
+
+
+def _detecting_path():
+    base = files.root()
+
+    return os.path.join(base, DETECTING_FILE) if base else None
+
+
+def _known_detecting():
+    """The cameras known to detect. The caller holds _lock."""
+    global _detecting
+
+    if _detecting is None:
+        _detecting = set()
+        path = _detecting_path()
+
+        try:
+            if path and os.path.exists(path):
+                with open(path, encoding="utf-8") as file:
+                    _detecting = {line.strip() for line in file if line.strip()}
+        except OSError as error:
+            print(f"[JARVIS] could not read {path}: {error}")
+
+    return _detecting
+
+
+def _remember_detecting(camera):
+    """[camera] has reported a detection: kept, so it is known after a restart. The caller holds _lock."""
+    known = _known_detecting()
+
+    if camera in known:
+        return
+
+    known.add(camera)
+    path = _detecting_path()
+
+    try:
+        if path:
+            with open(path, "w", encoding="utf-8") as file:
+                file.write("".join(f"{name}\n" for name in sorted(known)))
+    except OSError as error:
+        print(f"[JARVIS] could not write {path}: {error}")
 
 
 def set_listeners(on_say=None, on_phone=None):
@@ -141,6 +189,7 @@ def record(name, payload):
     now = time.monotonic()
 
     with _lock:
+        _remember_detecting(camera)
         before = _latest.get(camera, {})
         _latest[camera] = {"at": now, "objects": objects,
                            "ms": int(took) if isinstance(took, (int, float)) and not isinstance(took, bool) else None,
@@ -368,9 +417,10 @@ def asked(text):
     known = cameras.cameras()
 
     with _lock:
-        reporting = set(_latest)
+        reporting = set(_latest) | (_known_detecting() - set(_cannot_look))
 
-    # Only a camera that detects: "is anyone on the street", asked of a camera that only takes
+    # Only a camera that detects -- one reporting now, or one that has reported before and still
+    # answers a request to look: "is anyone on the street", asked of a camera that only takes
     # pictures, is left to be answered as before.
     for camera in sorted(known, key=lambda camera: -len(camera["name"])):
         if camera["name"] not in reporting:
@@ -417,7 +467,7 @@ def set_muted(muted):
 
 def forget():
     """Drop every report. For tests."""
-    global _muted
+    global _muted, _detecting
 
     with _lock:
         _latest.clear()
@@ -427,3 +477,4 @@ def forget():
         _look_wanted.clear()
         _cannot_look.clear()
         _muted = False
+        _detecting = None

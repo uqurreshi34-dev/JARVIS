@@ -173,6 +173,24 @@ for text in ("show me the house cam", "what's happening on the street", "is anyo
              "is anyone on my room cam", "what can you see"):
     check(detections.asked(text) is None, f"not claimed: {text!r}")
 
+# JARVIS restarted with nothing new in view: the board has said nothing since, but it is still the
+# house cam's question -- it was left to the model, which said it had no access to the feed.
+with open(detections._detecting_path(), encoding="utf-8") as kept:
+    check(kept.read() == "house cam\n", "a camera that reports is remembered in JARVIS's folder")
+with detections._lock:
+    detections._latest.clear()
+    detections._detecting = None
+check(detections.asked("what has my house cam detected") == house,
+      "and after a restart, before it reports again, the question is still the house cam's")
+check(detections.asked("is anyone on my room cam") is None, "a camera that has never reported is still not claimed")
+with detections._lock:
+    detections._cannot_look["house cam"] = time.monotonic()
+check(detections.asked("what has my house cam detected") is None,
+      "one remembered but no longer answering a request to look is left as before")
+with detections._lock:
+    detections._cannot_look.clear()
+detections.record("house cam", report(("person", 0.88), ("cup", 0.81), ("cup", 0.6)))
+
 check(detections.summary(house) == "Your house cam sees a person and two cups, sir.",
       f"answered in words ({detections.summary(house)!r})")
 detections.record("house cam", report())

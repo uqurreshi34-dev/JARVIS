@@ -179,13 +179,13 @@ else:
     cameras.stop_watching()
 
     check(client.post("/camera/wanted", json={"name": "my room cam"}).status_code == 403, "/camera/wanted needs the token")
-    check(client.post("/camera/wanted", json={"name": "my room cam"}, headers=token).get_json() == {"snap": False, "live": False},
+    check(client.post("/camera/wanted", json={"name": "my room cam"}, headers=token).get_json() == {"snap": False, "live": False, "look": False},
           "and says no when nothing is wanted")
     cameras.want("my room cam")
-    check(client.post("/camera/wanted", json={"name": "my room cam"}, headers=token).get_json() == {"snap": True, "live": False},
+    check(client.post("/camera/wanted", json={"name": "my room cam"}, headers=token).get_json() == {"snap": True, "live": False, "look": False},
           "and yes when a picture is")
     cameras.watch("my room cam")
-    check(client.post("/camera/wanted", json={"name": "my room cam"}, headers=token).get_json() == {"snap": False, "live": True},
+    check(client.post("/camera/wanted", json={"name": "my room cam"}, headers=token).get_json() == {"snap": False, "live": True, "look": False},
           "and asks for live view while its picture is shown")
     cameras.stop_watching()
 
