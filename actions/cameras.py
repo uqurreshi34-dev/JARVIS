@@ -463,11 +463,17 @@ def _targets(camera, only_one):
         names |= {"camera outside", "outside", "outside camera", "outdoor camera"}
 
     # "my room cam" is also "the room cam" and "room cam": whose it is, or "the", is said either way, and
-    # "show me the room cam" asked for this camera, not the PC's own webcam (12 October 2026).
+    # "show me the room cam" asked for this camera, not the PC's own webcam (12 October 2026). And the
+    # other way: "house cam" is also "my house cam" -- said so, it opened the laptop's webcam instead
+    # (19 October 2026).
     for name in list(names):
         for owner in _OWNERS:
             if name.startswith(owner + " "):
                 names.add(name[len(owner) + 1:])
+
+    for name in list(names):
+        if not any(name.startswith(owner + " ") for owner in _OWNERS):
+            names |= {f"{owner} {name}" for owner in _OWNERS}
 
     return names
 
@@ -584,9 +590,17 @@ def _called(camera, view=True):
     if camera["looks"] and view:
         return f"the {camera['looks']} camera"
 
-    # A name is in your words ("my room cam"); said back to you, it is yours: "your room cam".
+    # A name is in your words ("my room cam"); said back to you, it is yours: "your room cam". One named
+    # without an owner ("house cam") is yours all the same: "your house cam".
     words = camera["name"].split()
-    return " ".join(["your" if words[0] == "my" else words[0]] + words[1:]) if words else camera["name"]
+
+    if not words:
+        return camera["name"]
+
+    if words[0] not in _OWNERS:
+        return " ".join(["your"] + words)
+
+    return " ".join(["your" if words[0] == "my" else words[0]] + words[1:])
 
 
 def picture(text):

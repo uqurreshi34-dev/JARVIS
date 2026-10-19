@@ -75,6 +75,15 @@ check(sorted(camera["name"] for camera in cameras.online()) == ["house cam", "my
 house = next(camera for camera in cameras.cameras() if camera["name"] == "house cam")
 check(cameras.asked("show me the house cam") == ("show", house) and cameras.asked("show me the house") is None,
       "'show me the house cam' is the new camera; 'show me the house' is still the hologram's")
+check(cameras.asked("show me my house cam") == ("show", house) and cameras.asked("show my house camera") == ("show", house)
+      and cameras.asked("Jarvis, show our house cam") == ("show", house)
+      and cameras.dismissed("close my house cam") == house,
+      "'show me my house cam' is the house cam too, not the laptop's webcam, and so is closing it")
+check(cameras.here_words("show me my house cam", house) == "Here's your house cam, sir."
+      and cameras.closed_words("close my house cam", house) == "Closed your house cam, sir.",
+      "and it is answered as yours: 'Here's your house cam, sir.'")
+check(cameras.asked("show me my house") is None and cameras.asked("show me my camera") is None,
+      "while 'show me my house' and 'show me my camera' are not")
 
 cameras.watch_all(["my room cam", "house cam"])
 check(cameras.live_wanted("my room cam") and cameras.live_wanted("house cam"), "the grid streams both at once")
@@ -107,7 +116,7 @@ if commands is not None:
 
         result = commands.handle_command("show me the house cam")
         said = result["action"]()
-        check(told[-1] == ("focus", "house cam") and said == "Here's house cam, sir."
+        check(told[-1] == ("focus", "house cam") and said == "Here's your house cam, sir."
               and cameras.live_wanted("my room cam"),
               f"one asked for by name is made big, and the other keeps streaming for back ({said!r})")
 
