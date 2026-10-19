@@ -12,7 +12,8 @@ What FEMTO-ML itself does about speed and scores (its changes of October 2026, i
 each conv runs in blocks of output channels whose filters fit in a buffer of internal SRAM, which the
 sketch gives it once wifi is up (takeFastBuffer), on both cores (set_cores); a class score above 0.5
 is no longer clamped to 0.5; SiLU and the final Sigmoid are table lookups; values are quantized where
-they are made rather than moved as floats first; and the sources carry a step timer (env s3profile).
+they are made rather than moved as floats first; the sketch writes the model's int8 input itself
+(run_model_int8_input); and the sources carry a step timer (env s3profile).
 
 Two changes from FEMTO-ML's defaults, both so detection runs beside the camera's live view without
 taking from it:

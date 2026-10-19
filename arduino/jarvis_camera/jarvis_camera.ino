@@ -51,6 +51,7 @@
 // FEMTO-ML into detect/ by tools/femto_build.py. It runs on the other core,
 // beside everything above: pictures and live view carry on as before.
 #include "img_converters.h"
+#include "jpeg_decoder.h"
 #include "esp_heap_caps.h"
 #include "model.h"
 #include "labels.h"
@@ -524,14 +525,21 @@ static void letterboxMap(int16_t *map, int length, int shown, int pad, float sca
   }
 }
 
-// The frame as the model wants it: RGB / 255, channels first, letterboxed.
-bool fillInput(const uint8_t *bgr, int width, int height) {
+// The frame as the model wants it, letterboxed: [pixels] is three bytes a
+// pixel, red first, or blue first with [bgr].
+//
+// With FEMTO-ML's int8 input (MODEL_INPUT_INT8): straight into the tensor the
+// first conv reads, int8 and pixel by pixel (one byte a value, where the float
+// input was four, then quantized and transposed by the model), each byte what
+// the model's own QuantizeLinear made of RGB / 255 -- so the same input.
+bool fillInput(const uint8_t *pixels, int width, int height, bool bgr) {
   float scale = fminf((float)MODEL_SIZE / width, (float)MODEL_SIZE / height);
   int shown_w = (int)(width * scale), shown_h = (int)(height * scale);
   int pad_x = (MODEL_SIZE - shown_w) / 2, pad_y = (MODEL_SIZE - shown_h) / 2;
   const float grey = 114.0f / 255.0f;
   static int16_t column[MODEL_SIZE], row[MODEL_SIZE];
   static float level[256];
+  const int r = bgr ? 2 : 0, b = bgr ? 0 : 2;
 
   letterboxMap(column, width, shown_w, pad_x, scale);
   letterboxMap(row, height, shown_h, pad_y, scale);
@@ -540,6 +548,33 @@ bool fillInput(const uint8_t *bgr, int width, int height) {
     level[v] = v / 255.0f;
   }
 
+#ifdef MODEL_INPUT_INT8
+  static int8_t quantized[256];
+  const int8_t grey_q = model_quantize_input(grey);
+
+  for (int v = 0; v < 256; ++v) {
+    quantized[v] = model_quantize_input(level[v]);
+  }
+
+  int8_t *in = model_input_int8;
+
+  for (int y = 0; y < MODEL_SIZE; ++y) {
+    for (int x = 0; x < MODEL_SIZE; ++x, in += 3) {
+      if (row[y] < 0 || column[x] < 0) {
+        in[0] = in[1] = in[2] = grey_q;
+        continue;
+      }
+
+      const uint8_t *px = pixels + (row[y] * width + column[x]) * 3;
+      in[0] = quantized[px[r]];
+      in[1] = quantized[px[1]];
+      in[2] = quantized[px[b]];
+    }
+  }
+
+  return true;
+#endif
+
   for (int y = 0; y < MODEL_SIZE; ++y) {
     for (int x = 0; x < MODEL_SIZE; ++x) {
       if (row[y] < 0 || column[x] < 0) {
@@ -547,11 +582,10 @@ bool fillInput(const uint8_t *bgr, int width, int height) {
         continue;
       }
 
-      // The camera library's "RGB888" is blue, green, red in memory.
-      const uint8_t *px = bgr + (row[y] * width + column[x]) * 3;
-      tensor_images[0][y][x] = level[px[2]];
+      const uint8_t *px = pixels + (row[y] * width + column[x]) * 3;
+      tensor_images[0][y][x] = level[px[r]];
       tensor_images[1][y][x] = level[px[1]];
-      tensor_images[2][y][x] = level[px[0]];
+      tensor_images[2][y][x] = level[px[b]];
     }
   }
 
@@ -574,7 +608,7 @@ static float overlap(const Seen &a, const Seen &b) {
 // One name for one thing: the model can call the same box two things -- an
 // open laptop also "tv" (19 October 2026) -- and only the surer is kept.
 // Never a person: someone on a couch is a person and a couch, both there.
-static const float DETECT_SAME_BOX = 0.80f;
+static const float DETECT_SAME_BOX = 0.50f;   // 0.80 let a laptop and a "tv" through (19 October)
 
 int oneNameEach(Seen *seen, int count) {
   int kept = 0;
@@ -593,6 +627,27 @@ int oneNameEach(Seen *seen, int count) {
     }
   }
 
+  return kept;
+}
+
+// Someone is told at once. Anything else must be there two looks running:
+// the model's one-look guesses -- a toilet, a book, a chair -- came and went
+// in a single look (19 October 2026), and a cup held up is there for both.
+uint8_t seenLastLook[LABEL_COUNT] = {0};
+
+int sureOnes(Seen *seen, int count) {
+  uint8_t seenThisLook[LABEL_COUNT] = {0};
+  int kept = 0;
+
+  for (int i = 0; i < count; ++i) {
+    seenThisLook[seen[i].label] = 1;
+
+    if (seen[i].label == 0 || seenLastLook[seen[i].label]) {
+      seen[kept++] = seen[i];
+    }
+  }
+
+  memcpy(seenLastLook, seenThisLook, sizeof(seenLastLook));
   return kept;
 }
 
@@ -752,23 +807,54 @@ void detectTask(void *) {
       continue;
     }
 
+    // A VGA picture is decoded at half size: 320 x 240 is still more than the
+    // model's 256 across, the decoder skips most of its work at that scale
+    // (it was about 300 ms of each look at full size), and halving in the
+    // decoder averages pixels where the letterbox would only have dropped them.
     int width = frame->width, height = frame->height;
-    bool decoded = (size_t)width * height * 3 <= rgb_size &&
-                   fmt2rgb888(frame->buf, frame->len, frame->format, rgb);
+    bool bgr = false, decoded = false;
+
+    if (frame->format == PIXFORMAT_JPEG && width >= 2 * MODEL_SIZE) {
+      esp_jpeg_image_cfg_t jpeg = {};
+      esp_jpeg_image_output_t out = {};
+      jpeg.indata = frame->buf;
+      jpeg.indata_size = frame->len;
+      jpeg.outbuf = rgb;
+      jpeg.outbuf_size = rgb_size;
+      jpeg.out_format = JPEG_IMAGE_FORMAT_RGB888;
+      jpeg.out_scale = JPEG_IMAGE_SCALE_1_2;
+      decoded = esp_jpeg_decode(&jpeg, &out) == ESP_OK;
+      width = out.width;
+      height = out.height;
+    }
+
+    if (!decoded) {
+      width = frame->width;
+      height = frame->height;
+      // The camera library's "RGB888" is blue, green, red in memory.
+      bgr = true;
+      decoded = (size_t)width * height * 3 <= rgb_size &&
+                fmt2rgb888(frame->buf, frame->len, frame->format, rgb);
+    }
+
     esp_camera_fb_return(frame);
 
     if (!decoded) {
       continue;
     }
 
-    fillInput(rgb, width, height);
+    fillInput(rgb, width, height, bgr);
     unsigned long started = millis();
+#ifdef MODEL_INPUT_INT8
+    run_model_int8_input();
+#else
     run_model();
+#endif
     unsigned long took = millis() - started;
     unsigned long ready = started - asked;   // the picture taken, decoded and letterboxed
 
     Seen seen[DETECT_MAX];
-    int count = readOutput(seen, width, height);
+    int count = sureOnes(seen, readOutput(seen, width, height));
     String now = kinds(seen, count);
     Serial.printf("[jarvis] detection: %s in %lu ms, the picture ready in %lu ms\n",
                   now.length() ? now.c_str() : "nothing", took, ready);

@@ -211,7 +211,7 @@ def _load_main():
     for name in (
         "arm_follow_up", "consume_follow_up_answer", "disarm", "last_was_named", "listen",
         "set_follow_up_expired_listener", "set_level_listener",
-        "set_status_listener", "set_wake_listener", "FILLERS", "set_phone_active",
+        "set_status_listener", "set_wake_listener", "user_talking", "FILLERS", "set_phone_active",
     ):
         setattr(voice, name, MagicMock())
 
