@@ -231,8 +231,22 @@ def _check_speech(failures):
     while speech._neural_busy.is_set() and time.monotonic() < deadline:
         time.sleep(0.05)
 
-    # The fallback voice stops at the next word.
+    # The fallback voice stops at the next word. Kokoro is still loading here, so the fallback is Windows'
+    # voice: on a PC with Kokoro installed it would otherwise load during the fallback's wait and speak.
+    class StillLoading:
+        def load_in_background(self):
+            pass
+
+        def wait(self, timeout):
+            return False
+
+        def ready(self):
+            return False
+
+    import voices
+
     with patch.object(engine, "_speak_neural", side_effect=RuntimeError("offline")), \
+         patch.object(voices, "local", lambda: StillLoading()), \
          patch.object(speech, "_sapi_voice", FakeVoice):
         press_after(0.15)
         engine.speak(long_reply)

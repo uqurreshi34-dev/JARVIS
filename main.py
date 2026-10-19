@@ -1591,9 +1591,11 @@ def main():
     signal_watch.start()
     hud.shutdown.connect(signal_watch.stop)
 
-    # What the house cam recognises on its own board: someone coming into view is said, through the same
-    # gate as other announcements, and so reaches the phone too.
-    detections.set_listeners(on_say=assistant._on_alert)
+    # What the house cam recognises on its own board: what comes into view reaches the phone at once, with
+    # the camera to open, and is said aloud through the same gate as other announcements -- held while a
+    # turn is open, said as it ends (19 October 2026: held, a restart lost it unsaid).
+    detections.set_listeners(on_say=lambda text: assistant._on_alert(text, phone=False),
+                             on_phone=phone_server.sighting)
 
     # The DEX scan: each pair's price on both exchanges and whether the gap would pay, beside the HUD.
     dex_view = DexPanel()

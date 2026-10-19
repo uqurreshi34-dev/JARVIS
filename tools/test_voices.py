@@ -457,7 +457,27 @@ check(played and not windows, "Azure failing: Kokoro says it, not Windows' woman
 check(not speech.is_speaking(), "and speaking ends")
 
 played.clear()
-unloaded = voices.Kokoro(voice="bm_george")
+
+
+class _StillLoading:
+    """Kokoro while it is still being read off the disk (or downloaded): asked to load, and not ready in
+    time. The real one, on a PC that has it, would load during the wait and speak -- which is the
+    fallback working, not the case tested here."""
+
+    def load_in_background(self):
+        pass
+
+    def wait(self, timeout):
+        return False
+
+    def ready(self):
+        return False
+
+    def audio(self, text):
+        raise AssertionError("a Kokoro that is still loading was asked to speak")
+
+
+unloaded = _StillLoading()
 
 with patch.object(voices, "local", lambda: unloaded), \
         patch.object(engine, "_play_reactive", side_effect=_record), \

@@ -708,6 +708,23 @@ class PhoneServer:
             daemon=True,
         ).start()
 
+    def sighting(self, text, camera):
+        """Something a camera recognised coming into view: to the phone now, not held behind a turn at the
+        desk, and tapping it opens that camera's live feed. Quiet hours apply, as to any announcement."""
+        text = (text or "").strip()
+
+        if not text:
+            return
+
+        shown = {"name": cameras.normal_name(camera), "title": cameras.normal_name(camera).upper()}
+        self._hold(text, shown)
+
+        threading.Thread(
+            target=self._send_push,
+            args=(text, shown),
+            daemon=True,
+        ).start()
+
     def alarm(self, text, board):
         """Movement at home while you are away: to the phone now, with a way to see it.
 

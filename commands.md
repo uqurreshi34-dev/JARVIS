@@ -659,7 +659,7 @@ beside its live view, and tells JARVIS what it sees -- never the picture.
 
 | Say | Does |
 |---|---|
-| (nothing) | "Someone's in view of your house cam, sir." -- to the room and the phone |
+| (nothing) | "Someone's in view of your house cam, sir.", "A cup is in view ..." -- to the phone at once (tap to open the camera), aloud once a turn ends |
 | what has the house cam detected / is anyone on the house cam | what it sees now (**free**) |
 | mute the camera alerts / unmute the camera alerts | stops or starts saying so |
 

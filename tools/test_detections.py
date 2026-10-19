@@ -6,8 +6,10 @@ Without a camera: reports are made here as the sketch sends them. Checked:
 
 - a report is kept, and a bad one refused: not a list, a score out of range, a box that is not four
   numbers from 0 to 1, too many things;
-- someone coming into view is said once, to the room and the phone, and journalled; not again while
-  they stay, nor within ANNOUNCE_GAP of saying it; a cup coming into view is not said at all;
+- what comes into view is said once, in one sentence, someone first -- "Someone and two cups are in
+  view of your house cam, sir." -- to the phone at once with the camera to open, aloud through the
+  gate, and journalled; not again while it stays, nor within its gap (ANNOUNCE_GAP for someone,
+  OTHER_GAP for anything else); JARVIS_DETECT_ANNOUNCE can narrow it to some things;
 - "mute the camera alerts" stops the saying (it is still journalled), "unmute" starts it;
 - "what has the house cam detected" and "is anyone on the house cam" are answered free, in words:
   "Your house cam sees a person and two cups, sir."; a stale report says so; a camera that only takes
@@ -18,6 +20,7 @@ Without a camera: reports are made here as the sketch sends them. Checked:
 """
 
 import sys
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -51,13 +54,16 @@ detections.forget()
 sensors.report({"name": "house cam", "event": "online"})
 sensors.report({"name": "my room cam", "event": "online"})
 
-said, written = [], []
-detections.set_listeners(on_say=said.append)
+said, written, phoned = [], [], []
+detections.set_listeners(on_say=said.append, on_phone=lambda text, camera: phoned.append((text, camera)))
 
 with patch.object(detections.journal, "alert", written.append):
     # ---- reports ------------------------------------------------------------------------------------
     check(detections.record("house cam", report(("cup", 0.81))) is None
           and detections.latest("house cam")["objects"][0]["label"] == "cup", "a report is kept")
+    check(said == ["A cup is in view of your house cam, sir."] and written == said
+          and phoned == [("A cup is in view of your house cam, sir.", "house cam")],
+          f"a cup coming into view is said, sent to the phone with the camera, and journalled ({said})")
     check(detections.record("house cam", {"objects": "cup"}) == "not a report"
           and detections.record("house cam", report(("cup", 1.5))) == "not a report"
           and detections.record("house cam", {"objects": [{"label": "cup", "score": 0.5, "box": [0, 0, 2, 1]}]})
@@ -68,20 +74,39 @@ with patch.object(detections.journal, "alert", written.append):
           == "not a report"
           and detections.record("", report()) == "no camera named",
           "a bad report is refused")
-    check(not said and not written, "a cup coming into view is not said")
+    check(len(said) == 1, "the refused reports said nothing")
 
     detections.record("house cam", report(("person", 0.88), ("cup", 0.81), ("cup", 0.6)))
-    check(said == ["Someone's in view of your house cam, sir."] and written == said,
-          f"someone coming into view is said, and journalled ({said})")
+    check(said[-1] == "Someone's in view of your house cam, sir." and len(said) == 2,
+          f"someone coming into view is said; the cup, already there, is not said again ({said[-1]})")
     detections.record("house cam", report(("person", 0.9), ("cup", 0.8)))
-    check(len(said) == 1, "not again while they stay in view")
+    check(len(said) == 2, "not again while they stay in view")
     detections.record("house cam", report(("cup", 0.8)))
     detections.record("house cam", report(("person", 0.7)))
-    check(len(said) == 1, f"nor when they step back in within {detections.ANNOUNCE_GAP:.0f} seconds")
+    check(len(said) == 2, f"nor when they step back in within {detections.ANNOUNCE_GAP:.0f} seconds")
     detections._announced[("house cam", "person")] -= detections.ANNOUNCE_GAP + 1
     detections.record("house cam", report(("cup", 0.8)))
     detections.record("house cam", report(("person", 0.7)))
-    check(len(said) == 2, "and again once that has passed")
+    check(len(said) == 3, "and again once that has passed")
+
+    detections._announced.clear()
+    detections.record("house cam", report())
+    detections.record("house cam", report(("cup", 0.8), ("person", 0.9), ("cup", 0.7)))
+    check(said[-1] == "Someone and two cups are in view of your house cam, sir.",
+          f"what arrives together is said together, someone first ({said[-1]})")
+    detections.record("house cam", report())
+    detections._announced[("house cam", "person")] -= detections.ANNOUNCE_GAP + 1
+    detections.record("house cam", report(("cup", 0.8), ("person", 0.9)))
+    check(said[-1] == "Someone's in view of your house cam, sir.",
+          f"a cup back within {detections.OTHER_GAP:.0f} seconds is not said again; someone is ({said[-1]})")
+    with patch.object(detections, "ANNOUNCE", ("person",)):
+        detections._announced.clear()
+        detections.record("house cam", report())
+        count = len(said)
+        detections.record("house cam", report(("dog", 0.8)))
+        check(len(said) == count, "narrowed to people, a dog is not said")
+    check(detections.arrival_words("house cam", {"person": 2}) == "Two people are in view of your house cam, sir.",
+          "two people are two people")
 
     # ---- muting ---------------------------------------------------------------------------------------
     check(detections.muting_asked("mute the camera alerts") is True
@@ -92,10 +117,12 @@ with patch.object(detections.journal, "alert", written.append):
           "'mute the camera alerts' and 'unmute the camera alerts', and nothing else")
     detections.set_muted(True)
     detections._announced.clear()
-    detections.record("house cam", report(("cup", 0.8)))
+    detections.record("house cam", report())
     written.clear()
+    count, sent = len(said), len(phoned)
     detections.record("house cam", report(("person", 0.7)))
-    check(len(said) == 2 and len(written) == 1, "muted: not said, but still journalled")
+    check(len(said) == count and len(phoned) == sent and len(written) == 1,
+          "muted: not said nor sent to the phone, but still journalled")
     detections.set_muted(False)
 
 # ---- asking -----------------------------------------------------------------------------------------
@@ -151,6 +178,15 @@ if phone is not None:
     check(client.post("/camera/seen", json={"objects": "dog"}, headers=headers).status_code == 400, "refuses a bad report")
     check(client.post("/camera/seen", json=report(("dog", 0.7)), headers=headers).status_code == 200
           and detections.latest("house cam")["objects"][0]["label"] == "dog", "and keeps a good one")
+    with patch.object(server, "_send_push") as pushed:
+        server.sighting("Someone's in view of your house cam, sir.", "house cam")
+        for _ in range(50):
+            if pushed.called:
+                break
+
+            time.sleep(0.02)
+    check(pushed.called and pushed.call_args[0][1] == {"name": "house cam", "title": "HOUSE CAM"},
+          "a sighting is pushed to the phone at once, and tapping it opens that camera")
 
 # ---- the sketch, and the build -------------------------------------------------------------------------------
 

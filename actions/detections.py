@@ -5,15 +5,18 @@ tools/femto_build.py) every few seconds, beside its live view, and posts what it
 POST /camera/seen: names, scores and where each thing is, never the picture. This keeps the
 latest report from each camera, in memory only, and:
 
-    says, unasked, when someone comes into view     "Someone's in view of your house cam, sir."
-                                                    (to the room and the phone, as other alerts)
+    says, unasked, what comes into view             "Someone's in view of your house cam, sir."
+                                                    "Someone and a cup are in view of your house cam, sir."
+                                                    (to the phone at once, tapping it opens the camera;
+                                                    said aloud as other alerts are, once a turn ends)
     answers, free, what a camera has detected       "what has the house cam detected"
                                                     "is anyone on the house cam"
     stops and starts saying so                      "mute the camera alerts" / "unmute ..."
 
-Which things are worth saying unasked is JARVIS_DETECT_ANNOUNCE (default "person"); each is
-said at most once every ANNOUNCE_GAP seconds for each camera, so someone standing in view is
-not announced every five seconds.
+Which things are said unasked is JARVIS_DETECT_ANNOUNCE: "all" (the default) or the model's names,
+"person,cat". Someone is said at most once every ANNOUNCE_GAP seconds for each camera, anything
+else once every OTHER_GAP, so someone standing in view, or a cup on the desk, is not announced at
+every run.
 """
 
 import os
@@ -24,12 +27,13 @@ import time
 from actions import cameras, journal
 
 
-# Things said unasked when they come into view, by the model's own names.
+# Things said unasked when they come into view, by the model's own names; "all" for everything it knows.
 ANNOUNCE = tuple(name.strip().casefold() for name in
-                 (os.getenv("JARVIS_DETECT_ANNOUNCE") or "person").split(",") if name.strip())
+                 (os.getenv("JARVIS_DETECT_ANNOUNCE") or "all").split(",") if name.strip())
 
-# Each thing is said again for a camera only after this long.
+# Someone is said again for a camera only after this long; anything else, after OTHER_GAP.
 ANNOUNCE_GAP = float(os.getenv("JARVIS_DETECT_ANNOUNCE_GAP") or 120)
+OTHER_GAP = float(os.getenv("JARVIS_DETECT_OTHER_GAP") or 300)
 
 # A report older than this is not what the camera sees now.
 FRESH_SECONDS = 30.0
@@ -43,12 +47,19 @@ _latest = {}          # camera -> {"at", "objects", "ms"}
 _announced = {}       # (camera, label) -> monotonic time last said
 _muted = False
 _say = None
+_phone = None
 
 
-def set_listeners(on_say=None):
-    """on_say(text): speaks an unprompted announcement (and sends it to the phone)."""
-    global _say
-    _say = on_say
+def set_listeners(on_say=None, on_phone=None):
+    """on_say(text): says an unprompted announcement aloud, through the gate other alerts use -- held while
+    a turn is open, said when it ends. on_phone(text, camera): to the phone at once, not held behind the
+    desk's turn: tapping it opens [camera]. Without on_phone, on_say is expected to reach the phone too."""
+    global _say, _phone
+    _say, _phone = on_say, on_phone
+
+
+def _worth_saying(label):
+    return "all" in ANNOUNCE or label in ANNOUNCE
 
 
 def _clean(payload):
@@ -103,23 +114,40 @@ def record(name, payload):
         was = {item["label"] for item in before["objects"]} if before else set()
         _latest[camera] = {"at": now, "objects": objects,
                            "ms": int(took) if isinstance(took, (int, float)) and not isinstance(took, bool) else None}
-        arrived = [label for label in ANNOUNCE if label in {item["label"] for item in objects} and label not in was]
-        due = []
+        counts = {}
 
-        for label in arrived:
+        for item in objects:
+            counts[item["label"]] = counts.get(item["label"], 0) + 1
+
+        due = {}
+
+        for label, count in counts.items():
+            if label in was or not _worth_saying(label):
+                continue
+
             said = _announced.get((camera, label))
+            gap = ANNOUNCE_GAP if label == "person" else OTHER_GAP
 
-            if said is None or now - said >= ANNOUNCE_GAP:
+            if said is None or now - said >= gap:
                 _announced[(camera, label)] = now
-                due.append(label)
+                due[label] = count
 
         quiet = _muted
 
-    for label in due:
-        sentence = arrival_words(camera, label)
-        journal.alert(sentence)
+    if not due:
+        return None
 
-        if _say and not quiet:
+    sentence = arrival_words(camera, due)
+    journal.alert(sentence)
+
+    if not quiet:
+        if _phone:
+            try:
+                _phone(sentence, camera)
+            except Exception as error:   # noqa: BLE001 - the phone failing must not stop it being said
+                print(f"[JARVIS] could not send a sighting to the phone: {error}")
+
+        if _say:
             _say(sentence)
 
     return None
@@ -136,12 +164,30 @@ def _yours(camera):
     return " ".join(words)
 
 
-def arrival_words(camera, label):
-    """What JARVIS says when [label] comes into view of [camera]."""
-    if label == "person":
+def arrival_words(camera, arrived):
+    """What JARVIS says when the things in [arrived] ({label: how many}, or one label) come into view of
+    [camera], someone first: "Someone's in view of your house cam, sir.", "A cup is in view of ...",
+    "Someone and two cups are in view of ..."."""
+    if isinstance(arrived, str):
+        arrived = {arrived: 1}
+
+    order = sorted(arrived, key=lambda label: (label != "person", label))
+    parts = []
+
+    for label in order:
+        count = arrived[label]
+
+        if label == "person":
+            parts.append("someone" if count == 1 else f"{_NUMBERS.get(count, count)} people")
+        else:
+            parts.append(_counted(label, count))
+
+    if parts == ["someone"]:
         return f"Someone's in view of {_yours(camera)}, sir."
 
-    return f"{_article(label).capitalize()} {label} is in view of {_yours(camera)}, sir."
+    said = _listed(parts)
+    verb = "is" if len(parts) == 1 and arrived[order[0]] == 1 else "are"
+    return f"{said[:1].upper() + said[1:]} {verb} in view of {_yours(camera)}, sir."
 
 
 def _article(word):
