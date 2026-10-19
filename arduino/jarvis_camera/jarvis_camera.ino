@@ -502,7 +502,7 @@ bool joinWifi() {
 // 0.5, pass exactly what they passed then.
 static const float DETECT_SCORE_PERSON = 0.40f;
 static const float DETECT_SCORE_OTHER = 0.25f;
-static const unsigned long DETECT_GAP_MS = 1000UL;       // rest between runs
+static const unsigned long DETECT_GAP_MS = 200UL;        // rest between runs (was 1000: a second of every look)
 static const unsigned long DETECT_REPEAT_MS = 15000UL;
 static const int DETECT_MAX = 12;
 static const int MODEL_SIZE = 256;
@@ -630,25 +630,63 @@ int oneNameEach(Seen *seen, int count) {
   return kept;
 }
 
-// Someone is told at once. Anything else must be there two looks running:
-// the model's one-look guesses -- a toilet, a book, a chair -- came and went
-// in a single look (19 October 2026), and a cup held up is there for both.
-uint8_t seenLastLook[LABEL_COUNT] = {0};
+// What is reported is steadier than any one look. The model flickers: three
+// bottles held up read "bottle x2, bottle x2, nothing, bottle x2" (19 October
+// 2026), and its one-look guesses -- a toilet, a book -- come and go in a
+// single look. Requiring two looks running (the first try) threw the bottles
+// away with the guesses. So, over the last three looks:
+//   someone is reported when seen in this look or the last one;
+//   anything else when seen in two of the last three, and kept, with its last
+//   boxes, until it has been missed twice running.
+struct Track {
+  uint8_t hits;        // this look and the two before, one bit each
+  uint8_t count;       // boxes kept from the last look it was seen in
+  Seen boxes[3];
+};
 
-int sureOnes(Seen *seen, int count) {
-  uint8_t seenThisLook[LABEL_COUNT] = {0};
-  int kept = 0;
+Track *tracks = nullptr;   // one per kind of thing, in PSRAM
 
-  for (int i = 0; i < count; ++i) {
-    seenThisLook[seen[i].label] = 1;
+int steadyOnes(Seen *seen, int count) {
+  if (!tracks) {
+    tracks = (Track *)heap_caps_calloc(LABEL_COUNT, sizeof(Track), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
-    if (seen[i].label == 0 || seenLastLook[seen[i].label]) {
-      seen[kept++] = seen[i];
+    if (!tracks) {
+      return count;
     }
   }
 
-  memcpy(seenLastLook, seenThisLook, sizeof(seenLastLook));
-  return kept;
+  uint8_t now[LABEL_COUNT] = {0};
+
+  for (int i = 0; i < count; ++i) {
+    now[seen[i].label]++;
+  }
+
+  Seen kept[DETECT_MAX];
+  int found = 0;
+
+  for (int label = 0; label < LABEL_COUNT; ++label) {
+    Track &track = tracks[label];
+    track.hits = ((track.hits << 1) | (now[label] ? 1 : 0)) & 7;
+
+    if (now[label]) {
+      track.count = 0;
+
+      for (int i = 0; i < count && track.count < 3; ++i) {
+        if (seen[i].label == label) {
+          track.boxes[track.count++] = seen[i];
+        }
+      }
+    }
+
+    bool sure = label == 0 ? (track.hits & 3) != 0 : __builtin_popcount(track.hits) >= 2;
+
+    for (int k = 0; sure && k < track.count && found < DETECT_MAX; ++k) {
+      kept[found++] = track.boxes[k];
+    }
+  }
+
+  memcpy(seen, kept, sizeof(Seen) * found);
+  return found;
 }
 
 // The model's boxes are in its 256 x 256 letterbox; JARVIS is told where
@@ -854,7 +892,7 @@ void detectTask(void *) {
     unsigned long ready = started - asked;   // the picture taken, decoded and letterboxed
 
     Seen seen[DETECT_MAX];
-    int count = sureOnes(seen, readOutput(seen, width, height));
+    int count = steadyOnes(seen, readOutput(seen, width, height));
     String now = kinds(seen, count);
     Serial.printf("[jarvis] detection: %s in %lu ms, the picture ready in %lu ms\n",
                   now.length() ? now.c_str() : "nothing", took, ready);
