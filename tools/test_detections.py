@@ -186,8 +186,18 @@ import threading  # noqa: E402
 
 detections.forget()
 detections.record("house cam", report())
-check(detections.look_now(house) == "Nothing your house cam recognises is in view, sir." and not detections.look_wanted("house cam"),
-      "a board that has never looked on request is answered from its last report, at once")
+with patch.object(detections, "LOOK_WAIT", 0.2):
+    started = time.monotonic()
+    first = detections.look_now(house)
+    waited = time.monotonic() - started
+    started = time.monotonic()
+    second = detections.look_now(house)
+    again = time.monotonic() - started
+check(first == second == "Nothing your house cam recognises is in view, sir." and waited >= 0.2 and again < 0.1
+      and not detections.look_wanted("house cam"),
+      "a board that does not answer a request to look is answered from its last report, and not waited on again")
+detections.forget()
+detections.record("house cam", report())
 
 
 def fresh(*objects, now=()):
@@ -217,6 +227,9 @@ with patch.object(detections, "LOOK_WAIT", 0.2):
     answer = detections.look_now(house)
 check(time.monotonic() - started < 1 and answer == "Nothing your house cam recognises is in view, sir.",
       f"a look that does not come is waited for only so long, then what the board is sure of answers ({answer!r})")
+detections.record("house cam", fresh(now=(("cup", 0.6),)))
+threading.Thread(target=board, daemon=True).start()
+check("laptop" in detections.look_now(house), "and once it answers again, it is asked again")
 detections.forget()
 
 # ---- through commands, and the phone ---------------------------------------------------------------------

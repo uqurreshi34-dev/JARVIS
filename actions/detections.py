@@ -49,8 +49,10 @@ AWAY_SECONDS = float(os.getenv("JARVIS_DETECT_AWAY") or 30)
 FRESH_SECONDS = 30.0
 
 # Asked what a camera sees, JARVIS has it take a look and waits this long for it (a look is about
-# three seconds); a board too old to look on request is answered from its last report at once.
+# three seconds). A board that does not answer -- one flashed before 20 October 2026 -- is answered
+# from its last report, and not asked again for NO_LOOK_RETRY seconds.
 LOOK_WAIT = float(os.getenv("JARVIS_DETECT_LOOK_WAIT") or 6)
+NO_LOOK_RETRY = 600.0
 
 # A report is refused past this many things, or with a name longer than this.
 MAX_OBJECTS = 50
@@ -63,7 +65,7 @@ _present = {}         # (camera, label) -> {"last": monotonic time last in view,
 _pending = {}         # sentence waiting to be said -> (camera, {label: count}, monotonic time)
 _answered = set()     # sentences an answer has already covered: not said after it
 _look_wanted = {}     # camera -> monotonic time JARVIS asked it to look now
-_can_look = set()     # cameras that have answered a request to look (sketches from 20 October 2026)
+_cannot_look = {}     # camera -> monotonic time it last failed to answer a request to look
 _muted = False
 _say = None
 _phone = None
@@ -146,7 +148,7 @@ def record(name, payload):
                            "looked": now if fresh else before.get("looked")}
 
         if fresh:
-            _can_look.add(camera)
+            _cannot_look.pop(camera, None)
             _look_wanted.pop(camera, None)
             _looked.notify_all()
         counts = {}
@@ -292,15 +294,24 @@ def look_now(camera):
     """What [camera] sees now, as a sentence: from a look it takes on being asked, waited for up to
     LOOK_WAIT -- "Nothing is in view" was said of a laptop already held up (19 October 2026),
     because the board reports only once it is sure of a thing. A board that cannot look on
-    request, or one that does not answer in time, is answered from its last report."""
+    request, or one that does not answer in time, is answered from its last report.
+
+    Every camera is asked, until one fails to answer: the first version waited only on cameras that had
+    already answered a request -- and so never asked any (20 October 2026)."""
     name = camera["name"]
     asked = time.monotonic()
 
     with _looked:
-        if name in _can_look:
+        failed = _cannot_look.get(name)
+
+        if failed is None or asked - failed > NO_LOOK_RETRY:
             _look_wanted[name] = asked
-            _looked.wait_for(lambda: (_latest.get(name, {}).get("looked") or 0) >= asked, timeout=LOOK_WAIT)
+            answered = _looked.wait_for(lambda: (_latest.get(name, {}).get("looked") or 0) >= asked,
+                                        timeout=LOOK_WAIT)
             _look_wanted.pop(name, None)
+
+            if not answered:
+                _cannot_look[name] = time.monotonic()
 
     return summary(camera, since=asked)
 
@@ -414,5 +425,5 @@ def forget():
         _pending.clear()
         _answered.clear()
         _look_wanted.clear()
-        _can_look.clear()
+        _cannot_look.clear()
         _muted = False
