@@ -329,8 +329,23 @@ def _queue(name):
     if not outline.present():
         return
 
-    frame = cameras.latest(name)
-    items = [{"label": item["label"], "box": list(item["box"])} for item in boxes(name)]
+    with _lock:
+        wanted = _on.get(cameras.normal_name(name), ())
+
+    kept = detections.marks(name)
+
+    if wanted == () or kept is None or kept["ago"] > detections.MARKS_FRESH_SECONDS:
+        return
+
+    # What this look saw, where it saw it (what the board is sure of may carry a box from a look before),
+    # cut from the picture the look was made from: sent when the look ended, its time (ms) before.
+    seen = kept["now"] if kept["now"] is not None else kept["objects"]
+    items = [{"label": item["label"], "box": list(item["box"])} for item in seen
+             if wanted is None or item["label"] in wanted]
+    report = detections.latest(name)
+    took = (report or {}).get("ms")
+    ended = time.monotonic() - kept["ago"]
+    frame = (cameras.frame_at(name, ended - took / 1000.0) if took else None) or cameras.latest(name)
 
     if frame is None or not items:
         return
@@ -385,10 +400,25 @@ def _outline(frame, items):
     made = []
 
     for item in items:
-        found = outline.mask(view, item["box"])
+        found, steady, fits = outline.scored(view, item["box"])
         made.append(dict(item, mask=found, outline=outline.outline(found) if found is not None else []))
+        _say_verdict(item["label"], found is not None, steady, fits)
 
     return {"rgb": rgb, "items": made, "at": time.monotonic()}
+
+
+_verdicts = {}   # label -> whether its last outline was kept, so the log says when that changes
+
+
+def _say_verdict(label, kept, steady, fits):
+    """On the terminal, when a thing's outline starts or stops being good enough: SAM's two measures
+    (actions/outline.py), to tune STEADY_AT_LEAST and FITS_BOX_AT_LEAST from this camera's own pictures."""
+    if _verdicts.get(label) == kept:
+        return
+
+    _verdicts[label] = kept
+    print(f"[JARVIS] outline of the {label}: steady {steady:.2f}, fits its box {fits:.2f} -> "
+          f"{'its shape' if kept else 'its box'}", flush=True)
 
 
 # ---- saving -------------------------------------------------------------------------------------------------
@@ -516,6 +546,7 @@ def forget():
     with _lock:
         _on.clear()
         _shapes.clear()
+        _verdicts.clear()
 
     with _work:
         _jobs.clear()

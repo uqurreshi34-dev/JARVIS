@@ -134,6 +134,11 @@ asking = sketch[sketch.index("Wanted pictureWanted()"):sketch.index("// Live vie
 check("ASK_WAIT_SECONDS = 10UL" in sketch and '\\"wait\\":' in asking, "the board asks with a wait")
 check("POST_TIMEOUT_MS + ASK_WAIT_SECONDS * 1000UL" in asking, "and waits for the answer longer than that")
 check(cameras.ASK_WAIT_MAX >= 10, "JARVIS lets it wait that long")
+joining = sketch[sketch.index("WiFi.mode(WIFI_STA);"):sketch.index("[jarvis] wifi not joined yet")]
+check("WiFi.setSleep(false);" in joining and "WiFi.setTxPower(WIFI_POWER_19_5dBm);" in joining
+      and joining.index("WiFi.begin(") < joining.index("WiFi.setTxPower("),
+      "the board's radio is kept awake and at full strength, set once the wifi has begun")
+check("WiFi.RSSI()" in sketch, "and it says how strong its signal is on joining")
 
 cameras.forget()
 detections.forget()

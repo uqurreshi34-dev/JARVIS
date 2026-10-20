@@ -672,6 +672,11 @@ Highlights hug each thing's exact shape once the outline model is set up: once,
 models/mobile_sam, kept out of git), then restart JARVIS. It runs on the PC, for
 anything, with no list of things. Without it, highlights are boxes and saved
 pictures are what is in each box.
+A shape is drawn only when the model is sure of it -- it cuts from the picture
+the board's look was made from, and keeps the box when the shape is unsteady or
+does not fit the box (a camera moved in the hand). The terminal says each time a
+thing switches between the two: `outline of the laptop: steady 0.62, fits its
+box 0.71 -> its box`.
 
 Once: `pip install onnx numpy`, then `python tools/femto_build.py` (FEMTO-ML cloned
 beside JARVIS), then `pio run -e s3detect -t upload` from arduino/jarvis_camera.

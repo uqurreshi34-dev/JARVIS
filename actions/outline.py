@@ -33,6 +33,24 @@ _STD = np.array([58.395, 57.12, 57.375], dtype=np.float32)
 TRACE_SIZE = 160
 MAX_POINTS = 160
 
+# An outline is kept only when MobileSAM is sure of the shape it cut; otherwise the thing keeps its box.
+# The box comes from a look the board took a couple of seconds before the picture cut, so a camera held
+# in the hand puts it somewhere else, and SAM then cuts out whatever is there -- the bed beside a laptop
+# (20 October 2026). Two of SAM's own measures tell (measured that day on standard photos, clean, dark
+# and noisy, and blown out, with tight boxes and boxes a quarter too big):
+#   steady: how much of the shape stays the same when its edge is pushed a little either way (SAM's
+#     stability score): 0.79 to 0.98 on tight boxes, down to 0.56 on loose ones;
+#   fits its box: how well the shape's own box matches the board's (their overlap): 0.80 to 0.97 on tight
+#     boxes, down to 0.49 on loose ones.
+# SAM's own guess at its quality hardly moved (0.84 to 1.00 either way), so it is not used.
+STEADY_AT_LEAST = 0.8
+FITS_BOX_AT_LEAST = 0.7
+
+# Tidying a shape (tidy): pieces at most this many cells apart (on the TRACE_SIZE grid) are joined, and
+# a piece is kept if it is at least this share of the largest; smaller ones are specks.
+JOIN_CELLS = 2
+PIECE_AT_LEAST = 0.15
+
 _lock = threading.Lock()
 _sessions = None      # (encoder, decoder) once loaded; False if they could not be
 
@@ -110,11 +128,16 @@ def embed(rgb):
 
 def mask(view, box):
     """The thing in [box] (0 to 1 across and down) of the picture [view] was made from: a boolean array
-    the picture's size, or None."""
+    the picture's size, or None (no model, or not sure enough of its shape: judge)."""
+    return scored(view, box)[0]
+
+
+def scored(view, box):
+    """(mask, steady, fits its box) as mask() and judge() make them; (None, 0, 0) without the model."""
     sessions = _load()
 
     if not sessions or view is None:
-        return None
+        return None, 0.0, 0.0
 
     height, width = view["size"]
     x1, y1, x2, y2 = box
@@ -128,15 +151,156 @@ def mask(view, box):
              "orig_im_size": np.array([height, width], dtype=np.float32)}
     decoder = sessions[1]
     masks = decoder.run(None, {k: v for k, v in feeds.items() if k in {i.name for i in decoder.get_inputs()}})[0]
-    found = masks[0, 0] > 0.0
+    return judge(masks[0, 0], (x1 * width, y1 * height, x2 * width, y2 * height))
+
+
+def judge(logits, box):
+    """(the thing's mask, steady, fits its box) from SAM's mask logits [logits] for pixel box [box]
+    (x1, y1, x2, y2): the mask tidied, or None when it is not good enough to draw (STEADY_AT_LEAST,
+    FITS_BOX_AT_LEAST)."""
+    height, width = logits.shape
 
     # Only what is inside the box (a little either side) is the thing asked for.
-    keep = np.zeros_like(found)
+    x1, y1, x2, y2 = box
+    keep = np.zeros(logits.shape, dtype=bool)
     pad_x, pad_y = 0.02 * width, 0.02 * height
-    keep[max(0, int(y1 * height - pad_y)):int(y2 * height + pad_y) + 1,
-         max(0, int(x1 * width - pad_x)):int(x2 * width + pad_x) + 1] = True
-    found &= keep
-    return found if found.any() else None
+    keep[max(0, int(y1 - pad_y)):int(y2 + pad_y) + 1, max(0, int(x1 - pad_x)):int(x2 + pad_x) + 1] = True
+    loose = (logits > -1.0) & keep
+    steady = float(((logits > 1.0) & keep).sum() / loose.sum()) if loose.any() else 0.0
+    found = tidy((logits > 0.0) & keep)
+
+    if found is None:
+        return None, steady, 0.0
+
+    ys, xs = np.nonzero(found)
+    own = (xs.min(), ys.min(), xs.max() + 1, ys.max() + 1)
+    across = max(0.0, min(own[2], x2) - max(own[0], x1))
+    down = max(0.0, min(own[3], y2) - max(own[1], y1))
+    either = (own[2] - own[0]) * (own[3] - own[1]) + (x2 - x1) * (y2 - y1) - across * down
+    fits = float(across * down / either) if either > 0 else 0.0
+
+    if steady < STEADY_AT_LEAST or fits < FITS_BOX_AT_LEAST:
+        return None, steady, fits
+
+    return found, steady, fits
+
+
+def tidy(found):
+    """Boolean mask [found] as a solid thing: near pieces joined, holes filled, specks gone; or None."""
+    if found is None or not found.any():
+        return None
+
+    height, width = found.shape
+    ys, xs = np.nonzero(found)
+    top, bottom, left, right = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    step = max(1, int(np.ceil(max(bottom - top, right - left) / TRACE_SIZE)))
+    small = np.pad(found[top:bottom:step, left:right:step], JOIN_CELLS)
+
+    # Pieces a few cells apart joined (a laptop's screen and keyboard, a tie and its knot), then every
+    # piece kept but specks: a thing can look like two pieces, and only its largest was not all of it.
+    small = _shrunk(_grown(small, JOIN_CELLS), JOIN_CELLS)[JOIN_CELLS:-JOIN_CELLS, JOIN_CELLS:-JOIN_CELLS]
+    small = _pieces(small)
+
+    # Holes: what is not the thing and cannot be reached from outside it.
+    outside = _largest_from_edge(~np.pad(small, 1))[1:-1, 1:-1]
+    small = ~outside
+
+    # One cell of slack each way, so the thing's own fine edge is kept where it was.
+    grown = _grown(small, 1)
+    big = np.repeat(np.repeat(grown, step, axis=0), step, axis=1)[:bottom - top, :right - left]
+    kept = np.zeros_like(found)
+    kept[top:bottom, left:right] = big
+    solid = np.repeat(np.repeat(small, step, axis=0), step, axis=1)[:bottom - top, :right - left]
+    whole = np.zeros_like(found)
+    whole[top:bottom, left:right] = solid
+
+    # The thing's own pixels near its solid shape, and the inside of that shape wholly.
+    result = (found & kept) | (whole & _shrunk(whole, step))
+    return result if result.any() else None
+
+
+def _grown(region, by):
+    """[region] and [by] pixels more around its edge."""
+    grown = region.copy()
+
+    for _ in range(by):
+        before = grown.copy()
+        grown[1:] |= before[:-1]
+        grown[:-1] |= before[1:]
+        grown[:, 1:] |= before[:, :-1]
+        grown[:, :-1] |= before[:, 1:]
+
+    return grown
+
+
+def _pieces(region):
+    """[region]'s 4-connected pieces of at least PIECE_AT_LEAST of its largest."""
+    height, width = region.shape
+    seen = np.zeros_like(region)
+    pieces = []
+
+    for start in zip(*np.nonzero(region)):
+        if seen[start]:
+            continue
+
+        stack, piece = [start], []
+        seen[start] = True
+
+        while stack:
+            y, x = stack.pop()
+            piece.append((y, x))
+
+            for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+                if 0 <= ny < height and 0 <= nx < width and region[ny, nx] and not seen[ny, nx]:
+                    seen[ny, nx] = True
+                    stack.append((ny, nx))
+
+        pieces.append(piece)
+
+    kept = np.zeros_like(region)
+    largest = max((len(piece) for piece in pieces), default=0)
+
+    for piece in pieces:
+        if len(piece) >= PIECE_AT_LEAST * largest:
+            ys, xs = zip(*piece)
+            kept[list(ys), list(xs)] = True
+
+    return kept
+
+
+def _shrunk(region, by):
+    """[region] less [by] pixels from its edge (by at least one)."""
+    inner = region.copy()
+
+    for _ in range(max(1, by)):
+        inner[1:] &= region[:-1]
+        inner[:-1] &= region[1:]
+        inner[:, 1:] &= region[:, :-1]
+        inner[:, :-1] &= region[:, 1:]
+        region = inner.copy()
+
+    return inner
+
+
+def _largest_from_edge(region):
+    """The part of boolean array [region] joined (4-connected) to its edge."""
+    height, width = region.shape
+    seen = np.zeros_like(region)
+    stack = [(y, x) for y in range(height) for x in (0, width - 1) if region[y, x]]
+    stack += [(y, x) for x in range(width) for y in (0, height - 1) if region[y, x]]
+
+    for y, x in stack:
+        seen[y, x] = True
+
+    while stack:
+        y, x = stack.pop()
+
+        for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+            if 0 <= ny < height and 0 <= nx < width and region[ny, nx] and not seen[ny, nx]:
+                seen[ny, nx] = True
+                stack.append((ny, nx))
+
+    return seen
 
 
 def _largest(region):

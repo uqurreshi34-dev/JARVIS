@@ -107,7 +107,8 @@ BOTTLE = (((abs(xx - 320) < 60) & (yy > 200) & (yy < 440)) | ((abs(xx - 320) < 2
           | (((xx - 320) ** 2 / 60 ** 2 + (yy - 200) ** 2 / 50 ** 2 < 1) & (yy <= 200)))
 RGB = rng.integers(60, 140, (480, 640, 3)).astype(np.uint8)
 RGB[BOTTLE] = (40, 120, 220)
-BOX = [240 / 640, 100 / 480, 400 / 640, 450 / 480]
+# The board's box for it: as a detector draws one, a few pixels outside the bottle all round.
+BOX = [254 / 640, 104 / 480, 387 / 640, 447 / 480]
 buffer = io.BytesIO()
 Image.fromarray(RGB).save(buffer, "JPEG", quality=95)
 JPEG = buffer.getvalue()
@@ -122,6 +123,36 @@ cut = outline.cutout(RGB, BOTTLE)
 alpha = np.asarray(cut)[..., 3]
 check(cut.mode == "RGBA" and cut.size == SIZE and alpha.min() == 0 and alpha.max() == 255
       and (alpha == 255).sum() == BOTTLE.sum(), "a cut-out is the bottle alone, cropped, clear around it")
+
+# ---- what is good enough to draw ----------------------------------------------------------------------------
+
+PIXEL_BOX = (BOX[0] * 640, BOX[1] * 480, BOX[2] * 640, BOX[3] * 480)
+sure = np.where(BOTTLE, 6.0, -6.0)
+found, steady, fits = outline.judge(sure, PIXEL_BOX)
+check(found is not None and (found ^ BOTTLE).sum() <= BOTTLE.sum() // 1000 and steady > 0.99 and fits > 0.8,
+      f"a clear shape in its box is kept, as it is (steady {steady:.2f}, fits {fits:.2f})")
+
+x1, y1, x2, y2 = PIXEL_BOX
+loose = (x1 - 0.125 * (x2 - x1), y1 - 0.125 * (y2 - y1), x2 + 0.125 * (x2 - x1), y2 + 0.125 * (y2 - y1))
+found, steady, fits = outline.judge(sure, loose)
+check(found is None and fits < outline.FITS_BOX_AT_LEAST,
+      f"a shape that doesn't fit its box (the box a look old, the camera moved) keeps the box (fits {fits:.2f})")
+
+unsure = np.where(BOTTLE, 0.5, -0.5) + np.random.default_rng(3).normal(0, 0.8, BOTTLE.shape)
+found, steady, fits = outline.judge(unsure, PIXEL_BOX)
+check(found is None and steady < outline.STEADY_AT_LEAST,
+      f"a shape SAM is unsure of keeps the box (steady {steady:.2f})")
+
+messy = BOTTLE.copy()
+messy[300:320, 300:330] = False                  # a hole in the bottle
+messy[120:124, 250:254] = True                   # specks beside it, inside the box
+messy[430:433, 392:395] = True
+tidied = outline.tidy(messy)
+check(tidied is not None and tidied[300:320, 300:330].all() and not tidied[120:124, 250:254].any()
+      and not tidied[430:433, 392:395].any() and (tidied & ~BOTTLE).sum() <= BOTTLE.sum() // 1000
+      and (BOTTLE & ~tidied).sum() <= BOTTLE.sum() // 1000,
+      "tidied: holes filled, specks gone, the edge where it was")
+check(outline.tidy(None) is None and outline.tidy(np.zeros((9, 9), dtype=bool)) is None, "nothing tidies to nothing")
 
 # ---- without the model --------------------------------------------------------------------------------------
 
@@ -168,7 +199,7 @@ check(said == "Saved a bottle to your images folder, in their boxes, sir." and l
 
 if saved:
     with Image.open(saved[0]) as picture:
-        check(picture.size == (160, 350) and saved[0].name.startswith("house-cam-bottle-"),
+        check(picture.size == (int(BOX[2] * 640) - int(BOX[0] * 640), int(BOX[3] * 480) - int(BOX[1] * 480)) and saved[0].name.startswith("house-cam-bottle-"),
               f"named for the camera and the thing ({saved[0].name}, {picture.size})")
 
     saved[0].unlink()
@@ -178,12 +209,13 @@ highlight.stop()
 # ---- with a model (a stand-in, cutting out exactly the bottle) ----------------------------------------------
 
 outline.MODEL_DIR = real_dir
-real = {name: getattr(outline, name) for name in ("present", "embed", "mask")}
-called = {"embed": 0, "threads": set()}
+real = {name: getattr(outline, name) for name in ("present", "embed", "mask", "scored")}
+called = {"embed": 0, "threads": set(), "means": []}
 
 
 def fake_embed(rgb):
     called["embed"] += 1
+    called["means"].append(float(rgb.mean()))
     called["threads"].add(threading.current_thread().name)
     return {"size": rgb.shape[:2]}
 
@@ -192,7 +224,12 @@ def fake_mask(view, box):
     return BOTTLE.copy() if abs(box[0] - BOX[0]) < 0.1 else None
 
 
-outline.present, outline.embed, outline.mask = (lambda: True), fake_embed, fake_mask
+def fake_scored(view, box):
+    found = fake_mask(view, box)
+    return found, (0.95 if found is not None else 0.4), (0.9 if found is not None else 0.3)
+
+
+outline.present, outline.embed, outline.mask, outline.scored = (lambda: True), fake_embed, fake_mask, fake_scored
 
 
 def settle(seconds=3.0):
@@ -227,6 +264,36 @@ try:
     shown = highlight.boxes("house cam")
     check(shown and "outline" not in shown[0], "one somewhere else is a box until its own is made")
     detections.take_marks("house cam", look(item("bottle")))
+    settle()
+
+    # The look's own picture, though a newer one (the camera moved on to a plain wall) has come since.
+    buffer = io.BytesIO()
+    Image.fromarray(np.full((480, 640, 3), 200, dtype=np.uint8)).save(buffer, "JPEG")
+    WALL = buffer.getvalue()
+    detections.record("house cam", {"name": "house cam", "ms": 800, "objects": [item("bottle")]})
+    cameras.store("house cam", JPEG)
+    time.sleep(0.8)
+    cameras.store("house cam", WALL)
+    before = len(called["means"])
+    detections.take_marks("house cam", look(item("bottle")))
+    until = time.monotonic() + 3
+
+    while len(called["means"]) == before and time.monotonic() < until:
+        time.sleep(0.05)
+
+    used = called["means"][before:] or [None]
+    check(used[0] is not None and abs(used[0] - RGB.mean()) < 5,
+          "the outline is cut from the picture the look was made from, not the newest")
+    check(cameras.frame_at("house cam", time.monotonic()) == WALL
+          and cameras.frame_at("house cam", time.monotonic() - 0.8) == JPEG
+          and cameras.frame_at("no such cam", time.monotonic()) is None,
+          "a camera's recent pictures are kept, each found by when it came")
+    real_history = cameras.HISTORY_SECONDS
+    cameras.HISTORY_SECONDS = 0.5
+    time.sleep(0.6)
+    cameras.store("house cam", WALL)
+    cameras.HISTORY_SECONDS = real_history
+    check(len(cameras._history["house cam"]) == 1, "and only the last few seconds of them")
     settle()
 
     # "save the highlight"
@@ -341,7 +408,8 @@ else:
         print(f"SKIP the real model (no onnxruntime: {error})")
     else:
         view = outline.embed(RGB)
-        found = outline.mask(view, BOX)
+        found, steady, fits = outline.scored(view, BOX)
+        print(f"  the real model on the bottle: steady {steady:.2f}, fits its box {fits:.2f}")
         overlap = (found & BOTTLE).sum() / (found | BOTTLE).sum() if found is not None else 0.0
         check(overlap > 0.9, f"the real model cuts out the bottle as it is ({overlap:.1%} the same)")
         check(traced_well(BOTTLE, outline.outline(found))[1] < 8 if found is not None else False,

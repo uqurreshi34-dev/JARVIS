@@ -41,6 +41,12 @@ _JPEG_START = b"\xff\xd8\xff"
 _lock = threading.Condition()
 _wanted = {}        # name -> monotonic time it was asked for
 _frames = {}        # name -> (monotonic time taken, jpeg bytes)
+_history = {}       # name -> [(monotonic time taken, jpeg bytes)], oldest first: frame_at
+
+# A camera's pictures of the last this many seconds are kept, so a detection look's boxes can be matched
+# with the picture the look was made from (frame_at): the board sends its boxes when the look ends,
+# a couple of seconds after it took that picture, and a camera held in the hand has moved since.
+HISTORY_SECONDS = 6.0
 _polled = {}        # name -> monotonic time it last asked whether a picture was wanted
 _live = {}          # name -> monotonic time its live view stops
 _leases = {}        # name -> monotonic time the last remote viewer's lease runs out
@@ -147,11 +153,31 @@ def store(name, data):
     if not data.startswith(_JPEG_START):
         return "not a JPEG"
 
+    now = time.monotonic()
+
     with _lock:
-        _frames[_name(name)] = (time.monotonic(), bytes(data))
+        _frames[_name(name)] = (now, bytes(data))
+        kept = _history.setdefault(_name(name), [])
+        kept.append(_frames[_name(name)])
+
+        while kept and now - kept[0][0] > HISTORY_SECONDS:
+            kept.pop(0)
+
         _lock.notify_all()
 
     return None
+
+
+def frame_at(name, when):
+    """The picture from [name] taken nearest [when] (time.monotonic()) in the last HISTORY_SECONDS, or
+    None."""
+    with _lock:
+        kept = list(_history.get(_name(name), ()))
+
+    if not kept:
+        return None
+
+    return min(kept, key=lambda frame: abs(frame[0] - when))[1]
 
 
 def latest(name, newer_than=None):
@@ -480,6 +506,7 @@ def forget():
     with _lock:
         _wanted.clear()
         _frames.clear()
+        _history.clear()
         _polled.clear()
         _live.clear()
         _leases.clear()

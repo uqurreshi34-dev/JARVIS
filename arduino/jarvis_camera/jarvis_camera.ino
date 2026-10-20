@@ -522,7 +522,12 @@ bool joinWifi() {
   wifiBegun = millis();
   wifiLost = millis();
   WiFi.mode(WIFI_STA);
+  // The radio kept awake and at full strength: left to doze between messages (the ESP32's default), the
+  // ESP32-CAM missed about half of what reached it (20 October 2026: half its pings lost, the rest up to
+  // 1.3 s late) and its connections to JARVIS timed out. A camera on USB has power to spare.
+  WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
 
   unsigned long started = millis();
 
@@ -536,7 +541,8 @@ bool joinWifi() {
   }
 
   Serial.print("[jarvis] on the wifi as ");
-  Serial.println(WiFi.localIP().toString());
+  Serial.print(WiFi.localIP().toString());
+  Serial.printf(", signal %d dBm (-70 or above is good, below -80 is poor)\n", (int)WiFi.RSSI());
   return true;
 }
 
