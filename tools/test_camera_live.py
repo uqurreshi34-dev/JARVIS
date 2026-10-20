@@ -78,6 +78,16 @@ check("not a JPEG" in cameras.receive_live("my room cam", io.BytesIO(frames(1, b
 check("part way" in cameras.receive_live("my room cam", io.BytesIO(frames(1)[:-10]))[2],
       "and one cut short")
 
+# A detection look asked for while it streams: the stream ends so the board hears it, then comes back.
+asked_at = {}
+asked_at["my room cam"] = time.monotonic() + 60   # asked once this stream is under way
+kept, _, ended = cameras.receive_live("my room cam", io.BytesIO(frames(3)), look_asked_at=asked_at.get)
+check(kept == 0 and ended == "a detection look was asked for",
+      f"a look asked for while it streams ends the stream, so the board hears it ({ended})")
+asked_at["my room cam"] = time.monotonic() - 1    # asked before the stream it comes back with
+kept, _, ended = cameras.receive_live("my room cam", io.BytesIO(frames(3)), look_asked_at=asked_at.get)
+check(kept == 3, "and the stream it comes back with, begun after the asking, is not ended for it again")
+
 cameras.stop_watching()
 check(cameras.receive_live("my room cam", io.BytesIO(frames(3)))[0] == 0, "put away, no frame is taken")
 

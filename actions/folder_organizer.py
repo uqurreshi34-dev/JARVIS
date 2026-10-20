@@ -91,6 +91,8 @@ _PROTECTED_NAMES = frozenset({
     ".jarvis-push.json",
     # Records mev logs from mempool scanning
     "mev.log",
+    # The cameras that detect, so the house cam's questions are its own after a restart (actions/detections.py).
+    "jarvis-detecting-cameras.txt",
 })
 
 # Files JARVIS names by date: rotated logs and the monthly token ledger.

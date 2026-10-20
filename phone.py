@@ -1219,7 +1219,8 @@ class PhoneServer:
             if connection is not None:
                 connection.settimeout(cameras.LIVE_READ_TIMEOUT)
 
-            frames, seconds, ended = cameras.receive_live(name, request.stream)
+            frames, seconds, ended = cameras.receive_live(name, request.stream,
+                                                          look_asked_at=detections.look_asked_at)
             rate = frames / seconds if seconds > 0 else 0.0
             print(f"[JARVIS] {name} live: {frames} frames in {seconds:.0f}s ({rate:.1f} a second); "
                   f"{ended}", flush=True)

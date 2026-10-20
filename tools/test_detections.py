@@ -248,6 +248,28 @@ check(time.monotonic() - started < 1 and answer == "Nothing your house cam recog
 detections.record("house cam", fresh(now=(("cup", 0.6),)))
 threading.Thread(target=board, daemon=True).start()
 check("laptop" in detections.look_now(house), "and once it answers again, it is asked again")
+with patch.object(detections, "LOOK_WAIT", 0.2):
+    detections.look_now(house)
+threading.Thread(target=board, daemon=True).start()
+check("laptop" in detections.look_now(house),
+      "a board that has answered before and misses one -- its live view open -- is still asked the next time")
+
+
+def peeking():
+    for _ in range(200):
+        when = detections.look_asked_at("House Cam")
+        if when is not None:
+            peeked.append(when)
+            detections.record("house cam", fresh())
+            return
+        time.sleep(0.01)
+
+
+peeked = []
+threading.Thread(target=peeking, daemon=True).start()
+detections.look_now(house)
+check(peeked and detections.look_asked_at("house cam") is None,
+      "when a look was asked for is told, by any case of the name, until it is answered")
 detections.forget()
 
 # ---- through commands, and the phone ---------------------------------------------------------------------

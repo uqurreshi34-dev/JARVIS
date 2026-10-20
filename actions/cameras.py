@@ -314,11 +314,15 @@ def _read_exactly(stream, count):
     return data
 
 
-def receive_live(name, stream):
+def receive_live(name, stream, look_asked_at=None):
     """Take frames from camera [name]'s live stream until the view ends, the stream does, or a frame is bad.
 
     Each frame is its length (4 bytes, big-endian) then the JPEG. Returns
     (frames kept, seconds streamed, why it ended).
+
+    [look_asked_at], given a name, says when the camera was asked to take a detection look, or None. A look
+    asked for after this stream began ends it: while it streams the board asks nothing, so it would never
+    hear the request; it asks the moment the stream ends, and comes back to live view straight after.
     """
     started = time.monotonic()
     count = 0
@@ -326,6 +330,12 @@ def receive_live(name, stream):
     heard = None
 
     while live_wanted(name):
+        asked = look_asked_at(name) if look_asked_at is not None else None
+
+        if asked is not None and asked >= started:
+            ended = "a detection look was asked for"
+            break
+
         try:
             header = _read_exactly(stream, _FRAME_HEADER.size)
         except OSError:

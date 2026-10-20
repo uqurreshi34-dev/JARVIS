@@ -51,7 +51,7 @@ FRESH_SECONDS = 30.0
 # Asked what a camera sees, JARVIS has it take a look and waits this long for it (a look is about
 # three seconds). A board that does not answer -- one flashed before 20 October 2026 -- is answered
 # from its last report, and not asked again for NO_LOOK_RETRY seconds.
-LOOK_WAIT = float(os.getenv("JARVIS_DETECT_LOOK_WAIT") or 6)
+LOOK_WAIT = float(os.getenv("JARVIS_DETECT_LOOK_WAIT") or 8)
 NO_LOOK_RETRY = 600.0
 # The cameras that have ever reported a detection, one name a line in JARVIS's folder: a board
 # reports only when what it sees changes, so after a restart, with nothing new in view, "what has
@@ -333,6 +333,13 @@ def latest(name):
             "looked": report.get("looked")}
 
 
+def look_asked_at(name):
+    """When JARVIS asked [name] to take a look now (time.monotonic()), or None: what ends its live view,
+    whose stream otherwise keeps the board from asking whether anything is wanted."""
+    with _lock:
+        return _look_wanted.get(cameras.normal_name(name))
+
+
 def look_wanted(name):
     """Whether JARVIS has asked [name] to take a look now (told to it on its next /camera/wanted)."""
     with _lock:
@@ -359,7 +366,10 @@ def look_now(camera):
                                         timeout=LOOK_WAIT)
             _look_wanted.pop(name, None)
 
-            if not answered:
+            # Only a board that has never answered a request is taken for one that cannot: one that has
+            # answered and missed one -- its live view open, so it never heard the request -- is asked
+            # again the next time, not answered from its steady report for ten minutes (20 October 2026).
+            if not answered and not _latest.get(name, {}).get("looked"):
                 _cannot_look[name] = time.monotonic()
 
     return summary(camera, since=asked)
