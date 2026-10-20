@@ -40,3 +40,5 @@ arduino/jarvis_camera/detect/
 # The gold backtest's trade list (python tools/gold_backtest.py --trades).
 gold-backtest-trades.csv
 .venv-mev/
+# The outline model (MobileSAM as ONNX, 44 MB): made by tools/sam_export.py, never kept in git.
+models/mobile_sam/

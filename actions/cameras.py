@@ -87,10 +87,30 @@ def normal_name(name):
     return _name(name)
 
 
+# A camera's ask (POST /camera/wanted) may wait this long at most for something to be wanted, and looks
+# again at least this often while it does (a request is also made known at once: wait_for_change).
+ASK_WAIT_MAX = 15.0
+ASK_WAIT_STEP = 0.2
+
+
 def want(name):
     """Ask camera [name] for a picture."""
     with _lock:
         _wanted[_name(name)] = time.monotonic()
+        _lock.notify_all()
+
+
+def wait_for_change(seconds):
+    """Wait up to [seconds] for something to be asked of a camera (a picture, its live view, a look)."""
+    if seconds > 0:
+        with _lock:
+            _lock.wait(seconds)
+
+
+def changed():
+    """Something was asked of a camera: a waiting ask hears it now, not at its next look."""
+    with _lock:
+        _lock.notify_all()
 
 
 def wanted(name):
@@ -174,6 +194,7 @@ def watch(name, seconds=None):
     """Ask camera [name] for live view, until stop_watching() or [seconds] (LIVE_SECONDS) pass."""
     with _lock:
         _live[_name(name)] = time.monotonic() + (LIVE_SECONDS if seconds is None else seconds)
+        _lock.notify_all()
 
 
 def stop_watching(name=None):
@@ -231,6 +252,7 @@ def lease(name, seconds=REMOTE_LEASE_SECONDS):
     """Keep camera [name] live for [seconds] more, for a viewer elsewhere."""
     with _lock:
         _renew(_name(name), seconds)
+        _lock.notify_all()
 
 
 def remote_frames(name, fps=None, wait=REMOTE_FRAME_WAIT):

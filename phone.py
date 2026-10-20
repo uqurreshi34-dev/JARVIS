@@ -1194,9 +1194,23 @@ class PhoneServer:
 
             payload = request.get_json(silent=True) or {}
             name = payload.get("name")
-            # "look": take a detection look now and report it, asked what it sees (actions/detections.py)
-            return jsonify({"snap": cameras.wanted(name), "live": cameras.live_wanted(name),
-                            "look": detections.look_wanted(name)}), 200
+            # A board may ask to wait (its "wait", in seconds) until something is wanted: answered the
+            # moment it is, and otherwise when the wait is up -- one connection, and one TLS handshake on
+            # the board, every few seconds rather than every second. Without it, answered at once.
+            wait = payload.get("wait")
+            wait = (min(float(wait), cameras.ASK_WAIT_MAX) if isinstance(wait, (int, float))
+                    and not isinstance(wait, bool) and wait > 0 else 0.0)
+            until = time.monotonic() + wait
+
+            while True:
+                # "look": take a detection look now and report it, asked what it sees (actions/detections.py)
+                answer = {"snap": cameras.wanted(name), "live": cameras.live_wanted(name),
+                          "look": detections.look_wanted(name)}
+
+                if any(answer.values()) or time.monotonic() >= until:
+                    return jsonify(answer), 200
+
+                cameras.wait_for_change(min(cameras.ASK_WAIT_STEP, until - time.monotonic()))
 
         @app.post("/camera/live")
         def camera_live():
@@ -3095,8 +3109,30 @@ function drawMarks(boxes) {
 
   boxes.forEach(item => {
     const [x1, y1, x2, y2] = item.box;
-    const bx = x1 * pw, by = y1 * ph, bw = (x2 - x1) * pw, bh = (y2 - y1) * ph;
+    let bx = x1 * pw, by = y1 * ph, bw = (x2 - x1) * pw, bh = (y2 - y1) * ph;
     if (bw < 2 || bh < 2) return;
+    const line = item.outline || [];
+    if (line.length >= 3) {
+      // Its exact shape: the line hugs the thing, lightly filled.
+      pen.beginPath();
+      line.forEach(([x, y], i) => (i ? pen.lineTo(x * pw, y * ph) : pen.moveTo(x * pw, y * ph)));
+      pen.closePath();
+      pen.fillStyle = "rgba(255, 186, 72, 0.2)";
+      pen.fill();
+      pen.strokeStyle = "rgb(255, 186, 72)";
+      pen.lineWidth = 2.2;
+      pen.stroke();
+      const xs = line.map(p => p[0] * pw), ys = line.map(p => p[1] * ph);
+      bx = Math.min(...xs); by = Math.min(...ys);
+      const text = item.label.toUpperCase() + " " + Math.round(item.score * 100) + "%";
+      const tw = pen.measureText(text).width + 12;
+      const ty = by - 18 < 0 ? by + 2 : by - 18;
+      pen.fillStyle = "rgba(8, 14, 21, 0.82)";
+      pen.fillRect(bx, ty, tw, 16);
+      pen.fillStyle = "rgb(255, 186, 72)";
+      pen.fillText(text, bx + 6, ty + 12);
+      return;
+    }
     pen.strokeStyle = "rgba(255, 186, 72, 0.45)";
     pen.lineWidth = 1;
     pen.strokeRect(bx, by, bw, bh);

@@ -123,6 +123,12 @@ static const unsigned long HEARTBEAT_EVERY_MS = 15UL * 1000UL;
 // Asking every second: a picture starts within a second of "show me", and JARVIS
 // counts the camera as connected the moment it asks.
 static const unsigned long ASK_EVERY_MS = 1UL * 1000UL;
+// Each ask may wait at JARVIS this long for something to be wanted, answered
+// the moment it is: every connection is a TLS handshake, and one a second took
+// about 0.4 s of every detection look from the core it shares (20 October
+// 2026). A JARVIS from before then answers at once, as it always did.
+static const unsigned long ASK_WAIT_SECONDS = 10UL;
+static const unsigned long POST_TIMEOUT_MS = 8000UL;
 static const unsigned long WIFI_RETRY_MS = 10UL * 1000UL;
 
 // Live view carries on past a frame the camera fails to give -- moved by
@@ -170,7 +176,8 @@ String quoted(const char *text) {
 
 // Post to JARVIS. Returns the HTTP status, or a negative HTTPClient error;
 // [answer], when given, receives JARVIS's reply.
-int post(const char *path, const char *type, const uint8_t *body, size_t length, String *answer) {
+int post(const char *path, const char *type, const uint8_t *body, size_t length, String *answer,
+         unsigned long timeoutMs) {
   HTTPClient https;
   String url = String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + path;
 
@@ -179,7 +186,7 @@ int post(const char *path, const char *type, const uint8_t *body, size_t length,
     return -1;
   }
 
-  https.setTimeout(8000);
+  https.setTimeout(timeoutMs);
   https.addHeader("Content-Type", type);
   https.addHeader("X-Jarvis-Token", JARVIS_TOKEN);
   https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
@@ -205,14 +212,14 @@ int post(const char *path, const char *type, const uint8_t *body, size_t length,
   return code;
 }
 
-int postJson(const char *path, const String &json, String *answer) {
-  return post(path, "application/json", (const uint8_t *)json.c_str(), json.length(), answer);
+int postJson(const char *path, const String &json, String *answer, unsigned long timeoutMs) {
+  return post(path, "application/json", (const uint8_t *)json.c_str(), json.length(), answer, timeoutMs);
 }
 
 int reportOnline() {
   String json = String("{\"name\":") + quoted(SENSOR_NAME) + ",\"event\":\"online\"}";
   String answer;
-  int code = postJson("/sensor", json, &answer);
+  int code = postJson("/sensor", json, &answer, POST_TIMEOUT_MS);
 
   if (code == HTTP_CODE_OK) {
     Serial.println("[jarvis] online -> " + answer);
@@ -223,9 +230,9 @@ int reportOnline() {
 
 Wanted pictureWanted() {
   String answer;
-  String json = String("{\"name\":") + quoted(SENSOR_NAME) + "}";
+  String json = String("{\"name\":") + quoted(SENSOR_NAME) + ",\"wait\":" + String(ASK_WAIT_SECONDS) + "}";
 
-  if (postJson("/camera/wanted", json, &answer) != HTTP_CODE_OK) {
+  if (postJson("/camera/wanted", json, &answer, POST_TIMEOUT_MS + ASK_WAIT_SECONDS * 1000UL) != HTTP_CODE_OK) {
     return {false, false, false};
   }
 
@@ -391,7 +398,7 @@ void sendPicture() {
   }
 
   Serial.printf("[jarvis] sending a picture, %u bytes\n", (unsigned)frame->len);
-  int code = post("/camera", "image/jpeg", frame->buf, frame->len, nullptr);
+  int code = post("/camera", "image/jpeg", frame->buf, frame->len, nullptr, POST_TIMEOUT_MS);
   esp_camera_fb_return(frame);
 
   if (code == HTTP_CODE_OK) {

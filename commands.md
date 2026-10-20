@@ -665,6 +665,13 @@ beside its live view, and tells JARVIS what it sees -- never the picture.
 | highlight the bottle / highlight bottles / outline the laptop and the keyboard | boxes them over the live view, on the HUD and the phone, following them look by look; opens the view if it is not up (**free**) |
 | highlight what you see / highlight everything / highlight it / highlight someone | everything in view / what was just said / a person |
 | stop highlighting / clear the highlights / highlights off | takes the boxes away (closing the view does too) |
+| save the highlight / save the highlighted bottle / keep them | each highlighted thing as a PNG in JARVIS's images folder (made if it is not there), cut out with no background (**free**) |
+
+Highlights hug each thing's exact shape once the outline model is set up: once,
+`pip install timm onnx`, then `python tools/sam_export.py` (MobileSAM, 44 MB, into
+models/mobile_sam, kept out of git), then restart JARVIS. It runs on the PC, for
+anything, with no list of things. Without it, highlights are boxes and saved
+pictures are what is in each box.
 
 Once: `pip install onnx numpy`, then `python tools/femto_build.py` (FEMTO-ML cloned
 beside JARVIS), then `pio run -e s3detect -t upload` from arduino/jarvis_camera.

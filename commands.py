@@ -2384,6 +2384,11 @@ def _highlight_camera(wanted):
     if wanted["camera"]:
         return wanted["camera"]
 
+    # "save it" is the highlights' only while something is highlighted.
+    if wanted.get("save"):
+        showing = [camera for camera in cameras.cameras() if highlight.active(camera["name"])]
+        return showing[0] if showing else (_on_screen() if wanted.get("known") else None)
+
     shown = _on_screen()
 
     if shown:
@@ -2409,6 +2414,9 @@ def _camera_highlight(command):
 
     if not wanted["on"]:
         return highlight.stop(camera if camera.get("name") else None)
+
+    if wanted.get("save"):
+        return highlight.save(camera)
 
     name = cameras.normal_name(camera["name"])
 

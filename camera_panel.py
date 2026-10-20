@@ -9,6 +9,7 @@ from PyQt6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
+    QPolygonF,
 )
 from PyQt6.QtWidgets import QWidget
 
@@ -437,18 +438,32 @@ class CameraPanel(QWidget):
             if box.width() < 2 or box.height() < 2:
                 continue
 
-            faint = QColor(_MARK)
-            faint.setAlpha(110)
-            painter.setPen(QPen(faint, 1.0))
-            painter.drawRect(box)
+            line = item.get("outline") or []
 
-            painter.setPen(QPen(_MARK, 2.4))
-            span = max(6.0, min(18.0, box.width() / 4, box.height() / 4))
+            if len(line) >= 3:
+                # Its exact shape (actions/outline.py): the line hugs the thing, lightly filled.
+                shape = QPolygonF([QPointF(picture.left() + x * picture.width(), picture.top() + y * picture.height())
+                                   for x, y in line])
+                fill = QColor(_MARK)
+                fill.setAlpha(50)
+                painter.setBrush(fill)
+                painter.setPen(QPen(_MARK, 2.2))
+                painter.drawPolygon(shape)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                box = shape.boundingRect()
+            else:
+                faint = QColor(_MARK)
+                faint.setAlpha(110)
+                painter.setPen(QPen(faint, 1.0))
+                painter.drawRect(box)
 
-            for x, y, dx, dy in ((box.left(), box.top(), 1, 1), (box.right(), box.top(), -1, 1),
-                                 (box.left(), box.bottom(), 1, -1), (box.right(), box.bottom(), -1, -1)):
-                painter.drawLine(QPointF(x, y), QPointF(x + span * dx, y))
-                painter.drawLine(QPointF(x, y), QPointF(x, y + span * dy))
+                painter.setPen(QPen(_MARK, 2.4))
+                span = max(6.0, min(18.0, box.width() / 4, box.height() / 4))
+
+                for x, y, dx, dy in ((box.left(), box.top(), 1, 1), (box.right(), box.top(), -1, 1),
+                                     (box.left(), box.bottom(), 1, -1), (box.right(), box.bottom(), -1, -1)):
+                    painter.drawLine(QPointF(x, y), QPointF(x + span * dx, y))
+                    painter.drawLine(QPointF(x, y), QPointF(x, y + span * dy))
 
             text = f"{item['label'].upper()} {round(item['score'] * 100)}%"
             chip = QRectF(box.left(), box.top() - 18, metrics.horizontalAdvance(text) + 12, 16)

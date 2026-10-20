@@ -435,6 +435,7 @@ def look_now(camera):
 
         if failed is None or asked - failed > NO_LOOK_RETRY:
             _look_wanted[name] = asked
+            cameras.changed()   # a board waiting on its ask hears it now
             answered = _looked.wait_for(lambda: (_latest.get(name, {}).get("looked") or 0) >= asked,
                                         timeout=LOOK_WAIT)
             _look_wanted.pop(name, None)

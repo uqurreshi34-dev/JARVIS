@@ -10,28 +10,46 @@ and on the phone, and follow what is there, look by look (about every 2.5 second
     highlight it                      (what JARVIS last said came into view)
     highlight someone                 (the model calls a person "person")
     stop highlighting / clear the highlights / highlights off
+    save the highlight / save the highlights / save it   (each thing cut out, no background, as a PNG in
+                                                          JARVIS's images folder)
 
 Things are named as the model names them: what a camera has reported is matched first, plurals
 and all ("two bottles", "the cell phones"); a thing not in view yet is still highlighted when it
 comes. The view is opened if it is not showing; closing it ends the highlighting. Free: no model
 call, nothing stored but the boxes in memory.
+
+With the outline model set up (actions/outline.py), each thing's exact shape is cut out of the picture
+on the PC after each look, and the line drawn hugs it; saving keeps the thing alone. Without it the
+highlights are boxes, and saving keeps what is in the box.
 """
 
+import os
 import re
 import threading
+import time
 
-from actions import cameras, detections
+from actions import cameras, detections, files, outline
 
 
 _lock = threading.Lock()
 _on = {}            # camera -> frozenset of labels, or None for everything it sees
 _listener = None    # called with a camera's name when what to draw over it changes
+_shapes = {}        # camera -> {"rgb": picture, "items": [{"label", "box", "outline", "mask"}], "at"}
+_jobs = {}          # camera -> (jpeg, [items]): the newest look still to be outlined
+_work = threading.Condition()
+_worker = None
+
+# The images folder in JARVIS's own folder, as pictures the PC's camera keeps (actions/camera.py).
+IMAGES_FOLDER = "images"
 
 
 # "highlight ..." -- what to highlight, then optionally on which camera.
 _VERBS = r"(?:highlight|outline|box|circle|point\s+out)"
 _ON = re.compile(rf"^(?:(?:jarvis|please|can\s+you|could\s+you|would\s+you|now)\s+)*{_VERBS}\s+(?P<what>.+?)"
                  r"(?:\s+(?:is|are))?(?:\s+please)?$")
+_SAVE = re.compile(r"^(?:(?:jarvis|please|now|can\s+you|could\s+you)\s+)*(?:save|keep|store|capture|grab)\s+"
+                   r"(?:(?:the|that|those|this|these|my|your)\s+)?(?P<what>highlights?|highlighted(?:\s+\w+)*"
+                   r"|cut\s*outs?|cutouts?|outlines?|boxes|it|that|them|those)(?:\s+please)?$")
 _OFF = re.compile(r"^(?:(?:jarvis|please|now)\s+)*(?:(?:stop|cancel|end|clear|remove|hide|drop|turn\s+off|switch\s+off)"
                   r"\s+(?:the\s+|all\s+the\s+|those\s+|these\s+)?(?:highlighting|highlights?|boxes|outlines?)"
                   r"|unhighlight(?:\s+.+)?|no\s+more\s+(?:highlighting|highlights|boxes)"
@@ -100,6 +118,13 @@ def asked(text):
 
     if not words:
         return None
+
+    saving = _SAVE.match(words)
+
+    if saving:
+        camera, _ = _camera_named(words)
+        return {"save": True, "on": True, "what": "save", "camera": camera,
+                "known": saving.group("what") not in ("it", "that", "them", "those")}
 
     if _OFF.match(words):
         camera, _ = _camera_named(words)
@@ -201,8 +226,10 @@ def start(camera, what):
 
     with _lock:
         _on[name] = frozenset(what) if what else None
+        _shapes.pop(name, None)
 
     _tell(name)
+    _queue(name)
     return said_on(camera, what)
 
 
@@ -214,6 +241,7 @@ def stop(camera=None):
 
         for name in was:
             del _on[name]
+            _shapes.pop(name, None)
 
     for name in was:
         _tell(name)
@@ -249,7 +277,199 @@ def boxes(name):
     if kept is None or kept["ago"] > detections.MARKS_FRESH_SECONDS:
         return []
 
-    return [dict(item) for item in kept["objects"] if wanted is None or item["label"] in wanted]
+    shown = [dict(item) for item in kept["objects"] if wanted is None or item["label"] in wanted]
+
+    # Each thing's exact shape, once the outline model has made it from a picture of this look.
+    with _lock:
+        made = [shape for shape in (_shapes.get(name) or {}).get("items", []) if shape.get("outline")]
+
+    for item in shown:
+        shape = _same(item, made)
+
+        if shape:
+            item["outline"] = shape["outline"]
+
+    return shown
+
+
+def _overlap(a, b):
+    w = min(a[2], b[2]) - max(a[0], b[0])
+    h = min(a[3], b[3]) - max(a[1], b[1])
+
+    if w <= 0 or h <= 0:
+        return 0.0
+
+    either = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - w * h
+    return w * h / either if either > 0 else 0.0
+
+
+# A box this like the one an outline was made for is the same thing, hardly moved: its outline is kept
+# until the next is made, rather than the line falling back to a box between looks.
+SAME_THING = 0.6
+
+
+def _same(item, shapes):
+    """The shape in [shapes] made for [item]'s thing: the same label, the most overlapping box."""
+    best, best_overlap = None, SAME_THING
+
+    for shape in shapes:
+        if shape["label"] == item["label"]:
+            overlap = _overlap(shape["box"], item["box"])
+
+            if overlap >= best_overlap:
+                best, best_overlap = shape, overlap
+
+    return best
+
+
+# ---- outlines: made after each look, off the thread that took it ---------------------------------------------
+
+def _queue(name):
+    """Outline what is highlighted on camera [name] from its newest picture, when the model is there."""
+    if not outline.present():
+        return
+
+    frame = cameras.latest(name)
+    items = [{"label": item["label"], "box": list(item["box"])} for item in boxes(name)]
+
+    if frame is None or not items:
+        return
+
+    global _worker
+
+    with _work:
+        _jobs[name] = (frame, items)
+
+        if _worker is None or not _worker.is_alive():
+            _worker = threading.Thread(target=_outline_loop, name="jarvis-outline", daemon=True)
+            _worker.start()
+
+        _work.notify_all()
+
+
+def _outline_loop():
+    while True:
+        with _work:
+            while not _jobs:
+                if not _work.wait(30):
+                    return
+
+            name, (frame, items) = _jobs.popitem()
+
+        try:
+            made = _outline(frame, items)
+        except Exception as error:   # noqa: BLE001 - a picture that cannot be outlined keeps its boxes
+            print(f"[JARVIS] could not outline the highlights: {error}")
+            continue
+
+        if made is None:
+            continue
+
+        with _lock:
+            if name not in _on:
+                continue
+
+            _shapes[name] = made
+
+        _tell(name)
+
+
+def _outline(frame, items):
+    """{"rgb", "items", "at"}: each of [items] with its outline and mask, from JPEG [frame]."""
+    rgb = outline.picture(frame)
+    view = outline.embed(rgb) if rgb is not None else None
+
+    if view is None:
+        return None
+
+    made = []
+
+    for item in items:
+        found = outline.mask(view, item["box"])
+        made.append(dict(item, mask=found, outline=outline.outline(found) if found is not None else []))
+
+    return {"rgb": rgb, "items": made, "at": time.monotonic()}
+
+
+# ---- saving -------------------------------------------------------------------------------------------------
+
+def save(camera):
+    """Each thing highlighted on [camera] ({"name", ...}), cut out with no background, as a PNG in JARVIS's
+    images folder (made if it is not there). Without the outline model, what is in its box. Returns what
+    to say."""
+    name = cameras.normal_name(camera["name"])
+    shown = boxes(name)
+
+    if not shown:
+        return ("Nothing's highlighted to save, sir." if not active(name)
+                else f"Nothing highlighted is in view of {detections._yours(name)} right now, sir.")
+
+    base = files.root()
+
+    if not base:
+        return "I couldn't find my folder to save them in, sir."
+
+    folder = os.path.join(base, IMAGES_FOLDER)
+
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except OSError as error:
+        print(f"[JARVIS] could not create the images folder: {error}")
+        return "I couldn't make the images folder, sir."
+
+    with _lock:
+        shapes = dict(_shapes.get(name) or {})
+
+    made = [shape for shape in shapes.get("items", []) if shape.get("mask") is not None]
+    rgb = shapes.get("rgb")
+
+    if rgb is None:
+        frame = cameras.latest(name)
+        rgb = outline.picture(frame) if frame is not None else None
+
+    if rgb is None:
+        return "I haven't a picture from the camera to cut them from, sir."
+
+    from PIL import Image
+
+    stamp = time.strftime("%Y-%m-%d-%H%M%S")
+    saved, whole = [], 0
+
+    for number, item in enumerate(shown, start=1):
+        shape = _same(item, made)
+        found = shape["mask"] if shape else None
+
+        if found is not None and found.any():
+            picture = outline.cutout(rgb, found)
+            whole += 1
+        else:
+            height, width = rgb.shape[:2]
+            x1, y1, x2, y2 = item["box"]
+            box = (int(x1 * width), int(y1 * height), max(int(x2 * width), int(x1 * width) + 1),
+                   max(int(y2 * height), int(y1 * height) + 1))
+            picture = Image.fromarray(rgb).crop(box)
+
+        slug = re.sub(r"[^a-z0-9]+", "-", f"{name} {item['label']}").strip("-")
+        path = os.path.join(folder, f"{slug}-{stamp}-{number}.png")
+
+        try:
+            picture.save(path)
+            saved.append(item["label"])
+        except OSError as error:
+            print(f"[JARVIS] could not save {path}: {error}")
+
+    if not saved:
+        return "I couldn't save them, sir."
+
+    counts = {}
+
+    for label in saved:
+        counts[label] = counts.get(label, 0) + 1
+
+    things = detections._listed([("someone" if label == "person" and n == 1 else detections._counted(label, n))
+                                 for label, n in counts.items()])
+    how = "cut out" if whole == len(saved) else "in their boxes" if not whole else "cut out where I could"
+    return f"Saved {things} to your images folder, {how}, sir."
 
 
 def said_on(camera, what):
@@ -295,11 +515,16 @@ def forget():
     """Drop every highlight. For tests."""
     with _lock:
         _on.clear()
+        _shapes.clear()
+
+    with _work:
+        _jobs.clear()
 
 
 def _marks_changed(camera):
     if active(camera):
         _tell(camera)
+        _queue(camera)
 
 
 detections.set_marks_listener(_marks_changed)
