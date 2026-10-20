@@ -18,6 +18,7 @@ What a camera looks at comes from the house plan: a window that "looks"
 at the street names the camera that looks through it.
 """
 
+import json
 import os
 import re
 import struct
@@ -62,6 +63,14 @@ LIVE_SECONDS = float(os.getenv("JARVIS_CAMERA_LIVE_SECONDS") or 300)
 LIVE_READ_TIMEOUT = 10.0
 
 _FRAME_HEADER = struct.Struct(">I")
+
+# Between two frames a detecting camera (the house cam as s3detect) sends each look's boxes, as
+# JSON, its length with the top bit set: what it is sure of and what that look saw, for drawing
+# over the picture ("highlight the bottle"). Handed to the marks listener (actions/detections.py),
+# never taken for a frame.
+MARKS_FLAG = 0x80000000
+MAX_MARKS_BYTES = 8 * 1024
+_marks_listener = None
 
 # A streaming camera cannot also send its "online" every 15 seconds, so its
 # frames say it for it, as often: it stays connected on the plan and the
@@ -300,6 +309,12 @@ def set_live_listener(listener):
     _live_listener = listener
 
 
+def set_marks_listener(listener):
+    """Register a callable taking (name, payload dict) for each look's boxes sent down a live stream."""
+    global _marks_listener
+    _marks_listener = listener
+
+
 def _read_exactly(stream, count):
     data = b""
 
@@ -346,6 +361,39 @@ def receive_live(name, stream, look_asked_at=None):
             break
 
         (length,) = _FRAME_HEADER.unpack(header)
+
+        if length & MARKS_FLAG:
+            # A look's boxes, not a frame (see MARKS_FLAG).
+            size = length & ~MARKS_FLAG
+
+            if not 0 < size <= MAX_MARKS_BYTES:
+                ended = f"a look's boxes said they were {size} bytes"
+                break
+
+            try:
+                marks = _read_exactly(stream, size)
+            except OSError:
+                marks = None
+
+            if marks is None:
+                ended = "the camera stopped part way through a look's boxes"
+                break
+
+            listener = _marks_listener
+
+            if listener is not None:
+                try:
+                    payload = json.loads(marks.decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    payload = None
+
+                try:
+                    if isinstance(payload, dict):
+                        listener(_name(name), payload)
+                except Exception as error:
+                    print(f"[JARVIS] could not take a look's boxes: {error}")
+
+            continue
 
         if not 0 < length <= MAX_BYTES:
             ended = f"a frame said it was {length} bytes"

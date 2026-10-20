@@ -34,7 +34,7 @@ from pywebpush import webpush, WebPushException
 
 import phone_tls
 import transcriber
-from actions import location, askfiles, cameras, detections, files
+from actions import location, askfiles, cameras, detections, files, highlight
 from voice import FILLERS, set_phone_active
 
 import speech
@@ -1254,6 +1254,15 @@ class PhoneServer:
 
             return jsonify({"cameras": cameras.listed()}), 200
 
+        @app.get("/camera/marks")
+        def camera_marks():
+            """What is highlighted over a camera's live view now ("highlight the bottle"): its boxes, 0 to 1
+            across and down the picture, for the phone to draw over the feed (actions/highlight.py)."""
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            return jsonify({"boxes": highlight.boxes(request.args.get("name") or "")}), 200
+
         @app.get("/camera/watch")
         def camera_watch():
             """A camera's live view on the phone: MJPEG, which an <img> plays as video.
@@ -1895,6 +1904,13 @@ PAGE = """<!DOCTYPE html>
   object-fit: contain;
 }
 
+/* Highlighted things, drawn over the feed (actions/highlight.py): laid over the picture by script. */
+#feed-marks {
+  position: absolute;
+  pointer-events: none;
+  display: none;
+}
+
 #feed-list {
   display: flex;
   flex-direction: column;
@@ -2103,6 +2119,7 @@ PAGE = """<!DOCTYPE html>
       <button id="feed-close" type="button" title="close">&#10005;</button>
     </div>
     <img id="feed-img" alt="">
+    <canvas id="feed-marks"></canvas>
     <div id="feed-list"></div>
     <div id="feed-note"></div>
   </div>
@@ -3006,6 +3023,7 @@ function stopTiles() {
 }
 
 function stopFeed() {
+  stopMarks();
   // Without a source the stream's connection closes, and JARVIS lets the camera stop.
   feedImg.onload = null;
   feedImg.onerror = null;
@@ -3042,6 +3060,89 @@ function openGrid(listed) {
   feed.classList.add("open");
 }
 
+// ---- highlighted things over the feed: "highlight the bottle", asked of JARVIS --------------------
+
+const feedMarks = document.getElementById("feed-marks");
+let marksTimer = null;
+
+function drawMarks(boxes) {
+  // The picture's own rect inside the <img> (object-fit: contain leaves bars at the sides or top).
+  const w = feedImg.clientWidth, h = feedImg.clientHeight;
+  const nw = feedImg.naturalWidth, nh = feedImg.naturalHeight;
+
+  if (!boxes.length || !w || !h || !nw || !nh || feedImg.style.display === "none") {
+    feedMarks.style.display = "none";
+    return;
+  }
+
+  const scale = Math.min(w / nw, h / nh);
+  const pw = nw * scale, ph = nh * scale;
+  const left = feedImg.offsetLeft + (w - pw) / 2, top = feedImg.offsetTop + (h - ph) / 2;
+  const ratio = window.devicePixelRatio || 1;
+
+  feedMarks.style.left = left + "px";
+  feedMarks.style.top = top + "px";
+  feedMarks.style.width = pw + "px";
+  feedMarks.style.height = ph + "px";
+  feedMarks.width = Math.round(pw * ratio);
+  feedMarks.height = Math.round(ph * ratio);
+  feedMarks.style.display = "block";
+
+  const pen = feedMarks.getContext("2d");
+  pen.setTransform(ratio, 0, 0, ratio, 0, 0);
+  pen.clearRect(0, 0, pw, ph);
+  pen.font = "bold 12px Consolas, monospace";
+
+  boxes.forEach(item => {
+    const [x1, y1, x2, y2] = item.box;
+    const bx = x1 * pw, by = y1 * ph, bw = (x2 - x1) * pw, bh = (y2 - y1) * ph;
+    if (bw < 2 || bh < 2) return;
+    pen.strokeStyle = "rgba(255, 186, 72, 0.45)";
+    pen.lineWidth = 1;
+    pen.strokeRect(bx, by, bw, bh);
+    pen.strokeStyle = "rgb(255, 186, 72)";
+    pen.lineWidth = 2.5;
+    const span = Math.max(6, Math.min(18, bw / 4, bh / 4));
+    [[bx, by, 1, 1], [bx + bw, by, -1, 1], [bx, by + bh, 1, -1], [bx + bw, by + bh, -1, -1]].forEach(([x, y, dx, dy]) => {
+      pen.beginPath();
+      pen.moveTo(x + span * dx, y);
+      pen.lineTo(x, y);
+      pen.lineTo(x, y + span * dy);
+      pen.stroke();
+    });
+    const text = item.label.toUpperCase() + " " + Math.round(item.score * 100) + "%";
+    const tw = pen.measureText(text).width + 12;
+    const ty = by - 18 < 0 ? by + 2 : by - 18;
+    pen.fillStyle = "rgba(8, 14, 21, 0.82)";
+    pen.fillRect(bx, ty, tw, 16);
+    pen.fillStyle = "rgb(255, 186, 72)";
+    pen.fillText(text, bx + 6, ty + 12);
+  });
+}
+
+async function pollMarks() {
+  const name = feedImg.dataset.name;
+  if (!name || !feed.classList.contains("open")) return;
+
+  try {
+    const res = await fetch("/camera/marks?t=" + encodeURIComponent(TOKEN) + "&name=" + encodeURIComponent(name));
+    drawMarks(((await res.json()).boxes) || []);
+  } catch (e) {
+    drawMarks([]);
+  }
+}
+
+function startMarks() {
+  stopMarks();
+  marksTimer = setInterval(pollMarks, 1000);
+}
+
+function stopMarks() {
+  if (marksTimer) clearInterval(marksTimer);
+  marksTimer = null;
+  feedMarks.style.display = "none";
+}
+
 function openFeed(name, title, fromGrid) {
   // Already playing this camera (the alarm's tap and its notice both ask): leave it playing.
   if (feed.classList.contains("open") && feedImg.dataset.name === name && feedImg.getAttribute("src")) return;
@@ -3056,6 +3157,7 @@ function openFeed(name, title, fromGrid) {
   feedImg.onerror = () => { feedNote.textContent = "The camera stopped sending, sir."; };
   feedImg.src = watchUrl(name);
   feed.classList.add("open");
+  startMarks();
 }
 
 function closeFeed() {

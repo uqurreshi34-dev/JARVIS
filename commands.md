@@ -662,6 +662,9 @@ beside its live view, and tells JARVIS what it sees -- never the picture.
 | (nothing) | "Someone's in view of your house cam, sir.", "A cup is in view ..." -- to the phone at once (tap to open the camera), aloud once a turn ends |
 | what has the house cam detected / is anyone on the house cam | what it sees now (**free**) |
 | mute the camera alerts / unmute the camera alerts | stops or starts saying so |
+| highlight the bottle / highlight bottles / outline the laptop and the keyboard | boxes them over the live view, on the HUD and the phone, following them look by look; opens the view if it is not up (**free**) |
+| highlight what you see / highlight everything / highlight it / highlight someone | everything in view / what was just said / a person |
+| stop highlighting / clear the highlights / highlights off | takes the boxes away (closing the view does too) |
 
 Once: `pip install onnx numpy`, then `python tools/femto_build.py` (FEMTO-ML cloned
 beside JARVIS), then `pio run -e s3detect -t upload` from arduino/jarvis_camera.

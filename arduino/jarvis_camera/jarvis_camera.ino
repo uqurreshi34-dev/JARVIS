@@ -237,6 +237,20 @@ Wanted pictureWanted() {
 // Live view's own connection, kept apart from the one the polls use.
 NetworkClientSecure liveLink;
 
+#ifdef JARVIS_DETECT
+// Each look's boxes, for the live view: the detection task (core 0) leaves
+// them here, and streamLive (core 1) sends them down the stream it already
+// has open, between two frames -- so JARVIS can draw them over the picture
+// ("highlight the bottle") without another connection, and so without the
+// cost of another TLS handshake. Marked apart from a frame by the top bit of
+// its length: {"objects": [what the board is sure of], "now": [this look]}.
+static const uint32_t LIVE_MARKS_FLAG = 0x80000000UL;
+static char liveMarks[2048];
+static size_t liveMarksLength = 0;
+static uint32_t liveMarksSeq = 0;
+static portMUX_TYPE liveMarksLock = portMUX_INITIALIZER_UNLOCKED;
+#endif
+
 // Writes all of [length] bytes, in pieces the TLS layer takes; false if the
 // connection went.
 bool writeAll(NetworkClientSecure &link, const uint8_t *data, size_t length) {
@@ -277,6 +291,10 @@ void streamLive() {
   unsigned long frames = 0;
   unsigned long sinceCount = 0;
   int missed = 0;
+#ifdef JARVIS_DETECT
+  uint32_t marksSent = liveMarksSeq;   // only looks taken from now on
+  static char marks[sizeof(liveMarks)];
+#endif
 
   while (liveLink.connected() && !liveLink.available()) {
     camera_fb_t *frame = esp_camera_fb_get();
@@ -311,6 +329,36 @@ void streamLive() {
     if (!sent) {
       break;
     }
+
+#ifdef JARVIS_DETECT
+    // A new look's boxes, if one has finished since the last frame: one more
+    // chunk, its length with the top bit set.
+    size_t marksLength = 0;
+
+    portENTER_CRITICAL(&liveMarksLock);
+    if (liveMarksSeq != marksSent) {
+      marksSent = liveMarksSeq;
+      marksLength = liveMarksLength;
+      memcpy(marks, liveMarks, marksLength);
+    }
+    portEXIT_CRITICAL(&liveMarksLock);
+
+    if (marksLength) {
+      uint32_t flagged = (uint32_t)marksLength | LIVE_MARKS_FLAG;
+      uint8_t marksHeader[4] = {
+        (uint8_t)(flagged >> 24), (uint8_t)(flagged >> 16), (uint8_t)(flagged >> 8), (uint8_t)flagged,
+      };
+      char marksSize[12];
+      snprintf(marksSize, sizeof(marksSize), "%X\r\n", (unsigned)(marksLength + sizeof(marksHeader)));
+
+      if (!(writeAll(liveLink, (const uint8_t *)marksSize, strlen(marksSize)) &&
+            writeAll(liveLink, marksHeader, sizeof(marksHeader)) &&
+            writeAll(liveLink, (const uint8_t *)marks, marksLength) &&
+            writeAll(liveLink, (const uint8_t *)"\r\n", 2))) {
+        break;
+      }
+    }
+#endif
 
     frames++;
     sinceCount++;
@@ -958,6 +1006,21 @@ void detectTask(void *) {
 
     Serial.printf("[jarvis] detection: %s in %lu ms, the picture ready in %lu ms (this look: %s)\n",
                   now.length() ? now.c_str() : "nothing", took, ready, scores.length() ? scores.c_str() : "nothing");
+
+    // For the live view: what the board is sure of and this look, with their boxes (streamLive).
+    String marksJson = "{\"objects\":[";
+    addObjects(marksJson, seen, count);
+    marksJson += "],\"now\":[";
+    addObjects(marksJson, looked, lookedCount);
+    marksJson += "]}";
+
+    if (marksJson.length() < sizeof(liveMarks)) {
+      portENTER_CRITICAL(&liveMarksLock);
+      memcpy(liveMarks, marksJson.c_str(), marksJson.length());
+      liveMarksLength = marksJson.length();
+      liveMarksSeq++;
+      portEXIT_CRITICAL(&liveMarksLock);
+    }
 
 #if FEMTO_PROFILE
     // PlatformIO env "s3profile": where those milliseconds went, node by node.

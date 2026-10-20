@@ -72,9 +72,15 @@ _answered = set()     # sentences an answer has already covered: not said after 
 _look_wanted = {}     # camera -> monotonic time JARVIS asked it to look now
 _cannot_look = {}     # camera -> monotonic time it last failed to answer a request to look
 _detecting = None     # the names in DETECTING_FILE, read on first use
+_marks = {}           # camera -> {"at", "objects", "now"}: the newest boxes, from a report or a live view's look
+_last_said = {}       # camera -> [labels] last said unasked: what "highlight it" means
 _muted = False
 _say = None
 _phone = None
+_on_marks = None      # called with a camera's name when its boxes change (actions/highlight.py)
+
+# Boxes older than this are not where things are now.
+MARKS_FRESH_SECONDS = 12.0
 
 
 def _detecting_path():
@@ -125,6 +131,68 @@ def set_listeners(on_say=None, on_phone=None):
     desk's turn: tapping it opens [camera]. Without on_phone, on_say is expected to reach the phone too."""
     global _say, _phone
     _say, _phone = on_say, on_phone
+
+
+def set_marks_listener(listener):
+    """listener(camera): a camera's newest boxes have changed (marks(camera) has them)."""
+    global _on_marks
+    _on_marks = listener
+
+
+def _keep_marks(camera, objects, now_seen, at):
+    """The newest boxes for [camera]. The caller does not hold _lock; the listener is told after."""
+    with _lock:
+        _marks[camera] = {"at": at, "objects": list(objects),
+                          "now": list(now_seen) if now_seen is not None else None}
+
+    listener = _on_marks
+
+    if listener is not None:
+        try:
+            listener(camera)
+        except Exception as error:   # noqa: BLE001 - drawing boxes must never stop a report
+            print(f"[JARVIS] could not pass on a camera's boxes: {error}")
+
+
+def take_marks(name, payload):
+    """A look's boxes sent down camera [name]'s live stream (cameras.MARKS_FLAG): {"objects": [what the
+    board is sure of], "now": [that look]}. Kept for drawing only -- nothing is said, as a look's report
+    to /camera/seen still says it. Returns None, or why refused."""
+    camera = cameras.normal_name(name)
+    objects = _clean(payload) if camera else None
+
+    if objects is None:
+        return "not a report"
+
+    now_seen = _clean({"objects": payload.get("now")}) if payload.get("now") is not None else None
+    _keep_marks(camera, objects, now_seen, time.monotonic())
+    return None
+
+
+def marks(name):
+    """{"objects", "now", "ago"}: camera [name]'s newest boxes and their age in seconds, or None."""
+    with _lock:
+        kept = _marks.get(cameras.normal_name(name))
+
+    if kept is None:
+        return None
+
+    return {"objects": list(kept["objects"]), "now": list(kept["now"]) if kept["now"] is not None else None,
+            "ago": time.monotonic() - kept["at"]}
+
+
+def detecting_cameras():
+    """The cameras ({"name", ...}) that detect: reporting now, or known to from before."""
+    with _lock:
+        reporting = set(_latest) | (_known_detecting() - set(_cannot_look))
+
+    return [camera for camera in cameras.cameras() if camera["name"] in reporting]
+
+
+def last_said(name):
+    """The things last said unasked of camera [name], newest sentence's, or []."""
+    with _lock:
+        return list(_last_said.get(cameras.normal_name(name), []))
 
 
 def _worth_saying(label):
@@ -224,8 +292,13 @@ def record(name, payload):
 
         quiet = _muted
 
+    _keep_marks(camera, objects, seen_now, now)
+
     if not due:
         return None
+
+    with _lock:
+        _last_said[camera] = list(due)
 
     sentence = arrival_words(camera, due)
     journal.alert(sentence)
@@ -486,5 +559,10 @@ def forget():
         _answered.clear()
         _look_wanted.clear()
         _cannot_look.clear()
+        _marks.clear()
+        _last_said.clear()
         _muted = False
         _detecting = None
+
+
+cameras.set_marks_listener(take_marks)

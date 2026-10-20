@@ -1,3 +1,5 @@
+import time
+
 from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
@@ -31,6 +33,11 @@ _BEAM_GAP = 74
 
 _FRAME_MS = 33
 
+# Highlighted things: amber, so a box reads apart from the panel's own blue. A box not renewed for
+# this long is not drawn (its camera stopped sending looks).
+_MARK = QColor(255, 186, 72)
+_MARK_STALE_SECONDS = 12.0
+
 
 class CameraPanel(QWidget):
     """Shows what JARVIS last saw through the camera."""
@@ -42,6 +49,9 @@ class CameraPanel(QWidget):
     show_grid = pyqtSignal(list)
     grid_frame = pyqtSignal(str, bytes)
     focus_camera = pyqtSignal(str)
+    # Boxes over a view, {name: [{"label", "score", "box"}]}: a tile's by its camera's name, the panel's
+    # own single view as "". An empty list clears them (actions/highlight.py).
+    marks = pyqtSignal(dict)
 
     def __init__(self):
         super().__init__()
@@ -55,6 +65,7 @@ class CameraPanel(QWidget):
         self._tiles = {}        # name -> {"title", "image"}, in the order shown
         self._focused = None    # the tile made big, or None
         self._grid = False
+        self._marks = {}        # name ("" for the single view) -> (monotonic time, [boxes])
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -69,6 +80,7 @@ class CameraPanel(QWidget):
         self.show_grid.connect(self._on_grid)
         self.grid_frame.connect(self._on_grid_frame)
         self.focus_camera.connect(self._on_focus)
+        self.marks.connect(self._on_marks)
 
         self._animate = QTimer(self)
         self._animate.timeout.connect(self._tick)
@@ -112,8 +124,27 @@ class CameraPanel(QWidget):
         self._animate.stop()
         self._image = None
         self._title = ""
+        self._marks = {}
         self._leave_grid()
         self.hide()
+
+    def _on_marks(self, marks):
+        for name, boxes in (marks or {}).items():
+            if boxes:
+                self._marks[name] = (time.monotonic(), list(boxes))
+            else:
+                self._marks.pop(name, None)
+
+        self.update()
+
+    def _boxes(self, name):
+        """The boxes to draw over view [name] now, or []."""
+        kept = self._marks.get(name)
+
+        if kept is None or time.monotonic() - kept[0] > _MARK_STALE_SECONDS:
+            return []
+
+        return kept[1]
 
     # ---- every camera at once -------------------------------------------------------------------
 
@@ -279,7 +310,8 @@ class CameraPanel(QWidget):
         elif self._grid:
             self._paint_back(painter)
             self._paint_picture(painter, self._tiles[self._focused]["image"],
-                                QRectF(_MARGIN, 66, self.width() - _MARGIN * 2, self.height() - 66 - _MARGIN))
+                                QRectF(_MARGIN, 66, self.width() - _MARGIN * 2, self.height() - 66 - _MARGIN),
+                                marks=self._boxes(self._focused))
         else:
             self._paint_chart(painter)
 
@@ -340,7 +372,7 @@ class CameraPanel(QWidget):
             painter.fillPath(self._rounded(rect, 8), QColor(0, 0, 0, 120))
 
             if tile["image"] is not None:
-                self._paint_picture(painter, tile["image"], rect, cover=True)
+                self._paint_picture(painter, tile["image"], rect, cover=True, marks=self._boxes(name))
             else:
                 painter.setPen(QPen(self._tint(150)))
                 painter.setFont(QFont("Segoe UI", 10))
@@ -359,8 +391,9 @@ class CameraPanel(QWidget):
             painter.drawText(band.adjusted(10, 0, -10, 0),
                              Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, tile["title"])
 
-    def _paint_picture(self, painter, image, available, cover=False):
-        """[image] in [available]: whole (letterboxed), or with [cover] filling it, cropped to fit."""
+    def _paint_picture(self, painter, image, available, cover=False, marks=()):
+        """[image] in [available]: whole (letterboxed), or with [cover] filling it, cropped to fit; [marks]
+        boxed over it."""
         if image is None:
             painter.setPen(QPen(self._tint(150)))
             painter.setFont(QFont("Segoe UI", 10))
@@ -379,10 +412,53 @@ class CameraPanel(QWidget):
         painter.save()
         painter.setClipPath(self._rounded(shown, 8))
         painter.drawImage(target.topLeft(), scaled)
+        self._paint_marks(painter, target, marks)
         painter.restore()
 
         painter.setPen(QPen(self._tint(100), 1.2))
         painter.drawPath(self._rounded(shown, 8))
+
+    def _paint_marks(self, painter, picture, marks):
+        """Each of [marks] boxed over [picture] (the rect the whole image is drawn in): corner brackets,
+        a faint outline, and its name and score above it."""
+        if not marks:
+            return
+
+        font = QFont("Consolas", 9, QFont.Weight.Bold)
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.2)
+        metrics = QFontMetrics(font)
+        painter.setFont(font)
+
+        for item in marks:
+            x1, y1, x2, y2 = item["box"]
+            box = QRectF(picture.left() + x1 * picture.width(), picture.top() + y1 * picture.height(),
+                         (x2 - x1) * picture.width(), (y2 - y1) * picture.height())
+
+            if box.width() < 2 or box.height() < 2:
+                continue
+
+            faint = QColor(_MARK)
+            faint.setAlpha(110)
+            painter.setPen(QPen(faint, 1.0))
+            painter.drawRect(box)
+
+            painter.setPen(QPen(_MARK, 2.4))
+            span = max(6.0, min(18.0, box.width() / 4, box.height() / 4))
+
+            for x, y, dx, dy in ((box.left(), box.top(), 1, 1), (box.right(), box.top(), -1, 1),
+                                 (box.left(), box.bottom(), 1, -1), (box.right(), box.bottom(), -1, -1)):
+                painter.drawLine(QPointF(x, y), QPointF(x + span * dx, y))
+                painter.drawLine(QPointF(x, y), QPointF(x, y + span * dy))
+
+            text = f"{item['label'].upper()} {round(item['score'] * 100)}%"
+            chip = QRectF(box.left(), box.top() - 18, metrics.horizontalAdvance(text) + 12, 16)
+
+            if chip.top() < picture.top():
+                chip.moveTop(box.top() + 2)
+
+            painter.fillRect(chip, QColor(8, 14, 21, 210))
+            painter.setPen(QPen(_MARK))
+            painter.drawText(chip, Qt.AlignmentFlag.AlignCenter, text)
 
     def _paint_chart(self, painter):
         if not self._image:
@@ -411,6 +487,7 @@ class CameraPanel(QWidget):
         painter.save()
         painter.setClipPath(self._rounded(target, 8))
         painter.drawImage(target.topLeft(), scaled)
+        self._paint_marks(painter, target, self._boxes(""))
         painter.restore()
 
         painter.setPen(QPen(self._tint(100), 1.2))

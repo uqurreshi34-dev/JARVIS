@@ -38,6 +38,7 @@ from actions import (
     cameras,
     charts,
     detections,
+    highlight,
     clipboard,
     contacts,
     diary,
@@ -2247,6 +2248,7 @@ def _camera_picture(command):
 
     # Every camera already on screen: that one is made big, and the others keep streaming for "back".
     if request and request[0] == "show" and _grid and cameras.normal_name(request[1]["name"]) in _grid:
+        _grid_focus["name"] = cameras.normal_name(request[1]["name"])
         _tell_grid("focus", cameras.normal_name(request[1]["name"]))
         return cameras.here_words(command, request[1])
 
@@ -2302,6 +2304,9 @@ _live_view = {}
 # Every camera on screen at once, by name, while the grid is up; empty otherwise.
 _grid = []
 
+# The camera made big in the grid by asking for it, {"name"}; empty otherwise.
+_grid_focus = {}
+
 _NUMBERS = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
 
 
@@ -2351,6 +2356,77 @@ def _end_live():
     cameras.stop_watching()
     _live_view.clear()
     _grid.clear()
+    _grid_focus.clear()
+
+    # Highlights are drawn over a view: with it gone, they go too.
+    if highlight.active_any():
+        highlight.stop()
+
+
+def _on_screen():
+    """The camera ({"name", ...}) whose live view is on screen, the one made big in the grid, or None."""
+    name = _live_view.get("name") or _grid_focus.get("name")
+
+    if not name:
+        return None
+
+    return next((camera for camera in cameras.cameras() if cameras.normal_name(camera["name"]) == name), None)
+
+
+def _highlight_camera(wanted):
+    """The camera a highlight request [wanted] (highlight.asked) is for, or None when it is not one.
+
+    The one it names; else the one on screen; else the only camera that detects. A name no camera has
+    reported ("highlight the second story") is a highlight only when a camera is named or on screen."""
+    if not wanted:
+        return None
+
+    if wanted["camera"]:
+        return wanted["camera"]
+
+    shown = _on_screen()
+
+    if shown:
+        return shown
+
+    if not wanted["on"]:
+        return {"name": ""} if highlight.active_any() or detections.detecting_cameras() else None
+
+    if not wanted.get("known"):
+        return None
+
+    detecting = detections.detecting_cameras()
+    return detecting[0] if len(detecting) == 1 else None
+
+
+def _camera_highlight(command):
+    """Box what a camera sees over its live view, opening the view if it is not up; or stop."""
+    wanted = highlight.asked(command)
+    camera = _highlight_camera(wanted)
+
+    if camera is None:
+        return "Which camera, sir?"
+
+    if not wanted["on"]:
+        return highlight.stop(camera if camera.get("name") else None)
+
+    name = cameras.normal_name(camera["name"])
+
+    if name not in _grid and _live_view.get("name") != name:
+        _camera_picture(f"show me {camera['name']}")
+
+    return highlight.start(camera, wanted["what"])
+
+
+def _draw_highlights(name):
+    """What is highlighted over camera [name], onto its tile or the panel ("" is the panel's own view)."""
+    if name in _grid:
+        _tell_grid("marks", {name: highlight.boxes(name)})
+    elif _live_view.get("name") == name:
+        _tell_grid("marks", {"": highlight.boxes(name)})
+
+
+highlight.set_listener(_draw_highlights)
 
 
 def _stop_looking():
@@ -3990,7 +4066,7 @@ _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 # they may name a connected service: a protocol runs OBS's own actions
 # itself, and "initiate stream protocol" is not a request for Agent Mode.
 _SETTLED_HERE = frozenset({"protocol", "file_hologram", "house", "house_question", "camera_picture", "camera_close",
-                           "camera_grid", "camera_detections", "camera_alerts",
+                           "camera_grid", "camera_detections", "camera_alerts", "camera_highlight",
                            "voice_switch", "open_sandbox", "close_sandbox",
                            "sensor_history", "tradingview", "dex_scan", "dex_scan_hide"})
 
@@ -4076,6 +4152,12 @@ def _fast_path(command):
     # Its close, by the same names, first: "close my room cam" is the panel, never a program to quit.
     if cameras.dismissed(command) or cameras.all_dismissed(command):
         return _blank_result("camera_close")
+
+    # Boxes over a camera's live view: "highlight the bottle", "highlight what you see", "stop
+    # highlighting". Before what a camera has detected, so "highlight someone on the house cam" boxes
+    # them rather than answering whether anyone is there.
+    if _highlight_camera(highlight.asked(command)) is not None:
+        return _blank_result("camera_highlight")
 
     # What a camera recognised on its own board: "what has the house cam detected", "is anyone on the
     # house cam" -- free, from its last report -- and "mute the camera alerts".
@@ -6192,6 +6274,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "camera_alerts":
         return _query(intent, lambda: detections.set_muted(detections.muting_asked(command)))
+
+    if intent == "camera_highlight":
+        return _query(intent, lambda: _camera_highlight(command))
 
     if intent == "voice_switch":
         return _query(intent, lambda: _switch_voice(command))

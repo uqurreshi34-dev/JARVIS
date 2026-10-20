@@ -1114,6 +1114,8 @@ def main():
             view.grid_frame.emit(payload[0], payload[1])
         elif event == "focus":
             view.focus_camera.emit(payload or "")
+        elif event == "marks":
+            view.marks.emit(payload)
 
     set_camera_grid_listener(camera_grid_update)
 
