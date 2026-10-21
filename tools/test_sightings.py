@@ -218,15 +218,40 @@ reset()
 sightings.MAX_SECONDS = 1.5
 detections.record("house cam", {"name": "house cam", "objects": [person()]})
 started = time.monotonic()
+first = Path(sightings._open["house cam"]["folder"]) / sightings.RECORD_FILE
 
-while time.monotonic() - started < 2.5 and sightings._open:
+# Seen all along, for up to 15 s: a slow machine (GitHub's) takes its time over each picture, so the
+# sighting is given long enough to end, and checked by how long it ran, not by the clock here.
+while time.monotonic() - started < 15 and not first.is_file():
     cameras.store("house cam", SHARP)
     detections.take_marks("house cam", {"objects": [person()], "now": [person()]})
     time.sleep(0.2)
 
-check(not sightings._open or time.monotonic() - started < 2.5, "still there after MAX_SECONDS, it ends anyway")
 sightings.MAX_SECONDS = real["MAX_SECONDS"]
+detections.take_marks("house cam", {"objects": [], "now": []})
+wait_until(written, 10)
+long_seconds = json.loads(first.read_text(encoding="utf-8"))["seconds"] if first.is_file() else None
+check(long_seconds is not None and 1.5 <= long_seconds < 15,
+      f"still there after MAX_SECONDS, it ends anyway ({long_seconds} s)")
+
+# ---- a report of what the board is sure of carries an older look's box (21 October 2026) --------------------
+
+reset()
+detections.record("house cam", {"name": "house cam", "objects": [person()]})
+cameras.store("house cam", SHARP)                    # a look sees them, sharp
+time.sleep(0.15)
+detections.take_marks("house cam", {"objects": [person()], "now": [person()]})
+time.sleep(0.6)
+cameras.store("house cam", EMPTY)                    # they walk off ...
+time.sleep(0.15)
+# ... and the board's report of what it is still sure of (them: seen this look or the last) comes now.
+detections.record("house cam", {"name": "house cam", "objects": [person(score=0.9)]})
+time.sleep(0.3)
+detections.take_marks("house cam", {"objects": [], "now": []})
 wait_until(written, 6)
+door_path, door_record = sightings.newest()
+check((Path(door_path) / "best.jpg").read_bytes() == SHARP,
+      "the best picture is one a look saw them in, not one a report of an older look's box was paired with")
 
 # ---- the only look that saw them came before the camera streamed (21 October 2026) -------------------------
 

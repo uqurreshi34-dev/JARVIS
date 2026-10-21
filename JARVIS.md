@@ -2551,6 +2551,17 @@ the 40 to 48 it aims for. Night mode (aec2) and a 31x gain ceiling are
 set at start-up. Darkness also cost detection: a person was seen in 4 of
 12 looks, at 0.43 to 0.57.
 
+**A box is only true for the picture it was found in.** The board's report
+of what it is sure of keeps a person for a look after they were last seen,
+with that look's box; paired with the picture of the report's own time, the
+best shot of a sighting was the door he had just walked away from. Best
+shots come from a look's own boxes; reports only when no look has one.
+
+**A test that races the clock fails on a slower machine.** test_sightings
+gave a sighting 2.5 s to end itself; on GitHub's runner it took longer.
+Tests now wait for the thing itself (the record written) and check how long
+it ran, not how long the test waited.
+
 **A test must set up the world it checks.** test_sightings checked the
 no-model path assuming the outline model was absent; on the PC it was
 there, cut the person out properly, and the test failed. Tests now put

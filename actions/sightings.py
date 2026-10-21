@@ -165,7 +165,16 @@ def _seen(camera):
         if looked:
             report = detections.latest(camera)
             took = (report or {}).get("ms")
-            sighting["candidates"].append((at - (took / 1000.0 if took else 0.0), looked))
+            when = at - (took / 1000.0 if took else 0.0)
+
+            # Only a look's own boxes say where someone was when its picture was taken. A report of
+            # what the board is sure of can carry a box from an earlier look -- paired with the
+            # picture of its own time, it chose a picture of the door after he had walked off
+            # (21 October 2026) -- so those are kept for a sighting no look of its own saw.
+            if kept["now"] is not None:
+                sighting["candidates"].append((when, looked))
+            else:
+                sighting["reported"].append((when, looked))
 
     _start_worker()
 
@@ -194,7 +203,7 @@ def _begin(camera, now):
 
     sighting = {"camera": camera, "folder": path, "began": now, "began_text": _now_text(now), "last_seen": now,
                 "frames": [], "frame_times": [], "after": now - cameras.HISTORY_SECONDS, "looks": [],
-                "candidates": [], "unmatched": [], "best": None}
+                "candidates": [], "unmatched": [], "reported": [], "best": None}
     _open[camera] = sighting
     cameras.lease(camera, LEASE_SECONDS)
     _log(f"began  {os.path.basename(path)}  ({camera})")
@@ -344,12 +353,14 @@ def _end(sighting):
     path = sighting["folder"]
     made = []
 
-    # No look's picture was kept -- the one look that saw them came before the camera began streaming
-    # (21 October 2026: a 14 s sighting with no best picture) -- so the picture nearest that look, its
-    # distance in time in the record ("seconds_from_look").
-    if sighting["best"] is None:
-        for when, looked in sighting["unmatched"]:
-            _consider(sighting, when, looked, strict=False)
+    # No look of its own matched a kept picture -- the one look that saw them came before the camera
+    # began streaming (21 October 2026: a 14 s sighting with no best picture) -- so a picture near a look
+    # or a report of what the board was sure of, then the nearest; its distance in time in the record
+    # ("seconds_from_look").
+    for strict in (True, False):
+        if sighting["best"] is None:
+            for when, looked in sighting["unmatched"] + sighting["reported"]:
+                _consider(sighting, when, looked, strict=strict)
 
     best = sighting["best"]
 
