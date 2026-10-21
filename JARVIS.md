@@ -1715,12 +1715,15 @@ starter.
 An ESP32-CAM (AI Thinker) takes a picture only when asked. It reports
 "online" to `/sensor` like any board, named after its room ("my room cam"),
 so the house plan places it and points its cone out of that room's window;
-a window's "looks" ("street") names what it sees. Every second it asks
+a window's "looks" ("street") names what it sees. It asks
 `POST /camera/wanted` whether a picture is wanted -- which also counts as
 the camera being seen, so it is connected the moment JARVIS starts, not at
 its next "online" -- and only when one
 is does it send a JPEG to `POST /camera`, with the token and its name in
-`X-Jarvis-Camera`. JARVIS keeps the newest picture per camera in memory,
+`X-Jarvis-Camera`. It asks with `"wait": 10`, and JARVIS holds the ask until
+something is wanted (a picture, live view, a look) or the ten seconds pass:
+every ask is a TLS handshake on the board, and asking every second took
+about 0.4 s of each detection look (`tools/test_camera_ask_wait.py`). JARVIS keeps the newest picture per camera in memory,
 never on disk, and checks the size before reading the body and that it is
 a JPEG. So nothing is captured until asked, and nothing is kept.
 
@@ -1792,6 +1795,44 @@ Claude, now seeing the camera's picture, answered "nothing is happening ...
 a small round object" where Gemini had said "a smoke detector". The camera's
 prompt now asks for what a thing most likely is, and for what is in view
 when nothing moves.
+
+### What the house cam recognises - `actions/detections.py`, `arduino/jarvis_camera/` (s3detect)
+The ESP32-S3-CAM ("house cam"), flashed as `s3detect`, runs YOLO26n on its
+own board -- compiled to C by FEMTO-ML (`tools/femto_build.py`) -- beside
+its live view, about every two seconds, and posts what it is sure of to
+`POST /camera/seen`: names, scores and boxes, never the picture. A thing
+counts once seen in two of its last three looks (a person: this look or
+the last), so a flicker is not news. JARVIS says what comes into view
+("Someone's in view of your house cam, sir."), to the phone at once and
+aloud once a turn ends; "what has the house cam detected" has it take a
+fresh look; "mute the camera alerts" stops the saying, not the seeing.
+The board-side steady logic is right as it is and is not to be changed.
+
+### Highlights and their shapes - `actions/highlight.py`, `actions/outline.py`
+"Highlight the bottle", "highlight what you see": each look's boxes come
+down the live stream between frames (the length's top bit set), and the
+HUD and the phone draw them over the view. On the PC, MobileSAM
+(`models/mobile_sam`, made by `tools/sam_export.py`, out of git) cuts out
+whatever is in each box, so the line hugs the thing -- any thing, with no
+list. It cuts from the picture the look was made from (cameras.frame_at,
+the last six seconds kept), and draws the shape only when SAM is steady
+about it and it fits its box; otherwise the box. "Save the highlight"
+writes each highlighted thing to `~/JARVIS/images` as a PNG with no
+background. `tools/test_highlight.py`, `tools/test_outline.py`.
+
+### Sightings - `actions/sightings.py`
+When the house cam sees a person, JARVIS holds a lease on its live view
+(as the phone does, without opening the panel) and keeps what it sees
+until they have been gone ten seconds, two minutes at most, in
+`~/JARVIS/sightings/<camera>-<time>/`: the camera's own JPEGs untouched
+(five a second; the native format police ask for), `best.jpg` (the most of
+the person, sharpest, surest), the person cut out of it when SAM is sure,
+`sighting.json` (times with their UTC offset, each look, every file's
+SHA-256) and an `index.html` that plays them. `sightings-log.txt` says
+what was made, viewed, kept and deleted. Deleted after 31 days unless
+kept, the oldest first past 5 GB; made whether or not the alerts are
+muted; no faces recognised or stored. "Show me the last sighting", "keep
+the last sighting". `tools/test_sightings.py`.
 
 ### When the HUD freezes - `stall_watch.py`
 The HUD froze for a second or two at start-up, and the console said
@@ -2496,6 +2537,24 @@ later can't resurrect it.
 ## Things learned the hard way
 
 Each of these cost real time. They are here so they are not repeated.
+
+**Flashing one board can put another into its flasher.** With the room
+cam's USB base plugged in, `pio run -e s3detect -t upload` tried each port
+in turn, and the room cam came up waiting to be flashed ("boot:0x2
+DOWNLOAD_BOOT ... waiting for download"), silent to JARVIS until RST.
+Name the port when two boards are plugged in (`--upload-port COM7`).
+
+**A dark picture is a camera setting before it is a lamp.** In a lit
+room the house cam's pictures averaged 15 to 23 of 255: its OV3660 was at
+its limits, an exposure no longer than a frame and 15.5x gain, short of
+the 40 to 48 it aims for. Night mode (aec2) and a 31x gain ceiling are
+set at start-up. Darkness also cost detection: a person was seen in 4 of
+12 looks, at 0.43 to 0.57.
+
+**A test must set up the world it checks.** test_sightings checked the
+no-model path assuming the outline model was absent; on the PC it was
+there, cut the person out properly, and the test failed. Tests now put
+the model where they need it, there or not.
 
 **A synthesis deadline is a limit on text length, not on network health.**
 `edge_tts` renders a whole request before a single sample plays, against

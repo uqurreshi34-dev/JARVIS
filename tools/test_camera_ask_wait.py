@@ -139,6 +139,9 @@ check("WiFi.setSleep(false);" in joining and "WiFi.setTxPower(WIFI_POWER_19_5dBm
       and joining.index("WiFi.begin(") < joining.index("WiFi.setTxPower("),
       "the board's radio is kept awake and at full strength, set once the wifi has begun")
 check("WiFi.RSSI()" in sketch, "and it says how strong its signal is on joining")
+ov3660 = sketch[sketch.index("OV3660_PID) {"):sketch.index('Serial.println("[jarvis] camera: OV3660")')]
+check("set_aec2(sensor, 1)" in ov3660 and "OV3660_GAIN_CEILING" in ov3660 and "OV3660_GAIN_CEILING = 0x1F0" in sketch,
+      "the OV3660 may expose longer than a frame and gain up to 31x in the dark")
 
 cameras.forget()
 detections.forget()

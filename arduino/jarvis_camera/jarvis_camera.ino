@@ -406,6 +406,9 @@ void sendPicture() {
   }
 }
 
+// The OV3660's highest gain, in sixteenths: 0x1F0 is 31x (see startCamera).
+static const int OV3660_GAIN_CEILING = 0x1F0;
+
 bool startCamera() {
   // The camera driver's own task warns, through printf, whenever a frame
   // arrives broken or there is no buffer free for it -- and printf needs
@@ -476,6 +479,14 @@ bool startCamera() {
     sensor->set_vflip(sensor, 1);
     sensor->set_brightness(sensor, 1);
     sensor->set_saturation(sensor, -2);
+    // Dark indoors: in a lamp-lit room the house cam's pictures averaged 15 to 23 of 255, most of each
+    // under 20 (21 October 2026), short of the 40 to 48 its own exposure aims for -- held back by an
+    // exposure no longer than one frame and a gain of at most 15.5x. Night mode lets the exposure run
+    // past a frame when it must (fewer frames a second in the dark, none fewer in daylight), and the
+    // gain may go to 31x (0x1F0, in sixteenths; the driver's default 0xF8). A board without them
+    // ignores both.
+    sensor->set_aec2(sensor, 1);
+    sensor->set_gainceiling(sensor, (gainceiling_t)OV3660_GAIN_CEILING);
     Serial.println("[jarvis] camera: OV3660");
   } else if (sensor && sensor->id.PID == OV2640_PID) {
     Serial.println("[jarvis] camera: OV2640");

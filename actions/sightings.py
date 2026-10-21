@@ -194,7 +194,7 @@ def _begin(camera, now):
 
     sighting = {"camera": camera, "folder": path, "began": now, "began_text": _now_text(now), "last_seen": now,
                 "frames": [], "frame_times": [], "after": now - cameras.HISTORY_SECONDS, "looks": [],
-                "candidates": [], "best": None}
+                "candidates": [], "unmatched": [], "best": None}
     _open[camera] = sighting
     cameras.lease(camera, LEASE_SECONDS)
     _log(f"began  {os.path.basename(path)}  ({camera})")
@@ -267,7 +267,8 @@ def _tick(camera):
         candidates, sighting["candidates"] = sighting["candidates"], []
 
     for when, looked in candidates:
-        _consider(sighting, when, looked)
+        if not _consider(sighting, when, looked):
+            sighting["unmatched"].append((when, looked))
 
     if ending:
         with _lock:
@@ -301,15 +302,17 @@ def best_shot(score, box, rgb):
     return score * (x2 - x1) * (y2 - y1) * sharp / (sharp + SHARP_HALF), sharp
 
 
-def _consider(sighting, when, looked):
-    """Each person this look saw, in the kept picture taken when it looked: the best so far kept."""
+def _consider(sighting, when, looked, strict=True):
+    """Each person this look saw, in the kept picture taken when it looked: the best so far kept. Returns
+    whether a picture was near enough in time ([strict]: within FRAME_MATCH_SECONDS; else the nearest)."""
     if not sighting["frame_times"]:
-        return
+        return False
 
     nearest = min(range(len(sighting["frame_times"])), key=lambda i: abs(sighting["frame_times"][i] - when))
+    apart = abs(sighting["frame_times"][nearest] - when)
 
-    if abs(sighting["frame_times"][nearest] - when) > FRAME_MATCH_SECONDS:
-        return
+    if strict and apart > FRAME_MATCH_SECONDS:
+        return False
 
     frame = sighting["frames"][nearest]
 
@@ -317,12 +320,12 @@ def _consider(sighting, when, looked):
         with open(os.path.join(sighting["folder"], frame["file"]), "rb") as kept:
             jpeg = kept.read()
     except OSError:
-        return
+        return False
 
     rgb = outline.picture(jpeg)
 
     if rgb is None:
-        return
+        return False
 
     for item in looked:
         worth, sharp = best_shot(item["score"], item["box"], rgb)
@@ -330,7 +333,9 @@ def _consider(sighting, when, looked):
         if sighting["best"] is None or worth > sighting["best"]["worth"]:
             sighting["best"] = {"file": frame["file"], "at": frame["at"], "label": item["label"],
                                 "score": item["score"], "box": list(item["box"]), "worth": worth,
-                                "sharpness": round(sharp, 1)}
+                                "sharpness": round(sharp, 1), "seconds_from_look": round(apart, 2)}
+
+    return True
 
 
 def _end(sighting):
@@ -338,6 +343,14 @@ def _end(sighting):
     global _last
     path = sighting["folder"]
     made = []
+
+    # No look's picture was kept -- the one look that saw them came before the camera began streaming
+    # (21 October 2026: a 14 s sighting with no best picture) -- so the picture nearest that look, its
+    # distance in time in the record ("seconds_from_look").
+    if sighting["best"] is None:
+        for when, looked in sighting["unmatched"]:
+            _consider(sighting, when, looked, strict=False)
+
     best = sighting["best"]
 
     if best is not None:

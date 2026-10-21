@@ -118,6 +118,12 @@ def reset():
 
 base = Path(home) / sightings.FOLDER
 
+# The outline model as if not set up, wherever it is (models/mobile_sam on a PC that has made it): the
+# no-model path is what is checked, and the model itself is stood in for below.
+real_model_dir = outline.MODEL_DIR
+outline.MODEL_DIR = Path(home) / "no-outline-model"
+outline.forget()
+
 # ---- the best picture ---------------------------------------------------------------------------------------
 
 sharp_rgb, blurred_rgb = outline.picture(SHARP), outline.picture(BLURRED)
@@ -222,6 +228,25 @@ check(not sightings._open or time.monotonic() - started < 2.5, "still there afte
 sightings.MAX_SECONDS = real["MAX_SECONDS"]
 wait_until(written, 6)
 
+# ---- the only look that saw them came before the camera streamed (21 October 2026) -------------------------
+
+reset()
+real_quiet = sightings.QUIET_SECONDS
+sightings.QUIET_SECONDS = 1.0
+detections.record("house cam", {"name": "house cam", "ms": 2500, "objects": [person()]})
+
+for _ in range(4):
+    cameras.store("house cam", SHARP)
+    time.sleep(0.25)
+
+detections.take_marks("house cam", {"objects": [], "now": []})
+wait_until(written, 6)
+sightings.QUIET_SECONDS = real_quiet
+_, only_record = sightings.newest()
+check(only_record["best"] is not None and only_record["best"]["seconds_from_look"] > sightings.FRAME_MATCH_SECONDS,
+      "with no picture near the one look that saw them, the nearest, and how far from it in time "
+      f"({(only_record['best'] or {}).get('seconds_from_look')} s)")
+
 # ---- with the outline model sure of them (a stand-in) ------------------------------------------------------
 
 reset()
@@ -315,6 +340,8 @@ if commands is not None:
     check(result["intent"] == "camera_sighting" and result["action"]() == "That sighting is already kept, sir.",
           "and kept")
 
+outline.MODEL_DIR = real_model_dir
+outline.forget()
 sightings.forget()
 detections.forget()
 cameras.forget()

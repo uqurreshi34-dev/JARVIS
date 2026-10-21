@@ -703,6 +703,10 @@ are recognised or stored.
 | show me the last sighting | its best picture on the panel, and when it was (**free**) |
 | keep the last sighting / keep that sighting | never deleted |
 
+In the dark, the house cam (and any OV3660 camera) keeps its shutter open
+longer and turns its gain up further, so it sees more at the cost of fewer
+frames a second; daylight is as before. Reflash it after updating the sketch.
+
 `JARVIS_SIGHTING_LABELS` (default `person`), `JARVIS_SIGHTING_QUIET` (seconds,
 default 10), `JARVIS_SIGHTING_DAYS` (default 31) and `JARVIS_SIGHTING_MAX_GB`
 (default 5) change what begins one, when it ends, and how long and how much is kept.
