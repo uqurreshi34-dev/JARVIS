@@ -678,6 +678,35 @@ does not fit the box (a camera moved in the hand). The terminal says each time a
 thing switches between the two: `outline of the laptop: steady 0.62, fits its
 box 0.71 -> its box`.
 
+### Sightings: what the house cam saw when someone came into view
+
+When the house cam sees a person, JARVIS keeps what it sees until they have been
+gone 10 seconds (at most two minutes a time), in `~/JARVIS/sightings/`, one folder
+each -- whether or not the camera alerts are muted:
+
+- `frame-0001.jpg` ...: the camera's own pictures, five a second, untouched (what
+  police ask for: the original format, nothing re-encoded or drawn on)
+- `best.jpg`: the best of them (the most of the person, sharpest, surest)
+- `best-cutout.png`: the person alone, when the outline model is sure; else
+  `best-crop.jpg`, their box. For you to look at: the frames are the evidence
+- `sighting.json`: times (your PC's clock, with its UTC offset), what each look
+  saw, and every file's SHA-256, so a change to any of them shows
+- `index.html`: plays the pictures in any browser
+
+`sightings-log.txt` says when each was made, kept, viewed and deleted. Sightings are deleted
+after 31 days unless kept, and the oldest not kept go first if all of them pass
+5 GB (a camera facing a street sees many people go by, a few MB each). No faces
+are recognised or stored.
+
+| Say | Does |
+|---|---|
+| show me the last sighting | its best picture on the panel, and when it was (**free**) |
+| keep the last sighting / keep that sighting | never deleted |
+
+`JARVIS_SIGHTING_LABELS` (default `person`), `JARVIS_SIGHTING_QUIET` (seconds,
+default 10), `JARVIS_SIGHTING_DAYS` (default 31) and `JARVIS_SIGHTING_MAX_GB`
+(default 5) change what begins one, when it ends, and how long and how much is kept.
+
 Once: `pip install onnx numpy`, then `python tools/femto_build.py` (FEMTO-ML cloned
 beside JARVIS), then `pio run -e s3detect -t upload` from arduino/jarvis_camera.
 `pio run -e s3cam -t upload` goes back to the camera without detection.

@@ -78,6 +78,7 @@ _muted = False
 _say = None
 _phone = None
 _on_marks = None      # called with a camera's name when its boxes change (actions/highlight.py)
+_marks_listeners = []  # more of the same (actions/sightings.py)
 
 # Boxes older than this are not where things are now.
 MARKS_FRESH_SECONDS = 12.0
@@ -139,15 +140,22 @@ def set_marks_listener(listener):
     _on_marks = listener
 
 
+def add_marks_listener(listener):
+    """listener(camera), told as set_marks_listener's is, beside it."""
+    if listener not in _marks_listeners:
+        _marks_listeners.append(listener)
+
+
 def _keep_marks(camera, objects, now_seen, at):
     """The newest boxes for [camera]. The caller does not hold _lock; the listener is told after."""
     with _lock:
         _marks[camera] = {"at": at, "objects": list(objects),
                           "now": list(now_seen) if now_seen is not None else None}
 
-    listener = _on_marks
+    for listener in [_on_marks] + list(_marks_listeners):
+        if listener is None:
+            continue
 
-    if listener is not None:
         try:
             listener(camera)
         except Exception as error:   # noqa: BLE001 - drawing boxes must never stop a report

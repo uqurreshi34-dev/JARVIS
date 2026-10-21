@@ -1,0 +1,634 @@
+"""Sightings: when someone comes into view of a camera that detects, what it saw is kept as evidence.
+
+The house cam tells JARVIS when it sees a person (actions/detections.py). From that moment until they
+have been gone QUIET_SECONDS, JARVIS has the camera stream (a lease, as a phone watching it has: the
+desk's panel is not opened) and keeps, in its own folder under JARVIS's sightings folder:
+
+    frame-0001.jpg ...   the camera's own pictures, as it sent them: never re-encoded, cropped or drawn on,
+                         at most FPS a second -- the "native format" UK police ask for
+    best.jpg             the best picture of the person (best_shot): a copy of one of those frames
+    best-cutout.png      the person alone, cut out (actions/outline.py), when the model is sure of the
+                         shape; else best-crop.jpg, what is in their box. Made from best.jpg, for you to
+                         look at: the frames are the evidence
+    sighting.json        when it began and ended (the PC's clock, with its offset from UTC), the camera,
+                         what each look saw, and every file's SHA-256, so any later change to one shows
+    index.html           the frames played in order, in any browser, with nothing to install
+
+Each sighting begun, ended, kept, viewed or deleted is a line in the folder's sightings-log.txt. A
+sighting is deleted after KEEP_DAYS unless kept ("keep the last sighting"), and the oldest not kept go first when all of them
+pass MAX_GB. Sightings are made whether or not the camera
+alerts are muted: muting stops JARVIS saying so, not keeping the evidence.
+
+Which things begin one is JARVIS_SIGHTING_LABELS, the model's own names ("person", the default);
+nothing about who anyone is: no faces are recognised or stored.
+
+    keep the last sighting / keep that sighting      not deleted after KEEP_DAYS
+    show me the last sighting                         its best picture, on the panel, and when it was
+"""
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import threading
+import time
+from datetime import datetime, timedelta
+from io import BytesIO
+
+from actions import cameras, detections, files, outline
+
+FOLDER = "sightings"
+LOG_FILE = "sightings-log.txt"
+RECORD_FILE = "sighting.json"
+
+# What begins a sighting, by the model's own names.
+LABELS = tuple(name.strip().casefold() for name in
+               (os.getenv("JARVIS_SIGHTING_LABELS") or "person").split(",") if name.strip())
+
+# Gone this long, the sighting ends. The board keeps a person in what it is sure of while seen in this
+# look or the last, so a look's miss does not end one.
+QUIET_SECONDS = float(os.getenv("JARVIS_SIGHTING_QUIET") or 10)
+
+# However long someone stays, a sighting ends after this; if they are still there, a new one begins.
+MAX_SECONDS = 120.0
+
+# Kept this many days unless kept for good. 31: what UK police guidance takes as a usual retention.
+KEEP_DAYS = float(os.getenv("JARVIS_SIGHTING_DAYS") or 31)
+
+# All sightings together kept under this many gigabytes: past it, the oldest not kept go first. A camera
+# facing a street sees many people pass, at a few megabytes each.
+MAX_GB = float(os.getenv("JARVIS_SIGHTING_MAX_GB") or 5)
+
+# Pictures kept a second at most: the camera streams up to 25, and five tell what happened.
+FPS = 5.0
+
+# The camera is kept streaming this long at a time, renewed while the sighting lasts: one that ends,
+# or a JARVIS that stops, lets the camera go back to detection alone within this.
+LEASE_SECONDS = 6.0
+
+# How often the sighting's pictures are collected and its end looked for.
+TICK_SECONDS = 0.5
+
+# The best picture of the person: the most of them in view (their box's area), the model surest it is
+# them, and sharp. Sharpness is the spread of the picture's edges (the variance of its Laplacian);
+# measured 21 October 2026 on people cropped from a photo at the house cam's size: 2,500 to 3,400
+# sharp, 300 to 430 dark, 15 to 45 blurred by moving 6 to 12 pixels. Weighed as s / (s + SHARP_HALF):
+# a sharp picture keeps nearly all its worth, a blurred one under a third.
+SHARP_HALF = 100.0
+
+# A look's boxes are matched with a kept picture taken within this of the look.
+FRAME_MATCH_SECONDS = 1.0
+
+_lock = threading.Lock()
+_open = {}          # camera -> the sighting being made
+_last = None        # folder of the newest sighting ended this run, for "the last sighting"
+_worker = None
+
+
+def _now_text(monotonic=None):
+    """The PC's local time, with its offset from UTC, of [monotonic] (time.monotonic()), or now."""
+    wall = time.time() - (time.monotonic() - monotonic if monotonic is not None else 0.0)
+    return datetime.fromtimestamp(wall).astimezone().isoformat(timespec="milliseconds")
+
+
+def folder(make=True):
+    """JARVIS's sightings folder, made if missing (with [make]); or None."""
+    base = files.root()
+
+    if not base:
+        return None
+
+    path = os.path.join(base, FOLDER)
+
+    if not make:
+        return path if os.path.isdir(path) else None
+
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError as error:
+        print(f"[JARVIS] could not make the sightings folder: {error}")
+        return None
+
+    return path
+
+
+def _log(text):
+    path = folder()
+
+    if not path:
+        return
+
+    try:
+        with open(os.path.join(path, LOG_FILE), "a", encoding="utf-8") as log:
+            log.write(f"{_now_text()}  {text}\n")
+    except OSError as error:
+        print(f"[JARVIS] could not write the sightings log: {error}")
+
+
+def _sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+# ---- beginning, keeping, ending -------------------------------------------------------------------------
+
+def _seen(camera):
+    """A camera's boxes changed (detections): begin or continue a sighting, and offer its best picture."""
+    kept = detections.marks(camera)
+
+    if kept is None:
+        return
+
+    sure = [item for item in kept["objects"] if item["label"] in LABELS]
+    this_look = kept["now"] if kept["now"] is not None else kept["objects"]
+    looked = [item for item in this_look if item["label"] in LABELS]
+    now = time.monotonic()
+    at = now - kept["ago"]
+
+    with _lock:
+        sighting = _open.get(camera)
+
+        if sighting is None and not sure:
+            return
+
+        if sighting is None:
+            sighting = _begin(camera, now)
+
+            if sighting is None:
+                return
+
+        if sure or looked:
+            sighting["last_seen"] = now
+
+        sighting["looks"].append({"at": _now_text(at), "seen": [dict(item) for item in this_look]})
+
+        if looked:
+            report = detections.latest(camera)
+            took = (report or {}).get("ms")
+            sighting["candidates"].append((at - (took / 1000.0 if took else 0.0), looked))
+
+    _start_worker()
+
+
+def _begin(camera, now):
+    """A new sighting on [camera] (the caller holds _lock), or None if it cannot be kept."""
+    base = folder()
+
+    if not base:
+        return None
+
+    stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    slug = re.sub(r"[^a-z0-9]+", "-", camera.casefold()).strip("-") or "camera"
+    path = os.path.join(base, f"{slug}-{stamp}")
+    number = 2
+
+    while os.path.exists(path):
+        path = os.path.join(base, f"{slug}-{stamp}-{number}")
+        number += 1
+
+    try:
+        os.makedirs(path)
+    except OSError as error:
+        print(f"[JARVIS] could not begin a sighting: {error}")
+        return None
+
+    sighting = {"camera": camera, "folder": path, "began": now, "began_text": _now_text(now), "last_seen": now,
+                "frames": [], "frame_times": [], "after": now - cameras.HISTORY_SECONDS, "looks": [],
+                "candidates": [], "best": None}
+    _open[camera] = sighting
+    cameras.lease(camera, LEASE_SECONDS)
+    _log(f"began  {os.path.basename(path)}  ({camera})")
+    print(f"[JARVIS] sighting on {camera}: keeping what it sees ({os.path.basename(path)})", flush=True)
+    return sighting
+
+
+def _start_worker():
+    global _worker
+
+    with _lock:
+        if _worker is not None and _worker.is_alive():
+            return
+
+        _worker = threading.Thread(target=_work, name="jarvis-sightings", daemon=True)
+        _worker.start()
+
+
+def _work():
+    while True:
+        with _lock:
+            cameras_open = list(_open)
+
+        if not cameras_open:
+            return
+
+        for camera in cameras_open:
+            try:
+                _tick(camera)
+            except Exception as error:   # noqa: BLE001 - one bad picture must not end the evidence
+                print(f"[JARVIS] sighting on {camera}: {error}")
+
+        time.sleep(TICK_SECONDS)
+
+
+def _tick(camera):
+    now = time.monotonic()
+
+    with _lock:
+        sighting = _open.get(camera)
+
+    if sighting is None:
+        return
+
+    ending = now - sighting["last_seen"] > QUIET_SECONDS or now - sighting["began"] > MAX_SECONDS
+
+    if not ending:
+        cameras.lease(camera, LEASE_SECONDS)
+
+    # The camera's pictures since the last kept, at most FPS a second; the first ones from just before.
+    for taken, jpeg in cameras.frames_since(camera, sighting["after"]):
+        sighting["after"] = taken
+
+        if sighting["frame_times"] and taken - sighting["frame_times"][-1] < 1.0 / FPS:
+            continue
+
+        name = f"frame-{len(sighting['frames']) + 1:04d}.jpg"
+
+        try:
+            with open(os.path.join(sighting["folder"], name), "wb") as out:
+                out.write(jpeg)
+        except OSError as error:
+            print(f"[JARVIS] sighting on {camera}: could not keep a picture: {error}")
+            continue
+
+        sighting["frames"].append({"file": name, "at": _now_text(taken), "sha256": _sha256(jpeg)})
+        sighting["frame_times"].append(taken)
+
+    with _lock:
+        candidates, sighting["candidates"] = sighting["candidates"], []
+
+    for when, looked in candidates:
+        _consider(sighting, when, looked)
+
+    if ending:
+        with _lock:
+            _open.pop(camera, None)
+
+        _end(sighting)
+
+
+def sharpness(rgb):
+    """The variance of the Laplacian of picture [rgb] (height, width, 3): high when sharp."""
+    import numpy as np
+
+    grey = rgb.astype(np.float32).mean(axis=2)
+
+    if grey.shape[0] < 3 or grey.shape[1] < 3:
+        return 0.0
+
+    edges = (4 * grey[1:-1, 1:-1] - grey[:-2, 1:-1] - grey[2:, 1:-1] - grey[1:-1, :-2] - grey[1:-1, 2:])
+    return float(edges.var())
+
+
+def best_shot(score, box, rgb):
+    """How good a picture of someone is: (worth, sharpness). [box] is 0 to 1 of picture [rgb]."""
+    height, width = rgb.shape[:2]
+    x1, y1, x2, y2 = (int(max(0.0, min(1.0, v)) * size) for v, size in zip(box, (width, height, width, height)))
+
+    if x2 - x1 < 3 or y2 - y1 < 3:
+        return 0.0, 0.0
+
+    sharp = sharpness(rgb[y1:y2, x1:x2])
+    return score * (x2 - x1) * (y2 - y1) * sharp / (sharp + SHARP_HALF), sharp
+
+
+def _consider(sighting, when, looked):
+    """Each person this look saw, in the kept picture taken when it looked: the best so far kept."""
+    if not sighting["frame_times"]:
+        return
+
+    nearest = min(range(len(sighting["frame_times"])), key=lambda i: abs(sighting["frame_times"][i] - when))
+
+    if abs(sighting["frame_times"][nearest] - when) > FRAME_MATCH_SECONDS:
+        return
+
+    frame = sighting["frames"][nearest]
+
+    try:
+        with open(os.path.join(sighting["folder"], frame["file"]), "rb") as kept:
+            jpeg = kept.read()
+    except OSError:
+        return
+
+    rgb = outline.picture(jpeg)
+
+    if rgb is None:
+        return
+
+    for item in looked:
+        worth, sharp = best_shot(item["score"], item["box"], rgb)
+
+        if sighting["best"] is None or worth > sighting["best"]["worth"]:
+            sighting["best"] = {"file": frame["file"], "at": frame["at"], "label": item["label"],
+                                "score": item["score"], "box": list(item["box"]), "worth": worth,
+                                "sharpness": round(sharp, 1)}
+
+
+def _end(sighting):
+    """Write what is kept beside the pictures: the best one, the person cut out, the record, the player."""
+    global _last
+    path = sighting["folder"]
+    made = []
+    best = sighting["best"]
+
+    if best is not None:
+        try:
+            with open(os.path.join(path, best["file"]), "rb") as kept:
+                jpeg = kept.read()
+
+            with open(os.path.join(path, "best.jpg"), "wb") as out:
+                out.write(jpeg)
+
+            made.append(("best.jpg", jpeg))
+            made.extend(_cut_out(path, jpeg, best))
+        except OSError as error:
+            print(f"[JARVIS] sighting: could not keep its best picture: {error}")
+
+    ended = time.monotonic()
+    record = {
+        "camera": sighting["camera"],
+        "began": sighting["began_text"],
+        "ended": _now_text(ended),
+        "seconds": round(ended - sighting["began"], 1),
+        "kept": False,
+        "clock": "this PC's own clock, local time with its offset from UTC",
+        "frames": sighting["frames"],
+        "best": {key: value for key, value in best.items() if key != "worth"} if best else None,
+        "made_from_best": [{"file": name, "sha256": _sha256(data)} for name, data in made],
+        "looks": sighting["looks"],
+    }
+
+    try:
+        with open(os.path.join(path, RECORD_FILE), "w", encoding="utf-8") as out:
+            json.dump(record, out, indent=1)
+
+        with open(os.path.join(path, "index.html"), "w", encoding="utf-8") as out:
+            out.write(_player(record))
+    except OSError as error:
+        print(f"[JARVIS] sighting: could not write its record: {error}")
+
+    _last = path
+    _log(f"ended  {os.path.basename(path)}  ({len(sighting['frames'])} pictures, {record['seconds']} s)")
+    print(f"[JARVIS] sighting on {sighting['camera']} ended: {len(sighting['frames'])} pictures kept", flush=True)
+    sweep()
+
+
+def _cut_out(path, jpeg, best):
+    """The person alone from [jpeg]: [(file, bytes)] written to [path]."""
+    rgb = outline.picture(jpeg)
+
+    if rgb is None:
+        return []
+
+    found = None
+
+    if outline.present():
+        view = outline.embed(rgb)
+        found = outline.mask(view, best["box"]) if view is not None else None
+
+    out = BytesIO()
+
+    if found is not None:
+        outline.cutout(rgb, found).save(out, "PNG")
+        name = "best-cutout.png"
+    else:
+        from PIL import Image
+
+        height, width = rgb.shape[:2]
+        x1, y1, x2, y2 = best["box"]
+        box = (int(x1 * width), int(y1 * height), max(int(x2 * width), int(x1 * width) + 1),
+               max(int(y2 * height), int(y1 * height) + 1))
+        Image.fromarray(rgb).crop(box).save(out, "JPEG", quality=95)
+        name = "best-crop.jpg"
+
+    data = out.getvalue()
+
+    with open(os.path.join(path, name), "wb") as written:
+        written.write(data)
+
+    return [(name, data)]
+
+
+def _player(record):
+    """A page that plays a sighting's frames in order, with their times: nothing to install."""
+    frames = json.dumps([{"file": frame["file"], "at": frame["at"]} for frame in record["frames"]])
+    title = f"{record['camera']} -- {record['began']}"
+    return f"""<!doctype html>
+<meta charset="utf-8"><title>{title}</title>
+<style>body{{background:#111;color:#ddd;font:14px sans-serif;text-align:center}}img{{max-width:100%}}</style>
+<h3>{title} ({record['seconds']} s)</h3>
+<img id="p" alt=""><p id="t"></p>
+<button onclick="go(-1)">&lt;</button> <button onclick="play=!play">play / pause</button>
+<button onclick="go(1)">&gt;</button>
+<script>
+const frames = {frames};
+let i = 0, play = true;
+function show() {{ if (!frames.length) return; p.src = frames[i].file; t.textContent = frames[i].at + "  (" + (i + 1) + " of " + frames.length + ")"; }}
+function go(step) {{ i = (i + step + frames.length) % frames.length; show(); }}
+setInterval(() => {{ if (play) go(1); }}, 200);
+show();
+</script>
+"""
+
+
+# ---- keeping and deleting -----------------------------------------------------------------------------
+
+def _records():
+    """[(folder, record)] of every sighting kept, newest first."""
+    base = folder(make=False)
+
+    if not base:
+        return []
+
+    found = []
+
+    for name in os.listdir(base):
+        path = os.path.join(base, name)
+
+        try:
+            with open(os.path.join(path, RECORD_FILE), encoding="utf-8") as kept:
+                found.append((path, json.load(kept)))
+        except (OSError, ValueError):
+            continue
+
+    found.sort(key=lambda pair: pair[1].get("began", ""), reverse=True)
+    return found
+
+
+def _size(path):
+    total = 0
+
+    for parent, _, names in os.walk(path):
+        for name in names:
+            try:
+                total += os.path.getsize(os.path.join(parent, name))
+            except OSError:
+                pass
+
+    return total
+
+
+def sweep():
+    """Delete sightings not kept: older than KEEP_DAYS, then the oldest while all are over MAX_GB.
+    Returns how many."""
+    cutoff = datetime.now().astimezone() - timedelta(days=KEEP_DAYS)
+    base = folder(make=False)
+    gone = 0
+
+    if not base:
+        return 0
+
+    with _lock:
+        making = {os.path.abspath(sighting["folder"]) for sighting in _open.values()}
+
+    def delete(path, why):
+        nonlocal gone
+
+        try:
+            shutil.rmtree(path)
+            gone += 1
+            _log(f"deleted  {os.path.basename(path)}  ({why})")
+            return True
+        except OSError as error:
+            print(f"[JARVIS] could not delete an old sighting: {error}")
+            return False
+
+    left = []
+
+    for path, record in _records():
+        if os.path.dirname(os.path.abspath(path)) != os.path.abspath(base) or os.path.abspath(path) in making:
+            continue
+
+        try:
+            began = datetime.fromisoformat(record["began"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        if not record.get("kept") and began < cutoff:
+            delete(path, f"older than {KEEP_DAYS:g} days, not kept")
+        else:
+            left.append((path, record, _size(path)))
+
+    total = sum(size for _, _, size in left)
+
+    for path, record, size in reversed(left):        # oldest first
+        if total <= MAX_GB * 1024 ** 3:
+            break
+
+        if not record.get("kept") and delete(path, f"all sightings over {MAX_GB:g} GB, the oldest not kept"):
+            total -= size
+
+    return gone
+
+
+def newest():
+    """(folder, record) of the newest sighting kept, or None."""
+    found = _records()
+    return found[0] if found else None
+
+
+def keep_last():
+    """Keep the newest sighting for good. Returns what to say."""
+    found = newest()
+
+    if found is None:
+        return "There are no sightings to keep, sir."
+
+    path, record = found
+
+    if record.get("kept"):
+        return "That sighting is already kept, sir."
+
+    record["kept"] = True
+
+    try:
+        with open(os.path.join(path, RECORD_FILE), "w", encoding="utf-8") as out:
+            json.dump(record, out, indent=1)
+    except OSError:
+        return "I couldn't mark it kept, sir."
+
+    _log(f"kept  {os.path.basename(path)}")
+    return f"Kept the sighting from {_spoken_time(record['began'])}, sir. It won't be deleted."
+
+
+def last_picture():
+    """(jpeg, title, what to say) of the newest sighting's best picture, or (None, None, what to say)."""
+    found = newest()
+
+    if found is None:
+        return None, None, "There are no sightings yet, sir."
+
+    path, record = found
+    name = "best.jpg" if os.path.exists(os.path.join(path, "best.jpg")) else (
+        record["frames"][0]["file"] if record.get("frames") else None)
+
+    if name is None:
+        return None, None, "That sighting has no pictures, sir."
+
+    try:
+        with open(os.path.join(path, name), "rb") as kept:
+            jpeg = kept.read()
+    except OSError:
+        return None, None, "I couldn't open that sighting, sir."
+
+    _log(f"viewed  {os.path.basename(path)}")
+    seconds = record.get("seconds") or 0
+    return (jpeg, f"SIGHTING {record['camera'].upper()}",
+            f"Someone on your {record['camera']} at {_spoken_time(record['began'])}, for "
+            f"{max(1, round(seconds))} seconds, sir.")
+
+
+def _spoken_time(text):
+    try:
+        when = datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return "an unknown time"
+
+    today = datetime.now().astimezone().date()
+    day = "" if when.date() == today else (" yesterday" if when.date() == today - timedelta(days=1)
+                                           else f" on {when.strftime('%d %B').lstrip('0')}")
+    return f"{when.strftime('%H:%M')}{day}"
+
+
+_KEEP = re.compile(r"^(?:(?:jarvis|please|now)\s+)*(?:keep|save)\s+(?:the\s+)?(?:last|latest|that|this)\s+"
+                   r"(?:sighting|intruder|event)(?:\s+for\s+good)?(?:\s+please)?$")
+_SHOW = re.compile(r"^(?:(?:jarvis|please|now|can\s+you|could\s+you)\s+)*(?:show(?:\s+me)?|open|let\s+me\s+see)\s+"
+                   r"(?:the\s+)?(?:last|latest)\s+(?:sighting|intruder|event)(?:\s+please)?$")
+
+
+def asked(text):
+    """"keep" or "show" for a request about the last sighting, else None."""
+    words = " ".join(re.sub(r"[^\w\s']", " ", str(text or "").casefold()).split())
+
+    if _KEEP.match(words):
+        return "keep"
+
+    if _SHOW.match(words):
+        return "show"
+
+    return None
+
+
+def forget():
+    """Drop every sighting being made. For tests."""
+    global _last
+
+    with _lock:
+        _open.clear()
+
+    _last = None
+
+
+detections.add_marks_listener(_seen)
+
+# Old sightings deleted once a start, off the thread that imports this.
+threading.Thread(target=sweep, name="jarvis-sightings-sweep", daemon=True).start()

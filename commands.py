@@ -39,6 +39,7 @@ from actions import (
     charts,
     detections,
     highlight,
+    sightings,
     clipboard,
     contacts,
     diary,
@@ -2404,6 +2405,19 @@ def _highlight_camera(wanted):
     return detecting[0] if len(detecting) == 1 else None
 
 
+def _camera_sighting(command):
+    """The last sighting: its best picture on the panel, or kept for good."""
+    if sightings.asked(command) == "keep":
+        return sightings.keep_last()
+
+    picture, title, said = sightings.last_picture()
+
+    if picture and _camera_listener:
+        _camera_listener(picture, title)
+
+    return said
+
+
 def _camera_highlight(command):
     """Box what a camera sees over its live view, opening the view if it is not up; or stop."""
     wanted = highlight.asked(command)
@@ -4075,6 +4089,7 @@ _SOCIAL_REPLIES = {intent: kind for kind, intent in _SOCIAL_INTENTS.items()}
 # itself, and "initiate stream protocol" is not a request for Agent Mode.
 _SETTLED_HERE = frozenset({"protocol", "file_hologram", "house", "house_question", "camera_picture", "camera_close",
                            "camera_grid", "camera_detections", "camera_alerts", "camera_highlight",
+                           "camera_sighting",
                            "voice_switch", "open_sandbox", "close_sandbox",
                            "sensor_history", "tradingview", "dex_scan", "dex_scan_hide"})
 
@@ -4160,6 +4175,11 @@ def _fast_path(command):
     # Its close, by the same names, first: "close my room cam" is the panel, never a program to quit.
     if cameras.dismissed(command) or cameras.all_dismissed(command):
         return _blank_result("camera_close")
+
+    # What a camera kept when someone came into view: "show me the last sighting", "keep the last
+    # sighting" (actions/sightings.py).
+    if sightings.asked(command):
+        return _blank_result("camera_sighting")
 
     # Boxes over a camera's live view: "highlight the bottle", "highlight what you see", "stop
     # highlighting". Before what a camera has detected, so "highlight someone on the house cam" boxes
@@ -6285,6 +6305,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "camera_highlight":
         return _query(intent, lambda: _camera_highlight(command))
+
+    if intent == "camera_sighting":
+        return _query(intent, lambda: _camera_sighting(command))
 
     if intent == "voice_switch":
         return _query(intent, lambda: _switch_voice(command))

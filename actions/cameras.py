@@ -168,6 +168,13 @@ def store(name, data):
     return None
 
 
+def frames_since(name, after):
+    """[(time taken, jpeg)] from [name] taken after [after] (time.monotonic()), oldest first, of the last
+    HISTORY_SECONDS."""
+    with _lock:
+        return [frame for frame in _history.get(_name(name), ()) if frame[0] > after]
+
+
 def frame_at(name, when):
     """The picture from [name] taken nearest [when] (time.monotonic()) in the last HISTORY_SECONDS, or
     None."""
