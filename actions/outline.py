@@ -126,13 +126,14 @@ def embed(rgb):
     return {"embedding": embedding, "scale": scale, "size": (height, width)}
 
 
-def mask(view, box):
+def mask(view, box, inside=None):
     """The thing in [box] (0 to 1 across and down) of the picture [view] was made from: a boolean array
-    the picture's size, or None (no model, or not sure enough of its shape: judge)."""
-    return scored(view, box)[0]
+    the picture's size, or None (no model, or not sure enough of its shape: judge). [inside], a point
+    (0 to 1) known to be on the thing -- a person's face -- helps SAM keep that part."""
+    return scored(view, box, inside)[0]
 
 
-def scored(view, box):
+def scored(view, box, inside=None):
     """(mask, steady, fits its box) as mask() and judge() make them; (None, 0, 0) without the model."""
     sessions = _load()
 
@@ -141,11 +142,19 @@ def scored(view, box):
 
     height, width = view["size"]
     x1, y1, x2, y2 = box
-    corners = np.array([[[x1 * width, y1 * height], [x2 * width, y2 * height], [0.0, 0.0]]],
-                       dtype=np.float32) * np.array([view["scale"], view["scale"]], dtype=np.float32)
-    corners[0, 2] = 0.0
+
+    # SAM's prompt: the box's corners (labels 2 and 3), and a point on the thing first (label 1) when
+    # one is known; with no point, a padding point (label -1), as SAM's own ONNX example does.
+    if inside is not None:
+        points = [[inside[0] * width, inside[1] * height], [x1 * width, y1 * height], [x2 * width, y2 * height]]
+        labels = [1, 2, 3]
+    else:
+        points = [[x1 * width, y1 * height], [x2 * width, y2 * height], [0.0, 0.0]]
+        labels = [2, 3, -1]
+
+    corners = np.array([points], dtype=np.float32) * np.float32(view["scale"])
     feeds = {"image_embeddings": view["embedding"], "point_coords": corners,
-             "point_labels": np.array([[2, 3, -1]], dtype=np.float32),
+             "point_labels": np.array([labels], dtype=np.float32),
              "mask_input": np.zeros((1, 1, 256, 256), dtype=np.float32),
              "has_mask_input": np.zeros(1, dtype=np.float32),
              "orig_im_size": np.array([height, width], dtype=np.float32)}

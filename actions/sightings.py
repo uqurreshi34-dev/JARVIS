@@ -36,7 +36,7 @@ import time
 from datetime import datetime, timedelta
 from io import BytesIO
 
-from actions import cameras, detections, files, outline
+from actions import cameras, detections, faces, files, outline
 
 FOLDER = "sightings"
 LOG_FILE = "sightings-log.txt"
@@ -76,6 +76,13 @@ TICK_SECONDS = 0.5
 # sharp, 300 to 430 dark, 15 to 45 blurred by moving 6 to 12 pixels. Weighed as s / (s + SHARP_HALF):
 # a sharp picture keeps nearly all its worth, a blurred one under a third.
 SHARP_HALF = 100.0
+
+# A person's box for cutting them out, made from their face in the best picture itself (the board's
+# boxes are from looks seconds apart, and someone moving is elsewhere by then): this many face widths
+# either side of the face, from just above it to eight faces below, tightest first. On the house cam's
+# dark pictures (21 October 2026) a wider box took in the dark door behind him and SAM was as sure of
+# that; 1.3 cut off his arms. The first SAM is sure of is kept.
+BODY_FACE_WIDTHS = (1.5, 1.8, 2.2)
 
 # A look's boxes are matched with a kept picture taken within this of the look.
 FRAME_MATCH_SECONDS = 1.0
@@ -353,6 +360,13 @@ def _end(sighting):
     path = sighting["folder"]
     made = []
 
+    # The picture showing their face best, from every one kept, when the face model is there.
+    if faces.present():
+        by_face = _best_face(sighting)
+
+        if by_face is not None:
+            sighting["best"] = by_face
+
     # No look of its own matched a kept picture -- the one look that saw them came before the camera
     # began streaming (21 October 2026: a 14 s sighting with no best picture) -- so a picture near a look
     # or a report of what the board was sure of, then the nearest; its distance in time in the record
@@ -406,6 +420,46 @@ def _end(sighting):
     sweep()
 
 
+def _best_face(sighting):
+    """The best picture of someone's face among a sighting's kept pictures (faces.worth), as
+    sighting["best"] is kept, or None if no face was found in any."""
+    best = None
+
+    for frame in sighting["frames"]:
+        try:
+            with open(os.path.join(sighting["folder"], frame["file"]), "rb") as kept:
+                rgb = outline.picture(kept.read())
+        except OSError:
+            continue
+
+        if rgb is None:
+            continue
+
+        height, width = rgb.shape[:2]
+
+        for face in faces.detect(rgb):
+            worth = faces.worth(rgb, face)
+
+            if worth > 0 and (best is None or worth > best["worth"]):
+                x1, y1, x2, y2 = face["box"]
+                best = {"file": frame["file"], "at": frame["at"], "label": "person", "chosen_by": "face",
+                        "score": round(face["score"], 3), "worth": worth,
+                        "box": [round(x1 / width, 4), round(y1 / height, 4), round(x2 / width, 4),
+                                round(y2 / height, 4)],
+                        "face": {"facing": round(faces.facing(face), 2),
+                                 "sharpness": round(faces.sharpness(rgb, face["box"]), 3)}}
+
+    return best
+
+
+def _bodies(face_box):
+    """Boxes (0 to 1) for the person whose face is [face_box] (0 to 1), tightest first (BODY_FACE_WIDTHS)."""
+    x1, y1, x2, y2 = face_box
+    across, down, middle = x2 - x1, y2 - y1, (x1 + x2) / 2
+    return [(max(0.0, middle - k * across), max(0.0, y1 - 0.3 * down), min(1.0, middle + k * across),
+             min(1.0, y1 + 8 * down)) for k in BODY_FACE_WIDTHS]
+
+
 def _cut_out(path, jpeg, best):
     """The person alone from [jpeg]: [(file, bytes)] written to [path]."""
     rgb = outline.picture(jpeg)
@@ -417,7 +471,21 @@ def _cut_out(path, jpeg, best):
 
     if outline.present():
         view = outline.embed(rgb)
-        found = outline.mask(view, best["box"]) if view is not None else None
+
+        if view is not None and best.get("chosen_by") == "face":
+            # Their face in this very picture: a body box made from it, tightest first, the face
+            # itself given to SAM as a point on them -- it was 0.23 steady from the box alone, 0.90 with.
+            x1, y1, x2, y2 = best["box"]
+            face_middle = ((x1 + x2) / 2, (y1 + y2) / 2)
+
+            for body in _bodies(best["box"]):
+                found = outline.mask(view, body, inside=face_middle)
+
+                if found is not None:
+                    best["body"] = [round(v, 4) for v in body]
+                    break
+        elif view is not None:
+            found = outline.mask(view, best["box"])
 
     out = BytesIO()
 
@@ -428,7 +496,7 @@ def _cut_out(path, jpeg, best):
         from PIL import Image
 
         height, width = rgb.shape[:2]
-        x1, y1, x2, y2 = best["box"]
+        x1, y1, x2, y2 = _bodies(best["box"])[1] if best.get("chosen_by") == "face" else best["box"]
         box = (int(x1 * width), int(y1 * height), max(int(x2 * width), int(x1 * width) + 1),
                max(int(y2 * height), int(y1 * height) + 1))
         Image.fromarray(rgb).crop(box).save(out, "JPEG", quality=95)

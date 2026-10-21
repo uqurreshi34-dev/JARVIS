@@ -686,12 +686,19 @@ each -- whether or not the camera alerts are muted:
 
 - `frame-0001.jpg` ...: the camera's own pictures, five a second, untouched (what
   police ask for: the original format, nothing re-encoded or drawn on)
-- `best.jpg`: the best of them (the most of the person, sharpest, surest)
-- `best-cutout.png`: the person alone, when the outline model is sure; else
-  `best-crop.jpg`, their box. For you to look at: the frames are the evidence
+- `best.jpg`: the best of them -- with the face model, the picture showing their
+  face best of all kept (found, turned to the camera, large, sharp); without it,
+  from the board's looks (the most of the person, sharpest, surest)
+- `best-cutout.png`: the person alone, when the outline model is sure (with a face,
+  cut out from a body box made from it); else `best-crop.jpg`, their box. For you
+  to look at: the frames are the evidence
 - `sighting.json`: times (your PC's clock, with its UTC offset), what each look
   saw, and every file's SHA-256, so a change to any of them shows
 - `index.html`: plays the pictures in any browser
+
+The face model, once: `python tools/face_model.py` (YuNet, MIT, 227 KB, into
+models/faces, kept out of git), then restart JARVIS. It finds faces only; it
+never recognises anyone.
 
 `sightings-log.txt` says when each was made, kept, viewed and deleted. Sightings are deleted
 after 31 days unless kept, and the oldest not kept go first if all of them pass

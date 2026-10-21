@@ -42,3 +42,5 @@ gold-backtest-trades.csv
 .venv-mev/
 # The outline model (MobileSAM as ONNX, 44 MB): made by tools/sam_export.py, never kept in git.
 models/mobile_sam/
+# The face model (YuNet, 227 KB): fetched by tools/face_model.py, never kept in git.
+models/faces/

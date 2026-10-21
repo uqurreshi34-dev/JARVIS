@@ -45,7 +45,7 @@ for _name in ("win32api", "win32con", "win32gui", "win32process", "win32event", 
 
 from PIL import Image, ImageFilter  # noqa: E402
 
-from actions import cameras, detections, outline, sensors, sightings  # noqa: E402
+from actions import cameras, detections, faces, outline, sensors, sightings  # noqa: E402
 
 RESULTS = []
 
@@ -123,6 +123,9 @@ base = Path(home) / sightings.FOLDER
 real_model_dir = outline.MODEL_DIR
 outline.MODEL_DIR = Path(home) / "no-outline-model"
 outline.forget()
+real_face_dir = faces.MODEL_DIR
+faces.MODEL_DIR = Path(home) / "no-face-model"
+faces.forget()
 
 # ---- the best picture ---------------------------------------------------------------------------------------
 
@@ -272,6 +275,57 @@ check(only_record["best"] is not None and only_record["best"]["seconds_from_look
       "with no picture near the one look that saw them, the nearest, and how far from it in time "
       f"({(only_record['best'] or {}).get('seconds_from_look')} s)")
 
+# ---- with the face model: the picture showing their face best, of all kept (21 October 2026) -----------------
+
+reset()
+FRONT = outline.picture(SHARP)
+FACE_BOX = (290.0, 75.0, 350.0, 150.0)
+
+
+def stand_in_faces(rgb):
+    """A face looking at the camera in the sharp picture; one turned away in the blurred one."""
+    if np.array_equal(rgb, FRONT):
+        return [{"score": 0.85, "box": FACE_BOX, "points": [(305, 100), (335, 100), (320, 115), (308, 135), (332, 135)]}]
+    return [{"score": 0.8, "box": FACE_BOX, "points": [(305, 100), (335, 100), (340, 115), (308, 135), (332, 135)]}]
+
+
+asked_inside = []
+real_faces = {name: getattr(faces, name) for name in ("present", "detect")}
+real_outline = {name: getattr(outline, name) for name in ("present", "embed", "mask")}
+faces.present, faces.detect = (lambda: True), stand_in_faces
+outline.present, outline.embed = (lambda: True), (lambda rgb: {"size": rgb.shape[:2]})
+outline.mask = lambda view, box, inside=None: asked_inside.append((box, inside)) or FIGURE.copy()
+
+try:
+    detections.record("house cam", {"name": "house cam", "objects": [person()]})
+    cameras.store("house cam", BLURRED)                 # the only look sees them turned away, blurred ...
+    time.sleep(0.15)
+    detections.take_marks("house cam", {"objects": [person()], "now": [person()]})
+    time.sleep(0.4)
+    cameras.store("house cam", SHARP)                   # ... and between looks they face the camera, sharp
+    time.sleep(0.4)
+    cameras.store("house cam", BLURRED)
+    time.sleep(0.2)
+    detections.take_marks("house cam", {"objects": [], "now": []})
+    wait_until(written, 8)
+finally:
+    for name, function in real_faces.items():
+        setattr(faces, name, function)
+
+    for name, function in real_outline.items():
+        setattr(outline, name, function)
+
+face_path, face_record = sightings.newest()
+check((Path(face_path) / "best.jpg").read_bytes() == SHARP and face_record["best"]["chosen_by"] == "face"
+      and face_record["best"]["face"]["facing"] > 0.9,
+      "the best picture shows their face best, of every picture kept, not only those the looks were made from")
+middle = ((FACE_BOX[0] + FACE_BOX[2]) / 2 / 640, (FACE_BOX[1] + FACE_BOX[3]) / 2 / 480)
+check(asked_inside and np.allclose(asked_inside[0][1], middle, atol=1e-3) and asked_inside[0][0][0] < FACE_BOX[0] / 640
+      and asked_inside[0][0][3] > FACE_BOX[3] / 480 and face_record["best"]["body"] == [round(v, 4) for v in
+                                                                                       asked_inside[0][0]],
+      "cut out with a body box made from their face, the face given as a point on them")
+check((Path(face_path) / "best-cutout.png").is_file(), "and the cut-out kept")
+
 # ---- with the outline model sure of them (a stand-in) ------------------------------------------------------
 
 reset()
@@ -367,6 +421,8 @@ if commands is not None:
 
 outline.MODEL_DIR = real_model_dir
 outline.forget()
+faces.MODEL_DIR = real_face_dir
+faces.forget()
 sightings.forget()
 detections.forget()
 cameras.forget()

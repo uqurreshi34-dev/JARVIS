@@ -1825,14 +1825,23 @@ When the house cam sees a person, JARVIS holds a lease on its live view
 (as the phone does, without opening the panel) and keeps what it sees
 until they have been gone ten seconds, two minutes at most, in
 `~/JARVIS/sightings/<camera>-<time>/`: the camera's own JPEGs untouched
-(five a second; the native format police ask for), `best.jpg` (the most of
-the person, sharpest, surest), the person cut out of it when SAM is sure,
+(five a second; the native format police ask for), `best.jpg`, the person
+cut out of it when SAM is sure,
 `sighting.json` (times with their UTC offset, each look, every file's
 SHA-256) and an `index.html` that plays them. `sightings-log.txt` says
 what was made, viewed, kept and deleted. Deleted after 31 days unless
 kept, the oldest first past 5 GB; made whether or not the alerts are
 muted; no faces recognised or stored. "Show me the last sighting", "keep
 the last sighting". `tools/test_sightings.py`.
+
+The best picture is the one showing a face best, of every picture kept:
+YuNet (`actions/faces.py`, MIT, `models/faces` by `tools/face_model.py`)
+finds faces and their eyes, nose and mouth; a face counts by how sure it
+is, how squarely it faces the camera (the nose midway between the eyes),
+its size and its sharpness measured apart from brightness. The person is
+cut out with a body box made from that face, tightest first, the face
+given to SAM as a point on them. Without the face model, the best is
+chosen from the board's own looks. `tools/test_faces.py`.
 
 ### When the HUD freezes - `stall_watch.py`
 The HUD froze for a second or two at start-up, and the console said
@@ -2556,6 +2565,15 @@ of what it is sure of keeps a person for a look after they were last seen,
 with that look's box; paired with the picture of the report's own time, the
 best shot of a sighting was the door he had just walked away from. Best
 shots come from a look's own boxes; reports only when no look has one.
+
+**The best picture of someone is the best of their face.** Chosen from
+the board's looks (one every three seconds or so) by the size, sureness and
+sharpness of the whole person, the best of a 30 s sighting was a blurred
+frame with his head turned, from 5 of 116 pictures; frames with him facing
+the camera went unscored. Scored by face over every picture, it was the
+frame he picked himself. A box from the board's look, a second or more
+away, cut the dark door out with him; one from his face in that picture
+did not (SAM 0.23 steady from the box alone, 0.90 with the face as a point).
 
 **A test that races the clock fails on a slower machine.** test_sightings
 gave a sighting 2.5 s to end itself; on GitHub's runner it took longer.
