@@ -1843,7 +1843,8 @@ cut out with a body box made from that face, tightest first, the face
 given to SAM as a point on them. Without the face model, the best is
 chosen from the board's own looks. `tools/test_faces.py`.
 
-Stills. Live view is 640 x 480; the house cam's OV3660 takes 2048 x 1536.
+Stills. Live view is 640 x 480; the house cam's OV2640 takes 1600 x 1200
+(an OV3660, 2048 x 1536).
 A sighting asks for a still as it begins and every ten seconds
 (`"still"` in the answer to `/camera/wanted`; a stream is ended for one, as
 for a look, since a streaming board asks nothing). The board sets the
@@ -1851,7 +1852,8 @@ sensor to the still's size, lets two frames go while it settles, sends one
 to `POST /camera/still`, and goes back to VGA. The camera's picture
 buffers are sized when it starts (width x height / 5 each), so the board
 takes the detection model's memory first, then starts the camera at the
-largest still size that leaves 512 KB of PSRAM, and drops to VGA at once;
+largest still size that leaves 512 KB of PSRAM (as the sensor takes it:
+an OV2640 asked for 2048 x 1536 is given 1600 x 1200), then VGA at once;
 the console says which (`[jarvis] stills: 2048 x 1536; ... bytes of PSRAM
 left`). If none fits, no stills, and all else as before. Stills compete
 for the best picture: the same sharpness with three times the pixels.
@@ -2567,11 +2569,18 @@ DOWNLOAD_BOOT ... waiting for download"), silent to JARVIS until RST.
 Name the port when two boards are plugged in (`--upload-port COM7`).
 
 **A dark picture is a camera setting before it is a lamp.** In a lit
-room the house cam's pictures averaged 15 to 23 of 255: its OV3660 was at
-its limits, an exposure no longer than a frame and 15.5x gain, short of
-the 40 to 48 it aims for. Night mode (aec2) and a 31x gain ceiling are
-set at start-up. Darkness also cost detection: a person was seen in 4 of
-12 looks, at 0.43 to 0.57.
+room the house cam's pictures averaged 15 to 23 of 255. The fix was first
+written for an OV3660 (night mode, 31x gain), assumed to be the house
+cam's; its console later said `camera: OV2640`, which the fix had not
+touched -- and the camera driver caps an OV2640's gain at 2x as it starts.
+The OV2640 now gets aec2 and 16x. Check which sensor a board has (its
+console says) before tuning it. Darkness also cost detection: a person
+was seen in 4 of 12 looks, at 0.43 to 0.57.
+
+**A camera asked for more than it has is quietly given its most.** The
+board asked for 2048 x 1536 stills; the OV2640 tops out at 1600 x 1200 and
+the driver gave it that without an error, while the board believed 2048.
+It now reads back the size the camera took.
 
 **A box is only true for the picture it was found in.** The board's report
 of what it is sure of keeps a person for a look after they were last seen,

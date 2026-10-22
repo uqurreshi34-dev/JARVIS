@@ -473,6 +473,8 @@ void sendPicture() {
 
 // The OV3660's highest gain, in sixteenths: 0x1F0 is 31x (see startCamera).
 static const int OV3660_GAIN_CEILING = 0x1F0;
+// The OV2640's highest gain (see startCamera); the camera driver sets 2x.
+static const gainceiling_t OV2640_GAIN_CEILING = GAINCEILING_16X;
 
 
 bool startCamera() {
@@ -540,12 +542,20 @@ bool startCamera() {
       }
 
       if (ESP.getFreePsram() >= STILL_PSRAM_SPARE) {
+        // The size the camera really took: asked for more than its sensor's largest, the driver quietly
+        // gives it its largest (the house cam's OV2640: 1600 x 1200, though asked for 2048 x 1536, 22
+        // October 2026), and a still asked of it at the larger would be no picture at all.
         sensor_t *sized = esp_camera_sensor_get();
-        stillSize = size;
+        framesize_t taken = sized->status.framesize;
         sized->set_framesize(sized, FRAMESIZE_VGA);
         problem = ESP_OK;
-        Serial.printf("[jarvis] stills: %d x %d; %u bytes of PSRAM left\n", resolution[size].width,
-                      resolution[size].height, (unsigned)ESP.getFreePsram());
+
+        if (taken > FRAMESIZE_VGA && taken < FRAMESIZE_INVALID) {
+          stillSize = taken;
+          Serial.printf("[jarvis] stills: %d x %d; %u bytes of PSRAM left\n", resolution[taken].width,
+                        resolution[taken].height, (unsigned)ESP.getFreePsram());
+        }
+
         break;
       }
 
@@ -555,7 +565,7 @@ bool startCamera() {
     config.frame_size = FRAMESIZE_VGA;
   }
 
-  if (stillSize == FRAMESIZE_INVALID)
+  if (problem != ESP_OK)
 #endif
   problem = esp_camera_init(&config);
 
@@ -575,7 +585,8 @@ bool startCamera() {
     sensor->set_brightness(sensor, 1);
     sensor->set_saturation(sensor, -2);
     // Dark indoors: in a lamp-lit room the house cam's pictures averaged 15 to 23 of 255, most of each
-    // under 20 (21 October 2026), short of the 40 to 48 its own exposure aims for -- held back by an
+    // under 20 (21 October 2026) -- the house cam turned out to be an OV2640 (below), but an OV3660 is
+    // as short of the 40 to 48 its own exposure aims for in dim light, held back by an
     // exposure no longer than one frame and a gain of at most 15.5x. Night mode lets the exposure run
     // past a frame when it must (fewer frames a second in the dark, none fewer in daylight), and the
     // gain may go to 31x (0x1F0, in sixteenths; the driver's default 0xF8). A board without them
@@ -584,6 +595,12 @@ bool startCamera() {
     sensor->set_gainceiling(sensor, (gainceiling_t)OV3660_GAIN_CEILING);
     Serial.println("[jarvis] camera: OV3660");
   } else if (sensor && sensor->id.PID == OV2640_PID) {
+    // Dark indoors, as the OV3660: the house cam is an OV2640 (22 October 2026), whose pictures in a
+    // lamp-lit room averaged 15 to 23 of 255 -- and the camera driver caps an OV2640's gain at 2x as it
+    // starts. Its gain may go to 16x, about the OV3660's own default, and its exposure is measured by its
+    // DSP (aec2), which holds up better in dim light. In daylight its exposure keeps the gain low.
+    sensor->set_aec2(sensor, 1);
+    sensor->set_gainceiling(sensor, OV2640_GAIN_CEILING);
     Serial.println("[jarvis] camera: OV2640");
   } else if (sensor) {
     Serial.printf("[jarvis] camera: sensor 0x%x\n", sensor->id.PID);

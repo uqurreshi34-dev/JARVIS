@@ -686,7 +686,7 @@ each -- whether or not the camera alerts are muted:
 
 - `frame-0001.jpg` ...: the camera's own pictures, five a second, untouched (what
   police ask for: the original format, nothing re-encoded or drawn on)
-- `still-01.jpg` ...: larger pictures (the house cam's 2048 x 1536), asked for as
+- `still-01.jpg` ...: larger pictures (the house cam's 1600 x 1200), asked for as
   it begins and every 10 seconds: a face three times as many pixels across
 - `best.jpg`: the best of them (frames and stills) -- with the face model, the picture showing their
   face best of all kept (found, turned to the camera, large, sharp); without it,
@@ -712,9 +712,10 @@ are recognised or stored.
 | show me the last sighting | its best picture on the panel, and when it was (**free**) |
 | keep the last sighting / keep that sighting | never deleted |
 
-In the dark, the house cam (and any OV3660 camera) keeps its shutter open
-longer and turns its gain up further, so it sees more at the cost of fewer
-frames a second; daylight is as before. Reflash it after updating the sketch.
+In the dark, both cameras turn their gain up further (the house cam's OV2640
+to 16x, from the 2x it started with; an OV3660 to 31x, and it may keep its
+shutter open longer, for fewer frames a second); daylight is as before.
+Reflash after updating the sketch.
 
 `JARVIS_SIGHTING_LABELS` (default `person`), `JARVIS_SIGHTING_QUIET` (seconds,
 default 10), `JARVIS_SIGHTING_DAYS` (default 31) and `JARVIS_SIGHTING_MAX_GB`

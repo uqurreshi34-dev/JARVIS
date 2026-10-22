@@ -6,7 +6,7 @@ desk's panel is not opened) and keeps, in its own folder under JARVIS's sighting
 
     frame-0001.jpg ...   the camera's own pictures, as it sent them: never re-encoded, cropped or drawn on,
                          at most FPS a second -- the "native format" UK police ask for
-    still-01.jpg ...     larger pictures (the house cam's 2048 x 1536) asked for as it begins and every
+    still-01.jpg ...     larger pictures (the house cam's 1600 x 1200) asked for as it begins and every
                          STILL_EVERY_SECONDS, as the camera sent them
     best.jpg             the best picture of the person: a copy of one of those frames or stills
     best-cutout.png      the person alone, cut out (actions/outline.py), when the model is sure of the
@@ -79,10 +79,10 @@ TICK_SECONDS = 0.5
 # a sharp picture keeps nearly all its worth, a blurred one under a third.
 SHARP_HALF = 100.0
 
-# A still -- a picture larger than live view's, from a board that can take one (the house cam: up to
-# 2048 x 1536, against live view's 640 x 480) -- is asked for when a sighting begins and every this many
+# A still -- a picture larger than live view's, from a board that can take one (the house cam: 1600 x
+# 1200, against live view's 640 x 480) -- is asked for when a sighting begins and every this many
 # seconds while it lasts. Each costs a second or two of live view (the board stops streaming to take it),
-# and a face in one is three times as many pixels across: what makes someone known again.
+# and a face in one is two and a half times as many pixels across: what makes someone known again.
 STILL_EVERY_SECONDS = 10.0
 
 # A person's box for cutting them out, made from their face in the best picture itself (the board's

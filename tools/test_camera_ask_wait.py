@@ -206,6 +206,12 @@ check(setup.index("reserveDetection();") < setup.index("cameraReady = startCamer
 check("STILL_SIZES[] = {FRAMESIZE_QXGA, FRAMESIZE_UXGA, FRAMESIZE_SXGA}" in sketch
       and "ESP.getFreePsram() >= STILL_PSRAM_SPARE" in sketch and "set_framesize(sized, FRAMESIZE_VGA)" in sketch,
       "and starts the camera at the largest still size its memory allows, then VGA")
+check("framesize_t taken = sized->status.framesize;" in sketch and "stillSize = taken;" in sketch,
+      "the still size is the one the camera took, not the one asked for (an OV2640 is given its 1600 x 1200)")
+ov2640 = sketch[sketch.index("OV2640_PID) {"):sketch.index('Serial.println("[jarvis] camera: OV2640")')]
+check("set_aec2(sensor, 1)" in ov2640 and "set_gainceiling(sensor, OV2640_GAIN_CEILING)" in ov2640
+      and "OV2640_GAIN_CEILING = GAINCEILING_16X" in sketch,
+      "the OV2640 (the house cam) gains up to 16x in the dark, not the driver's 2x")
 still = sketch[sketch.index("void takeStill()"):sketch.index("void sendPicture()")]
 check('post("/camera/still"' in still and "set_framesize(sensor, FRAMESIZE_VGA)" in still
       and "STILL_SETTLE_FRAMES" in still, "a still: the size changed, settled, sent, and set back")
