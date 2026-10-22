@@ -1829,7 +1829,9 @@ until they have been gone ten seconds, two minutes at most, in
 cut out of it when SAM is sure,
 `sighting.json` (times with their UTC offset, each look, every file's
 SHA-256) and an `index.html` that plays them. `sightings-log.txt` says
-what was made, viewed, kept and deleted. Deleted after 31 days unless
+what was made, viewed, kept and deleted. One JARVIS was closed during is
+finished when it next starts (`finish_unfinished`), its times from when
+its pictures were saved, its best by face only (no looks were recorded). Deleted after 31 days unless
 kept, the oldest first past 5 GB; made whether or not the alerts are
 muted; no faces recognised or stored. "Show me the last sighting", "keep
 the last sighting". `tools/test_sightings.py`.
@@ -2646,6 +2648,13 @@ board could not reach it for about 10 s with him standing in view: the
 sighting ended at 12 s with 5 pictures, and a second began when the
 looks came back. Now only a look that saw nobody starts the 10 s; no
 looks at all end one only after 40 s.
+
+**Evidence must survive JARVIS closing.** A sighting's record, best
+picture and player were written only when it ended, so two sightings
+JARVIS was closed during kept their pictures and nothing else -- and,
+with no record, would never have been deleted either. Now JARVIS
+finishes them when it next starts. Finishing at start covers closing,
+a crash and a power cut alike, and closing is not held up.
 
 **A test that races the clock fails on a slower machine.** test_sightings
 gave a sighting 2.5 s to end itself; on GitHub's runner it took longer.

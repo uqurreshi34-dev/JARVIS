@@ -706,6 +706,10 @@ The face model, once: `python tools/face_model.py` (YuNet, MIT, 227 KB, into
 models/faces, kept out of git), then restart JARVIS. It finds faces only; it
 never recognises anyone.
 
+If you close JARVIS while a sighting is being made, its pictures stay, and the next time
+JARVIS starts it finishes it (best picture, `sighting.json`, `index.html`), with times from
+when each picture was saved; the log says "finished".
+
 `sightings-log.txt` says when each was made, kept, viewed and deleted. Sightings are deleted
 after 31 days unless kept, and the oldest not kept go first if all of them pass
 5 GB (a camera facing a street sees many people go by, a few MB each). No faces

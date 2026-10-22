@@ -13,13 +13,16 @@ its live stream stores them. Checked:
   cut out of it when the outline model is sure, else what is in their box;
 - it ends when the person has been gone QUIET_SECONDS (a look saw nobody), or no looks came for
   SILENT_MORE_SECONDS more, or after MAX_SECONDS whatever;
+- one JARVIS was closed during is finished when it next starts, its times from its pictures;
 - sightings-log.txt says each begun, ended, kept, viewed and deleted; old sightings are deleted, kept ones not;
 - "keep the last sighting", "show me the last sighting": asked how people say it, and through commands.
 """
 
+import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import time
 from datetime import datetime, timedelta
@@ -534,6 +537,35 @@ if phone is not None:
     page = phone.PAGE
     check("function openSighting" in page and "if (data.sighting) {" in page and 'id="feed-close"' in page,
           "the phone's page shows it full screen, with the cross that closes a camera")
+
+# ---- a sighting JARVIS was closed during is finished when it next starts ------------------------------------
+
+reset()
+left = base / "house-cam-2026-10-20-101010"
+left.mkdir(parents=True)
+(left / "frame-0001.jpg").write_bytes(SHARP)
+(left / "frame-0002.jpg").write_bytes(BLURRED)
+saved_at = time.time() - 3600
+os.utime(left / "frame-0001.jpg", (saved_at, saved_at))
+os.utime(left / "frame-0002.jpg", (saved_at + 4, saved_at + 4))
+os.utime(left, (saved_at + 4, saved_at + 4))
+being_made = base / "house-cam-2026-10-22-235959"          # made since JARVIS started: not touched
+being_made.mkdir()
+(being_made / "frame-0001.jpg").write_bytes(SHARP)
+check(sightings.finish_unfinished() == 1, "a sighting left unfinished by JARVIS closing is finished, once")
+record = json.loads((left / sightings.RECORD_FILE).read_text(encoding="utf-8"))
+check([frame["file"] for frame in record["frames"]] == ["frame-0001.jpg", "frame-0002.jpg"]
+      and record["frames"][0]["sha256"] == hashlib.sha256(SHARP).hexdigest()
+      and (left / "index.html").is_file(),
+      "its record (every picture's SHA-256) and its player written")
+check(record["seconds"] == 4.0 and record["camera"] == "house cam" and "closed" in record["finished_late"],
+      f"its times from when its pictures were saved, and the record says so ({record['seconds']} s)")
+check("finished  house-cam-2026-10-20-101010" in (base / sightings.LOG_FILE).read_text(encoding="utf-8"),
+      "the log says it was finished")
+check(not (being_made / sightings.RECORD_FILE).exists() and sightings.finish_unfinished() == 0,
+      "one made since JARVIS started is left alone, and nothing is finished twice")
+shutil.rmtree(left)
+shutil.rmtree(being_made)
 
 # ---- no looks is not gone (22 October 2026: JARVIS just started, the board could not reach it) ---------------
 

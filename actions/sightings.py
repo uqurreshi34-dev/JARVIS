@@ -17,7 +17,8 @@ folder:
                          what each look saw, and every file's SHA-256, so any later change to one shows
     index.html           the frames played in order, in any browser, with nothing to install
 
-Each sighting begun, ended, kept, viewed or deleted is a line in the folder's sightings-log.txt. A
+Each sighting begun, ended, kept, viewed or deleted is a line in the folder's sightings-log.txt. One
+JARVIS was closed during is finished when it next starts (finish_unfinished), from its pictures. A
 sighting is deleted after KEEP_DAYS unless kept ("keep the last sighting"), and the oldest not kept go first when all of them
 pass MAX_GB. Sightings are made whether or not the camera
 alerts are muted: muting stops JARVIS saying so, not keeping the evidence.
@@ -120,11 +121,17 @@ _lock = threading.Lock()
 _open = {}          # camera -> the sighting being made
 _last = None        # folder of the newest sighting ended this run, for "the last sighting"
 _worker = None
+_STARTED = time.time()   # folders older than this, with no record, were left by a JARVIS since closed
 
 
 def _now_text(monotonic=None):
     """The PC's local time, with its offset from UTC, of [monotonic] (time.monotonic()), or now."""
     wall = time.time() - (time.monotonic() - monotonic if monotonic is not None else 0.0)
+    return _wall_text(wall)
+
+
+def _wall_text(wall):
+    """The PC's local time, with its offset from UTC, of [wall] (time.time())."""
     return datetime.fromtimestamp(wall).astimezone().isoformat(timespec="milliseconds")
 
 
@@ -482,8 +489,8 @@ def _end(sighting):
     record = {
         "camera": sighting["camera"],
         "began": sighting["began_text"],
-        "ended": _now_text(ended),
-        "seconds": round(ended - sighting["began"], 1),
+        "ended": sighting.get("ended_text") or _now_text(ended),
+        "seconds": sighting.get("seconds", round(ended - sighting["began"], 1)),
         "kept": False,
         "clock": "this PC's own clock, local time with its offset from UTC",
         "frames": sighting["frames"],
@@ -494,6 +501,9 @@ def _end(sighting):
         "looks": sighting["looks"],
     }
 
+    if sighting.get("finished_late"):
+        record["finished_late"] = sighting["finished_late"]
+
     try:
         with open(os.path.join(path, RECORD_FILE), "w", encoding="utf-8") as out:
             json.dump(record, out, indent=1)
@@ -503,9 +513,95 @@ def _end(sighting):
     except OSError as error:
         print(f"[JARVIS] sighting: could not write its record: {error}")
 
-    _last = path
-    _log(f"ended  {os.path.basename(path)}  ({len(sighting['frames'])} pictures, {record['seconds']} s)")
-    print(f"[JARVIS] sighting on {sighting['camera']} ended: {len(sighting['frames'])} pictures kept", flush=True)
+    if sighting.get("finished_late"):
+        _log(f"finished  {os.path.basename(path)}  ({len(sighting['frames'])} pictures, {record['seconds']} s;"
+             f" JARVIS was closed before it ended)")
+        print(f"[JARVIS] sighting on {sighting['camera']} finished: {os.path.basename(path)}, left when JARVIS"
+              f" was closed", flush=True)
+    else:
+        _last = path
+        _log(f"ended  {os.path.basename(path)}  ({len(sighting['frames'])} pictures, {record['seconds']} s)")
+        print(f"[JARVIS] sighting on {sighting['camera']} ended: {len(sighting['frames'])} pictures kept",
+              flush=True)
+
+    sweep()
+
+
+_KEPT_PICTURE = re.compile(r"^(?:frame-\d{4}|still-\d{2})\.jpg$")
+
+
+def finish_unfinished():
+    """Finish every sighting JARVIS was closed (or stopped) during: its pictures are there, but not its
+    best picture, record or player (22 October 2026: two closed mid-sighting, never finished -- and,
+    with no record, never deleted either). Each one's times are when its pictures were saved, as the
+    record says. Returns how many."""
+    base = folder(make=False)
+
+    if not base:
+        return 0
+
+    with _lock:
+        making = {os.path.abspath(sighting["folder"]) for sighting in _open.values()}
+
+    done = 0
+
+    for name in sorted(os.listdir(base)):
+        path = os.path.join(base, name)
+
+        try:
+            if (not os.path.isdir(path) or os.path.abspath(path) in making
+                    or os.path.exists(os.path.join(path, RECORD_FILE)) or os.path.getmtime(path) >= _STARTED):
+                continue
+
+            pictures = sorted(file for file in os.listdir(path) if _KEPT_PICTURE.match(file))
+            began = ended = os.path.getmtime(path)
+        except OSError:
+            continue
+
+        frames, stills, saved = [], [], []
+
+        for file in pictures:
+            try:
+                with open(os.path.join(path, file), "rb") as kept:
+                    data = kept.read()
+
+                at = os.path.getmtime(os.path.join(path, file))
+            except OSError:
+                continue
+
+            saved.append(at)
+            (frames if file.startswith("frame-") else stills).append(
+                {"file": file, "at": _wall_text(at), "sha256": _sha256(data)})
+
+        if saved:
+            began, ended = min(saved), max(saved)
+
+        # The folder's name is the camera's, made safe for a file name (_begin): as near as it can be had.
+        camera = re.sub(r"-\d{4}-\d{2}-\d{2}-\d{6}(?:-\d+)?$", "", name).replace("-", " ")
+        sighting = {"camera": camera, "folder": path, "began": time.monotonic(), "began_text": _wall_text(began),
+                    "ended_text": _wall_text(ended), "seconds": round(ended - began, 1),
+                    "finished_late": "JARVIS was closed before this sighting ended; finished when it next"
+                                     " started. Its times are when each picture was saved; no looks are"
+                                     " recorded, so its best picture is chosen by face only.",
+                    "frames": frames, "stills": stills, "looks": [], "candidates": [], "unmatched": [],
+                    "reported": [], "best": None}
+
+        try:
+            _end(sighting)
+            done += 1
+        except Exception as error:   # noqa: BLE001 - one folder must not stop the rest
+            print(f"[JARVIS] could not finish the sighting {name}: {error}")
+
+    return done
+
+
+def _on_start():
+    """Once a start, off the thread that imports this: unfinished sightings finished, old ones deleted."""
+    try:
+        finish_unfinished()
+    except OSError as error:
+        print(f"[JARVIS] could not finish old sightings: {error}")
+
     sweep()
 
 
@@ -824,5 +920,5 @@ def forget():
 detections.add_marks_listener(_seen)
 cameras.set_still_listener(_still)
 
-# Old sightings deleted once a start, off the thread that imports this.
-threading.Thread(target=sweep, name="jarvis-sightings-sweep", daemon=True).start()
+# Unfinished sightings finished, old ones deleted, once a start, off the thread that imports this.
+threading.Thread(target=_on_start, name="jarvis-sightings-sweep", daemon=True).start()
