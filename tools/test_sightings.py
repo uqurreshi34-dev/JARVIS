@@ -326,6 +326,72 @@ check(asked_inside and np.allclose(asked_inside[0][1], middle, atol=1e-3) and as
       "cut out with a body box made from their face, the face given as a point on them")
 check((Path(face_path) / "best-cutout.png").is_file(), "and the cut-out kept")
 
+# ---- stills: asked for as a sighting begins and every STILL_EVERY_SECONDS; the best picture may be one ----
+
+reset()
+# The still: the same scene drawn at twice the size, with twice the detail (finer stripes), as a camera
+# taking a larger picture sees it -- not a frame made bigger, which holds nothing more.
+by, bx = np.mgrid[0:960, 0:1280]
+BIG_FIGURE = ((abs(bx - 640) < 90) & (by > 300) & (by < 920)) | ((bx - 640) ** 2 + (by - 220) ** 2 < 76 ** 2)
+big = np.asarray(Image.fromarray(WALL).resize((1280, 960))).copy()
+big[BIG_FIGURE] = (180, 60, 40)
+big[BIG_FIGURE & ((by // 6) % 2 == 0)] = (240, 220, 200)
+out = io.BytesIO()
+Image.fromarray(big).save(out, "JPEG", quality=90)
+STILL = out.getvalue()
+
+
+def stand_in_faces_still(rgb):
+    """The same face, facing the camera, in a frame and -- twice as many pixels across -- in a still."""
+    k = rgb.shape[1] / 640
+    points = [(305 * k, 100 * k), (335 * k, 100 * k), (320 * k, 115 * k), (308 * k, 135 * k), (332 * k, 135 * k)]
+    return [{"score": 0.85, "box": tuple(v * k for v in FACE_BOX), "points": points}]
+
+
+real_every = sightings.STILL_EVERY_SECONDS
+sightings.STILL_EVERY_SECONDS = 1.0
+real_faces = {name: getattr(faces, name) for name in ("present", "detect")}
+faces.present, faces.detect = (lambda: True), stand_in_faces_still
+
+try:
+    detections.record("house cam", {"name": "house cam", "objects": [person()]})
+    check(cameras.still_wanted("house cam") is not None, "a sighting begins by asking the camera for a still")
+    cameras.still_sent("house cam")
+    cameras.store("house cam", SHARP)
+    time.sleep(0.15)
+    detections.take_marks("house cam", {"objects": [person()], "now": [person()]})
+    check(cameras.take_still("house cam", STILL) is None, "the still is taken")
+    until = time.monotonic() + 4
+    asked_again = False
+
+    while time.monotonic() < until and not asked_again:      # still in view, so the sighting goes on
+        detections.take_marks("house cam", {"objects": [person()], "now": [person()]})
+        asked_again = cameras.still_wanted("house cam") is not None
+        time.sleep(0.2)
+
+    check(asked_again, "and another asked for every STILL_EVERY_SECONDS while it lasts")
+    cameras.still_sent("house cam")
+    detections.take_marks("house cam", {"objects": [], "now": []})
+    wait_until(written, 8)
+finally:
+    for name, function in real_faces.items():
+        setattr(faces, name, function)
+
+    sightings.STILL_EVERY_SECONDS = real_every
+
+still_path, still_record = sightings.newest()
+check(still_record["stills"] and still_record["stills"][0]["file"] == "still-01.jpg"
+      and (Path(still_path) / "still-01.jpg").read_bytes() == STILL
+      and still_record["stills"][0]["sha256"] == sightings._sha256(STILL)
+      and (still_record["stills"][0]["width"], still_record["stills"][0]["height"]) == (1280, 960),
+      "kept as it came, with its time, size and SHA-256")
+check((Path(still_path) / "best.jpg").read_bytes() == STILL and still_record["best"]["file"] == "still-01.jpg",
+      "the face twice as many pixels across: the still is the best picture")
+check("still-01.jpg" in (Path(still_path) / "index.html").read_text(encoding="utf-8"), "and the page shows it")
+before = len(list(Path(still_path).glob("still-*.jpg")))
+cameras.take_still("house cam", STILL)
+check(len(list(Path(still_path).glob("still-*.jpg"))) == before, "a still after the sighting has ended is not kept")
+
 # ---- with the outline model sure of them (a stand-in) ------------------------------------------------------
 
 reset()

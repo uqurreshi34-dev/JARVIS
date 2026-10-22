@@ -145,6 +145,9 @@ s_sharp, s_dark, s_blur = (faces.sharpness(x, whole) for x in (sharp, dark, blur
 check(abs(s_dark - s_sharp) / s_sharp < 0.25 and s_blur < s_sharp / 2,
       f"sharpness: dark as sharp as bright ({s_dark:.2f} to {s_sharp:.2f}), blurred far less ({s_blur:.2f})")
 check(faces.sharpness(sharp, (5, 5, 6, 6)) == 0.0, "a box of almost nothing has no sharpness")
+enlarged = np.asarray(Image.fromarray(sharp).resize((600, 600), Image.BILINEAR))
+check(faces.sharpness(enlarged, (0, 0, 600, 600)) < s_sharp / 2,
+      "a picture made larger holds nothing more, and measures softer (a still must be truly sharper to win)")
 
 box = (20, 20, 180, 180)
 check(faces.worth(sharp, a_face(100, box) | {"points": [(60, 60), (140, 60), (100, 100), (70, 140), (130, 140)]})

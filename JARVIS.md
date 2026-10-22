@@ -1843,6 +1843,19 @@ cut out with a body box made from that face, tightest first, the face
 given to SAM as a point on them. Without the face model, the best is
 chosen from the board's own looks. `tools/test_faces.py`.
 
+Stills. Live view is 640 x 480; the house cam's OV3660 takes 2048 x 1536.
+A sighting asks for a still as it begins and every ten seconds
+(`"still"` in the answer to `/camera/wanted`; a stream is ended for one, as
+for a look, since a streaming board asks nothing). The board sets the
+sensor to the still's size, lets two frames go while it settles, sends one
+to `POST /camera/still`, and goes back to VGA. The camera's picture
+buffers are sized when it starts (width x height / 5 each), so the board
+takes the detection model's memory first, then starts the camera at the
+largest still size that leaves 512 KB of PSRAM, and drops to VGA at once;
+the console says which (`[jarvis] stills: 2048 x 1536; ... bytes of PSRAM
+left`). If none fits, no stills, and all else as before. Stills compete
+for the best picture: the same sharpness with three times the pixels.
+
 ### When the HUD freezes - `stall_watch.py`
 The HUD froze for a second or two at start-up, and the console said
 nothing. stall_watch keeps a timer beating on the HUD's thread and a
@@ -2574,6 +2587,12 @@ the camera went unscored. Scored by face over every picture, it was the
 frame he picked himself. A box from the board's look, a second or more
 away, cut the dark door out with him; one from his face in that picture
 did not (SAM 0.23 steady from the box alone, 0.90 with the face as a point).
+
+**Measure sharpness where the picture was taken.** Scaling every face to
+one size to compare a still with a frame changed which frame of a sighting
+was best, and any scaling blurs a little, so true stills seemed softer. A
+sharp picture is sharp pixel by pixel at any size; a picture made larger is
+not, which is the difference that matters.
 
 **A test that races the clock fails on a slower machine.** test_sightings
 gave a sighting 2.5 s to end itself; on GitHub's runner it took longer.

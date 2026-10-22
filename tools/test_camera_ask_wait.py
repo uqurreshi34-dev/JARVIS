@@ -67,11 +67,11 @@ if phone is not None:
         return answer.status_code, answer.get_json() or {}, time.monotonic() - started
 
     code, answer, took = ask({"name": "house cam"})
-    check(code == 200 and answer == {"snap": False, "live": False, "look": False} and took < 0.5,
+    check(code == 200 and answer == {"snap": False, "live": False, "look": False, "still": False} and took < 0.5,
           f"without a wait, answered at once, as before ({took:.2f}s)")
 
     code, answer, took = ask({"name": "house cam", "wait": 1})
-    check(answer == {"snap": False, "live": False, "look": False} and 0.9 <= took < 1.8,
+    check(answer == {"snap": False, "live": False, "look": False, "still": False} and 0.9 <= took < 1.8,
           f"with one, nothing wanted: answered when the wait is up ({took:.2f}s)")
     check(cameras.is_camera("house cam") and any(c["name"] == "house cam" and c["online"]
                                                  for c in cameras.cameras()),
@@ -127,6 +127,72 @@ if phone is not None:
     check(heard.get("answer") and heard["answer"][1].get("look") is True and heard["answer"][2] < 1.5,
           "asked what the camera sees, the board waiting on its ask hears it at once")
 
+    # ---- stills: asked of a board that can take one, answered once; a stream ends for one -------------------
+
+    later(0.4, lambda: cameras.want_still("house cam"))
+    code, answer, took = ask({"name": "house cam", "wait": 10})
+    check(answer.get("still") is True and took < 1.5, f"a still asked for is answered at once ({took:.2f}s)")
+    code, answer, took = ask({"name": "house cam"})
+    check(answer.get("still") is False, "and once: the next ask is not asked for it again")
+    real_still_wait = cameras.STILL_WAIT_SECONDS
+    cameras.STILL_WAIT_SECONDS = 0.3
+    cameras.want_still("house cam")
+    time.sleep(0.5)
+    code, answer, took = ask({"name": "house cam"})
+    cameras.STILL_WAIT_SECONDS = real_still_wait
+    check(answer.get("still") is False, "a still not taken in STILL_WAIT_SECONDS (a board that cannot) is let go")
+
+    import io
+    import struct
+
+    class Slow(io.RawIOBase):
+        """A live stream sending a small frame every 0.1 s, for ever."""
+        frame = b"\xff\xd8\xff\xe0" + b"x" * 100
+
+        def __init__(self):
+            self.pending = b""
+
+        def readable(self):
+            return True
+
+        def readinto(self, buffer):
+            if not self.pending:
+                time.sleep(0.1)
+                self.pending = struct.pack(">I", len(self.frame)) + self.frame
+
+            count = min(len(buffer), len(self.pending))
+            buffer[:count] = self.pending[:count]
+            self.pending = self.pending[count:]
+            return count
+
+    cameras.watch("house cam", 30)
+    ended = {}
+    streaming = threading.Thread(target=lambda: ended.update(
+        result=cameras.receive_live("house cam", io.BufferedReader(Slow()))))
+    streaming.start()
+    time.sleep(0.5)
+    cameras.want_still("house cam")
+    streaming.join(5)
+    cameras.stop_watching()
+    check(ended.get("result") and ended["result"][2] == "a still was asked for" and ended["result"][0] > 0,
+          f"a still asked for while the board streams ends the stream, so its next ask hears it ({ended.get('result')})")
+    code, answer, took = ask({"name": "house cam"})
+    check(answer.get("still") is True, "and that ask is told")
+
+    kept = []
+    cameras.set_still_listener(lambda camera, jpeg: kept.append((camera, jpeg)))
+    still_headers = dict(headers, **{"Content-Type": "image/jpeg"})
+    picture = b"\xff\xd8\xff\xe0" + b"s" * 5000
+    check(client.post("/camera/still", data=picture, headers={"X-Jarvis-Camera": "house cam"}).status_code == 403,
+          "/camera/still needs the token")
+    check(client.post("/camera/still", data=b"not a jpeg", headers=still_headers).status_code == 400,
+          "and a JPEG")
+    check(client.post("/camera/still", data=b"\xff\xd8\xff" + b"x" * (cameras.MAX_STILL_BYTES + 1),
+                      headers=still_headers).status_code == 413, "no larger than MAX_STILL_BYTES")
+    check(client.post("/camera/still", data=picture, headers=still_headers).status_code == 200
+          and kept == [("house cam", picture)], "and passes it on as it came")
+    cameras.set_still_listener(None)
+
 # ---- the sketch ---------------------------------------------------------------------------------------------
 
 sketch = (ROOT / "arduino" / "jarvis_camera" / "jarvis_camera.ino").read_text(encoding="utf-8")
@@ -134,6 +200,18 @@ asking = sketch[sketch.index("Wanted pictureWanted()"):sketch.index("// Live vie
 check("ASK_WAIT_SECONDS = 10UL" in sketch and '\\"wait\\":' in asking, "the board asks with a wait")
 check("POST_TIMEOUT_MS + ASK_WAIT_SECONDS * 1000UL" in asking, "and waits for the answer longer than that")
 check(cameras.ASK_WAIT_MAX >= 10, "JARVIS lets it wait that long")
+setup = sketch[sketch.index("void setup()"):sketch.index("void loop()")]
+check(setup.index("reserveDetection();") < setup.index("cameraReady = startCamera();"),
+      "the board takes the model's memory before the camera sizes its buffers")
+check("STILL_SIZES[] = {FRAMESIZE_QXGA, FRAMESIZE_UXGA, FRAMESIZE_SXGA}" in sketch
+      and "ESP.getFreePsram() >= STILL_PSRAM_SPARE" in sketch and "set_framesize(sized, FRAMESIZE_VGA)" in sketch,
+      "and starts the camera at the largest still size its memory allows, then VGA")
+still = sketch[sketch.index("void takeStill()"):sketch.index("void sendPicture()")]
+check('post("/camera/still"' in still and "set_framesize(sensor, FRAMESIZE_VGA)" in still
+      and "STILL_SETTLE_FRAMES" in still, "a still: the size changed, settled, sent, and set back")
+looping = sketch[sketch.index("Wanted wanted = pictureWanted();"):sketch.index("if (!cameraReady)")]
+check('"\\"still\\":true"' in sketch and looping.index("takeStill()") < looping.index("streamLive()"),
+      "asked for a still, the board takes it before going back to live view")
 joining = sketch[sketch.index("WiFi.mode(WIFI_STA);"):sketch.index("[jarvis] wifi not joined yet")]
 check("WiFi.setSleep(false);" in joining and "WiFi.setTxPower(WIFI_POWER_19_5dBm);" in joining
       and joining.index("WiFi.begin(") < joining.index("WiFi.setTxPower("),

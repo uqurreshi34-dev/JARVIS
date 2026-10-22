@@ -78,6 +78,16 @@ MARKS_FLAG = 0x80000000
 MAX_MARKS_BYTES = 8 * 1024
 _marks_listener = None
 
+# Stills: a picture larger than live view's, from a board that can take one (the ESP32-S3s), asked for
+# when someone comes into view (actions/sightings.py). Asked for, it is answered by the board's next ask
+# (POST /camera/wanted, "still"), once; a board streaming live view asks nothing, so a still asked for
+# meanwhile ends the stream, as a detection look does, and the board comes back to it after. A still not
+# taken within STILL_WAIT_SECONDS -- a board that cannot -- is no longer asked for.
+STILL_WAIT_SECONDS = 10.0
+MAX_STILL_BYTES = 1536 * 1024
+_stills = {}        # name -> monotonic time a still was asked for
+_still_listener = None
+
 # A streaming camera cannot also send its "online" every 15 seconds, so its
 # frames say it for it, as often: it stays connected on the plan and the
 # sensor panel for as long as it streams.
@@ -104,6 +114,61 @@ def want(name):
     with _lock:
         _wanted[_name(name)] = time.monotonic()
         _lock.notify_all()
+
+
+def want_still(name):
+    """Ask camera [name] for a still (a board that cannot take one ignores it)."""
+    with _lock:
+        _stills[_name(name)] = time.monotonic()
+        _lock.notify_all()
+
+
+def still_wanted(name):
+    """When a still was asked of camera [name] and not yet sent for, or None."""
+    name = _name(name)
+
+    with _lock:
+        asked = _stills.get(name)
+
+        if asked is not None and time.monotonic() - asked > STILL_WAIT_SECONDS:
+            del _stills[name]
+            return None
+
+        return asked
+
+
+def still_sent(name):
+    """The board has been told to take its still."""
+    with _lock:
+        _stills.pop(_name(name), None)
+
+
+def set_still_listener(listener):
+    """listener(camera, jpeg): a still has come (actions/sightings.py)."""
+    global _still_listener
+    _still_listener = listener
+
+
+def take_still(name, data):
+    """A still from camera [name] (POST /camera/still). Returns None when taken, or why it was refused."""
+    if not data:
+        return "empty"
+
+    if len(data) > MAX_STILL_BYTES:
+        return "too large"
+
+    if not data.startswith(_JPEG_START):
+        return "not a JPEG"
+
+    listener = _still_listener
+
+    if listener is not None:
+        try:
+            listener(_name(name), bytes(data))
+        except Exception as error:   # noqa: BLE001 - a still that cannot be kept must not fail the board
+            print(f"[JARVIS] could not keep a still from {name}: {error}")
+
+    return None
 
 
 def wait_for_change(seconds):
@@ -406,6 +471,10 @@ def receive_live(name, stream, look_asked_at=None):
             ended = "a detection look was asked for"
             break
 
+        if still_wanted(name) is not None:
+            ended = "a still was asked for"
+            break
+
         try:
             header = _read_exactly(stream, _FRAME_HEADER.size)
         except OSError:
@@ -514,6 +583,7 @@ def forget():
         _wanted.clear()
         _frames.clear()
         _history.clear()
+        _stills.clear()
         _polled.clear()
         _live.clear()
         _leases.clear()

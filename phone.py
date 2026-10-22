@@ -1205,9 +1205,12 @@ class PhoneServer:
             while True:
                 # "look": take a detection look now and report it, asked what it sees (actions/detections.py)
                 answer = {"snap": cameras.wanted(name), "live": cameras.live_wanted(name),
-                          "look": detections.look_wanted(name)}
+                          "look": detections.look_wanted(name), "still": cameras.still_wanted(name) is not None}
 
                 if any(answer.values()) or time.monotonic() >= until:
+                    if answer["still"]:
+                        cameras.still_sent(name)
+
                     return jsonify(answer), 200
 
                 cameras.wait_for_change(min(cameras.ASK_WAIT_STEP, until - time.monotonic()))
@@ -1315,6 +1318,23 @@ class PhoneServer:
                 return jsonify({"error": "too large"}), 413
 
             refused = cameras.store(request.headers.get("X-Jarvis-Camera", ""), request.get_data(cache=False))
+
+            if refused:
+                return jsonify({"error": refused}), 400
+
+            return jsonify({"ok": True}), 200
+
+        @app.post("/camera/still")
+        def camera_still():
+            """A still a camera was asked for (larger than its live view's): passed to a sighting
+            (actions/sightings.py), checked for size before the body is read, never kept here."""
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            if request.content_length is None or request.content_length > cameras.MAX_STILL_BYTES:
+                return jsonify({"error": "too large"}), 413
+
+            refused = cameras.take_still(request.headers.get("X-Jarvis-Camera", ""), request.get_data(cache=False))
 
             if refused:
                 return jsonify({"error": refused}), 400

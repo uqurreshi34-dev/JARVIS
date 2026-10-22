@@ -135,8 +135,10 @@ def facing(face):
 
 def sharpness(rgb, box):
     """How sharp the part of picture [rgb] in [box] is, whatever its brightness: the variance of its
-    Laplacian over the variance of its values. Measured on the house cam's dim pictures (21 October
-    2026): faces held still 0.4 or more, moving 0.1 to 0.2."""
+    Laplacian over the variance of its values, pixel by pixel. Measured on the house cam's dim pictures
+    (21 October 2026): faces held still 0.4 or more, moving 0.1 to 0.2. A larger picture of the same
+    sharpness (a still) measures the same, with more pixels across the face (worth counts those); a
+    picture made larger holds nothing more and measures softer, as it should."""
     height, width = rgb.shape[:2]
     x1, y1, x2, y2 = (int(round(v)) for v in box)
     part = rgb[max(0, y1):min(height, y2), max(0, x1):min(width, x2)].astype(np.float32)

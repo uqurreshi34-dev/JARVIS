@@ -168,6 +168,7 @@ struct Wanted {
   bool snap;
   bool live;
   bool look;   // JARVIS has been asked what this camera sees: report the next look as it is
+  bool still;  // a picture larger than live view's, for a sighting (takeStill)
 };
 
 String quoted(const char *text) {
@@ -233,12 +234,12 @@ Wanted pictureWanted() {
   String json = String("{\"name\":") + quoted(SENSOR_NAME) + ",\"wait\":" + String(ASK_WAIT_SECONDS) + "}";
 
   if (postJson("/camera/wanted", json, &answer, POST_TIMEOUT_MS + ASK_WAIT_SECONDS * 1000UL) != HTTP_CODE_OK) {
-    return {false, false, false};
+    return {false, false, false, false};
   }
 
   answer.replace(" ", "");
   return {answer.indexOf("\"snap\":true") >= 0, answer.indexOf("\"live\":true") >= 0,
-          answer.indexOf("\"look\":true") >= 0};
+          answer.indexOf("\"look\":true") >= 0, answer.indexOf("\"still\":true") >= 0};
 }
 
 // Live view's own connection, kept apart from the one the polls use.
@@ -387,6 +388,70 @@ void streamLive() {
   Serial.printf("[jarvis] live view ended: %lu frames in %lu s\n", frames, (millis() - started) / 1000UL);
 }
 
+// A still, larger than live view's VGA, when JARVIS asks (someone has come into view: actions/sightings.py).
+// The camera's picture buffers are sized when it starts, width x height / 5 each, so it starts at the
+// largest of these whose buffers leave STILL_PSRAM_SPARE of PSRAM free -- after the detection model has
+// taken its own (reserveDetection) -- and is set back to VGA at once. None fits: no stills, VGA as before.
+// The ESP32-S3 boards only; the ESP32-CAM's 4 MB is left as it was.
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+static const framesize_t STILL_SIZES[] = {FRAMESIZE_QXGA, FRAMESIZE_UXGA, FRAMESIZE_SXGA};
+static const size_t STILL_PSRAM_SPARE = 512UL * 1024UL;
+#endif
+static const int LIVE_QUALITY = 12;         // JPEG quality for live view and pictures (lower is better)
+static const int STILL_QUALITY = 10;        // and for a still
+static const int STILL_SETTLE_FRAMES = 2;   // frames let go after a size change, while the sensor settles
+framesize_t stillSize = FRAMESIZE_INVALID;
+
+// A still at stillSize for a sighting: the sensor set to it, a frame or two let go while it settles,
+// one sent to POST /camera/still, and the sensor set back to VGA. Detection meanwhile skips the large
+// frames it is given (too big for its buffer), as live view is not running: the loop is here.
+void takeStill() {
+  if (stillSize == FRAMESIZE_INVALID) {
+    return;
+  }
+
+  sensor_t *sensor = esp_camera_sensor_get();
+  unsigned long started = millis();
+
+  if (!sensor || sensor->set_framesize(sensor, stillSize) != 0) {
+    Serial.println("[jarvis] still: the camera would not change size");
+    return;
+  }
+
+  sensor->set_quality(sensor, STILL_QUALITY);
+
+  for (int i = 0; i < STILL_SETTLE_FRAMES; ++i) {
+    camera_fb_t *old = esp_camera_fb_get();
+
+    if (old) {
+      esp_camera_fb_return(old);
+    }
+  }
+
+  camera_fb_t *frame = esp_camera_fb_get();
+
+  if (frame) {
+    Serial.printf("[jarvis] still: %u x %u, %u bytes in %lu ms\n", (unsigned)frame->width, (unsigned)frame->height,
+                  (unsigned)frame->len, millis() - started);
+    int code = post("/camera/still", "image/jpeg", frame->buf, frame->len, nullptr, POST_TIMEOUT_MS * 2);
+    esp_camera_fb_return(frame);
+
+    if (code == HTTP_CODE_OK) {
+      lastDelivered = millis();
+    }
+  } else {
+    Serial.println("[jarvis] still: the camera gave no picture");
+  }
+
+  sensor->set_framesize(sensor, FRAMESIZE_VGA);
+  sensor->set_quality(sensor, LIVE_QUALITY);
+  camera_fb_t *old = esp_camera_fb_get();
+
+  if (old) {
+    esp_camera_fb_return(old);
+  }
+}
+
 void sendPicture() {
   // The driver keeps the newest frame (CAMERA_GRAB_LATEST), so this is a
   // picture of now, not of whenever the last one was taken.
@@ -408,6 +473,7 @@ void sendPicture() {
 
 // The OV3660's highest gain, in sixteenths: 0x1F0 is 31x (see startCamera).
 static const int OV3660_GAIN_CEILING = 0x1F0;
+
 
 bool startCamera() {
   // The camera driver's own task warns, through printf, whenever a frame
@@ -446,7 +512,7 @@ bool startCamera() {
   // that memory is missing, rather than no picture at all.
   if (psramFound()) {
     config.frame_size = FRAMESIZE_VGA;
-    config.jpeg_quality = 12;
+    config.jpeg_quality = LIVE_QUALITY;
 #ifdef JARVIS_DETECT
     // One frame more: detection holds one while it decodes, and live view
     // still has two to swap between.
@@ -462,7 +528,36 @@ bool startCamera() {
     config.fb_location = CAMERA_FB_IN_DRAM;
   }
 
-  esp_err_t problem = esp_camera_init(&config);
+  esp_err_t problem = ESP_FAIL;
+
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+  if (psramFound()) {
+    for (framesize_t size : STILL_SIZES) {
+      config.frame_size = size;
+
+      if (esp_camera_init(&config) != ESP_OK) {
+        continue;
+      }
+
+      if (ESP.getFreePsram() >= STILL_PSRAM_SPARE) {
+        sensor_t *sized = esp_camera_sensor_get();
+        stillSize = size;
+        sized->set_framesize(sized, FRAMESIZE_VGA);
+        problem = ESP_OK;
+        Serial.printf("[jarvis] stills: %d x %d; %u bytes of PSRAM left\n", resolution[size].width,
+                      resolution[size].height, (unsigned)ESP.getFreePsram());
+        break;
+      }
+
+      esp_camera_deinit();
+    }
+
+    config.frame_size = FRAMESIZE_VGA;
+  }
+
+  if (stillSize == FRAMESIZE_INVALID)
+#endif
+  problem = esp_camera_init(&config);
 
   if (problem != ESP_OK) {
     Serial.printf("[jarvis] the camera did not start (0x%x): is its ribbon pushed in and latched?\n", problem);
@@ -931,18 +1026,36 @@ void takeFastBuffer() {
                 (unsigned)free_before);
 }
 
-void detectTask(void *) {
-  // A decoded frame: VGA at three bytes a pixel, in PSRAM, kept for the run.
-  size_t rgb_size = 640 * 480 * 3;
-  uint8_t *rgb = (uint8_t *)heap_caps_malloc(rgb_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  String lastKinds = "";
-  unsigned long lastSent = 0;
+// A decoded frame: VGA at three bytes a pixel, in PSRAM, kept for the run (reserveDetection).
+static const size_t DETECT_RGB_SIZE = 640 * 480 * 3;
+static uint8_t *detectRgb = nullptr;
+static bool detectReserved = false;
 
-  if (!rgb) {
-    Serial.println("[jarvis] detection: no memory for a decoded frame");
-    vTaskDelete(nullptr);
+// The model's memory and a decoded frame's, taken before the camera starts, so the camera sizes its
+// picture buffers -- and so its stills -- from what is left, never the other way about.
+void reserveDetection() {
+  int problem = activations_init();
+
+  if (problem) {
+    Serial.printf("[jarvis] detection off: the model's memory could not be had (%d)\n", problem);
     return;
   }
+
+  detectRgb = (uint8_t *)heap_caps_malloc(DETECT_RGB_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+  if (!detectRgb) {
+    Serial.println("[jarvis] detection off: no memory for a decoded frame");
+    return;
+  }
+
+  detectReserved = true;
+}
+
+void detectTask(void *) {
+  size_t rgb_size = DETECT_RGB_SIZE;
+  uint8_t *rgb = detectRgb;
+  String lastKinds = "";
+  unsigned long lastSent = 0;
 
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(DETECT_GAP_MS));
@@ -1067,10 +1180,7 @@ void detectTask(void *) {
 }
 
 void startDetection() {
-  int problem = activations_init();
-
-  if (problem) {
-    Serial.printf("[jarvis] detection off: the model's memory could not be had (%d)\n", problem);
+  if (!detectReserved) {
     return;
   }
 
@@ -1102,6 +1212,9 @@ void setup() {
 #endif
   Serial.println(SENSOR_NAME);
 
+#ifdef JARVIS_DETECT
+  reserveDetection();
+#endif
   cameraReady = startCamera();
 
   // JARVIS's own authority: the board accepts JARVIS and nothing else.
@@ -1166,6 +1279,10 @@ void loop() {
       lookWanted = true;
     }
 #endif
+
+    if (wanted.still) {
+      takeStill();
+    }
 
     if (wanted.live) {
       streamLive();

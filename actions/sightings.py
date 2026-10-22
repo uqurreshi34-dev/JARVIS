@@ -6,7 +6,9 @@ desk's panel is not opened) and keeps, in its own folder under JARVIS's sighting
 
     frame-0001.jpg ...   the camera's own pictures, as it sent them: never re-encoded, cropped or drawn on,
                          at most FPS a second -- the "native format" UK police ask for
-    best.jpg             the best picture of the person (best_shot): a copy of one of those frames
+    still-01.jpg ...     larger pictures (the house cam's 2048 x 1536) asked for as it begins and every
+                         STILL_EVERY_SECONDS, as the camera sent them
+    best.jpg             the best picture of the person: a copy of one of those frames or stills
     best-cutout.png      the person alone, cut out (actions/outline.py), when the model is sure of the
                          shape; else best-crop.jpg, what is in their box. Made from best.jpg, for you to
                          look at: the frames are the evidence
@@ -76,6 +78,12 @@ TICK_SECONDS = 0.5
 # sharp, 300 to 430 dark, 15 to 45 blurred by moving 6 to 12 pixels. Weighed as s / (s + SHARP_HALF):
 # a sharp picture keeps nearly all its worth, a blurred one under a third.
 SHARP_HALF = 100.0
+
+# A still -- a picture larger than live view's, from a board that can take one (the house cam: up to
+# 2048 x 1536, against live view's 640 x 480) -- is asked for when a sighting begins and every this many
+# seconds while it lasts. Each costs a second or two of live view (the board stops streaming to take it),
+# and a face in one is three times as many pixels across: what makes someone known again.
+STILL_EVERY_SECONDS = 10.0
 
 # A person's box for cutting them out, made from their face in the best picture itself (the board's
 # boxes are from looks seconds apart, and someone moving is elsewhere by then): this many face widths
@@ -210,12 +218,38 @@ def _begin(camera, now):
 
     sighting = {"camera": camera, "folder": path, "began": now, "began_text": _now_text(now), "last_seen": now,
                 "frames": [], "frame_times": [], "after": now - cameras.HISTORY_SECONDS, "looks": [],
-                "candidates": [], "unmatched": [], "reported": [], "best": None}
+                "candidates": [], "unmatched": [], "reported": [], "best": None, "stills": []}
     _open[camera] = sighting
     cameras.lease(camera, LEASE_SECONDS)
+    cameras.want_still(camera)
+    sighting["still_asked"] = now
     _log(f"began  {os.path.basename(path)}  ({camera})")
     print(f"[JARVIS] sighting on {camera}: keeping what it sees ({os.path.basename(path)})", flush=True)
     return sighting
+
+
+def _still(camera, jpeg):
+    """A still from [camera] (cameras.take_still): kept beside the sighting's frames, as it came."""
+    with _lock:
+        sighting = _open.get(camera)
+
+    if sighting is None:
+        return
+
+    name = f"still-{len(sighting['stills']) + 1:02d}.jpg"
+    rgb = outline.picture(jpeg)
+
+    try:
+        with open(os.path.join(sighting["folder"], name), "wb") as out:
+            out.write(jpeg)
+    except OSError as error:
+        print(f"[JARVIS] sighting on {camera}: could not keep a still: {error}")
+        return
+
+    height, width = rgb.shape[:2] if rgb is not None else (0, 0)
+    sighting["stills"].append({"file": name, "at": _now_text(), "sha256": _sha256(jpeg),
+                               "width": int(width), "height": int(height)})
+    print(f"[JARVIS] sighting on {camera}: a still, {width} x {height}", flush=True)
 
 
 def _start_worker():
@@ -259,6 +293,10 @@ def _tick(camera):
 
     if not ending:
         cameras.lease(camera, LEASE_SECONDS)
+
+        if now - sighting.get("still_asked", now) >= STILL_EVERY_SECONDS:
+            cameras.want_still(camera)
+            sighting["still_asked"] = now
 
     # The camera's pictures since the last kept, at most FPS a second; the first ones from just before.
     for taken, jpeg in cameras.frames_since(camera, sighting["after"]):
@@ -400,6 +438,7 @@ def _end(sighting):
         "kept": False,
         "clock": "this PC's own clock, local time with its offset from UTC",
         "frames": sighting["frames"],
+        "stills": sighting["stills"],
         "best": {key: value for key, value in best.items() if key != "worth"} if best else None,
         "made_from_best": [{"file": name, "sha256": _sha256(data)} for name, data in made],
         "looks": sighting["looks"],
@@ -425,7 +464,7 @@ def _best_face(sighting):
     sighting["best"] is kept, or None if no face was found in any."""
     best = None
 
-    for frame in sighting["frames"]:
+    for frame in sighting["frames"] + sighting["stills"]:
         try:
             with open(os.path.join(sighting["folder"], frame["file"]), "rb") as kept:
                 rgb = outline.picture(kept.read())
@@ -521,6 +560,7 @@ def _player(record):
 <img id="p" alt=""><p id="t"></p>
 <button onclick="go(-1)">&lt;</button> <button onclick="play=!play">play / pause</button>
 <button onclick="go(1)">&gt;</button>
+<p>{"".join(f'<a href="{still["file"]}"><img src="{still["file"]}" style="width:200px;margin:4px" alt=""></a>' for still in record.get("stills", []))}</p>
 <script>
 const frames = {frames};
 let i = 0, play = true;
@@ -721,6 +761,7 @@ def forget():
 
 
 detections.add_marks_listener(_seen)
+cameras.set_still_listener(_still)
 
 # Old sightings deleted once a start, off the thread that imports this.
 threading.Thread(target=sweep, name="jarvis-sightings-sweep", daemon=True).start()
