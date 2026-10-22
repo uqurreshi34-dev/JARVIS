@@ -686,8 +686,9 @@ each -- whether or not the camera alerts are muted:
 
 - `frame-0001.jpg` ...: the camera's own pictures, five a second, untouched (what
   police ask for: the original format, nothing re-encoded or drawn on)
-- `still-01.jpg` ...: larger pictures (the house cam's 1600 x 1200), asked for as
-  it begins and every 10 seconds: a face three times as many pixels across
+- `still-01.jpg` ...: larger pictures (the house cam's 2048 x 1536 with its
+  OV3660), as it begins and every 10 seconds while someone is in view: a face
+  three times as many pixels across. A still that comes broken is not kept
 - `best.jpg`: the best of them (frames and stills) -- with the face model, the picture showing their
   face best of all kept (found, turned to the camera, large, sharp); without it,
   from the board's looks (the most of the person, sharpest, surest)

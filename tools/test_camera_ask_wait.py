@@ -179,6 +179,21 @@ if phone is not None:
     code, answer, took = ask({"name": "house cam"})
     check(answer.get("still") is True, "and that ask is told")
 
+    # A still the board sends down its live stream itself, between frames, flagged.
+    kept_live = []
+    cameras.set_still_listener(lambda camera, jpeg: kept_live.append(jpeg))
+    still_bytes = b"\xff\xd8\xff\xe0" + b"S" * 4000
+    frame_bytes = b"\xff\xd8\xff\xe0" + b"f" * 100
+    body = (struct.pack(">I", len(frame_bytes)) + frame_bytes
+            + struct.pack(">I", len(still_bytes) | cameras.STILL_FLAG) + still_bytes
+            + struct.pack(">I", len(frame_bytes)) + frame_bytes)
+    cameras.watch("house cam", 30)
+    frames_in, _, why = cameras.receive_live("house cam", io.BytesIO(body))
+    cameras.stop_watching()
+    check(kept_live == [still_bytes] and frames_in == 2 and cameras.latest("house cam") == frame_bytes,
+          f"a still the board sends down its live stream is passed on, and is not a frame ({frames_in}; {why})")
+    cameras.set_still_listener(None)
+
     kept = []
     cameras.set_still_listener(lambda camera, jpeg: kept.append((camera, jpeg)))
     still_headers = dict(headers, **{"Content-Type": "image/jpeg"})
@@ -212,9 +227,18 @@ ov2640 = sketch[sketch.index("OV2640_PID) {"):sketch.index('Serial.println("[jar
 check("set_aec2(sensor, 1)" in ov2640 and "set_gainceiling(sensor, OV2640_GAIN_CEILING)" in ov2640
       and "OV2640_GAIN_CEILING = GAINCEILING_16X" in sketch,
       "the OV2640 (the house cam) gains up to 16x in the dark, not the driver's 2x")
-still = sketch[sketch.index("void takeStill()"):sketch.index("void sendPicture()")]
-check('post("/camera/still"' in still and "set_framesize(sensor, FRAMESIZE_VGA)" in still
-      and "STILL_SETTLE_FRAMES" in still, "a still: the size changed, settled, sent, and set back")
+grab = sketch[sketch.index("camera_fb_t *grabStill()"):sketch.index("void stillDone(")]
+done = sketch[sketch.index("void stillDone("):sketch.index("void takeStill()")]
+asked = sketch[sketch.index("void takeStill()"):sketch.index("void streamLive()")]
+check("set_framesize(sensor, stillSize)" in grab and "STILL_SETTLE_FRAMES" in grab
+      and "set_framesize(sensor, FRAMESIZE_VGA)" in done and 'post("/camera/still"' in asked
+      and "stillDone(frame)" in asked, "a still: the size changed, settled, sent, and set back")
+live = sketch[sketch.index("void streamLive()"):sketch.index("void sendPicture()")]
+check("LIVE_STILL_FLAG = 0x40000000UL" in sketch and cameras.STILL_FLAG == 0x40000000
+      and "(uint32_t)still->len | LIVE_STILL_FLAG" in live and "STILL_EVERY_MS" in live,
+      "while someone is in view the board sends a still down its live stream every STILL_EVERY_MS, flagged")
+check("STILL_SETTLE_FRAMES = 4;" in sketch and "|| stillTaking) {" in sketch,
+      "letting four frames go while the camera settles, detection holding off meanwhile")
 looping = sketch[sketch.index("Wanted wanted = pictureWanted();"):sketch.index("if (!cameraReady)")]
 check('"\\"still\\":true"' in sketch and looping.index("takeStill()") < looping.index("streamLive()"),
       "asked for a still, the board takes it before going back to live view")

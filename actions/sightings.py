@@ -6,8 +6,8 @@ desk's panel is not opened) and keeps, in its own folder under JARVIS's sighting
 
     frame-0001.jpg ...   the camera's own pictures, as it sent them: never re-encoded, cropped or drawn on,
                          at most FPS a second -- the "native format" UK police ask for
-    still-01.jpg ...     larger pictures (the house cam's 1600 x 1200) asked for as it begins and every
-                         STILL_EVERY_SECONDS, as the camera sent them
+    still-01.jpg ...     larger pictures (the house cam's 2048 x 1536), as it begins and every ten
+                         seconds, as the camera sent them
     best.jpg             the best picture of the person: a copy of one of those frames or stills
     best-cutout.png      the person alone, cut out (actions/outline.py), when the model is sure of the
                          shape; else best-crop.jpg, what is in their box. Made from best.jpg, for you to
@@ -79,11 +79,17 @@ TICK_SECONDS = 0.5
 # a sharp picture keeps nearly all its worth, a blurred one under a third.
 SHARP_HALF = 100.0
 
-# A still -- a picture larger than live view's, from a board that can take one (the house cam: 1600 x
-# 1200, against live view's 640 x 480) -- is asked for when a sighting begins and every this many
-# seconds while it lasts. Each costs a second or two of live view (the board stops streaming to take it),
-# and a face in one is two and a half times as many pixels across: what makes someone known again.
-STILL_EVERY_SECONDS = 10.0
+# A still -- a picture larger than live view's, from a board that can take one (the house cam: 2048 x
+# 1536 with its OV3660, against live view's 640 x 480) -- is asked for as a sighting begins; while it
+# lasts the board takes one every ten seconds itself, down the live stream (cameras.STILL_FLAG). A face
+# in one is three times as many pixels across: what makes someone known again.
+#
+# A still mostly blank -- taken while the camera was still changing over to the larger size: one came
+# with only 281 of its 2048 columns showing anything (22 October 2026) -- is not kept. A column counts
+# as showing something when its values vary by more than STILL_COLUMN_SPREAD; a still needs
+# STILL_COLUMNS_AT_LEAST of them.
+STILL_COLUMN_SPREAD = 1.0
+STILL_COLUMNS_AT_LEAST = 0.9
 
 # A person's box for cutting them out, made from their face in the best picture itself (the board's
 # boxes are from looks seconds apart, and someone moving is elsewhere by then): this many face widths
@@ -222,7 +228,6 @@ def _begin(camera, now):
     _open[camera] = sighting
     cameras.lease(camera, LEASE_SECONDS)
     cameras.want_still(camera)
-    sighting["still_asked"] = now
     _log(f"began  {os.path.basename(path)}  ({camera})")
     print(f"[JARVIS] sighting on {camera}: keeping what it sees ({os.path.basename(path)})", flush=True)
     return sighting
@@ -236,8 +241,16 @@ def _still(camera, jpeg):
     if sighting is None:
         return
 
-    name = f"still-{len(sighting['stills']) + 1:02d}.jpg"
     rgb = outline.picture(jpeg)
+    shown = still_shown(rgb)
+
+    if shown < STILL_COLUMNS_AT_LEAST:
+        sighting["stills_broken"] = sighting.get("stills_broken", 0) + 1
+        print(f"[JARVIS] sighting on {camera}: a still came broken ({shown:.0%} of it showing anything); "
+              "not kept", flush=True)
+        return
+
+    name = f"still-{len(sighting['stills']) + 1:02d}.jpg"
 
     try:
         with open(os.path.join(sighting["folder"], name), "wb") as out:
@@ -250,6 +263,16 @@ def _still(camera, jpeg):
     sighting["stills"].append({"file": name, "at": _now_text(), "sha256": _sha256(jpeg),
                                "width": int(width), "height": int(height)})
     print(f"[JARVIS] sighting on {camera}: a still, {width} x {height}", flush=True)
+
+
+def still_shown(rgb):
+    """How much of still [rgb] shows anything: the share of its columns whose values vary (0 to 1)."""
+    if rgb is None:
+        return 0.0
+
+    import numpy as np
+
+    return float((rgb.astype(np.float32).std(axis=(0, 2)) > STILL_COLUMN_SPREAD).mean())
 
 
 def _start_worker():
@@ -293,10 +316,6 @@ def _tick(camera):
 
     if not ending:
         cameras.lease(camera, LEASE_SECONDS)
-
-        if now - sighting.get("still_asked", now) >= STILL_EVERY_SECONDS:
-            cameras.want_still(camera)
-            sighting["still_asked"] = now
 
     # The camera's pictures since the last kept, at most FPS a second; the first ones from just before.
     for taken, jpeg in cameras.frames_since(camera, sighting["after"]):
@@ -439,6 +458,7 @@ def _end(sighting):
         "clock": "this PC's own clock, local time with its offset from UTC",
         "frames": sighting["frames"],
         "stills": sighting["stills"],
+        "stills_broken": sighting.get("stills_broken", 0),
         "best": {key: value for key, value in best.items() if key != "worth"} if best else None,
         "made_from_best": [{"file": name, "sha256": _sha256(data)} for name, data in made],
         "looks": sighting["looks"],

@@ -76,6 +76,11 @@ _FRAME_HEADER = struct.Struct(">I")
 # never taken for a frame.
 MARKS_FLAG = 0x80000000
 MAX_MARKS_BYTES = 8 * 1024
+
+# A still sent down a live stream by the board itself, while someone is in view (take_still): its length
+# with the second bit set. Taken that way it costs about a second of live view; asked for between
+# streams, 4 to 6 (22 October 2026).
+STILL_FLAG = 0x40000000
 _marks_listener = None
 
 # Stills: a picture larger than live view's, from a board that can take one (the ESP32-S3s), asked for
@@ -485,6 +490,30 @@ def receive_live(name, stream, look_asked_at=None):
             break
 
         (length,) = _FRAME_HEADER.unpack(header)
+
+        if not length & MARKS_FLAG and length & STILL_FLAG:
+            # A still, not a frame (see STILL_FLAG).
+            size = length & ~STILL_FLAG
+
+            if not 0 < size <= MAX_STILL_BYTES:
+                ended = f"a still said it was {size} bytes"
+                break
+
+            try:
+                still = _read_exactly(stream, size)
+            except OSError:
+                still = None
+
+            if still is None:
+                ended = "the camera stopped part way through a still"
+                break
+
+            refused = take_still(name, still)
+
+            if refused:
+                print(f"[JARVIS] {name}: a still in live view was {refused}")
+
+            continue
 
         if length & MARKS_FLAG:
             # A look's boxes, not a frame (see MARKS_FLAG).
