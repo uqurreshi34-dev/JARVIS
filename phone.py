@@ -1042,7 +1042,10 @@ class PhoneServer:
                 "__VAPID_PUBLIC_KEY__",
                 os.getenv(VAPID_PUBLIC_ENV, "")
             ), 200, {
-                "Content-Type": "text/html; charset=utf-8"
+                "Content-Type": "text/html; charset=utf-8",
+                # Never an old copy: a phone holding the page from before an update kept its old code
+                # (22 October 2026: "show me the last sighting" opened nothing there).
+                "Cache-Control": "no-store",
             }
 
         @app.get("/where")

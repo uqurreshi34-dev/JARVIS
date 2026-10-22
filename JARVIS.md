@@ -2607,6 +2607,17 @@ frame he picked himself. A box from the board's look, a second or more
 away, cut the dark door out with him; one from his face in that picture
 did not (SAM 0.23 steady from the box alone, 0.90 with the face as a point).
 
+**Some things a driver cannot do while it runs.** Stills meant changing
+the camera's size between frames. Every way tried went wrong on the house
+cam: half-drawn stills, live view that stopped, and then, with the board's
+console open, two crashes in a minute inside esp32-camera itself
+(`esp_camera_fb_get` -> `cam_verify_jpeg_eoi`, a scrambled pointer) on the
+next ordinary frame after a still. Stills are off
+(`JARVIS_SIGHTING_STILLS`); the board takes one only if asked, so it no
+longer changes size at all. Frames chosen by face are the sighting's
+pictures. A larger still would need the camera stopped and started
+again, or live view at a larger size all the time.
+
 **A board change tested only on a pretend board is not tested.** Sending
 stills down the live stream worked against a simulated board over real
 TLS, and on the real one stopped live view after every still: sightings

@@ -85,6 +85,13 @@ SHARP_HALF = 100.0
 # and a face in one is two and a half times as many pixels across: what makes someone known again.
 STILL_EVERY_SECONDS = 10.0
 
+# Stills are off unless JARVIS_SIGHTING_STILLS is "on". Taking one means changing the camera's size while
+# it runs, and on the house cam (ESP32-S3, OV3660, esp32-camera) that broke it: half-drawn stills, live
+# view that stopped, and twice in a minute a crash inside the camera driver itself (esp_camera_fb_get ->
+# cam_verify_jpeg_eoi, reading a scrambled pointer) on the next ordinary frame, and a restart (22 October
+# 2026). The frames, chosen by face, are the sighting's pictures; the board takes a still only if asked.
+STILLS = (os.getenv("JARVIS_SIGHTING_STILLS") or "off").strip().casefold() == "on"
+
 # A still mostly blank is not kept: the camera, changing to the larger size, sometimes sends one with
 # only part of it drawn (green and black, the rest blank: 5 of 8 on 22 October 2026, which showed
 # something in 14% to 36% of their columns; the good ones, 92% to 100% -- a plain wall in view shows
@@ -229,7 +236,9 @@ def _begin(camera, now):
                 "candidates": [], "unmatched": [], "reported": [], "best": None, "stills": []}
     _open[camera] = sighting
     cameras.lease(camera, LEASE_SECONDS)
-    cameras.want_still(camera)
+    if STILLS:
+        cameras.want_still(camera)
+
     sighting["still_asked"] = now
     _log(f"began  {os.path.basename(path)}  ({camera})")
     print(f"[JARVIS] sighting on {camera}: keeping what it sees ({os.path.basename(path)})", flush=True)
@@ -320,7 +329,7 @@ def _tick(camera):
     if not ending:
         cameras.lease(camera, LEASE_SECONDS)
 
-        if now - sighting.get("still_asked", now) >= STILL_EVERY_SECONDS:
+        if STILLS and now - sighting.get("still_asked", now) >= STILL_EVERY_SECONDS:
             cameras.want_still(camera)
             sighting["still_asked"] = now
 

@@ -326,7 +326,19 @@ check(asked_inside and np.allclose(asked_inside[0][1], middle, atol=1e-3) and as
       "cut out with a body box made from their face, the face given as a point on them")
 check((Path(face_path) / "best-cutout.png").is_file(), "and the cut-out kept")
 
-# ---- stills: asked for as a sighting begins and every STILL_EVERY_SECONDS; the best picture may be one ----
+# ---- stills: off unless JARVIS_SIGHTING_STILLS is on (they broke the house cam's camera driver) -------------
+
+reset()
+check(sightings.STILLS is False, "stills are off unless asked for")
+detections.record("house cam", {"name": "house cam", "objects": [person()]})
+check(sightings._open and cameras.still_wanted("house cam") is None,
+      "so a sighting does not ask the camera to change size")
+detections.take_marks("house cam", {"objects": [], "now": []})
+wait_until(written, 8)
+
+# ---- with them on: asked for as a sighting begins and every STILL_EVERY_SECONDS; the best picture may be one
+
+sightings.STILLS = True
 
 reset()
 # The still: the same scene drawn at twice the size, with twice the detail (finer stripes), as a camera
@@ -385,6 +397,7 @@ finally:
         setattr(faces, name, function)
 
     sightings.STILL_EVERY_SECONDS = real_every
+    sightings.STILLS = False
 
 still_path, still_record = sightings.newest()
 check(still_record["stills"] and still_record["stills"][0]["file"] == "still-01.jpg"
@@ -515,6 +528,8 @@ if phone is not None:
           and got.data == (Path(newest_folder) / "best.jpg").read_bytes(),
           "and is the best picture, as kept")
     check("(on the phone)" in (base / sightings.LOG_FILE).read_text(encoding="utf-8"), "the log says it was viewed there")
+    check(client.get("/?t=sighting-test").headers.get("Cache-Control") == "no-store",
+          "the page is never kept, so a phone always has the newest")
     page = phone.PAGE
     check("function openSighting" in page and "if (data.sighting) {" in page and 'id="feed-close"' in page,
           "the phone's page shows it full screen, with the cross that closes a camera")
