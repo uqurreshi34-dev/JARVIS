@@ -1,8 +1,9 @@
 """Sightings: when someone comes into view of a camera that detects, what it saw is kept as evidence.
 
 The house cam tells JARVIS when it sees a person (actions/detections.py). From that moment until they
-have been gone QUIET_SECONDS, JARVIS has the camera stream (a lease, as a phone watching it has: the
-desk's panel is not opened) and keeps, in its own folder under JARVIS's sightings folder:
+have been gone QUIET_SECONDS (a look saw nobody), JARVIS has the camera stream (a lease, as a phone
+watching it has: the desk's panel is not opened) and keeps, in its own folder under JARVIS's sightings
+folder:
 
     frame-0001.jpg ...   the camera's own pictures, as it sent them: never re-encoded, cropped or drawn on,
                          at most FPS a second -- the "native format" UK police ask for
@@ -49,8 +50,13 @@ LABELS = tuple(name.strip().casefold() for name in
                (os.getenv("JARVIS_SIGHTING_LABELS") or "person").split(",") if name.strip())
 
 # Gone this long, the sighting ends. The board keeps a person in what it is sure of while seen in this
-# look or the last, so a look's miss does not end one.
+# look or the last, so a look's miss does not end one. Gone means a look since saw nobody: no looks at
+# all is not gone (JARVIS just started, the wifi dropped -- 22 October 2026 a sighting ended 10 s in,
+# while the board could not reach JARVIS for as long, and a second began when it could).
 QUIET_SECONDS = float(os.getenv("JARVIS_SIGHTING_QUIET") or 10)
+
+# No looks at all for QUIET_SECONDS and this much more (the board off, or out of reach): it ends.
+SILENT_MORE_SECONDS = 30.0
 
 # However long someone stays, a sighting ends after this; if they are still there, a new one begins.
 MAX_SECONDS = 120.0
@@ -187,8 +193,13 @@ def _seen(camera):
             if sighting is None:
                 return
 
+        sighting["last_look"] = now
+
         if sure or looked:
             sighting["last_seen"] = now
+            sighting["nobody_seen"] = False
+        else:
+            sighting["nobody_seen"] = True
 
         sighting["looks"].append({"at": _now_text(at), "seen": [dict(item) for item in this_look]})
 
@@ -232,6 +243,7 @@ def _begin(camera, now):
         return None
 
     sighting = {"camera": camera, "folder": path, "began": now, "began_text": _now_text(now), "last_seen": now,
+                "last_look": now, "nobody_seen": False,
                 "frames": [], "frame_times": [], "after": now - cameras.HISTORY_SECONDS, "looks": [],
                 "candidates": [], "unmatched": [], "reported": [], "best": None, "stills": []}
     _open[camera] = sighting
@@ -324,7 +336,9 @@ def _tick(camera):
     if sighting is None:
         return
 
-    ending = now - sighting["last_seen"] > QUIET_SECONDS or now - sighting["began"] > MAX_SECONDS
+    gone = sighting["nobody_seen"] and now - sighting["last_seen"] > QUIET_SECONDS
+    silent = now - sighting["last_look"] > QUIET_SECONDS + SILENT_MORE_SECONDS
+    ending = gone or silent or now - sighting["began"] > MAX_SECONDS
 
     if not ending:
         cameras.lease(camera, LEASE_SECONDS)
@@ -522,7 +536,7 @@ def _best_face(sighting):
                         "box": [round(x1 / width, 4), round(y1 / height, 4), round(x2 / width, 4),
                                 round(y2 / height, 4)],
                         "face": {"facing": round(faces.facing(face), 2),
-                                 "sharpness": round(faces.sharpness(rgb, face["box"]), 3)}}
+                                 "sharpness": round(faces.sharpness(rgb, face), 3)}}
 
     return best
 

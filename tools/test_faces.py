@@ -8,8 +8,9 @@ Checked without the model (a stand-in gives YuNet's outputs, so the reading of t
 - YuNet's outputs read as OpenCV reads them: a cell's score, box and five points, in the picture's own
   pixels whatever its size; below SURE_AT_LEAST nothing; one face found twice is one;
 - facing: a nose midway between the eyes 1, at an eye 0, beyond it 0;
-- sharpness: a picture made dark is as sharp as it was, a blurred one is not;
-- worth: a face turned away, or blurred, is worth less.
+- sharpness: of the middle of the face only, at one size; a picture made dark is as sharp as it was, a
+  blurred one is not, a nearer one judged for its size;
+- worth: a face turned away, or blurred (even when larger), is worth less.
 
 With the real model (models/faces, or JARVIS_FACE_FOLDER) and a picture of a face named by
 JARVIS_TEST_FACE_IMAGE: a face is found in it (SKIP otherwise).
@@ -140,19 +141,25 @@ texture = (np.indices((200, 200)).sum(axis=0) % 8 < 4) * 120 + 60 + rng.integers
 sharp = np.stack([texture] * 3, axis=2).astype(np.uint8)
 dark = (sharp.astype(np.float32) * 0.2).astype(np.uint8)
 blurred = np.asarray(Image.fromarray(sharp).filter(ImageFilter.BoxBlur(4)))
-whole = (0, 0, 200, 200)
-s_sharp, s_dark, s_blur = (faces.sharpness(x, whole) for x in (sharp, dark, blurred))
+middle = {"score": 0.9, "box": (0, 0, 200, 200), "points": [(60, 60), (140, 60), (100, 100), (70, 140), (130, 140)]}
+s_sharp, s_dark, s_blur = (faces.sharpness(x, middle) for x in (sharp, dark, blurred))
 check(abs(s_dark - s_sharp) / s_sharp < 0.25 and s_blur < s_sharp / 2,
-      f"sharpness: dark as sharp as bright ({s_dark:.2f} to {s_sharp:.2f}), blurred far less ({s_blur:.2f})")
-check(faces.sharpness(sharp, (5, 5, 6, 6)) == 0.0, "a box of almost nothing has no sharpness")
-enlarged = np.asarray(Image.fromarray(sharp).resize((600, 600), Image.BILINEAR))
-check(faces.sharpness(enlarged, (0, 0, 600, 600)) < s_sharp / 2,
-      "a picture made larger holds nothing more, and measures softer (a still must be truly sharper to win)")
+      f"sharpness: dark as sharp as bright ({s_dark:.3f} to {s_sharp:.3f}), blurred far less ({s_blur:.3f})")
+check(faces.sharpness(sharp, middle | {"points": [(5, 5)] * 5}) == 0.0, "a face of almost nothing has no sharpness")
+walls = sharp.copy()
+walls[:, :40] = 0                                                   # the box's edges: a dark door frame
+walls[:, 160:] = 255
+check(abs(faces.sharpness(walls, middle) - s_sharp) < 1e-6,
+      "only the middle of the face counts: what is behind its box (a door, a wall) does not")
+enlarged = np.asarray(Image.fromarray(sharp).resize((400, 400), Image.BILINEAR))
+twice = middle | {"box": (0, 0, 400, 400), "points": [(2 * x, 2 * y) for x, y in middle["points"]]}
+check(abs(faces.sharpness(enlarged, twice) - s_sharp) / s_sharp < 0.25,
+      "a face twice as near is judged as sharp for its size as it was")
 
+near_blurred = middle | {"box": (0, 0, 400, 400)}
+check(faces.worth(sharp, middle) > faces.worth(blurred, near_blurred) > 0,
+      "a blurred face is worth less, even twice as wide")
 box = (20, 20, 180, 180)
-check(faces.worth(sharp, a_face(100, box) | {"points": [(60, 60), (140, 60), (100, 100), (70, 140), (130, 140)]})
-      > faces.worth(blurred, a_face(100, box) | {"points": [(60, 60), (140, 60), (100, 100), (70, 140), (130, 140)]})
-      > 0, "a blurred face is worth less")
 check(faces.worth(sharp, a_face(158, box)) < faces.worth(sharp, a_face(140, box)),
       "and one turned away")
 

@@ -31,6 +31,11 @@ SURE_AT_LEAST = 0.6
 # Two finds overlapping more than this are one face.
 SAME_FACE = 0.3
 
+# Sharpness is measured on the middle of a face (its five points, and this much more of their spread
+# around them) scaled to this many pixels across.
+SHARP_MORE = 0.25
+SHARP_SIZE = 32
+
 _lock = threading.Lock()
 _session = None     # the model once loaded; False if it could not be
 
@@ -133,28 +138,37 @@ def facing(face):
     return float(max(0.0, 1.0 - abs(nose_x - (right_x + left_x) / 2) / (apart / 2)))
 
 
-def sharpness(rgb, box):
-    """How sharp the part of picture [rgb] in [box] is, whatever its brightness: the variance of its
-    Laplacian over the variance of its values, pixel by pixel. Measured on the house cam's dim pictures
-    (21 October 2026): faces held still 0.4 or more, moving 0.1 to 0.2. A larger picture of the same
-    sharpness (a still) measures the same, with more pixels across the face (worth counts those); a
-    picture made larger holds nothing more and measures softer, as it should."""
+def sharpness(rgb, face):
+    """How sharp [face] is in picture [rgb], whatever its brightness or size: the middle of the face (its
+    eyes, nose and mouth, and a quarter more around them) scaled to SHARP_SIZE across, then its mean
+    change from pixel to pixel over its mean brightness. Measured on the house cam (22 October 2026):
+    faces held still 0.09 to 0.10, moving 0.05 to 0.06. The middle only, so the door or wall behind a
+    face's box is not counted; one size, so a near face is judged as sharp for its size as a far one."""
+    from PIL import Image
+
     height, width = rgb.shape[:2]
-    x1, y1, x2, y2 = (int(round(v)) for v in box)
-    part = rgb[max(0, y1):min(height, y2), max(0, x1):min(width, x2)].astype(np.float32)
+    xs = [x for x, _ in face["points"]]
+    ys = [y for _, y in face["points"]]
+    more_x, more_y = (max(xs) - min(xs)) * SHARP_MORE, (max(ys) - min(ys)) * SHARP_MORE
+    x1, y1 = int(round(min(xs) - more_x)), int(round(min(ys) - more_y))
+    x2, y2 = int(round(max(xs) + more_x)), int(round(max(ys) + more_y))
+    part = rgb[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
 
     if part.shape[0] < 3 or part.shape[1] < 3:
         return 0.0
 
-    grey = part.mean(axis=2)
-    edges = 4 * grey[1:-1, 1:-1] - grey[:-2, 1:-1] - grey[2:, 1:-1] - grey[1:-1, :-2] - grey[1:-1, 2:]
-    return float(edges.var() / (grey.var() + 1.0))
+    scaled = Image.fromarray(np.ascontiguousarray(part)).resize((SHARP_SIZE, SHARP_SIZE), Image.BILINEAR)
+    grey = np.asarray(scaled, np.float32).mean(axis=2)
+    change = np.abs(np.diff(grey, axis=1)).mean() + np.abs(np.diff(grey, axis=0)).mean()
+    return float(change / (grey.mean() + 1.0))
 
 
 def worth(rgb, face):
-    """How good a picture of a face [face] is in [rgb]: sure, turned to the camera, large and sharp."""
+    """How good a picture of a face [face] is in [rgb]: sure, turned to the camera, sharp (counted twice:
+    a blurred face is no use however large) and large (counted as the square root of its width: a face
+    a little nearer is not worth a little blur)."""
     width = face["box"][2] - face["box"][0]
-    return face["score"] * facing(face) * max(0.0, width) * sharpness(rgb, face["box"])
+    return face["score"] * facing(face) * np.sqrt(max(0.0, width)) * sharpness(rgb, face) ** 2
 
 
 def forget():

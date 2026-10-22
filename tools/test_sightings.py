@@ -11,7 +11,8 @@ its live stream stores them. Checked:
   included; each one's SHA-256 and time in sighting.json;
 - the best picture: the sharp one over a blurred one, matched to the look that saw the person; the person
   cut out of it when the outline model is sure, else what is in their box;
-- it ends when the person has been gone QUIET_SECONDS, or after MAX_SECONDS whatever;
+- it ends when the person has been gone QUIET_SECONDS (a look saw nobody), or no looks came for
+  SILENT_MORE_SECONDS more, or after MAX_SECONDS whatever;
 - sightings-log.txt says each begun, ended, kept, viewed and deleted; old sightings are deleted, kept ones not;
 - "keep the last sighting", "show me the last sighting": asked how people say it, and through commands.
 """
@@ -533,6 +534,29 @@ if phone is not None:
     page = phone.PAGE
     check("function openSighting" in page and "if (data.sighting) {" in page and 'id="feed-close"' in page,
           "the phone's page shows it full screen, with the cross that closes a camera")
+
+# ---- no looks is not gone (22 October 2026: JARVIS just started, the board could not reach it) ---------------
+
+reset()
+real = {name: getattr(sightings, name) for name in ("QUIET_SECONDS", "LEASE_SECONDS", "SILENT_MORE_SECONDS")}
+sightings.QUIET_SECONDS = 1.0
+sightings.LEASE_SECONDS = 1.0
+sightings.SILENT_MORE_SECONDS = 1.0
+detections.set_muted(True)
+before = {path.name for path in base.iterdir() if path.is_dir()}
+cameras.store("house cam", SHARP)
+detections.record("house cam", {"name": "house cam", "ms": 300, "objects": [person()]})
+time.sleep(1.6)                              # past QUIET_SECONDS, and no look since
+check(len(sightings._open) == 1, "no looks for QUIET_SECONDS: not gone, the sighting goes on")
+detections.take_marks("house cam", {"objects": [person()], "now": [person()]})   # the looks come back
+time.sleep(0.5)
+check(len(sightings._open) == 1, "and when the looks come back, it is the same sighting")
+check(wait_until(written, 6), "no looks at all for QUIET_SECONDS and SILENT_MORE_SECONDS: it ends")
+check(len({path.name for path in base.iterdir() if path.is_dir()} - before) == 1, "one folder, not two")
+detections.set_muted(False)
+
+for name, value in real.items():
+    setattr(sightings, name, value)
 
 outline.MODEL_DIR = real_model_dir
 outline.forget()

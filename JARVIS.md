@@ -1838,7 +1838,10 @@ The best picture is the one showing a face best, of every picture kept:
 YuNet (`actions/faces.py`, MIT, `models/faces` by `tools/face_model.py`)
 finds faces and their eyes, nose and mouth; a face counts by how sure it
 is, how squarely it faces the camera (the nose midway between the eyes),
-its size and its sharpness measured apart from brightness. The person is
+its sharpness (counted twice) and its size (the square root of its
+width). Sharpness is of the middle of the face only (eyes, nose, mouth),
+scaled to 32 pixels across, as the mean change from pixel to pixel over
+the mean brightness: still faces 0.09 to 0.10, moving 0.05 to 0.06. The person is
 cut out with a body box made from that face, tightest first, the face
 given to SAM as a point on them. Without the face model, the best is
 chosen from the board's own looks. `tools/test_faces.py`.
@@ -1856,7 +1859,7 @@ largest still size that leaves 512 KB of PSRAM (as the sensor takes it:
 an OV2640 asked for 2048 x 1536 is given 1600 x 1200), then VGA at once;
 the console says which (`[jarvis] stills: 2048 x 1536; ... bytes of PSRAM
 left`). If none fits, no stills, and all else as before. Stills compete
-for the best picture: the same sharpness with three times the pixels.
+for the best picture: the same sharpness, larger.
 A still only partly drawn -- the camera caught changing size: green and
 black, the rest blank, 5 of 8 on 22 October -- is not kept (under 60% of
 its columns showing anything; the broken ones showed 14 to 36%, the good
@@ -2625,11 +2628,24 @@ with no pictures. It was undone the same day. Board changes wait for the
 board's own console during a real test (`ESP32-S3-CAM as house cam` at the
 top: the room cam is COM7).
 
-**Measure sharpness where the picture was taken.** Scaling every face to
-one size to compare a still with a frame changed which frame of a sighting
-was best, and any scaling blurs a little, so true stills seemed softer. A
-sharp picture is sharp pixel by pixel at any size; a picture made larger is
-not, which is the difference that matters.
+**Measure sharpness on the face, at one size.** Measured over the face's
+whole box, pixel by pixel, the best of a 146-picture sighting (22 October
+2026) was a badly blurred frame: the box took in the door frame behind
+him, whose hard edges stayed sharp while his face smeared, and a nearer
+face counted for more pixels. Measured on the middle of the face only,
+scaled to 32 pixels across, the three blurred frames came last of the nine
+facing the camera and the one he would pick came first; sharpness counts
+twice and width only as its square root, so a face a little nearer is not
+worth a little blur. (Before, scaling was undone because it seemed to soften
+true stills; stills are off, and a face measured at its own middle is
+judged as sharp for its size, near or far.)
+
+**No news is not "gone".** A sighting ended once 10 s passed with no
+report saying the person was there. When JARVIS had just started, the
+board could not reach it for about 10 s with him standing in view: the
+sighting ended at 12 s with 5 pictures, and a second began when the
+looks came back. Now only a look that saw nobody starts the 10 s; no
+looks at all end one only after 40 s.
 
 **A test that races the clock fails on a slower machine.** test_sightings
 gave a sighting 2.5 s to end itself; on GitHub's runner it took longer.

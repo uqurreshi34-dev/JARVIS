@@ -682,7 +682,9 @@ box 0.71 -> its box`.
 
 When the house cam sees a person, JARVIS keeps what it sees until they have been
 gone 10 seconds (at most two minutes a time), in `~/JARVIS/sightings/`, one folder
-each -- whether or not the camera alerts are muted:
+each -- whether or not the camera alerts are muted. Gone means the camera looked and
+saw nobody: while its looks are not reaching JARVIS (JARVIS just started, the wifi
+dropped) the sighting waits, up to 40 seconds with no looks at all:
 
 - `frame-0001.jpg` ...: the camera's own pictures, five a second, untouched (what
   police ask for: the original format, nothing re-encoded or drawn on)
@@ -690,7 +692,8 @@ each -- whether or not the camera alerts are muted:
   `JARVIS_SIGHTING_STILLS=on` -- off, because changing the camera's size while it
   runs crashed the house cam's camera driver. A still only partly drawn is not kept
 - `best.jpg`: the best of them (frames and stills) -- with the face model, the picture showing their
-  face best of all kept (found, turned to the camera, large, sharp); without it,
+  face best of all kept (found, turned to the camera, sharp -- a blurred face loses
+  even when nearer -- and large); without it,
   from the board's looks (the most of the person, sharpest, surest)
 - `best-cutout.png`: the person alone, when the outline model is sure (with a face,
   cut out from a body box made from it); else `best-crop.jpg`, their box. For you
