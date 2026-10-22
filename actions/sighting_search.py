@@ -117,7 +117,7 @@ def when(words, now=None):
     return None, None, ""
 
 
-def asked(text):
+def asked(text, now=None):
     """{"who": "you"|"others"|"any", "mode": "last"|"count"|"list", "start", "end", "spoken"} for a
     question about kept sightings, else None."""
     words = _words(text)
@@ -125,7 +125,7 @@ def asked(text):
     if not words or not _ABOUT.search(words) or not _ASKING.match(words):
         return None
 
-    start, end, spoken = when(words)
+    start, end, spoken = when(words, now)
 
     if start is None and not _HISTORY.search(words) and not _PAST.search(words):
         return None     # "is anyone on the house cam": what it sees now, not what it kept
@@ -197,12 +197,14 @@ def find(query):
 
 def answer(text, now=None):
     """(what to say, the picture to show or None, its title) for a question [text] about sightings."""
-    query = asked(text)
+    # One now for both: the time asked about and how it is said (on a runner in UTC, "today" for a
+    # test's now in BST began an hour after the test's own midnight: 22 October 2026).
+    now = now or datetime.now().astimezone()
+    query = asked(text, now)
 
     if query is None:
         return None, None, None
 
-    now = now or datetime.now().astimezone()
     knows_you = known_faces.anyone_known()
 
     if query["who"] != "any" and not knows_you:

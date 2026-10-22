@@ -2722,6 +2722,13 @@ with no record, would never have been deleted either. Now JARVIS
 finishes them when it next starts. Finishing at start covers closing,
 a crash and a power cut alike, and closing is not held up.
 
+**One "now" for the whole answer.** Asked "any strangers today", the
+search worked out "today" from the real clock but everything else from
+the time the test gave it. On the PC (UK time) the two agreed; on
+GitHub's runner (UTC) "today" began an hour later, and a sighting at
+midnight UK time fell out. The time is now passed all the way through;
+the suite passes in UTC, London, New York and Tokyo.
+
 **A test that races the clock fails on a slower machine.** test_sightings
 gave a sighting 2.5 s to end itself; on GitHub's runner it took longer.
 Tests now wait for the thing itself (the record written) and check how long
