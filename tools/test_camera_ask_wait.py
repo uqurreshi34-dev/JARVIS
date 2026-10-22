@@ -213,6 +213,9 @@ check("set_aec2(sensor, 1)" in ov2640 and "set_gainceiling(sensor, OV2640_GAIN_C
       and "OV2640_GAIN_CEILING = GAINCEILING_16X" in sketch,
       "the OV2640 (the house cam) gains up to 16x in the dark, not the driver's 2x")
 still = sketch[sketch.index("void takeStill()"):sketch.index("void sendPicture()")]
+check("jpegWidth(candidate->buf, candidate->len) == wanted && atSize++ >= STILL_SETTLE_FRAMES" in sketch
+      and "STILL_SETTLE_MS" in sketch,
+      "a still is the third frame at the still's own size, told by each JPEG's width, not frames waiting from before")
 check('post("/camera/still"' in still and "set_framesize(sensor, FRAMESIZE_VGA)" in still
       and "STILL_SETTLE_FRAMES" in still, "a still: the size changed, settled, sent, and set back")
 looping = sketch[sketch.index("Wanted wanted = pictureWanted();"):sketch.index("if (!cameraReady)")]

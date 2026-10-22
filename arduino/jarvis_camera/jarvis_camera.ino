@@ -399,7 +399,35 @@ static const size_t STILL_PSRAM_SPARE = 512UL * 1024UL;
 #endif
 static const int LIVE_QUALITY = 12;         // JPEG quality for live view and pictures (lower is better)
 static const int STILL_QUALITY = 10;        // and for a still
-static const int STILL_SETTLE_FRAMES = 2;   // frames let go after a size change, while the sensor settles
+static const int STILL_SETTLE_FRAMES = 2;   // frames at the still's size let go while the sensor settles
+static const unsigned long STILL_SETTLE_MS = 3000UL;   // and the longest a still may take
+
+// A JPEG's width, from its frame header (SOF0 to SOF2), or 0.
+int jpegWidth(const uint8_t *data, size_t length) {
+  size_t i = 2;
+
+  while (i + 9 < length) {
+    if (data[i] != 0xFF) {
+      i++;
+      continue;
+    }
+
+    uint8_t marker = data[i + 1];
+
+    if (marker == 0xC0 || marker == 0xC1 || marker == 0xC2) {
+      return (data[i + 7] << 8) | data[i + 8];
+    }
+
+    if (marker == 0xFF || marker == 0x01 || (marker >= 0xD0 && marker <= 0xD8)) {
+      i += (marker == 0xFF) ? 1 : 2;
+      continue;
+    }
+
+    i += 2 + ((data[i + 2] << 8) | data[i + 3]);
+  }
+
+  return 0;
+}
 framesize_t stillSize = FRAMESIZE_INVALID;
 
 // A still at stillSize for a sighting: the sensor set to it, a frame or two let go while it settles,
@@ -420,19 +448,33 @@ void takeStill() {
 
   sensor->set_quality(sensor, STILL_QUALITY);
 
-  for (int i = 0; i < STILL_SETTLE_FRAMES; ++i) {
-    camera_fb_t *old = esp_camera_fb_get();
+  // Frames let go until STILL_SETTLE_FRAMES at the still's own size have gone by, then the next at that
+  // size is the still. Letting any two go was not enough: they were frames already waiting at the old
+  // size, and the still came in 143 ms, the first at the new size, half drawn (22 October 2026). Each
+  // JPEG says its own size (jpegWidth), so an old one is told from a new one.
+  int wanted = resolution[stillSize].width;
+  int atSize = 0, letGo = 0;
+  camera_fb_t *frame = nullptr;
 
-    if (old) {
-      esp_camera_fb_return(old);
+  while (millis() - started < STILL_SETTLE_MS) {
+    camera_fb_t *candidate = esp_camera_fb_get();
+
+    if (!candidate) {
+      continue;
     }
+
+    if (jpegWidth(candidate->buf, candidate->len) == wanted && atSize++ >= STILL_SETTLE_FRAMES) {
+      frame = candidate;
+      break;
+    }
+
+    esp_camera_fb_return(candidate);
+    letGo++;
   }
 
-  camera_fb_t *frame = esp_camera_fb_get();
-
   if (frame) {
-    Serial.printf("[jarvis] still: %u x %u, %u bytes in %lu ms\n", (unsigned)frame->width, (unsigned)frame->height,
-                  (unsigned)frame->len, millis() - started);
+    Serial.printf("[jarvis] still: %u x %u, %u bytes in %lu ms (%d frames let go)\n", (unsigned)frame->width,
+                  (unsigned)frame->height, (unsigned)frame->len, millis() - started, letGo);
     int code = post("/camera/still", "image/jpeg", frame->buf, frame->len, nullptr, POST_TIMEOUT_MS * 2);
     esp_camera_fb_return(frame);
 
@@ -440,7 +482,7 @@ void takeStill() {
       lastDelivered = millis();
     }
   } else {
-    Serial.println("[jarvis] still: the camera gave no picture");
+    Serial.printf("[jarvis] still: none at the still's size in %lu ms (%d frames let go)\n", STILL_SETTLE_MS, letGo);
   }
 
   sensor->set_framesize(sensor, FRAMESIZE_VGA);

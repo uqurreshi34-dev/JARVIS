@@ -1857,6 +1857,16 @@ an OV2640 asked for 2048 x 1536 is given 1600 x 1200), then VGA at once;
 the console says which (`[jarvis] stills: 2048 x 1536; ... bytes of PSRAM
 left`). If none fits, no stills, and all else as before. Stills compete
 for the best picture: the same sharpness with three times the pixels.
+A still only partly drawn -- the camera caught changing size: green and
+black, the rest blank, 5 of 8 on 22 October -- is not kept (under 60% of
+its columns showing anything; the broken ones showed 14 to 36%, the good
+ones 92 to 100%). The cause, from the board's own console: a still taken
+in 143 ms, too fast for three frames at that size -- the two "let go" were
+frames already waiting at the old size. The board now reads each JPEG's
+own width from its header, lets two frames at the still's size go, and
+keeps the third (3 seconds at most), and says how many it let go. "Show me the last sighting" asked on the phone opens its
+picture there full screen (`GET /sighting/picture`, with the token),
+closed with the cross that closes a camera.
 
 ### When the HUD freezes - `stall_watch.py`
 The HUD froze for a second or two at start-up, and the console said
@@ -2596,6 +2606,13 @@ the camera went unscored. Scored by face over every picture, it was the
 frame he picked himself. A box from the board's look, a second or more
 away, cut the dark door out with him; one from his face in that picture
 did not (SAM 0.23 steady from the box alone, 0.90 with the face as a point).
+
+**A board change tested only on a pretend board is not tested.** Sending
+stills down the live stream worked against a simulated board over real
+TLS, and on the real one stopped live view after every still: sightings
+with no pictures. It was undone the same day. Board changes wait for the
+board's own console during a real test (`ESP32-S3-CAM as house cam` at the
+top: the room cam is COM7).
 
 **Measure sharpness where the picture was taken.** Scaling every face to
 one size to compare a still with a frame changed which frame of a sighting

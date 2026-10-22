@@ -361,6 +361,13 @@ try:
     time.sleep(0.15)
     detections.take_marks("house cam", {"objects": [person()], "now": [person()]})
     check(cameras.take_still("house cam", STILL) is None, "the still is taken")
+    broken = big.copy()
+    broken[:, 400:] = (128, 128, 128)                  # what came on 22 October: only part of it drawn
+    out = io.BytesIO()
+    Image.fromarray(broken).save(out, "JPEG", quality=90)
+    cameras.take_still("house cam", out.getvalue())
+    check(len(sightings._open["house cam"]["stills"]) == 1 and sightings._open["house cam"].get("stills_broken") == 1,
+          "a still only partly drawn (the camera still changing size) is not kept, but counted")
     until = time.monotonic() + 4
     asked_again = False
 
@@ -383,7 +390,8 @@ still_path, still_record = sightings.newest()
 check(still_record["stills"] and still_record["stills"][0]["file"] == "still-01.jpg"
       and (Path(still_path) / "still-01.jpg").read_bytes() == STILL
       and still_record["stills"][0]["sha256"] == sightings._sha256(STILL)
-      and (still_record["stills"][0]["width"], still_record["stills"][0]["height"]) == (1280, 960),
+      and (still_record["stills"][0]["width"], still_record["stills"][0]["height"]) == (1280, 960)
+      and still_record["stills_broken"] == 1,
       "kept as it came, with its time, size and SHA-256")
 check((Path(still_path) / "best.jpg").read_bytes() == STILL and still_record["best"]["file"] == "still-01.jpg",
       "the face twice as many pixels across: the still is the best picture")
@@ -484,6 +492,32 @@ if commands is not None:
     result = commands.handle_command("keep the last sighting")
     check(result["intent"] == "camera_sighting" and result["action"]() == "That sighting is already kept, sir.",
           "and kept")
+
+# ---- on the phone: "show me the last sighting" shows it there too, closeable -------------------------------
+
+try:
+    import phone
+except Exception as error:
+    print(f"SKIP the phone (could not import phone: {error})")
+    phone = None
+
+if phone is not None:
+    server = phone.PhoneServer(token="sighting-test")
+    client = server._app.test_client()
+    reply = server._camera_or_grid("show me the last sighting")
+    check(reply.get("sighting") == {"title": "SIGHTING HOUSE CAM", "url": "/sighting/picture"},
+          "asked on the phone, its reply carries the sighting's picture")
+    check("sighting" not in server._camera_or_grid("show me the house cam"), "and only then")
+    check(client.get("/sighting/picture").status_code == 403, "the picture needs the token")
+    got = client.get("/sighting/picture?t=sighting-test")
+    newest_folder, _ = sightings.newest()
+    check(got.status_code == 200 and got.mimetype == "image/jpeg"
+          and got.data == (Path(newest_folder) / "best.jpg").read_bytes(),
+          "and is the best picture, as kept")
+    check("(on the phone)" in (base / sightings.LOG_FILE).read_text(encoding="utf-8"), "the log says it was viewed there")
+    page = phone.PAGE
+    check("function openSighting" in page and "if (data.sighting) {" in page and 'id="feed-close"' in page,
+          "the phone's page shows it full screen, with the cross that closes a camera")
 
 outline.MODEL_DIR = real_model_dir
 outline.forget()

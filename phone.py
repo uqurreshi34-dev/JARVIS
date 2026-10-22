@@ -34,7 +34,7 @@ from pywebpush import webpush, WebPushException
 
 import phone_tls
 import transcriber
-from actions import location, askfiles, cameras, detections, files, highlight
+from actions import location, askfiles, cameras, detections, files, highlight, sightings
 from voice import FILLERS, set_phone_active
 
 import speech
@@ -997,7 +997,20 @@ class PhoneServer:
         return [{"name": camera["name"], "title": camera["name"].upper()} for camera in showing]
 
     def _camera_or_grid(self, text):
-        """{"camera": one camera to play} or {"cameras": every camera, as a grid}, for a reply."""
+        """{"camera": one camera to play} or {"cameras": every camera, as a grid}, for a reply; and
+        {"sighting": its picture} for "show me the last sighting", so the phone shows it too."""
+        shown = self._camera_or_grid_only(text)
+
+        if sightings.asked(text) == "show":
+            picture, record = sightings.last_picture_file()
+
+            if picture:
+                shown["sighting"] = {"title": f"SIGHTING {record['camera'].upper()}",
+                                     "url": "/sighting/picture"}
+
+        return shown
+
+    def _camera_or_grid_only(self, text):
         grid = self._cameras_shown(text)
 
         if grid:
@@ -1340,6 +1353,24 @@ class PhoneServer:
                 return jsonify({"error": refused}), 400
 
             return jsonify({"ok": True}), 200
+
+        @app.get("/sighting/picture")
+        def sighting_picture():
+            """The newest sighting's best picture, for the phone ("show me the last sighting"): over the
+            same HTTPS and token as everything else, read from the sighting's folder, never changed."""
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            picture, record = sightings.last_picture_file()
+
+            if not picture or not os.path.isfile(picture):
+                return jsonify({"error": "no sighting picture"}), 404
+
+            with open(picture, "rb") as kept:
+                data = kept.read()
+
+            sightings._log(f"viewed  {os.path.basename(os.path.dirname(picture))}  (on the phone)")
+            return app.response_class(data, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
 
         @app.get("/health")
         def health():
@@ -2929,7 +2960,9 @@ async function submit() {
     } else if (data.reply) {
       add(data.reply, "jarvis");
 
-      if (data.cameras && data.cameras.length) {
+      if (data.sighting) {
+        openSighting(data.sighting);
+      } else if (data.cameras && data.cameras.length) {
         openGrid(data.cameras);
       } else if (data.camera) {
         openFeed(data.camera.name, data.camera.title);
@@ -3214,6 +3247,21 @@ function openFeed(name, title, fromGrid) {
   feedImg.src = watchUrl(name);
   feed.classList.add("open");
   startMarks();
+}
+
+// A sighting's best picture ("show me the last sighting"), full screen where a camera plays; the cross
+// closes it as it closes a camera.
+function openSighting(sighting) {
+  stopFeed();
+  feedBack.classList.remove("shown");
+  feedImg.dataset.name = "";
+  feedTitle.textContent = sighting.title || "SIGHTING";
+  feedNote.textContent = "";
+  feedImg.style.display = "block";
+  feedImg.onload = null;
+  feedImg.onerror = () => { feedNote.textContent = "I couldn't get that picture, sir."; };
+  feedImg.src = sighting.url + "?t=" + encodeURIComponent(TOKEN) + "&at=" + Date.now();
+  feed.classList.add("open");
 }
 
 function closeFeed() {
@@ -3819,7 +3867,9 @@ async function stopRecording() {
     if (data.reply) {
       add(data.reply, "jarvis");
 
-      if (data.cameras && data.cameras.length) {
+      if (data.sighting) {
+        openSighting(data.sighting);
+      } else if (data.cameras && data.cameras.length) {
         openGrid(data.cameras);
       } else if (data.camera) {
         openFeed(data.camera.name, data.camera.title);

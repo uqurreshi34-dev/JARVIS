@@ -85,6 +85,14 @@ SHARP_HALF = 100.0
 # and a face in one is two and a half times as many pixels across: what makes someone known again.
 STILL_EVERY_SECONDS = 10.0
 
+# A still mostly blank is not kept: the camera, changing to the larger size, sometimes sends one with
+# only part of it drawn (green and black, the rest blank: 5 of 8 on 22 October 2026, which showed
+# something in 14% to 36% of their columns; the good ones, 92% to 100% -- a plain wall in view shows
+# little). A column shows something when its values vary by more than STILL_COLUMN_SPREAD; a still must
+# have STILL_COLUMNS_AT_LEAST of them.
+STILL_COLUMN_SPREAD = 1.0
+STILL_COLUMNS_AT_LEAST = 0.6
+
 # A person's box for cutting them out, made from their face in the best picture itself (the board's
 # boxes are from looks seconds apart, and someone moving is elsewhere by then): this many face widths
 # either side of the face, from just above it to eight faces below, tightest first. On the house cam's
@@ -228,6 +236,16 @@ def _begin(camera, now):
     return sighting
 
 
+def still_shown(rgb):
+    """How much of still [rgb] is drawn: the share of its columns whose values vary (0 to 1)."""
+    if rgb is None:
+        return 0.0
+
+    import numpy as np
+
+    return float((rgb.astype(np.float32).std(axis=(0, 2)) > STILL_COLUMN_SPREAD).mean())
+
+
 def _still(camera, jpeg):
     """A still from [camera] (cameras.take_still): kept beside the sighting's frames, as it came."""
     with _lock:
@@ -236,8 +254,16 @@ def _still(camera, jpeg):
     if sighting is None:
         return
 
-    name = f"still-{len(sighting['stills']) + 1:02d}.jpg"
     rgb = outline.picture(jpeg)
+    shown = still_shown(rgb)
+
+    if shown < STILL_COLUMNS_AT_LEAST:
+        sighting["stills_broken"] = sighting.get("stills_broken", 0) + 1
+        print(f"[JARVIS] sighting on {camera}: a still came broken ({shown:.0%} of it drawn); not kept",
+              flush=True)
+        return
+
+    name = f"still-{len(sighting['stills']) + 1:02d}.jpg"
 
     try:
         with open(os.path.join(sighting["folder"], name), "wb") as out:
@@ -439,6 +465,7 @@ def _end(sighting):
         "clock": "this PC's own clock, local time with its offset from UTC",
         "frames": sighting["frames"],
         "stills": sighting["stills"],
+        "stills_broken": sighting.get("stills_broken", 0),
         "best": {key: value for key, value in best.items() if key != "worth"} if best else None,
         "made_from_best": [{"file": name, "sha256": _sha256(data)} for name, data in made],
         "looks": sighting["looks"],
@@ -692,27 +719,38 @@ def keep_last():
     return f"Kept the sighting from {_spoken_time(record['began'])}, sir. It won't be deleted."
 
 
-def last_picture():
-    """(jpeg, title, what to say) of the newest sighting's best picture, or (None, None, what to say)."""
+def last_picture_file():
+    """(the file of the newest sighting's best picture, its record), or (None, record or None)."""
     found = newest()
 
     if found is None:
-        return None, None, "There are no sightings yet, sir."
+        return None, None
 
     path, record = found
     name = "best.jpg" if os.path.exists(os.path.join(path, "best.jpg")) else (
         record["frames"][0]["file"] if record.get("frames") else None)
+    return (os.path.join(path, name) if name else None), record
 
-    if name is None:
+
+def last_picture(where=""):
+    """(jpeg, title, what to say) of the newest sighting's best picture, or (None, None, what to say).
+    [where] it is viewed, for the log ("on the phone")."""
+    picture, record = last_picture_file()
+
+    if record is None:
+        return None, None, "There are no sightings yet, sir."
+
+    if picture is None:
         return None, None, "That sighting has no pictures, sir."
 
     try:
-        with open(os.path.join(path, name), "rb") as kept:
+        with open(picture, "rb") as kept:
             jpeg = kept.read()
     except OSError:
         return None, None, "I couldn't open that sighting, sir."
 
-    _log(f"viewed  {os.path.basename(path)}")
+    path = os.path.dirname(picture)
+    _log(f"viewed  {os.path.basename(path)}{('  (' + where + ')') if where else ''}")
     seconds = record.get("seconds") or 0
     return (jpeg, f"SIGHTING {record['camera'].upper()}",
             f"Someone on your {record['camera']} at {_spoken_time(record['began'])}, for "
