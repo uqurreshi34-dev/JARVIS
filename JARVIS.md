@@ -1855,15 +1855,19 @@ some made small and dark like the house cam's, 0.25 at most. "Forget my
 face" deletes it. known.json is never listed in the file hologram, never
 handed to the language model, and never moved by tidying the folder.
 
-Greeted as you arrive: `detections.set_arrival_hold` lets sightings hold
-the "Someone's in view" of one person while the sighting's newest
-picture, twice a second, is checked for your face (a face takes about
-50 ms; a group in view must not leave it behind the camera). Three
-pictures alike and "Welcome back, sir." is said instead; else the
-sentence as before, GREET_WAIT_SECONDS (4) after the first picture or
-GREET_WAIT_MOST (12) after the look. On his own sightings: 4.4 s from the
-look to the greeting, a group of strangers 8 s to "Someone's in view";
-the day before's sighting, his face turned away at first, "Someone".
+Greeted as you arrive: `detections.set_arrival_hold` tells sightings of
+one person arriving; "Someone's in view" is said at once all the same,
+and the sighting's newest picture, twice a second, is checked for your
+face (a face takes about 50 ms; a group in view must not leave it behind
+the camera). Three pictures alike and "It's you, sir. Welcome back."
+follows; else nothing more, GREET_WAIT_SECONDS (8) after the first
+picture or GREET_WAIT_MOST (20) after the look. On his own sightings: the
+greeting 5 s after the alert.
+
+**An alert never waits on good news.** For one evening "Someone's in
+view" was held up to 12 s while the pictures were checked for him, so a
+stranger's alert came late to spare him one about himself. Back to at
+once, with the greeting after: the alert matters more than the quiet.
 
 The best picture is the one showing a face best, of every picture kept:
 YuNet (`actions/faces.py`, MIT, `models/faces` by `tools/face_model.py`)

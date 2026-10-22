@@ -119,13 +119,14 @@ BODY_FACE_WIDTHS = (1.5, 1.8, 2.2)
 # A look's boxes are matched with a kept picture taken within this of the look.
 FRAME_MATCH_SECONDS = 1.0
 
-# Once you have taught JARVIS your face: "Someone's in view" is held while the sighting's first pictures
-# are checked for it, and "Welcome back, sir." said instead when SEEN_IN_AT_LEAST of them are you. Held
-# at most GREET_WAIT_SECONDS after the first picture comes, and GREET_WAIT_MOST after the look (the
-# stream takes a few seconds to start): then "Someone's in view" is said as before.
-GREET_WAIT_SECONDS = 4.0
-GREET_WAIT_MOST = 12.0
-GREETING = "Welcome back, sir."
+# Once you have taught JARVIS your face: "Someone's in view" is said at once, as ever, and the sighting's
+# first pictures are checked for you; when SEEN_IN_AT_LEAST of them are, GREETING follows. Checked for
+# GREET_WAIT_SECONDS after the first picture comes, and at most GREET_WAIT_MOST after the look (the
+# stream takes a few seconds to start); after that, nothing more is said. Never held: an alert about a
+# stranger must not wait on a check for you (it did, for one evening: 22 October 2026).
+GREET_WAIT_SECONDS = 8.0
+GREET_WAIT_MOST = 20.0
+GREETING = "It's you, sir. Welcome back."
 
 _lock = threading.Lock()
 _open = {}          # camera -> the sighting being made
@@ -465,8 +466,9 @@ def _consider(sighting, when, looked, strict=True):
 
 
 def hold_arrival(camera, arrived, sentence, deliver):
-    """detections' arrival hold: "Someone's in view" ([sentence]) is held while the sighting's first
-    pictures are checked for your face, when JARVIS knows it and one person has come. True if held."""
+    """detections' arrival hook: when JARVIS knows your face and one person has come, the sighting's
+    first pictures are checked for you, and GREETING said through deliver(text) if they are. Always
+    False: [sentence] ("Someone's in view") is said at once, by detections, never held."""
     likeness = known_faces.known().get(known_faces.YOU) if known_faces.present() else None
 
     if arrived != {"person": 1} or likeness is None:
@@ -483,7 +485,7 @@ def hold_arrival(camera, arrived, sentence, deliver):
                                "likeness": likeness}
 
     _start_worker()
-    return True
+    return False
 
 
 def _say_arrival(arrival, text):
@@ -496,8 +498,8 @@ def _say_arrival(arrival, text):
 
 
 def _greet(sighting, fresh, now):
-    """Check a held arrival's new pictures [fresh] for your face: "Welcome back, sir." once enough are
-    you; "Someone's in view" as before once the wait is over."""
+    """Check an arrival's new pictures [fresh] for your face: GREETING once enough are you; nothing
+    more once the wait is over."""
     arrival = sighting.get("arrival")
 
     if not arrival or arrival["done"]:
@@ -532,7 +534,7 @@ def _greet(sighting, fresh, now):
     waited_from_picture = arrival["first_picture"] is not None and now - arrival["first_picture"] > GREET_WAIT_SECONDS
 
     if waited_from_picture or now - arrival["looked"] > GREET_WAIT_MOST:
-        _say_arrival(arrival, arrival["sentence"])
+        arrival["done"] = True
 
 
 def _end(sighting):
@@ -540,10 +542,6 @@ def _end(sighting):
     global _last
     path = sighting["folder"]
     made = []
-
-    # An arrival still held when it ends: said as it would have been.
-    if sighting.get("arrival") and not sighting["arrival"]["done"]:
-        _say_arrival(sighting["arrival"], sighting["arrival"]["sentence"])
 
     # The picture showing their face best, from every one kept, when the face model is there.
     if faces.present():

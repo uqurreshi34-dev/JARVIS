@@ -12,8 +12,8 @@ Checked without the models (stand-ins give faces and fingerprints, so the rules 
 - a sighting's record says it was you, or None; nothing of a face is kept in it but that;
 - "learn my face", "forget my face": asked how people say it, and "show me the last sighting" says you;
   the sighting learned from is marked as you;
-- greeted: "Someone's in view" held while the first pictures are checked, "Welcome back, sir." when they
-  are you; a stranger, or no pictures, and it is said as before once the wait is up.
+- greeted: "Someone's in view" said at once, never held; then "It's you, sir. Welcome back." when the
+  first pictures are you; a stranger, or no pictures, and nothing more is said.
 
 With the real models (models/faces, or JARVIS_FACE_FOLDER) and JARVIS_TEST_FACE_IMAGE: a face's
 fingerprint is 128 numbers, and the same face made smaller is still alike (SKIP otherwise).
@@ -258,27 +258,26 @@ try:
     sightings.QUIET_SECONDS, sightings.LEASE_SECONDS = 1.0, 1.0
 
     try:
+        someone = "Someone's in view of your house cam, sir."
         held = arrive(list(range(50, 60)) * 2)
-        check(held == [], "you come into view: 'Someone's in view' is held while your face is checked")
-        check(wait_until(lambda: said == [sightings.GREETING], 5) and said == ["Welcome back, sir."],
-              f"and when it is you: 'Welcome back, sir.' instead ({said})")
+        check(held == [someone], f"you come into view: 'Someone's in view' at once, as ever ({held})")
+        check(wait_until(lambda: len(said) == 2, 5) and said == [someone, "It's you, sir. Welcome back."],
+              f"and when the pictures are you: 'It's you, sir. Welcome back.' after it ({said})")
         check(gone(), "the sighting ends as before")
         newest_folder, newest_record = sightings.newest()
         check(newest_record.get("greeted") == sightings.GREETING and "greeted you" in
               (base / sightings.LOG_FILE).read_text(encoding="utf-8"), "its record and the log say you were greeted")
         shutil.rmtree(newest_folder)
 
-        arrive(list(range(30, 40)) * 2)
-        check(wait_until(lambda: said, 5) and said == ["Someone's in view of your house cam, sir."],
-              f"a stranger: 'Someone's in view', as before, once their pictures are not you ({said})")
+        held = arrive(list(range(30, 40)) * 2)
+        time.sleep(sightings.GREET_WAIT_SECONDS)
+        check(held == [someone] and said == [someone], f"a stranger: 'Someone's in view' at once, and no more ({said})")
         gone()
         shutil.rmtree(sightings.newest()[0])
 
-        started = time.monotonic()
-        arrive([])
-        check(wait_until(lambda: said, 6) and said == ["Someone's in view of your house cam, sir."]
-              and time.monotonic() - started >= sightings.GREET_WAIT_MOST - 0.2,
-              f"no pictures at all: said when the most it waits is up ({time.monotonic() - started:.1f} s)")
+        held = arrive([])
+        time.sleep(sightings.GREET_WAIT_MOST + 0.5)
+        check(held == [someone] and said == [someone], f"no pictures at all: the same ({said})")
         gone()
         shutil.rmtree(sightings.newest()[0])
     finally:

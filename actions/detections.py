@@ -137,7 +137,8 @@ def set_listeners(on_say=None, on_phone=None):
 
 def set_arrival_hold(hold):
     """hold(camera, arrived, sentence, deliver) -> True if it will say [sentence] itself, or what it says
-    instead, through deliver(text) (to the phone and aloud, as said here); False to have it said now."""
+    instead, through deliver(text) (to the phone and aloud, as said here); False to have it said now.
+    Whatever it returns, it may say more later through deliver (sightings: "It's you, sir.")."""
     global _arrival_hold
     _arrival_hold = hold
 
