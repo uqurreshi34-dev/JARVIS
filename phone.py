@@ -34,7 +34,7 @@ from pywebpush import webpush, WebPushException
 
 import phone_tls
 import transcriber
-from actions import location, askfiles, cameras, detections, files, highlight, sightings
+from actions import location, askfiles, cameras, detections, files, highlight, sighting_search, sightings
 from voice import FILLERS, set_phone_active
 
 import speech
@@ -1001,12 +1001,22 @@ class PhoneServer:
         {"sighting": its picture} for "show me the last sighting", so the phone shows it too."""
         shown = self._camera_or_grid_only(text)
 
-        if sightings.asked(text) == "show":
+        wanted = sightings.asked(text)
+
+        if wanted == "show":
             picture, record = sightings.last_picture_file()
 
             if picture:
                 shown["sighting"] = {"title": f"SIGHTING {record['camera'].upper()}",
                                      "url": "/sighting/picture"}
+
+        # "When was I last on the house cam": the newest sighting it found, by its folder's name.
+        if wanted == "search":
+            _, picture, title = sighting_search.answer(text)
+
+            if picture:
+                shown["sighting"] = {"title": title,
+                                     "url": "/sighting/picture?name=" + os.path.basename(os.path.dirname(picture))}
 
         return shown
 
@@ -1364,7 +1374,9 @@ class PhoneServer:
             if not self._authorised():
                 return jsonify({"error": "unauthorised"}), 403
 
-            picture, record = sightings.last_picture_file()
+            # A sighting named by its folder (a search's answer), else the newest.
+            name = request.args.get("name")
+            picture = sighting_search.picture_of(name) if name else sightings.last_picture_file()[0]
 
             if not picture or not os.path.isfile(picture):
                 return jsonify({"error": "no sighting picture"}), 404
@@ -3263,7 +3275,8 @@ function openSighting(sighting) {
   feedImg.style.display = "block";
   feedImg.onload = null;
   feedImg.onerror = () => { feedNote.textContent = "I couldn't get that picture, sir."; };
-  feedImg.src = sighting.url + "?t=" + encodeURIComponent(TOKEN) + "&at=" + Date.now();
+  feedImg.src = sighting.url + (sighting.url.includes("?") ? "&" : "?") + "t=" + encodeURIComponent(TOKEN)
+    + "&at=" + Date.now();
   feed.classList.add("open");
 }
 

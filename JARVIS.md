@@ -2691,6 +2691,23 @@ a sighting is you only when three pictures say so, at a likeness no
 stranger tested came near. It was tested on seven strangers only: a
 housemate who agrees to it walking past is the test that matters.
 
+Asking about sightings (`actions/sighting_search.py`,
+`tools/test_sighting_search.py`): "when was I last on the house cam",
+"any strangers this week", "show me sightings from last night", "how many
+times was I seen today". Answered from the sighting.json records alone,
+no model and no call: a time (today, last night 18:00 to 06:00, this
+week from Monday, on Monday, the last N hours...), who (you, anyone not
+recognised as you, anyone) and what (the last, how many, a list of at
+most 5, times only within one day). A question about sightings needs the
+camera or the words for them, and the past or a time: "is anyone on the
+house cam" is still what it sees now. Sightings from before your face was
+known have no "recognised" and are neither you nor anyone else:
+`sightings.check_unchecked` checks them at start, and after "learn my
+face" checks those found not to be you again (every 2nd picture; about
+1.5 s a sighting here). The answer's picture shows on the panel, and on
+the phone by its folder's name (`/sighting/picture?name=`, a folder's
+name only, its best.jpg only).
+
 **Know what the user saw before calling it broken.** "Learned from 97
 pictures, and still Someone": the sighting shown had ended before the
 face was learned, and the one he was in was still being kept when he

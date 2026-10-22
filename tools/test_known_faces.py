@@ -11,7 +11,8 @@ Checked without the models (stand-ins give faces and fingerprints, so the rules 
   kept; learned again, it adds; "forget my face" deletes it;
 - a sighting's record says it was you, or None; nothing of a face is kept in it but that;
 - "learn my face", "forget my face": asked how people say it, and "show me the last sighting" says you;
-  the sighting learned from is marked as you;
+  the sighting learned from is marked as you; sightings from before your face was known are checked for
+  it, and those not found to be you checked again after learning more;
 - greeted: "Someone's in view" said at once, never held; then "It's you, sir. Welcome back." when the
   first pictures are you; a stranger, or no pictures, and nothing more is said.
 
@@ -287,6 +288,39 @@ try:
         sightings.forget()
         detections.forget()
         cameras.forget()
+
+    # Sightings from before your face was known: checked for it, at start and after "learn my face".
+    def recorded(name, numbers, recognised="never"):
+        path = sighting_folder(name, [picture_of(n) for n in numbers])
+        record = {"camera": "house cam", "began": "2026-10-21T12:00:00+01:00", "seconds": 5,
+                  "frames": [{"file": f"frame-{index:04d}.jpg"} for index in range(1, len(numbers) + 1)]}
+
+        if recognised != "never":
+            record["recognised"] = recognised
+
+        (path / sightings.RECORD_FILE).write_text(json.dumps(record), encoding="utf-8")
+        return path
+
+    def recognised_in(path):
+        return json.loads((path / sightings.RECORD_FILE).read_text(encoding="utf-8")).get("recognised", "never")
+
+    old_you = recorded("house-cam-2026-10-21-100000", list(range(50, 60)))
+    old_stranger = recorded("house-cam-2026-10-21-110000", list(range(30, 40)))
+    missed = recorded("house-cam-2026-10-21-120000", list(range(50, 60)), recognised=None)
+    checked = sightings.check_unchecked()
+    check(checked == 2 and (recognised_in(old_you) or {}).get("name") == "you"
+          and recognised_in(old_stranger) is None and recognised_in(missed) is None,
+          f"sightings never checked for your face: checked, you and not you ({checked} checked)")
+    check("checked  house-cam-2026-10-21-100000  (you)" in (base / sightings.LOG_FILE).read_text(encoding="utf-8")
+          and "recognised_later" in json.loads((old_you / sightings.RECORD_FILE).read_text(encoding="utf-8")),
+          "the log and the record say when it was checked")
+    check(sightings.check_unchecked() == 0, "each only once")
+    check(sightings.check_unchecked(again=True) == 2 and (recognised_in(missed) or {}).get("name") == "you"
+          and recognised_in(old_stranger) is None,
+          "after learning more, those not found to be you are checked again: you now, a stranger still not")
+
+    for path in (old_you, old_stranger, missed):
+        shutil.rmtree(path)
 
     # Learned from: that sighting is you, though it ended before your face was known.
     learned_from = sighting_folder("house-cam-2099-01-01-000000", [picture_of(n) for n in range(50, 60)])

@@ -705,10 +705,76 @@ def _finish_unfinished(base):
     return done
 
 
+_checking = threading.Lock()   # one check_unchecked at a time
+
+# Sightings made before your face was known are checked for it every this many pictures: half of them
+# is plenty to find you, and the check takes half as long.
+CHECK_EVERY = 2
+
+
+def check_unchecked(again=False):
+    """Check each sighting made before JARVIS knew your face for it, and say in its record whether it
+    was you ("recognised", and "recognised_later" with when): asked "any strangers this week", a sighting
+    never checked is not a stranger. With [again] (after "learn my face": it knows you better now), those
+    found not to be you are checked again too. A stranger's fingerprints are compared and dropped, as at
+    the end of a sighting. Returns how many were checked."""
+    if not known_faces.anyone_known():
+        return 0
+
+    with _checking:
+        with _lock:
+            making = {os.path.abspath(sighting["folder"]) for sighting in _open.values()}
+
+        checked = 0
+
+        for path, record in _records():
+            unchecked = "recognised" not in record or (again and record["recognised"] is None)
+
+            if not unchecked or os.path.abspath(path) in making:
+                continue
+
+            prints = []
+            pictures = record.get("frames", [])[::CHECK_EVERY] + record.get("stills", [])
+
+            for picture in pictures:
+                try:
+                    with open(os.path.join(path, picture["file"]), "rb") as kept:
+                        rgb = outline.picture(kept.read())
+                except (OSError, KeyError, TypeError):
+                    continue
+
+                if rgb is None:
+                    continue
+
+                for face in faces.detect(rgb):
+                    if faces.facing(face) >= known_faces.FACING_AT_LEAST:
+                        one = known_faces.fingerprint(rgb, face)
+
+                        if one is not None:
+                            prints.append(one)
+
+            record["recognised"] = known_faces.who(prints)
+            record["recognised_later"] = _now_text()
+
+            try:
+                with open(os.path.join(path, RECORD_FILE), "w", encoding="utf-8") as out:
+                    json.dump(record, out, indent=1)
+            except OSError as error:
+                print(f"[JARVIS] could not check an old sighting for you: {error}")
+                continue
+
+            checked += 1
+            _log(f"checked  {os.path.basename(path)}  ({'you' if record['recognised'] else 'not you'})")
+
+        return checked
+
+
 def _on_start():
-    """Once a start, off the thread that imports this: unfinished sightings finished, old ones deleted."""
+    """Once a start, off the thread that imports this: unfinished sightings finished, old ones checked
+    for your face, old ones deleted."""
     try:
         finish_unfinished()
+        check_unchecked()
     except OSError as error:
         print(f"[JARVIS] could not finish old sightings: {error}")
 
@@ -1028,7 +1094,8 @@ _UNLEARN = re.compile(r"^(?:(?:jarvis|please|now)\s+)*forget\s+my\s+face(?:\s+pl
 
 
 def asked(text):
-    """"keep", "show", "learn" (my face) or "unlearn" for a request about sightings, else None."""
+    """"keep", "show", "learn" (my face), "unlearn", or "search" (a question about the sightings kept:
+    actions/sighting_search.py) for a request about sightings, else None."""
     words = " ".join(re.sub(r"[^\w\s']", " ", str(text or "").casefold()).split())
 
     if _KEEP.match(words):
@@ -1042,6 +1109,11 @@ def asked(text):
 
     if _UNLEARN.match(words):
         return "unlearn"
+
+    from actions import sighting_search   # it reads the records here, so it is imported when asked
+
+    if sighting_search.asked(text):
+        return "search"
 
     return None
 
@@ -1072,6 +1144,10 @@ def learn_face():
     except OSError as error:
         print(f"[JARVIS] could not mark the sighting as you: {error}")
 
+    # Every sighting made before your face was known, or not found to be you, checked now, off this thread:
+    # learned by lamplight, last night's sightings may be you after all.
+    threading.Thread(target=check_unchecked, kwargs={"again": True}, name="jarvis-sightings-check",
+                     daemon=True).start()
     return said
 
 

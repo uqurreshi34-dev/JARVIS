@@ -739,6 +739,21 @@ after 31 days unless kept, and the oldest not kept go first if all of them pass
 | keep the last sighting / keep that sighting | never deleted |
 | learn my face | the last sighting is you: JARVIS learns your face from it (again, to learn more) |
 | forget my face | JARVIS knows no one's face |
+| when was I last on the house cam / when did you last see me | when, for how long, and its picture (**free**) |
+| any strangers this week / when did a stranger last come | sightings not recognised as you (**free**) |
+| show me sightings from last night / was anyone on the house cam yesterday | how many, when, you or someone; the newest one's picture (**free**) |
+| how many times was I seen today | a count (**free**) |
+
+**Asking about your sightings.** The questions above are answered from the sightings'
+own records, on your PC, with no model or call. Times: today, yesterday, last night (6 pm
+to 6 am), this morning, this afternoon, this evening, this week, last week, on Monday,
+in the last hour, in the last 3 hours or 20 minutes; none means every sighting kept.
+JARVIS says "not recognised as you", never "a stranger": your face has to be seen well
+enough to be you. Sightings from before it knew your face are checked for it each time
+JARVIS starts, and again (those not found to be you) after each "learn my face" -- so
+learning your face in a dim room also re-checks last night's. Until then they're
+"someone (not checked yet)", and it says how many. The picture shows on the panel, and
+on the phone when asked there.
 
 In the dark, both cameras turn their gain up further (the house cam's OV2640
 to 16x, from the 2x it started with; an OV3660 to 31x, and it may keep its

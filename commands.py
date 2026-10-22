@@ -39,6 +39,7 @@ from actions import (
     charts,
     detections,
     highlight,
+    sighting_search,
     sightings,
     clipboard,
     contacts,
@@ -2417,6 +2418,22 @@ def _camera_sighting(command):
 
     if wanted == "unlearn":
         return sightings.unlearn_face()
+
+    # "When was I last on the house cam", "any strangers this week": from the records kept, the newest
+    # one found shown (actions/sighting_search.py).
+    if wanted == "search":
+        said, found, title = sighting_search.answer(command)
+
+        if found and _camera_listener:
+            try:
+                with open(found, "rb") as kept:
+                    _camera_listener(kept.read(), title)
+
+                sightings._log(f"viewed  {os.path.basename(os.path.dirname(found))}")
+            except OSError:
+                pass
+
+        return said
 
     picture, title, said = sightings.last_picture()
 
