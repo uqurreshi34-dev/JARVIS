@@ -1843,26 +1843,20 @@ cut out with a body box made from that face, tightest first, the face
 given to SAM as a point on them. Without the face model, the best is
 chosen from the board's own looks. `tools/test_faces.py`.
 
-Stills. Live view is 640 x 480; the house cam's OV3660 takes 2048 x 1536
-(an OV2640, 1600 x 1200: the camera modules were swapped on 22 October so
-the board that detects has the better one). A sighting asks for a still as
-it begins (`"still"` in the answer to `/camera/wanted`; a stream is ended
-for one, as for a look, since a streaming board asks nothing). After that
-the board takes one every ten seconds itself while it has seen a person in
-the last four, and sends it down the live stream between two frames, its
-length's second bit set (cameras.STILL_FLAG): about a second of live view
-rather than the four to six an ask cost. For a still the board sets the
-sensor to the still's size, lets four frames go while it settles --
-detection holding off meanwhile, so it does not take them -- keeps the
-next, and goes back to VGA. A still mostly blank (taken mid-change) is
-not kept. The camera's picture buffers are sized when it starts (width x
-height / 5 each), so the board takes the detection model's memory first,
-then starts the camera at the largest still size that leaves 512 KB of
-PSRAM (as the sensor takes it: an OV2640 asked for 2048 x 1536 is given
-1600 x 1200), then VGA at once; the console says which (`[jarvis] stills:
-2048 x 1536; ... bytes of PSRAM left`). If none fits, no stills, and all
-else as before. Stills compete for the best picture: the same sharpness
-with three times the pixels.
+Stills. Live view is 640 x 480; the house cam's OV2640 takes 1600 x 1200
+(an OV3660, 2048 x 1536).
+A sighting asks for a still as it begins and every ten seconds
+(`"still"` in the answer to `/camera/wanted`; a stream is ended for one, as
+for a look, since a streaming board asks nothing). The board sets the
+sensor to the still's size, lets two frames go while it settles, sends one
+to `POST /camera/still`, and goes back to VGA. The camera's picture
+buffers are sized when it starts (width x height / 5 each), so the board
+takes the detection model's memory first, then starts the camera at the
+largest still size that leaves 512 KB of PSRAM (as the sensor takes it:
+an OV2640 asked for 2048 x 1536 is given 1600 x 1200), then VGA at once;
+the console says which (`[jarvis] stills: 2048 x 1536; ... bytes of PSRAM
+left`). If none fits, no stills, and all else as before. Stills compete
+for the best picture: the same sharpness with three times the pixels.
 
 ### When the HUD freezes - `stall_watch.py`
 The HUD froze for a second or two at start-up, and the console said
@@ -2602,13 +2596,6 @@ the camera went unscored. Scored by face over every picture, it was the
 frame he picked himself. A box from the board's look, a second or more
 away, cut the dark door out with him; one from his face in that picture
 did not (SAM 0.23 steady from the box alone, 0.90 with the face as a point).
-
-**A camera changing size gives garbage for a frame or two.** The first
-still after a stream came with 86% of it blank: two frames let go were not
-enough, and detection, taking frames as ever, had some of those. Now four,
-detection holds off, and a still mostly blank is not kept. Asking for each
-still between streams also cost 4 to 6 seconds of live view a time; the
-board now sends them down the stream itself.
 
 **Measure sharpness where the picture was taken.** Scaling every face to
 one size to compare a still with a frame changed which frame of a sighting

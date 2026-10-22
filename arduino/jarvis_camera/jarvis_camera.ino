@@ -257,19 +257,7 @@ static char liveMarks[2048];
 static size_t liveMarksLength = 0;
 static uint32_t liveMarksSeq = 0;
 static portMUX_TYPE liveMarksLock = portMUX_INITIALIZER_UNLOCKED;
-
-// A still sent down the live stream as a chunk of its own, its length's second bit set, while someone is
-// in view: the board takes one every STILL_EVERY_MS without stopping the stream. Asked for by JARVIS
-// instead, a still cost 4 to 6 seconds of live view -- the stream ended, an ask, the still, a new stream
-// (22 October 2026). Detection holds off while one is taken (stillTaking), so the frames the camera
-// gives while it settles at the larger size are let go here, not taken by a look.
-static const uint32_t LIVE_STILL_FLAG = 0x40000000UL;
-static const unsigned long STILL_EVERY_MS = 10000UL;
-static const unsigned long STILL_PERSON_RECENT_MS = 4000UL;   // someone seen this recently is in view
-volatile unsigned long personSeenAt = 0;
-unsigned long lastStillAt = 0;
 #endif
-volatile bool stillTaking = false;
 
 // Writes all of [length] bytes, in pieces the TLS layer takes; false if the
 // connection went.
@@ -292,102 +280,6 @@ bool writeAll(NetworkClientSecure &link, const uint8_t *data, size_t length) {
 // sent as one chunk -- its length in four bytes, then the JPEG. JARVIS
 // answers, and closes the connection, when the picture is put away; a write
 // that fails, or an answer waiting, ends it here.
-// A still, larger than live view's VGA, when JARVIS asks (someone has come into view: actions/sightings.py).
-// The camera's picture buffers are sized when it starts, width x height / 5 each, so it starts at the
-// largest of these whose buffers leave STILL_PSRAM_SPARE of PSRAM free -- after the detection model has
-// taken its own (reserveDetection) -- and is set back to VGA at once. None fits: no stills, VGA as before.
-// The ESP32-S3 boards only; the ESP32-CAM's 4 MB is left as it was.
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
-static const framesize_t STILL_SIZES[] = {FRAMESIZE_QXGA, FRAMESIZE_UXGA, FRAMESIZE_SXGA};
-static const size_t STILL_PSRAM_SPARE = 512UL * 1024UL;
-#endif
-static const int LIVE_QUALITY = 12;         // JPEG quality for live view and pictures (lower is better)
-static const int STILL_QUALITY = 10;        // and for a still
-static const int STILL_SETTLE_FRAMES = 4;   // frames let go after a size change, while the sensor settles
-framesize_t stillSize = FRAMESIZE_INVALID;
-
-// A still at stillSize: the sensor set to it, frames let go while it settles (detection holding off), and
-// the still itself; stillDone() puts the camera back. 2 frames let go were not enough: one still came
-// with its last 86% blank, taken while the sensor was still changing over (22 October 2026).
-camera_fb_t *grabStill() {
-  if (stillSize == FRAMESIZE_INVALID) {
-    return nullptr;
-  }
-
-  sensor_t *sensor = esp_camera_sensor_get();
-
-  if (!sensor) {
-    return nullptr;
-  }
-
-  stillTaking = true;
-
-  if (sensor->set_framesize(sensor, stillSize) != 0) {
-    Serial.println("[jarvis] still: the camera would not change size");
-    stillTaking = false;
-    return nullptr;
-  }
-
-  sensor->set_quality(sensor, STILL_QUALITY);
-
-  for (int i = 0; i < STILL_SETTLE_FRAMES; ++i) {
-    camera_fb_t *old = esp_camera_fb_get();
-
-    if (old) {
-      esp_camera_fb_return(old);
-    }
-  }
-
-  camera_fb_t *frame = esp_camera_fb_get();
-
-  if (!frame) {
-    Serial.println("[jarvis] still: the camera gave no picture");
-  }
-
-  return frame;
-}
-
-void stillDone(camera_fb_t *frame) {
-  if (frame) {
-    esp_camera_fb_return(frame);
-  }
-
-  sensor_t *sensor = esp_camera_sensor_get();
-
-  if (sensor) {
-    sensor->set_framesize(sensor, FRAMESIZE_VGA);
-    sensor->set_quality(sensor, LIVE_QUALITY);
-  }
-
-  camera_fb_t *old = esp_camera_fb_get();
-
-  if (old) {
-    esp_camera_fb_return(old);
-  }
-
-  stillTaking = false;
-#ifdef JARVIS_DETECT
-  lastStillAt = millis();
-#endif
-}
-
-// A still JARVIS asked for (as a sighting begins), sent to POST /camera/still.
-void takeStill() {
-  unsigned long started = millis();
-  camera_fb_t *frame = grabStill();
-
-  if (frame) {
-    Serial.printf("[jarvis] still: %u x %u, %u bytes in %lu ms\n", (unsigned)frame->width, (unsigned)frame->height,
-                  (unsigned)frame->len, millis() - started);
-
-    if (post("/camera/still", "image/jpeg", frame->buf, frame->len, nullptr, POST_TIMEOUT_MS * 2) == HTTP_CODE_OK) {
-      lastDelivered = millis();
-    }
-  }
-
-  stillDone(frame);
-}
-
 void streamLive() {
   if (!liveLink.connect(JARVIS_HOST, JARVIS_PORT)) {
     Serial.println("[jarvis] live view: could not connect");
@@ -474,35 +366,6 @@ void streamLive() {
         break;
       }
     }
-
-    // Someone in view and a still due: one down this same stream, flagged as a still.
-    if (stillSize != FRAMESIZE_INVALID && personSeenAt && millis() - personSeenAt < STILL_PERSON_RECENT_MS &&
-        millis() - lastStillAt >= STILL_EVERY_MS) {
-      unsigned long stillStarted = millis();
-      camera_fb_t *still = grabStill();
-      bool stillSent = true;
-
-      if (still) {
-        uint32_t flagged = (uint32_t)still->len | LIVE_STILL_FLAG;
-        uint8_t stillHeader[4] = {
-          (uint8_t)(flagged >> 24), (uint8_t)(flagged >> 16), (uint8_t)(flagged >> 8), (uint8_t)flagged,
-        };
-        char stillSize_[12];
-        snprintf(stillSize_, sizeof(stillSize_), "%X\r\n", (unsigned)(still->len + sizeof(stillHeader)));
-        stillSent = writeAll(liveLink, (const uint8_t *)stillSize_, strlen(stillSize_)) &&
-                    writeAll(liveLink, stillHeader, sizeof(stillHeader)) &&
-                    writeAll(liveLink, still->buf, still->len) &&
-                    writeAll(liveLink, (const uint8_t *)"\r\n", 2);
-        Serial.printf("[jarvis] still in live view: %u bytes in %lu ms\n", (unsigned)still->len,
-                      millis() - stillStarted);
-      }
-
-      stillDone(still);
-
-      if (!stillSent) {
-        break;
-      }
-    }
 #endif
 
     frames++;
@@ -523,6 +386,70 @@ void streamLive() {
   writeAll(liveLink, (const uint8_t *)"0\r\n\r\n", 5);
   liveLink.stop();
   Serial.printf("[jarvis] live view ended: %lu frames in %lu s\n", frames, (millis() - started) / 1000UL);
+}
+
+// A still, larger than live view's VGA, when JARVIS asks (someone has come into view: actions/sightings.py).
+// The camera's picture buffers are sized when it starts, width x height / 5 each, so it starts at the
+// largest of these whose buffers leave STILL_PSRAM_SPARE of PSRAM free -- after the detection model has
+// taken its own (reserveDetection) -- and is set back to VGA at once. None fits: no stills, VGA as before.
+// The ESP32-S3 boards only; the ESP32-CAM's 4 MB is left as it was.
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+static const framesize_t STILL_SIZES[] = {FRAMESIZE_QXGA, FRAMESIZE_UXGA, FRAMESIZE_SXGA};
+static const size_t STILL_PSRAM_SPARE = 512UL * 1024UL;
+#endif
+static const int LIVE_QUALITY = 12;         // JPEG quality for live view and pictures (lower is better)
+static const int STILL_QUALITY = 10;        // and for a still
+static const int STILL_SETTLE_FRAMES = 2;   // frames let go after a size change, while the sensor settles
+framesize_t stillSize = FRAMESIZE_INVALID;
+
+// A still at stillSize for a sighting: the sensor set to it, a frame or two let go while it settles,
+// one sent to POST /camera/still, and the sensor set back to VGA. Detection meanwhile skips the large
+// frames it is given (too big for its buffer), as live view is not running: the loop is here.
+void takeStill() {
+  if (stillSize == FRAMESIZE_INVALID) {
+    return;
+  }
+
+  sensor_t *sensor = esp_camera_sensor_get();
+  unsigned long started = millis();
+
+  if (!sensor || sensor->set_framesize(sensor, stillSize) != 0) {
+    Serial.println("[jarvis] still: the camera would not change size");
+    return;
+  }
+
+  sensor->set_quality(sensor, STILL_QUALITY);
+
+  for (int i = 0; i < STILL_SETTLE_FRAMES; ++i) {
+    camera_fb_t *old = esp_camera_fb_get();
+
+    if (old) {
+      esp_camera_fb_return(old);
+    }
+  }
+
+  camera_fb_t *frame = esp_camera_fb_get();
+
+  if (frame) {
+    Serial.printf("[jarvis] still: %u x %u, %u bytes in %lu ms\n", (unsigned)frame->width, (unsigned)frame->height,
+                  (unsigned)frame->len, millis() - started);
+    int code = post("/camera/still", "image/jpeg", frame->buf, frame->len, nullptr, POST_TIMEOUT_MS * 2);
+    esp_camera_fb_return(frame);
+
+    if (code == HTTP_CODE_OK) {
+      lastDelivered = millis();
+    }
+  } else {
+    Serial.println("[jarvis] still: the camera gave no picture");
+  }
+
+  sensor->set_framesize(sensor, FRAMESIZE_VGA);
+  sensor->set_quality(sensor, LIVE_QUALITY);
+  camera_fb_t *old = esp_camera_fb_get();
+
+  if (old) {
+    esp_camera_fb_return(old);
+  }
 }
 
 void sendPicture() {
@@ -1150,7 +1077,7 @@ void detectTask(void *) {
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(DETECT_GAP_MS));
 
-    if (WiFi.status() != WL_CONNECTED || stillTaking) {
+    if (WiFi.status() != WL_CONNECTED) {
       continue;
     }
 
@@ -1235,13 +1162,6 @@ void detectTask(void *) {
                   now.length() ? now.c_str() : "nothing", took, ready, scores.length() ? scores.c_str() : "nothing");
 
     // For the live view: what the board is sure of and this look, with their boxes (streamLive).
-    for (int i = 0; i < count; ++i) {
-      if (seen[i].label == 0) {   // a person: stills are taken while someone is in view (streamLive)
-        personSeenAt = millis();
-        break;
-      }
-    }
-
     String marksJson = "{\"objects\":[";
     addObjects(marksJson, seen, count);
     marksJson += "],\"now\":[";
