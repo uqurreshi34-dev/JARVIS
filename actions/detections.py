@@ -77,6 +77,7 @@ _last_said = {}       # camera -> [labels] last said unasked: what "highlight it
 _muted = False
 _say = None
 _phone = None
+_arrival_hold = None   # actions/sightings.py: holds "Someone's in view" a moment, to greet you instead
 _on_marks = None      # called with a camera's name when its boxes change (actions/highlight.py)
 _marks_listeners = []  # more of the same (actions/sightings.py)
 
@@ -132,6 +133,25 @@ def set_listeners(on_say=None, on_phone=None):
     desk's turn: tapping it opens [camera]. Without on_phone, on_say is expected to reach the phone too."""
     global _say, _phone
     _say, _phone = on_say, on_phone
+
+
+def set_arrival_hold(hold):
+    """hold(camera, arrived, sentence, deliver) -> True if it will say [sentence] itself, or what it says
+    instead, through deliver(text) (to the phone and aloud, as said here); False to have it said now."""
+    global _arrival_hold
+    _arrival_hold = hold
+
+
+def _deliver(camera, sentence):
+    """[sentence], about [camera], to the phone and aloud."""
+    if _phone:
+        try:
+            _phone(sentence, camera)
+        except Exception as error:   # noqa: BLE001 - the phone failing must not stop it being said
+            print(f"[JARVIS] could not send a sighting to the phone: {error}")
+
+    if _say:
+        _say(sentence)
 
 
 def set_marks_listener(listener):
@@ -318,14 +338,16 @@ def record(name, payload):
         _pending[sentence] = (camera, dict(due), now)
 
     if not quiet:
-        if _phone:
-            try:
-                _phone(sentence, camera)
-            except Exception as error:   # noqa: BLE001 - the phone failing must not stop it being said
-                print(f"[JARVIS] could not send a sighting to the phone: {error}")
+        held = False
 
-        if _say:
-            _say(sentence)
+        if _arrival_hold:
+            try:
+                held = _arrival_hold(camera, dict(due), sentence, lambda text: _deliver(camera, text))
+            except Exception as error:   # noqa: BLE001 - whatever goes wrong there, it is still said
+                print(f"[JARVIS] could not hold an arrival: {error}")
+
+        if not held:
+            _deliver(camera, sentence)
 
     return None
 

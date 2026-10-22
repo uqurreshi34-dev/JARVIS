@@ -10,7 +10,10 @@ Checked without the models (stand-ins give faces and fingerprints, so the rules 
 - learning: only pictures with one face, turned to the camera, and like the rest; too few and nothing is
   kept; learned again, it adds; "forget my face" deletes it;
 - a sighting's record says it was you, or None; nothing of a face is kept in it but that;
-- "learn my face", "forget my face": asked how people say it, and "show me the last sighting" says you.
+- "learn my face", "forget my face": asked how people say it, and "show me the last sighting" says you;
+  the sighting learned from is marked as you;
+- greeted: "Someone's in view" held while the first pictures are checked, "Welcome back, sir." when they
+  are you; a stranger, or no pictures, and it is said as before once the wait is up.
 
 With the real models (models/faces, or JARVIS_FACE_FOLDER) and JARVIS_TEST_FACE_IMAGE: a face's
 fingerprint is 128 numbers, and the same face made smaller is still alike (SKIP otherwise).
@@ -43,7 +46,10 @@ for _name in ("win32api", "win32con", "win32gui", "win32process", "win32event", 
 
 from PIL import Image  # noqa: E402
 
-from actions import faces, known_faces, outline, sightings  # noqa: E402
+import io  # noqa: E402
+import time  # noqa: E402
+
+from actions import cameras, detections, faces, known_faces, outline, sensors, sightings  # noqa: E402
 
 RESULTS = []
 
@@ -202,6 +208,96 @@ try:
     check(sightings.last_picture()[2].startswith("You were on your house cam"),
           "'show me the last sighting' says it was you")
     shutil.rmtree(mine)
+
+    # ---- greeted as you arrive -------------------------------------------------------------------------------
+
+    def as_jpeg(shown):
+        out = io.BytesIO()
+        Image.fromarray(shown).save(out, "JPEG", quality=100)
+        return out.getvalue()
+
+    def wait_until(condition, seconds=8.0):
+        until = time.monotonic() + seconds
+
+        while time.monotonic() < until and not condition():
+            time.sleep(0.05)
+
+        return condition()
+
+    def arrive(numbers, gap=0.15):
+        """Someone comes into view: the board's report, then the stream's pictures of face [numbers]."""
+        sightings.forget()
+        cameras.forget()
+        detections.forget()
+        sensors.reset()
+        sensors.report({"name": "house cam", "event": "online"})
+        said.clear()
+        earlier[:] = [path for path in base.iterdir() if path.is_dir()]
+        detections.record("house cam", {"name": "house cam", "ms": 300,
+                                        "objects": [{"label": "person", "score": 0.8, "box": [0.3, 0.2, 0.6, 0.9]}]})
+        held = list(said)
+
+        for number in numbers:
+            cameras.store("house cam", as_jpeg(picture_of(number)))
+            time.sleep(gap)
+
+        return held
+
+    def gone():
+        detections.take_marks("house cam", {"objects": [], "now": []})
+        return wait_until(lambda: not sightings._open and all((path / sightings.RECORD_FILE).is_file()
+                                                              for path in base.iterdir()
+                                                              if path.is_dir() and path not in earlier), 10)
+
+    said, earlier = [], []
+    detections.set_listeners(on_say=said.append, on_phone=lambda text, camera: None)
+    real_waits = (sightings.GREET_WAIT_SECONDS, sightings.GREET_WAIT_MOST, sightings.QUIET_SECONDS,
+                  sightings.LEASE_SECONDS)
+    # The newest picture is checked each tick (twice a second): three of you take a second and a half.
+    sightings.GREET_WAIT_SECONDS, sightings.GREET_WAIT_MOST = 2.5, 4.0
+    sightings.QUIET_SECONDS, sightings.LEASE_SECONDS = 1.0, 1.0
+
+    try:
+        held = arrive(list(range(50, 60)) * 2)
+        check(held == [], "you come into view: 'Someone's in view' is held while your face is checked")
+        check(wait_until(lambda: said == [sightings.GREETING], 5) and said == ["Welcome back, sir."],
+              f"and when it is you: 'Welcome back, sir.' instead ({said})")
+        check(gone(), "the sighting ends as before")
+        newest_folder, newest_record = sightings.newest()
+        check(newest_record.get("greeted") == sightings.GREETING and "greeted you" in
+              (base / sightings.LOG_FILE).read_text(encoding="utf-8"), "its record and the log say you were greeted")
+        shutil.rmtree(newest_folder)
+
+        arrive(list(range(30, 40)) * 2)
+        check(wait_until(lambda: said, 5) and said == ["Someone's in view of your house cam, sir."],
+              f"a stranger: 'Someone's in view', as before, once their pictures are not you ({said})")
+        gone()
+        shutil.rmtree(sightings.newest()[0])
+
+        started = time.monotonic()
+        arrive([])
+        check(wait_until(lambda: said, 6) and said == ["Someone's in view of your house cam, sir."]
+              and time.monotonic() - started >= sightings.GREET_WAIT_MOST - 0.2,
+              f"no pictures at all: said when the most it waits is up ({time.monotonic() - started:.1f} s)")
+        gone()
+        shutil.rmtree(sightings.newest()[0])
+    finally:
+        (sightings.GREET_WAIT_SECONDS, sightings.GREET_WAIT_MOST, sightings.QUIET_SECONDS,
+         sightings.LEASE_SECONDS) = real_waits
+        detections.set_listeners(on_say=None, on_phone=None)
+        sightings.forget()
+        detections.forget()
+        cameras.forget()
+
+    # Learned from: that sighting is you, though it ended before your face was known.
+    learned_from = sighting_folder("house-cam-2099-01-01-000000", [picture_of(n) for n in range(50, 60)])
+    (learned_from / sightings.RECORD_FILE).write_text(json.dumps({"camera": "house cam", "began": "2099-01-01T00:00:00+00:00",
+                                                             "seconds": 5, "frames": [], "recognised": None}),
+                                                 encoding="utf-8")
+    check(sightings.learn_face().startswith("Learned")
+          and json.loads((learned_from / sightings.RECORD_FILE).read_text(encoding="utf-8"))["recognised"]["name"] == "you",
+          "the sighting learned from is marked as you")
+    shutil.rmtree(learned_from)
 
     check(sightings.asked("learn my face") == "learn" and sightings.asked("Jarvis, learn my face please.") == "learn"
           and sightings.asked("learn my face from the last sighting") == "learn",

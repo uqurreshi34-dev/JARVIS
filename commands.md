@@ -713,6 +713,15 @@ Say it again after a sighting at night, so it knows you in any light. From then
 on each sighting's record says whether it was you (in at least 3 pictures alike),
 and "show me the last sighting" says "You were on your house cam..." instead of
 "Someone...". No one else is ever named, and nothing of a stranger's face is kept.
+
+**Greeted as you arrive.** Once JARVIS knows your face, when one person comes into view
+of the house cam it holds "Someone's in view" while it checks the first pictures: if 3
+are you, it says "Welcome back, sir." instead. If not -- a stranger, or your face turned
+away -- it says "Someone's in view" as before, 4 seconds after the pictures start (at
+most 12 after the camera saw them). So an alert about a stranger now comes a few seconds
+later than before; that is the price of not being alerted about yourself. The sighting
+you learn from is marked as you, and asking for the last sighting while one is still
+being kept says so.
 What JARVIS knows of you is `~/JARVIS/faces/known.json`, on this PC only; "forget
 my face" deletes it. Recognising faces of people in the street is not the same as
 in your own home under data protection law: keep it to your own home.

@@ -119,6 +119,14 @@ BODY_FACE_WIDTHS = (1.5, 1.8, 2.2)
 # A look's boxes are matched with a kept picture taken within this of the look.
 FRAME_MATCH_SECONDS = 1.0
 
+# Once you have taught JARVIS your face: "Someone's in view" is held while the sighting's first pictures
+# are checked for it, and "Welcome back, sir." said instead when SEEN_IN_AT_LEAST of them are you. Held
+# at most GREET_WAIT_SECONDS after the first picture comes, and GREET_WAIT_MOST after the look (the
+# stream takes a few seconds to start): then "Someone's in view" is said as before.
+GREET_WAIT_SECONDS = 4.0
+GREET_WAIT_MOST = 12.0
+GREETING = "Welcome back, sir."
+
 _lock = threading.Lock()
 _open = {}          # camera -> the sighting being made
 _last = None        # folder of the newest sighting ended this run, for "the last sighting"
@@ -357,6 +365,8 @@ def _tick(camera):
             cameras.want_still(camera)
             sighting["still_asked"] = now
 
+    fresh = []
+
     # The camera's pictures since the last kept, at most FPS a second; the first ones from just before.
     for taken, jpeg in cameras.frames_since(camera, sighting["after"]):
         sighting["after"] = taken
@@ -375,6 +385,9 @@ def _tick(camera):
 
         sighting["frames"].append({"file": name, "at": _now_text(taken), "sha256": _sha256(jpeg)})
         sighting["frame_times"].append(taken)
+        fresh.append(jpeg)
+
+    _greet(sighting, fresh, now)
 
     with _lock:
         candidates, sighting["candidates"] = sighting["candidates"], []
@@ -451,11 +464,86 @@ def _consider(sighting, when, looked, strict=True):
     return True
 
 
+def hold_arrival(camera, arrived, sentence, deliver):
+    """detections' arrival hold: "Someone's in view" ([sentence]) is held while the sighting's first
+    pictures are checked for your face, when JARVIS knows it and one person has come. True if held."""
+    likeness = known_faces.known().get(known_faces.YOU) if known_faces.present() else None
+
+    if arrived != {"person": 1} or likeness is None:
+        return False
+
+    with _lock:
+        sighting = _open.get(camera)
+
+        if sighting is None or (sighting.get("arrival") and not sighting["arrival"]["done"]):
+            return False
+
+        sighting["arrival"] = {"sentence": sentence, "deliver": deliver, "looked": time.monotonic(),
+                               "first_picture": None, "you": 0, "done": False,
+                               "likeness": likeness}
+
+    _start_worker()
+    return True
+
+
+def _say_arrival(arrival, text):
+    arrival["done"] = True
+
+    try:
+        arrival["deliver"](text)
+    except Exception as error:   # noqa: BLE001 - a greeting must never stop the evidence
+        print(f"[JARVIS] could not say an arrival: {error}")
+
+
+def _greet(sighting, fresh, now):
+    """Check a held arrival's new pictures [fresh] for your face: "Welcome back, sir." once enough are
+    you; "Someone's in view" as before once the wait is over."""
+    arrival = sighting.get("arrival")
+
+    if not arrival or arrival["done"]:
+        return
+
+    if fresh and arrival["first_picture"] is None:
+        arrival["first_picture"] = now
+
+    # The newest picture only, each tick (two a second): a face takes about 50 ms to check, and a group
+    # in view must not leave it behind the camera.
+    for jpeg in fresh[-1:]:
+        rgb = outline.picture(jpeg)
+
+        if rgb is None:
+            continue
+
+        for face in faces.detect(rgb):
+            if faces.facing(face) < known_faces.FACING_AT_LEAST:
+                continue
+
+            one = known_faces.fingerprint(rgb, face)
+
+            if one is not None and known_faces.alike(one, arrival["likeness"]) >= known_faces.SAME_AT_LEAST:
+                arrival["you"] += 1
+
+        if arrival["you"] >= known_faces.SEEN_IN_AT_LEAST:
+            sighting["greeted"] = True
+            _log(f"greeted you  {os.path.basename(sighting['folder'])}")
+            _say_arrival(arrival, GREETING)
+            return
+
+    waited_from_picture = arrival["first_picture"] is not None and now - arrival["first_picture"] > GREET_WAIT_SECONDS
+
+    if waited_from_picture or now - arrival["looked"] > GREET_WAIT_MOST:
+        _say_arrival(arrival, arrival["sentence"])
+
+
 def _end(sighting):
     """Write what is kept beside the pictures: the best one, the person cut out, the record, the player."""
     global _last
     path = sighting["folder"]
     made = []
+
+    # An arrival still held when it ends: said as it would have been.
+    if sighting.get("arrival") and not sighting["arrival"]["done"]:
+        _say_arrival(sighting["arrival"], sighting["arrival"]["sentence"])
 
     # The picture showing their face best, from every one kept, when the face model is there.
     if faces.present():
@@ -516,6 +604,9 @@ def _end(sighting):
     # one it knows. Nothing else about anyone's face is kept.
     if known_faces.anyone_known():
         record["recognised"] = sighting.get("who")
+
+    if sighting.get("greeted"):
+        record["greeted"] = GREETING
 
     who = (record.get("recognised") or {}).get("name")
     said_who = f"; {who}" if who else ""
@@ -903,9 +994,16 @@ def last_picture(where=""):
     _log(f"viewed  {os.path.basename(path)}{('  (' + where + ')') if where else ''}")
     seconds = record.get("seconds") or 0
     who = "You were" if (record.get("recognised") or {}).get("name") == known_faces.YOU else "Someone"
+
+    # One still being kept is not the last: it has no best picture yet (19:04, 22 October 2026: asked
+    # while in view, and shown the one before without a word).
+    with _lock:
+        going_on = bool(_open)
+
+    still = " Another is being kept now; ask again when it ends." if going_on else ""
     return (jpeg, f"SIGHTING {record['camera'].upper()}",
             f"{who} on your {record['camera']} at {_spoken_time(record['began'])}, for "
-            f"{max(1, round(seconds))} seconds, sir.")
+            f"{max(1, round(seconds))} seconds, sir.{still}")
 
 
 def _spoken_time(text):
@@ -957,9 +1055,25 @@ def learn_face():
     if found is None:
         return "There are no sightings to learn your face from yet, sir. Stand in front of the house cam first."
 
-    said = known_faces.learn(found[0])
-    _log(f"learned a face from  {os.path.basename(found[0])}" if said.startswith("Learned") else
-         f"could not learn a face from  {os.path.basename(found[0])}")
+    path, record = found
+    said = known_faces.learn(path)
+
+    if not said.startswith("Learned"):
+        _log(f"could not learn a face from  {os.path.basename(path)}")
+        return said
+
+    _log(f"learned a face from  {os.path.basename(path)}")
+
+    # The sighting learned from is you, by your own word (19:03, 22 October 2026: learned from, and
+    # still "Someone" when shown, as it ended before your face was known).
+    record["recognised"] = {"name": known_faces.YOU, "learned_from": True}
+
+    try:
+        with open(os.path.join(path, RECORD_FILE), "w", encoding="utf-8") as out:
+            json.dump(record, out, indent=1)
+    except OSError as error:
+        print(f"[JARVIS] could not mark the sighting as you: {error}")
+
     return said
 
 
@@ -983,6 +1097,7 @@ def forget():
 
 
 detections.add_marks_listener(_seen)
+detections.set_arrival_hold(hold_arrival)
 cameras.set_still_listener(_still)
 
 # Unfinished sightings finished, old ones deleted, once a start, off the thread that imports this.

@@ -1855,6 +1855,16 @@ some made small and dark like the house cam's, 0.25 at most. "Forget my
 face" deletes it. known.json is never listed in the file hologram, never
 handed to the language model, and never moved by tidying the folder.
 
+Greeted as you arrive: `detections.set_arrival_hold` lets sightings hold
+the "Someone's in view" of one person while the sighting's newest
+picture, twice a second, is checked for your face (a face takes about
+50 ms; a group in view must not leave it behind the camera). Three
+pictures alike and "Welcome back, sir." is said instead; else the
+sentence as before, GREET_WAIT_SECONDS (4) after the first picture or
+GREET_WAIT_MOST (12) after the look. On his own sightings: 4.4 s from the
+look to the greeting, a group of strangers 8 s to "Someone's in view";
+the day before's sighting, his face turned away at first, "Someone".
+
 The best picture is the one showing a face best, of every picture kept:
 YuNet (`actions/faces.py`, MIT, `models/faces` by `tools/face_model.py`)
 finds faces and their eyes, nose and mouth; a face counts by how sure it
@@ -2676,6 +2686,13 @@ only pictures with one face are learned from, outliers are dropped, and
 a sighting is you only when three pictures say so, at a likeness no
 stranger tested came near. It was tested on seven strangers only: a
 housemate who agrees to it walking past is the test that matters.
+
+**Know what the user saw before calling it broken.** "Learned from 97
+pictures, and still Someone": the sighting shown had ended before the
+face was learned, and the one he was in was still being kept when he
+asked, so the one before was shown. Recognition was right (0.85 to 0.94
+on his frames); what JARVIS said about it was not. The sighting learned
+from is now marked as him, and one still going on is mentioned.
 
 **Evidence must survive JARVIS closing.** A sighting's record, best
 picture and player were written only when it ended, so two sightings
