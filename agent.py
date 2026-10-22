@@ -255,15 +255,17 @@ def list_directory(path):
 
 # Files in the JARVIS folder that hold keys and sign-ins: mcp.json (and the
 # copies kept before an edit) carries service tokens and the OBS password,
-# and the Outlook cache is a live sign-in. Whatever the model reads is sent
+# and the Outlook cache is a live sign-in; faces/known.json is your face's
+# fingerprints (actions/known_faces.py). Whatever the model reads is sent
 # to its provider, so these are never handed to it, whoever asks.
-_SECRET_FILES = re.compile(r"^(?:mcp\.json(?:\..+)?|outlook_token_cache\.json|\.env(?:\..+)?)$", re.IGNORECASE)
+_SECRET_FILES = re.compile(r"^(?:mcp\.json(?:\..+)?|outlook_token_cache\.json|\.env(?:\..+)?|known\.json)$",
+                           re.IGNORECASE)
 
 
 def read_jarvis_file(name):
     """Read one file from JARVIS's private working folder."""
     if _SECRET_FILES.match(os.path.basename(str(name or "").strip())):
-        return {"error": "That file holds keys or sign-ins, and is never read out."}
+        return {"error": "That file holds keys, sign-ins or faces, and is never read out."}
 
     return files.read(name)
 

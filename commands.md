@@ -702,9 +702,20 @@ dropped) the sighting waits, up to 40 seconds with no looks at all:
   saw, and every file's SHA-256, so a change to any of them shows
 - `index.html`: plays the pictures in any browser
 
-The face model, once: `python tools/face_model.py` (YuNet, MIT, 227 KB, into
-models/faces, kept out of git), then restart JARVIS. It finds faces only; it
-never recognises anyone.
+The face models, once: `python tools/face_model.py` (YuNet, MIT, 227 KB, finds
+faces; SFace, Apache 2.0, 38.7 MB, tells faces apart; into models/faces, kept out
+of git), then restart JARVIS. Run it again if you had only YuNet.
+
+**Your face.** Stand in front of the house cam, facing it, for a few seconds; when
+the sighting has ended, say "learn my face". JARVIS takes that sighting as you and
+learns from every picture in it with one face turned to the camera (it needs 5).
+Say it again after a sighting at night, so it knows you in any light. From then
+on each sighting's record says whether it was you (in at least 3 pictures alike),
+and "show me the last sighting" says "You were on your house cam..." instead of
+"Someone...". No one else is ever named, and nothing of a stranger's face is kept.
+What JARVIS knows of you is `~/JARVIS/faces/known.json`, on this PC only; "forget
+my face" deletes it. Recognising faces of people in the street is not the same as
+in your own home under data protection law: keep it to your own home.
 
 If you close JARVIS while a sighting is being made, its pictures stay, and the next time
 JARVIS starts it finishes it (best picture, `sighting.json`, `index.html`), with times from
@@ -712,13 +723,14 @@ when each picture was saved; the log says "finished".
 
 `sightings-log.txt` says when each was made, kept, viewed and deleted. Sightings are deleted
 after 31 days unless kept, and the oldest not kept go first if all of them pass
-5 GB (a camera facing a street sees many people go by, a few MB each). No faces
-are recognised or stored.
+5 GB (a camera facing a street sees many people go by, a few MB each).
 
 | Say | Does |
 |---|---|
 | show me the last sighting | its best picture on the panel -- and full screen on the phone, when asked there, closed with its cross -- and when it was (**free**) |
 | keep the last sighting / keep that sighting | never deleted |
+| learn my face | the last sighting is you: JARVIS learns your face from it (again, to learn more) |
+| forget my face | JARVIS knows no one's face |
 
 In the dark, both cameras turn their gain up further (the house cam's OV2640
 to 16x, from the 2x it started with; an OV3660 to 31x, and it may keep its

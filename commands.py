@@ -2407,8 +2407,16 @@ def _highlight_camera(wanted):
 
 def _camera_sighting(command):
     """The last sighting: its best picture on the panel, or kept for good."""
-    if sightings.asked(command) == "keep":
+    wanted = sightings.asked(command)
+
+    if wanted == "keep":
         return sightings.keep_last()
+
+    if wanted == "learn":
+        return sightings.learn_face()
+
+    if wanted == "unlearn":
+        return sightings.unlearn_face()
 
     picture, title, said = sightings.last_picture()
 
@@ -4177,7 +4185,7 @@ def _fast_path(command):
         return _blank_result("camera_close")
 
     # What a camera kept when someone came into view: "show me the last sighting", "keep the last
-    # sighting" (actions/sightings.py).
+    # sighting", "learn my face" (actions/sightings.py).
     if sightings.asked(command):
         return _blank_result("camera_sighting")
 

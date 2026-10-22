@@ -96,6 +96,8 @@ _PROTECTED_NAMES = frozenset({
     # A sighting's record and the sightings' log, kept in the sightings folder (actions/sightings.py).
     "sighting.json",
     "sightings-log.txt",
+    # The faces JARVIS knows (actions/known_faces.py), in the faces folder.
+    "known.json",
 })
 
 # Files JARVIS names by date: rotated logs and the monthly token ledger.

@@ -23,11 +23,13 @@ sighting is deleted after KEEP_DAYS unless kept ("keep the last sighting"), and 
 pass MAX_GB. Sightings are made whether or not the camera
 alerts are muted: muting stops JARVIS saying so, not keeping the evidence.
 
-Which things begin one is JARVIS_SIGHTING_LABELS, the model's own names ("person", the default);
-nothing about who anyone is: no faces are recognised or stored.
+Which things begin one is JARVIS_SIGHTING_LABELS, the model's own names ("person", the default).
+Once you have asked "learn my face" (actions/known_faces.py), a sighting's record says whether it was
+you; no one else is named, and nothing of a stranger's face is kept.
 
     keep the last sighting / keep that sighting      not deleted after KEEP_DAYS
     show me the last sighting                         its best picture, on the panel, and when it was
+    learn my face / forget my face                    the newest sighting is you / JARVIS knows no one
 """
 
 import hashlib
@@ -40,7 +42,7 @@ import time
 from datetime import datetime, timedelta
 from io import BytesIO
 
-from actions import cameras, detections, faces, files, outline
+from actions import cameras, detections, faces, files, known_faces, outline
 
 FOLDER = "sightings"
 LOG_FILE = "sightings-log.txt"
@@ -122,6 +124,7 @@ _open = {}          # camera -> the sighting being made
 _last = None        # folder of the newest sighting ended this run, for "the last sighting"
 _worker = None
 _STARTED = time.time()   # folders older than this, with no record, were left by a JARVIS since closed
+_finishing = threading.Lock()   # one finish_unfinished at a time, so no folder is finished twice
 
 
 def _now_text(monotonic=None):
@@ -461,6 +464,11 @@ def _end(sighting):
         if by_face is not None:
             sighting["best"] = by_face
 
+        if sighting.get("prints"):
+            sighting["who"] = known_faces.who(sighting["prints"])
+
+        sighting.pop("prints", None)     # a stranger's face is compared and forgotten
+
     # No look of its own matched a kept picture -- the one look that saw them came before the camera
     # began streaming (21 October 2026: a 14 s sighting with no best picture) -- so a picture near a look
     # or a report of what the board was sure of, then the nearest; its distance in time in the record
@@ -504,6 +512,14 @@ def _end(sighting):
     if sighting.get("finished_late"):
         record["finished_late"] = sighting["finished_late"]
 
+    # Who it was, when JARVIS knows anyone: {"name", "pictures" alike, "alike" at best}, or None for no
+    # one it knows. Nothing else about anyone's face is kept.
+    if known_faces.anyone_known():
+        record["recognised"] = sighting.get("who")
+
+    who = (record.get("recognised") or {}).get("name")
+    said_who = f"; {who}" if who else ""
+
     try:
         with open(os.path.join(path, RECORD_FILE), "w", encoding="utf-8") as out:
             json.dump(record, out, indent=1)
@@ -515,12 +531,12 @@ def _end(sighting):
 
     if sighting.get("finished_late"):
         _log(f"finished  {os.path.basename(path)}  ({len(sighting['frames'])} pictures, {record['seconds']} s;"
-             f" JARVIS was closed before it ended)")
+             f" JARVIS was closed before it ended{said_who})")
         print(f"[JARVIS] sighting on {sighting['camera']} finished: {os.path.basename(path)}, left when JARVIS"
               f" was closed", flush=True)
     else:
         _last = path
-        _log(f"ended  {os.path.basename(path)}  ({len(sighting['frames'])} pictures, {record['seconds']} s)")
+        _log(f"ended  {os.path.basename(path)}  ({len(sighting['frames'])} pictures, {record['seconds']} s{said_who})")
         print(f"[JARVIS] sighting on {sighting['camera']} ended: {len(sighting['frames'])} pictures kept",
               flush=True)
 
@@ -540,6 +556,11 @@ def finish_unfinished():
     if not base:
         return 0
 
+    with _finishing:
+        return _finish_unfinished(base)
+
+
+def _finish_unfinished(base):
     with _lock:
         making = {os.path.abspath(sighting["folder"]) for sighting in _open.values()}
 
@@ -609,6 +630,8 @@ def _best_face(sighting):
     """The best picture of someone's face among a sighting's kept pictures (faces.worth), as
     sighting["best"] is kept, or None if no face was found in any."""
     best = None
+    knowing = known_faces.anyone_known()
+    sighting["prints"] = []
 
     for frame in sighting["frames"] + sighting["stills"]:
         try:
@@ -624,6 +647,14 @@ def _best_face(sighting):
 
         for face in faces.detect(rgb):
             worth = faces.worth(rgb, face)
+
+            # Who it was (actions/known_faces.py): each face's fingerprint, kept only until it has been
+            # compared, and only if someone is known at all.
+            if knowing and faces.facing(face) >= known_faces.FACING_AT_LEAST:
+                one = known_faces.fingerprint(rgb, face)
+
+                if one is not None:
+                    sighting["prints"].append(one)
 
             if worth > 0 and (best is None or worth > best["worth"]):
                 x1, y1, x2, y2 = face["box"]
@@ -871,8 +902,9 @@ def last_picture(where=""):
     path = os.path.dirname(picture)
     _log(f"viewed  {os.path.basename(path)}{('  (' + where + ')') if where else ''}")
     seconds = record.get("seconds") or 0
+    who = "You were" if (record.get("recognised") or {}).get("name") == known_faces.YOU else "Someone"
     return (jpeg, f"SIGHTING {record['camera'].upper()}",
-            f"Someone on your {record['camera']} at {_spoken_time(record['began'])}, for "
+            f"{who} on your {record['camera']} at {_spoken_time(record['began'])}, for "
             f"{max(1, round(seconds))} seconds, sir.")
 
 
@@ -894,8 +926,13 @@ _SHOW = re.compile(r"^(?:(?:jarvis|please|now|can\s+you|could\s+you)\s+)*(?:show
                    r"(?:the\s+)?(?:last|latest)\s+(?:sighting|intruder|event)(?:\s+please)?$")
 
 
+_LEARN = re.compile(r"^(?:(?:jarvis|please|now|can\s+you|could\s+you)\s+)*learn\s+my\s+face"
+                    r"(?:\s+from\s+(?:the\s+)?(?:last|latest)\s+sighting)?(?:\s+please)?$")
+_UNLEARN = re.compile(r"^(?:(?:jarvis|please|now)\s+)*forget\s+my\s+face(?:\s+please)?$")
+
+
 def asked(text):
-    """"keep" or "show" for a request about the last sighting, else None."""
+    """"keep", "show", "learn" (my face) or "unlearn" for a request about sightings, else None."""
     words = " ".join(re.sub(r"[^\w\s']", " ", str(text or "").casefold()).split())
 
     if _KEEP.match(words):
@@ -904,7 +941,35 @@ def asked(text):
     if _SHOW.match(words):
         return "show"
 
+    if _LEARN.match(words):
+        return "learn"
+
+    if _UNLEARN.match(words):
+        return "unlearn"
+
     return None
+
+
+def learn_face():
+    """"Learn my face": from the newest sighting. Returns what to say."""
+    found = newest()
+
+    if found is None:
+        return "There are no sightings to learn your face from yet, sir. Stand in front of the house cam first."
+
+    said = known_faces.learn(found[0])
+    _log(f"learned a face from  {os.path.basename(found[0])}" if said.startswith("Learned") else
+         f"could not learn a face from  {os.path.basename(found[0])}")
+    return said
+
+
+def unlearn_face():
+    said = known_faces.unlearn()
+
+    if said.startswith("Forgotten"):
+        _log("forgot the face it knew")
+
+    return said
 
 
 def forget():

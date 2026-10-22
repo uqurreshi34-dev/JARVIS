@@ -43,8 +43,9 @@ PREVIEW_CHARS = 90
 # Read from a text file for its first lines; enough for any opening.
 _HEAD_BYTES = 16 * 1024
 
-# Never listed and never read: keys, tokens and sign-ins.
-_SECRET = re.compile(r"^(?:mcp\.json(?:\..+)?|outlook_token_cache\.json|\.env(?:\..+)?)$", re.IGNORECASE)
+# Never listed and never read: keys, tokens, sign-ins, and the faces JARVIS knows (actions/known_faces.py).
+_SECRET = re.compile(r"^(?:mcp\.json(?:\..+)?|outlook_token_cache\.json|\.env(?:\..+)?|known\.json)$",
+                     re.IGNORECASE)
 
 # Listed, but opening one would run it rather than show it.
 _RUNS = frozenset({

@@ -12,7 +12,7 @@ Checked:
 - dated files (rotated logs, the monthly ledger) are protected by pattern;
 - protected files are never offered for sorting, while ordinary ones are;
 - the automatic guard sorts ordinary files and leaves JARVIS's alone;
-- the model's file tool never reads a file holding keys or sign-ins.
+- the model's file tool never reads a file holding keys, sign-ins or faces.
 
 Runs in a sandboxed JARVIS folder.
 
@@ -136,7 +136,8 @@ else:
     with open(os.path.join(folder, "mcp.json"), "w", encoding="utf-8") as handle:
         handle.write('{"mcpServers": {"github": {"headers": {"Authorization": "Bearer secret-token"}}}}')
 
-    for name in ("mcp.json", "MCP.JSON", "mcp.json.before-clip-name", "outlook_token_cache.json", ".env"):
+    for name in ("mcp.json", "MCP.JSON", "mcp.json.before-clip-name", "outlook_token_cache.json", ".env",
+                 "known.json", "faces/known.json"):
         answer = agent.read_jarvis_file(name)
         check(isinstance(answer, dict) and "never read out" in answer.get("error", ""),
               f"the model's file tool will not read {name}")

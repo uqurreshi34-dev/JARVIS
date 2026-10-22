@@ -1833,8 +1833,27 @@ what was made, viewed, kept and deleted. One JARVIS was closed during is
 finished when it next starts (`finish_unfinished`), its times from when
 its pictures were saved, its best by face only (no looks were recorded). Deleted after 31 days unless
 kept, the oldest first past 5 GB; made whether or not the alerts are
-muted; no faces recognised or stored. "Show me the last sighting", "keep
+muted. "Show me the last sighting", "keep
 the last sighting". `tools/test_sightings.py`.
+
+Your face (`actions/known_faces.py`, `tools/test_known_faces.py`). "Learn
+my face" takes the newest sighting as you: each picture with one face,
+turned to the camera, gives that face's fingerprint -- SFace (Apache 2.0,
+OpenCV's zoo, 38.7 MB, by `tools/face_model.py`) on the face cut to
+112 x 112 with its five points moved where OpenCV's FaceRecognizerSF
+puts them (checked against OpenCV: the same fingerprint, cosine 0.997 or
+more) -- dropping any less like the rest than 0.3, and needing 5. What
+you look like is the average of them, in `~/JARVIS/faces/known.json`;
+learned again, it adds (up to 300). When a sighting ends, every face in
+it turned to the camera at least 0.3 is compared with that average; at
+least 3 pictures at 0.363 (OpenCV's own for SFace) and its record says
+`"recognised": {"name": "you", ...}`, else `null`. A stranger's
+fingerprints are compared and dropped, never written. Measured on the
+house cam: learned by day, you by night 0.38 to 0.50 in your best six
+pictures; learned by night, by day 0.40 to 0.47; seven strangers' faces,
+some made small and dark like the house cam's, 0.25 at most. "Forget my
+face" deletes it. known.json is never listed in the file hologram, never
+handed to the language model, and never moved by tidying the folder.
 
 The best picture is the one showing a face best, of every picture kept:
 YuNet (`actions/faces.py`, MIT, `models/faces` by `tools/face_model.py`)
@@ -2648,6 +2667,15 @@ board could not reach it for about 10 s with him standing in view: the
 sighting ended at 12 s with 5 pictures, and a second began when the
 looks came back. Now only a look that saw nobody starts the 10 s; no
 looks at all end one only after 40 s.
+
+**Who is learned matters more than how.** Learning a face from a
+picture with two faces in it, or from one picture unlike the rest, would
+teach JARVIS someone else as you; and naming a stranger as you is the
+worst mistake a house cam can make, since it would say all is well. So
+only pictures with one face are learned from, outliers are dropped, and
+a sighting is you only when three pictures say so, at a likeness no
+stranger tested came near. It was tested on seven strangers only: a
+housemate who agrees to it walking past is the test that matters.
 
 **Evidence must survive JARVIS closing.** A sighting's record, best
 picture and player were written only when it ended, so two sightings
