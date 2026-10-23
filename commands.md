@@ -723,12 +723,12 @@ you learn from is marked as you, and asking for the last sighting while one is s
 being kept says so.
 
 **The house cam finds faces itself.** Built with the face finder (below), the house cam
-runs it after YOLO on the first 3 looks with someone in them, and sends JARVIS the
-look's own picture when it has a face in it -- so "It's you, sir" can come before live
-view has even started. One picture that is clearly you (0.6 alike or more) is enough;
-less alike, it waits for more pictures as before. The pictures are kept in the sighting
-as `look-01.jpg` ..., untouched. Each costs the look about a third of a second; nobody in
-view, nothing changes. The console says `[jarvis] face: <score> in <ms> ms, sent in <ms> ms` for each one.
+runs it after YOLO on up to 3 looks with someone in them, until one has a face in it,
+and sends JARVIS that look's own picture -- so "It's you, sir" can come before live view
+has even started. One picture that is clearly you (0.6 alike or more) is enough; less
+alike, live view's frames carry on the check as before. The picture is kept in the
+sighting as `look-01.jpg`, untouched. On the board the face finder takes about 1.9 s and
+sending the picture 0.4 s, once each time someone arrives; nobody in view, nothing changes. The console says `[jarvis] face: <score> in <ms> ms, sent in <ms> ms` for each one.
 What JARVIS knows of you is `~/JARVIS/faces/known.json`, on this PC only; "forget
 my face" deletes it. Recognising faces of people in the street is not the same as
 in your own home under data protection law: keep it to your own home.

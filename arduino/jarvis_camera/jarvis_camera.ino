@@ -1093,11 +1093,12 @@ void takeFastBuffer() {
 }
 
 #ifdef JARVIS_FACES
-// When someone comes into view, the first FACE_LOOKS looks with them in it are also run through
-// the face finder (about a sixth of YOLO's work, on the same half-size picture); a look whose
-// picture has a face in it is sent to JARVIS as it is (POST /camera/face), so JARVIS can tell
-// who it is at once rather than waiting for live view to start. Then no more until they have
-// been out of view for FACE_GONE_LOOKS looks.
+// When someone comes into view, up to FACE_LOOKS looks with them in it are also run through the
+// face finder, on the same half-size picture, until one has a face in it: that look's picture is
+// sent to JARVIS as it is (POST /camera/face), so JARVIS can tell who it is at once rather than
+// waiting for live view to start. One is enough -- live view's frames carry on the check -- and
+// the face finder takes about 1.9 s a look on the board (23 October 2026), so it stops there.
+// Then no more until they have been out of view for FACE_GONE_LOOKS looks.
 static const int FACE_LOOKS = 3;
 static const int FACE_GONE_LOOKS = 3;
 static const float FACE_SURE = 0.6f;              // YuNet's score, as JARVIS's own (actions/faces.py)
@@ -1358,6 +1359,7 @@ void detectTask(void *) {
 #ifdef JARVIS_FACES
     // After the report, so JARVIS has begun the sighting the picture belongs to.
     static int faceLooks = 0, goneLooks = 0;
+    static bool faceSent = false;
     bool personHere = false;
 
     for (int i = 0; i < lookedCount; ++i) {
@@ -1368,18 +1370,29 @@ void detectTask(void *) {
 
     if (goneLooks >= FACE_GONE_LOOKS) {
       faceLooks = 0;
+      faceSent = false;
     }
 
-    if (personHere && faceLooks < FACE_LOOKS && lookJpegLength && fillFaceInput(rgb, width, height, bgr)) {
+    if (personHere && !faceSent && faceLooks < FACE_LOOKS && lookJpegLength &&
+        fillFaceInput(rgb, width, height, bgr)) {
       faceLooks++;
       unsigned long faceStarted = millis();
       face_run_model_int8_input();
       float face = bestFace();
       unsigned long faceTook = millis() - faceStarted;
 
+#if FEMTO_PROFILE
+      // The face finder's own steps, apart from YOLO's (whose report came before it ran).
+      static char faceProfile[3072];
+      femto_prof_report(faceProfile, sizeof(faceProfile));
+      Serial.print("[jarvis] face finder ");
+      Serial.print(faceProfile);
+#endif
+
       if (face >= FACE_SURE) {
         unsigned long sendStarted = millis();
         sendFace(face);
+        faceSent = true;
         Serial.printf("[jarvis] face: %.2f in %lu ms, sent in %lu ms\n", face, faceTook, millis() - sendStarted);
       } else {
         Serial.printf("[jarvis] face: none in %lu ms (surest %.2f)\n", faceTook, face);

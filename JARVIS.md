@@ -1882,7 +1882,18 @@ to /camera/face when it finds a face (0.6 or more); sightings keeps it as
 look-NN.jpg and checks it first. One picture 0.6 alike or more
 (known_faces.CERTAIN_AT_LEAST) greets on its own: him 0.75 to 0.95, the
 strangers measured 0.25 at most. YuNet's work is a sixth of YOLO's
-(69 against 429 million multiply-adds).
+(69 against 429 million multiply-adds) -- yet on the board it took
+1.87 s a run to YOLO's 2.1 (23 October 2026): estimated 0.3 s, measured
+six times that. Until its steps are timed (s3profile reports the face
+finder apart) and FEMTO-ML made faster for it, the board stops at the
+first look with a face, rather than running it on three: the greeting
+came 3 s after the alert, as live view's had.
+
+**Count the work, then time it.** A model with a sixth of the sums was
+expected to take a sixth of the time; it took nine-tenths. Why is for
+the step timer to say, not a guess: YuNet keeps 160 x 128 for its first
+layers where YOLO halves its picture twice, which may be it. An estimate
+said as one was still far out; the board's own console is the measure.
 
 **An alert never waits on good news.** For one evening "Someone's in
 view" was held up to 12 s while the pictures were checked for him, so a

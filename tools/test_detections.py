@@ -17,8 +17,8 @@ Without a camera: reports are made here as the sketch sends them. Checked:
   pictures is not claimed; a board that can is told to take a look then, and the answer is that look;
 - the phone server's /camera/seen: the token, the size, a report;
 - the sketch: detection only in the s3detect build, beside live view, and labels from the model;
-- the sketch's face finder: after the report, for the first looks with someone in them, a picture
-  sent only when it has a face in it; built only when its sources were made;
+- the sketch's face finder: after the report, for the first looks with someone in them until one
+  picture with a face in it is sent; built only when its sources were made; timed apart in s3profile;
 - tools/femto_build.py: the labels header, the model it expects, and the face finder's tuning frames,
   left out (and none left from before) without what it needs.
 """
@@ -343,8 +343,12 @@ check("/camera/seen" in sketch and "\\\"box\\\"" in sketch and "image/jpeg" not 
       and "image/jpeg" in send_face,
       "the look itself sends what it found; a picture only from sendFace")
 check("if (face >= FACE_SURE) {" in face_part and face_part.index("if (face >= FACE_SURE) {") < face_part.index("sendFace(face)")
-      and "faceLooks < FACE_LOOKS" in face_part and "looked[i].label == 0" in face_part,
-      "and only a look's picture with a face in it, for the first looks with someone in them")
+      and "faceLooks < FACE_LOOKS" in face_part and "looked[i].label == 0" in face_part
+      and "!faceSent" in face_part and face_part.index("sendFace(face);") < face_part.index("faceSent = true;"),
+      "and only a look's picture with a face in it, the first one only, from the first looks with someone in them")
+check(face_part.index("face_run_model_int8_input();") < face_part.index("femto_prof_report(faceProfile")
+      < face_part.index("if (face >= FACE_SURE) {"),
+      "the profile build reports the face finder's own steps, apart from YOLO's")
 check(detect_part.index("sendSeen(seen, count, took);") < detect_part.index("face_run_model_int8_input();"),
       "the face finder runs after the report, so JARVIS has begun the sighting the picture belongs to")
 check('#if __has_include("face_model.h")' in sketch and "-I faces" in ini and "+<faces/*.c>" in ini
