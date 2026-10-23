@@ -14,12 +14,14 @@ Checked without the models (stand-ins give faces and fingerprints, so the rules 
   the sighting learned from is marked as you; sightings from before your face was known are checked for
   it, and those not found to be you checked again after learning more;
 - greeted: "Someone's in view" said at once, never held; then "It's you, sir. Welcome back." when the
-  first pictures are you; a stranger, or no pictures, and nothing more is said.
+  first pictures are you; a stranger, or no pictures, and nothing more is said; the board's own picture
+  of a look with a face in it (POST /camera/face) greets you on its own when surely you, and is kept.
 
 With the real models (models/faces, or JARVIS_FACE_FOLDER) and JARVIS_TEST_FACE_IMAGE: a face's
 fingerprint is 128 numbers, and the same face made smaller is still alike (SKIP otherwise).
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -281,6 +283,54 @@ try:
         check(held == [someone] and said == [someone], f"no pictures at all: the same ({said})")
         gone()
         shutil.rmtree(sightings.newest()[0])
+
+        # The board's own picture of the look, sent because its face finder saw a face in it: one
+        # that is surely you greets you with no live view at all.
+        arrive([])
+        check(cameras.take_face("house cam", as_jpeg(picture_of(50)), 0.91) is None,
+              "a look's picture with a face in it is taken (POST /camera/face)")
+        check(wait_until(lambda: len(said) == 2, 3) and said[1] == sightings.GREETING,
+              f"one picture surely you (alike {known_faces.CERTAIN_AT_LEAST} or more): greeted before live view "
+              f"starts ({said})")
+        check(gone(), "the sighting ends as before")
+        folder, record = sightings.newest()
+        check([look["file"] for look in record.get("look_pictures", [])] == ["look-01.jpg"]
+              and record["look_pictures"][0]["face_finder"] == 0.91 and (Path(folder) / "look-01.jpg").is_file()
+              and record["look_pictures"][0]["sha256"] == hashlib.sha256((Path(folder) / "look-01.jpg").read_bytes()).hexdigest(),
+              "and kept as it came, look-01.jpg, with its SHA-256 and the board's face score")
+        shutil.rmtree(folder)
+
+        PRINTS[45] = like_you(0.45)                 # alike, but not surely: one is not enough
+        arrive([])
+        cameras.take_face("house cam", as_jpeg(picture_of(45)), 0.8)
+        time.sleep(sightings.GREET_WAIT_SECONDS + 0.5)
+        check(said == [someone], f"one picture only a little alike: not greeted on it alone ({said})")
+        gone()
+        shutil.rmtree(sightings.newest()[0])
+
+        check(cameras.take_face("house cam", b"", 0.9) == "empty" and cameras.take_face("house cam", b"GIF89a", 0.9)
+              == "not a JPEG", "a face picture that is empty or not a JPEG is refused")
+
+        try:
+            import phone
+        except Exception as error:
+            print(f"SKIP the phone server's /camera/face (could not import phone: {error})")
+            phone = None
+
+        if phone is not None:
+            client = phone.PhoneServer(token="face-test")._app.test_client()
+            headers = {"X-Jarvis-Token": "face-test", "X-Jarvis-Camera": "house cam", "X-Jarvis-Face": "0.88",
+                       "Content-Type": "image/jpeg"}
+            jpeg = as_jpeg(picture_of(50))
+            check(client.post("/camera/face", data=jpeg, headers={"X-Jarvis-Camera": "house cam"}).status_code == 403
+                  and client.post("/camera/face", data=b"not a jpeg", headers=headers).status_code == 400,
+                  "/camera/face needs the token, and a JPEG")
+            arrive([])
+            check(client.post("/camera/face", data=jpeg, headers=headers).status_code == 200
+                  and wait_until(lambda: len(said) == 2, 3) and said[1] == sightings.GREETING,
+                  "and through it, the board's picture greets you")
+            gone()
+            shutil.rmtree(sightings.newest()[0])
     finally:
         (sightings.GREET_WAIT_SECONDS, sightings.GREET_WAIT_MOST, sightings.QUIET_SECONDS,
          sightings.LEASE_SECONDS) = real_waits

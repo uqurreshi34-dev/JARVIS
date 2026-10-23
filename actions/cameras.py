@@ -87,6 +87,7 @@ STILL_WAIT_SECONDS = 10.0
 MAX_STILL_BYTES = 1536 * 1024
 _stills = {}        # name -> monotonic time a still was asked for
 _still_listener = None
+_face_listener = None
 
 # A streaming camera cannot also send its "online" every 15 seconds, so its
 # frames say it for it, as often: it stays connected on the plan and the
@@ -167,6 +168,35 @@ def take_still(name, data):
             listener(_name(name), bytes(data))
         except Exception as error:   # noqa: BLE001 - a still that cannot be kept must not fail the board
             print(f"[JARVIS] could not keep a still from {name}: {error}")
+
+    return None
+
+
+def set_face_listener(listener):
+    """listener(camera, jpeg, score): a look's picture with a face in it has come (actions/sightings.py)."""
+    global _face_listener
+    _face_listener = listener
+
+
+def take_face(name, data, score=None):
+    """A look's own picture from camera [name], in which its face finder saw a face (POST /camera/face):
+    for JARVIS to tell at once who it is. Returns None when taken, or why it was refused."""
+    if not data:
+        return "empty"
+
+    if len(data) > MAX_STILL_BYTES:
+        return "too large"
+
+    if not data.startswith(_JPEG_START):
+        return "not a JPEG"
+
+    listener = _face_listener
+
+    if listener is not None:
+        try:
+            listener(_name(name), bytes(data), score)
+        except Exception as error:   # noqa: BLE001 - a picture that cannot be used must not fail the board
+            print(f"[JARVIS] could not take a face picture from {name}: {error}")
 
     return None
 

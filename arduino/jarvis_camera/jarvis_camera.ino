@@ -55,6 +55,13 @@
 #include "esp_heap_caps.h"
 #include "model.h"
 #include "labels.h"
+
+// The face finder: YuNet (OpenCV's, MIT), compiled by FEMTO-ML with its names prefixed face_
+// into faces/ by tools/femto_build.py, beside YOLO26n. Without faces/, none of it is built.
+#if __has_include("face_model.h")
+#include "face_model.h"
+#define JARVIS_FACES 1
+#endif
 #endif
 
 // One thing detection found. Up here, and whatever the build, as Wanted is:
@@ -1085,6 +1092,97 @@ void takeFastBuffer() {
                 (unsigned)free_before);
 }
 
+#ifdef JARVIS_FACES
+// When someone comes into view, the first FACE_LOOKS looks with them in it are also run through
+// the face finder (about a sixth of YOLO's work, on the same half-size picture); a look whose
+// picture has a face in it is sent to JARVIS as it is (POST /camera/face), so JARVIS can tell
+// who it is at once rather than waiting for live view to start. Then no more until they have
+// been out of view for FACE_GONE_LOOKS looks.
+static const int FACE_LOOKS = 3;
+static const int FACE_GONE_LOOKS = 3;
+static const float FACE_SURE = 0.6f;              // YuNet's score, as JARVIS's own (actions/faces.py)
+static const size_t LOOK_JPEG_SIZE = 96 * 1024;   // a VGA JPEG is 10 to 40 KB
+static uint8_t *lookJpeg = nullptr;
+static size_t lookJpegLength = 0;
+static bool facesReady = false;
+
+// The look's half-size picture (320 x 240, three bytes a pixel, red first or blue first with
+// [bgr]) as the face finder wants it: blue, green, red, 0 to 255, padded below to its 256 rows.
+static bool fillFaceInput(const uint8_t *pixels, int width, int height, bool bgr) {
+  if (width != face_MODEL_INPUT_W || height > face_MODEL_INPUT_H || face_MODEL_INPUT_C != 3) {
+    return false;
+  }
+
+  static int8_t quantized[256];
+  static bool tabled = false;
+
+  if (!tabled) {
+    for (int v = 0; v < 256; ++v) {
+      quantized[v] = face_model_quantize_input((float)v);
+    }
+
+    tabled = true;
+  }
+
+  const int b = bgr ? 0 : 2, r = bgr ? 2 : 0;
+  int8_t *in = face_model_input_int8;
+  const uint8_t *px = pixels;
+
+  for (int i = 0; i < width * height; ++i, px += 3, in += 3) {
+    in[0] = quantized[px[b]];
+    in[1] = quantized[px[1]];
+    in[2] = quantized[px[r]];
+  }
+
+  memset(in, quantized[0], (size_t)(face_MODEL_INPUT_H - height) * width * 3);
+  return true;
+}
+
+// The surest face the face finder saw: YuNet's score is the square root of its class and
+// object scores, cell by cell, at each of its three scales.
+static float bestFace() {
+  const float *cls[3] = {(const float *)face_tensor_cls_8, (const float *)face_tensor_cls_16,
+                         (const float *)face_tensor_cls_32};
+  const float *obj[3] = {(const float *)face_tensor_obj_8, (const float *)face_tensor_obj_16,
+                         (const float *)face_tensor_obj_32};
+  const int strides[3] = {8, 16, 32};
+  float best = 0.0f;
+
+  for (int s = 0; s < 3; ++s) {
+    int cells = (face_MODEL_INPUT_W / strides[s]) * (face_MODEL_INPUT_H / strides[s]);
+
+    for (int i = 0; i < cells; ++i) {
+      float c = fminf(fmaxf(cls[s][i], 0.0f), 1.0f), o = fminf(fmaxf(obj[s][i], 0.0f), 1.0f);
+      best = fmaxf(best, sqrtf(c * o));
+    }
+  }
+
+  return best;
+}
+
+// The look's own picture, with a face in it, to JARVIS: untouched, as the camera made it.
+static void sendFace(float score) {
+  HTTPClient https;
+  String url = String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + "/camera/face";
+
+  if (!https.begin(detectLink, url)) {
+    return;
+  }
+
+  https.setTimeout(8000);
+  https.addHeader("Content-Type", "image/jpeg");
+  https.addHeader("X-Jarvis-Token", JARVIS_TOKEN);
+  https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
+  https.addHeader("X-Jarvis-Face", String(score, 2));
+  int code = https.POST(lookJpeg, lookJpegLength);
+  https.end();
+
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("[jarvis] face: JARVIS answered %d\n", code);
+  }
+}
+#endif
+
 // A decoded frame: VGA at three bytes a pixel, in PSRAM, kept for the run (reserveDetection).
 static const size_t DETECT_RGB_SIZE = 640 * 480 * 3;
 static uint8_t *detectRgb = nullptr;
@@ -1108,6 +1206,17 @@ void reserveDetection() {
   }
 
   detectReserved = true;
+
+#ifdef JARVIS_FACES
+  // The face finder's memory too, before the camera's: without it, detection goes on without faces.
+  int faceProblem = face_activations_init();
+  lookJpeg = faceProblem ? nullptr : (uint8_t *)heap_caps_malloc(LOOK_JPEG_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  facesReady = lookJpeg != nullptr;
+
+  if (!facesReady) {
+    Serial.printf("[jarvis] faces off: the face finder's memory could not be had (%d)\n", faceProblem);
+  }
+#endif
 }
 
 void detectTask(void *) {
@@ -1168,6 +1277,16 @@ void detectTask(void *) {
       decoded = (size_t)width * height * 3 <= rgb_size &&
                 fmt2rgb888(frame->buf, frame->len, frame->format, rgb);
     }
+
+#ifdef JARVIS_FACES
+    // The look's own picture, kept in case it is sent (the frame goes back to the camera now).
+    lookJpegLength = 0;
+
+    if (facesReady && frame->format == PIXFORMAT_JPEG && frame->len <= LOOK_JPEG_SIZE) {
+      memcpy(lookJpeg, frame->buf, frame->len);
+      lookJpegLength = frame->len;
+    }
+#endif
 
     esp_camera_fb_return(frame);
 
@@ -1235,6 +1354,38 @@ void detectTask(void *) {
       lastKinds = now;
       lastSent = millis();
     }
+
+#ifdef JARVIS_FACES
+    // After the report, so JARVIS has begun the sighting the picture belongs to.
+    static int faceLooks = 0, goneLooks = 0;
+    bool personHere = false;
+
+    for (int i = 0; i < lookedCount; ++i) {
+      personHere = personHere || looked[i].label == 0;
+    }
+
+    goneLooks = personHere ? 0 : goneLooks + 1;
+
+    if (goneLooks >= FACE_GONE_LOOKS) {
+      faceLooks = 0;
+    }
+
+    if (personHere && faceLooks < FACE_LOOKS && lookJpegLength && fillFaceInput(rgb, width, height, bgr)) {
+      faceLooks++;
+      unsigned long faceStarted = millis();
+      face_run_model_int8_input();
+      float face = bestFace();
+      unsigned long faceTook = millis() - faceStarted;
+
+      if (face >= FACE_SURE) {
+        unsigned long sendStarted = millis();
+        sendFace(face);
+        Serial.printf("[jarvis] face: %.2f in %lu ms, sent in %lu ms\n", face, faceTook, millis() - sendStarted);
+      } else {
+        Serial.printf("[jarvis] face: none in %lu ms (surest %.2f)\n", faceTook, face);
+      }
+    }
+#endif
   }
 }
 
@@ -1249,8 +1400,14 @@ void startDetection() {
   // Core 0, below the wifi's own tasks; pictures and live view run on core 1.
   if (xTaskCreatePinnedToCore(detectTask, "detect", 16384, nullptr, 1, nullptr, 0) == pdPASS) {
     detectReady = true;
-    Serial.printf("[jarvis] detection on: YOLO26n, %d kinds of thing; %u bytes of PSRAM left\n",
-                  LABEL_COUNT, (unsigned)ESP.getFreePsram());
+    Serial.printf("[jarvis] detection on: YOLO26n, %d kinds of thing%s; %u bytes of PSRAM left\n",
+                  LABEL_COUNT,
+#ifdef JARVIS_FACES
+                  facesReady ? ", and faces" : ", no faces",
+#else
+                  "",
+#endif
+                  (unsigned)ESP.getFreePsram());
   }
 }
 #endif

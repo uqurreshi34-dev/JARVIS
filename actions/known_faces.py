@@ -46,6 +46,11 @@ SAME_AT_LEAST = 0.363
 # In at least this many of a sighting's pictures: one alike picture could be chance.
 SEEN_IN_AT_LEAST = 3
 
+# Except one this alike, which is not: you, in good light and by laptop light, 0.75 to 0.95; the
+# seven strangers measured, 0.25 at most (22 October 2026). Used for the greeting only, so the
+# board's first picture of you can greet you before live view starts.
+CERTAIN_AT_LEAST = 0.6
+
 # Faces turned further than this from the camera (faces.facing) say little of who it is.
 FACING_AT_LEAST = 0.3
 

@@ -721,6 +721,14 @@ if 3 are you, it adds "It's you, sir. Welcome back." A stranger, or your face tu
 away, and nothing more is said. No alert ever waits on the check. The sighting
 you learn from is marked as you, and asking for the last sighting while one is still
 being kept says so.
+
+**The house cam finds faces itself.** Built with the face finder (below), the house cam
+runs it after YOLO on the first 3 looks with someone in them, and sends JARVIS the
+look's own picture when it has a face in it -- so "It's you, sir" can come before live
+view has even started. One picture that is clearly you (0.6 alike or more) is enough;
+less alike, it waits for more pictures as before. The pictures are kept in the sighting
+as `look-01.jpg` ..., untouched. Each costs the look about a third of a second; nobody in
+view, nothing changes. The console says `[jarvis] face: <score> in <ms> ms, sent in <ms> ms` for each one.
 What JARVIS knows of you is `~/JARVIS/faces/known.json`, on this PC only; "forget
 my face" deletes it. Recognising faces of people in the street is not the same as
 in your own home under data protection law: keep it to your own home.
@@ -766,6 +774,11 @@ default 10), `JARVIS_SIGHTING_DAYS` (default 31) and `JARVIS_SIGHTING_MAX_GB`
 
 Once: `pip install onnx numpy`, then `python tools/femto_build.py` (FEMTO-ML cloned
 beside JARVIS), then `pio run -e s3detect -t upload` from arduino/jarvis_camera.
+It also builds the face finder into `faces/` when it can: FEMTO-ML with `--prefix`
+(October 2026's third round), YuNet (`python tools/face_model.py`) and 30 or more
+sightings' frames to tune it with (the first time; it keeps
+`models/faces/face_detection_yunet_320x256_int8.onnx` -- delete it to tune again). If
+not, it says why and builds as before. `--no-faces` leaves it out.
 `pio run -e s3cam -t upload` goes back to the camera without detection.
 
 Two boards, one sketch (arduino/jarvis_camera): `pio run -e cam -t upload` for the

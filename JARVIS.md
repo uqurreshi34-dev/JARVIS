@@ -1864,6 +1864,26 @@ follows; else nothing more, GREET_WAIT_SECONDS (8) after the first
 picture or GREET_WAIT_MOST (20) after the look. On his own sightings: the
 greeting 5 s after the alert.
 
+The face finder on the board (October 2026): YuNet compiled by FEMTO-ML
+beside YOLO26n, `faces/` by `tools/femto_build.py` -- its input the
+board's half-size decode (320 x 240, padded to 256 rows), quantized to
+int8 with 100 of his own sightings' frames (convs, ReLUs, pools and
+layout steps: the arena 0.9 MB, where Conv-only left float ReLUs between
+them and 3.3 MB). On 186 frames it was not tuned on, the same faces as
+onnxruntime in 185, as the float model in 184, scores within 0.03; the
+sketch's own glue, built on a PC, agreed on face or none in 40 of 40.
+FEMTO-ML needed three things for it, made in his fork: `--prefix` (every
+name of the second model is face_..., so both link into one firmware),
+`FEMTO_NO_FLOAT_INPUT` (both models' unused float inputs, 0.8 and 1 MB,
+not taken), and a fix for a conv with one output channel (YuNet's
+scores), plus a ReLU. The board runs it after the report, on the first
+FACE_LOOKS (3) looks with a person in them, and POSTs the look's own JPEG
+to /camera/face when it finds a face (0.6 or more); sightings keeps it as
+look-NN.jpg and checks it first. One picture 0.6 alike or more
+(known_faces.CERTAIN_AT_LEAST) greets on its own: him 0.75 to 0.95, the
+strangers measured 0.25 at most. YuNet's work is a sixth of YOLO's
+(69 against 429 million multiply-adds).
+
 **An alert never waits on good news.** For one evening "Someone's in
 view" was held up to 12 s while the pictures were checked for him, so a
 stranger's alert came late to spare him one about himself. Back to at

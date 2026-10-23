@@ -37,6 +37,7 @@ arduino/*/.cache/
 # The house cam's detection sources: made by tools/femto_build.py from FEMTO-ML and the YOLO26n
 # model (11 MB, and the model's licence is its own), never kept in git.
 arduino/jarvis_camera/detect/
+arduino/jarvis_camera/faces/
 # The gold backtest's trade list (python tools/gold_backtest.py --trades).
 gold-backtest-trades.csv
 .venv-mev/

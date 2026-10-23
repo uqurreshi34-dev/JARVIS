@@ -17,7 +17,10 @@ Without a camera: reports are made here as the sketch sends them. Checked:
   pictures is not claimed; a board that can is told to take a look then, and the answer is that look;
 - the phone server's /camera/seen: the token, the size, a report;
 - the sketch: detection only in the s3detect build, beside live view, and labels from the model;
-- tools/femto_build.py: the labels header, and the model it expects.
+- the sketch's face finder: after the report, for the first looks with someone in them, a picture
+  sent only when it has a face in it; built only when its sources were made;
+- tools/femto_build.py: the labels header, the model it expects, and the face finder's tuning frames,
+  left out (and none left from before) without what it needs.
 """
 
 import sys
@@ -334,9 +337,21 @@ check(sketch.count("#ifdef JARVIS_DETECT") >= 3 and "xTaskCreatePinnedToCore(det
 check("esp_camera_fb_return(frame);" in detect_part
       and detect_part.index("esp_camera_fb_return(frame);") < detect_part.index("run_model();"),
       "a frame is handed back before the model runs, so live view never waits on it")
-check("/camera/seen" in sketch and "\\\"box\\\"" in sketch and "image/jpeg" not in detect_part,
-      "it sends what it found, never the picture")
-check("arduino/jarvis_camera/detect/" in (ROOT / ".gitignore").read_text(encoding="utf-8"),
+face_part = detect_part[detect_part.index("#ifdef JARVIS_FACES\n    // After the report"):]
+send_face = sketch[sketch.index("static void sendFace("):sketch.index("// A decoded frame:")]
+check("/camera/seen" in sketch and "\\\"box\\\"" in sketch and "image/jpeg" not in detect_part
+      and "image/jpeg" in send_face,
+      "the look itself sends what it found; a picture only from sendFace")
+check("if (face >= FACE_SURE) {" in face_part and face_part.index("if (face >= FACE_SURE) {") < face_part.index("sendFace(face)")
+      and "faceLooks < FACE_LOOKS" in face_part and "looked[i].label == 0" in face_part,
+      "and only a look's picture with a face in it, for the first looks with someone in them")
+check(detect_part.index("sendSeen(seen, count, took);") < detect_part.index("face_run_model_int8_input();"),
+      "the face finder runs after the report, so JARVIS has begun the sighting the picture belongs to")
+check('#if __has_include("face_model.h")' in sketch and "-I faces" in ini and "+<faces/*.c>" in ini
+      and "-D FEMTO_NO_FLOAT_INPUT" in ini and "face_MODEL_INPUT_W" in sketch and "320" not in send_face,
+      "the face finder is built only when its sources were made, sized from them, and no float inputs taken")
+gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+check("arduino/jarvis_camera/detect/" in gitignore and "arduino/jarvis_camera/faces/" in gitignore,
       "the made sources are kept out of git")
 
 from tools import femto_build  # noqa: E402
@@ -345,6 +360,40 @@ header = femto_build.labels_header(["person", "bicycle", "cup"])
 check("#define LABEL_COUNT 3" in header and '  "person",' in header, "labels.h numbers the model's names")
 check(femto_build.INPUT == [1, 3, 256, 256] and "MODEL_SIZE = 256" in sketch,
       "the builder expects the input the sketch letterboxes to")
+
+# The face finder: tuned on frames spread over every sighting; without what it needs, left out.
+import tempfile  # noqa: E402
+
+with tempfile.TemporaryDirectory() as made:
+    made = Path(made)
+
+    for sighting in range(4):
+        (made / f"house-cam-{sighting}").mkdir()
+
+        for frame in range(50):
+            (made / f"house-cam-{sighting}" / f"frame-{frame:04d}.jpg").write_bytes(b"")
+
+    picked = femto_build.calibration_frames(made, at_most=20)
+    check(len(picked) == 20 and len({path.parent.name for path in picked}) == 4 and picked == sorted(picked)
+          and femto_build.calibration_frames(made, at_most=20) == picked,
+          "the face finder is tuned on frames spread evenly over all the sightings, the same each time")
+    check(len(femto_build.calibration_frames(made / "none")) == 0, "and none when there are no sightings")
+    old_femto = made / "old-femto"
+    (old_femto / "nhwc_compiler").mkdir(parents=True)
+    faces_out = made / "faces"
+    faces_out.mkdir()
+    check(femto_build.build_faces(old_femto, out=faces_out) is None and not faces_out.exists(),
+          "a FEMTO-ML without --prefix: no face finder, and none left from before")
+    (old_femto / "nhwc_compiler" / "prefix.py").write_text("", encoding="ascii")
+    check(femto_build.build_faces(old_femto, out=faces_out, float_model=made / "nothing.onnx",
+                                  int8_model=made / "nothing-int8.onnx") is None,
+          "no YuNet: no face finder")
+    check(femto_build.build_faces(old_femto, out=faces_out, float_model=made / "house-cam-0" / "frame-0000.jpg",
+                                  int8_model=made / "nothing-int8.onnx", sightings=made / "none") is None,
+          "too few sightings' frames to tune it: no face finder")
+check(femto_build.FACE_W == 320 and femto_build.FACE_ROWS == 240 and femto_build.FACE_H % 32 == 0
+      and "JPEG_IMAGE_SCALE_1_2" in sketch,
+      "it is sized for the board's half-size picture, padded to whole rows of 32")
 
 detections.forget()
 cameras.forget()

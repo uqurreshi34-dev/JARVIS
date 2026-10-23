@@ -249,8 +249,8 @@ for sketch in ("jarvis_sensor", "jarvis_camera"):
     ini = (ROOT / "arduino" / sketch / "platformio.ini").read_text(encoding="utf-8")
     filters = [line.split("=", 1)[1].split() for line in ini.splitlines() if line.startswith("build_src_filter")]
     # One filter for each board it builds for (the camera: the ESP32-CAM and the ESP32-S3-CAM), the house
-    # cam's detection build adding only its own made sources (detect/, from tools/femto_build.py).
-    check(filters and all(each[0] == f"+<{sketch}.ino.cpp>" and set(each[1:]) <= {"+<detect/*.c>"}
+    # cam's detection build adding only its own made sources (detect/ and faces/, from tools/femto_build.py).
+    check(filters and all(each[0] == f"+<{sketch}.ino.cpp>" and set(each[1:]) <= {"+<detect/*.c>", "+<faces/*.c>"}
                           for each in filters),
           f"{sketch}: PlatformIO builds the converted sketch, and nothing else in the folder ({filters})")
 

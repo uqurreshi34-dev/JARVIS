@@ -264,7 +264,8 @@ def _begin(camera, now):
     sighting = {"camera": camera, "folder": path, "began": now, "began_text": _now_text(now), "last_seen": now,
                 "last_look": now, "nobody_seen": False,
                 "frames": [], "frame_times": [], "after": now - cameras.HISTORY_SECONDS, "looks": [],
-                "candidates": [], "unmatched": [], "reported": [], "best": None, "stills": []}
+                "candidates": [], "unmatched": [], "reported": [], "best": None, "stills": [],
+                "faces": [], "face_queue": []}
     _open[camera] = sighting
     cameras.lease(camera, LEASE_SECONDS)
     if STILLS:
@@ -316,6 +317,37 @@ def _still(camera, jpeg):
     sighting["stills"].append({"file": name, "at": _now_text(), "sha256": _sha256(jpeg),
                                "width": int(width), "height": int(height)})
     print(f"[JARVIS] sighting on {camera}: a still, {width} x {height}", flush=True)
+
+
+def _face_look(camera, jpeg, score=None):
+    """A look's own picture with a face in it (cameras.take_face): kept beside the frames as it came
+    (look-01.jpg ...), and checked at the next tick for who it is -- seconds before live view's
+    first frames (the board sends it straight after the look that saw them)."""
+    with _lock:
+        sighting = _open.get(camera)
+
+    if sighting is None:
+        return
+
+    name = f"look-{len(sighting['faces']) + 1:02d}.jpg"
+
+    try:
+        with open(os.path.join(sighting["folder"], name), "wb") as out:
+            out.write(jpeg)
+    except OSError as error:
+        print(f"[JARVIS] sighting on {camera}: could not keep a look's picture: {error}")
+        return
+
+    entry = {"file": name, "at": _now_text(), "sha256": _sha256(jpeg)}
+
+    if score is not None:
+        entry["face_finder"] = round(float(score), 2)   # the board's own face finder's score
+
+    with _lock:
+        sighting["faces"].append(entry)
+        sighting["face_queue"].append(jpeg)
+
+    _start_worker()
 
 
 def _start_worker():
@@ -502,15 +534,22 @@ def _greet(sighting, fresh, now):
     more once the wait is over."""
     arrival = sighting.get("arrival")
 
+    with _lock:
+        looked, sighting["face_queue"] = sighting.get("face_queue", []), []
+
     if not arrival or arrival["done"]:
         return
 
     if fresh and arrival["first_picture"] is None:
         arrival["first_picture"] = now
 
-    # The newest picture only, each tick (two a second): a face takes about 50 ms to check, and a group
-    # in view must not leave it behind the camera.
-    for jpeg in fresh[-1:]:
+    # The board's own pictures with a face in them first (each one), then the newest picture only, each
+    # tick (two a second): a face takes about 50 ms to check, and a group in view must not leave it
+    # behind the camera.
+    if looked and arrival["first_picture"] is None:
+        arrival["first_picture"] = now
+
+    for jpeg in looked + fresh[-1:]:
         rgb = outline.picture(jpeg)
 
         if rgb is None:
@@ -522,7 +561,13 @@ def _greet(sighting, fresh, now):
 
             one = known_faces.fingerprint(rgb, face)
 
-            if one is not None and known_faces.alike(one, arrival["likeness"]) >= known_faces.SAME_AT_LEAST:
+            how_alike = known_faces.alike(one, arrival["likeness"]) if one is not None else 0.0
+
+            # One picture this alike is enough (known_faces.CERTAIN_AT_LEAST): the board's first
+            # picture of you greets you before live view has started.
+            if how_alike >= known_faces.CERTAIN_AT_LEAST:
+                arrival["you"] = max(arrival["you"] + 1, known_faces.SEEN_IN_AT_LEAST)
+            elif how_alike >= known_faces.SAME_AT_LEAST:
                 arrival["you"] += 1
 
         if arrival["you"] >= known_faces.SEEN_IN_AT_LEAST:
@@ -589,6 +634,7 @@ def _end(sighting):
         "clock": "this PC's own clock, local time with its offset from UTC",
         "frames": sighting["frames"],
         "stills": sighting["stills"],
+        "look_pictures": sighting.get("faces", []),
         "stills_broken": sighting.get("stills_broken", 0),
         "best": {key: value for key, value in best.items() if key != "worth"} if best else None,
         "made_from_best": [{"file": name, "sha256": _sha256(data)} for name, data in made],
@@ -632,7 +678,7 @@ def _end(sighting):
     sweep()
 
 
-_KEPT_PICTURE = re.compile(r"^(?:frame-\d{4}|still-\d{2})\.jpg$")
+_KEPT_PICTURE = re.compile(r"^(?:frame-\d{4}|still-\d{2}|look-\d{2})\.jpg$")
 
 
 def finish_unfinished():
@@ -668,7 +714,7 @@ def _finish_unfinished(base):
         except OSError:
             continue
 
-        frames, stills, saved = [], [], []
+        frames, stills, looks, saved = [], [], [], []
 
         for file in pictures:
             try:
@@ -680,8 +726,8 @@ def _finish_unfinished(base):
                 continue
 
             saved.append(at)
-            (frames if file.startswith("frame-") else stills).append(
-                {"file": file, "at": _wall_text(at), "sha256": _sha256(data)})
+            kind = frames if file.startswith("frame-") else (looks if file.startswith("look-") else stills)
+            kind.append({"file": file, "at": _wall_text(at), "sha256": _sha256(data)})
 
         if saved:
             began, ended = min(saved), max(saved)
@@ -693,7 +739,7 @@ def _finish_unfinished(base):
                     "finished_late": "JARVIS was closed before this sighting ended; finished when it next"
                                      " started. Its times are when each picture was saved; no looks are"
                                      " recorded, so its best picture is chosen by face only.",
-                    "frames": frames, "stills": stills, "looks": [], "candidates": [], "unmatched": [],
+                    "frames": frames, "stills": stills, "faces": looks, "looks": [], "candidates": [], "unmatched": [],
                     "reported": [], "best": None}
 
         try:
@@ -734,7 +780,8 @@ def check_unchecked(again=False):
                 continue
 
             prints = []
-            pictures = record.get("frames", [])[::CHECK_EVERY] + record.get("stills", [])
+            pictures = (record.get("frames", [])[::CHECK_EVERY] + record.get("stills", [])
+                        + record.get("look_pictures", []))
 
             for picture in pictures:
                 try:
@@ -788,7 +835,7 @@ def _best_face(sighting):
     knowing = known_faces.anyone_known()
     sighting["prints"] = []
 
-    for frame in sighting["frames"] + sighting["stills"]:
+    for frame in sighting["frames"] + sighting["stills"] + sighting.get("faces", []):
         try:
             with open(os.path.join(sighting["folder"], frame["file"]), "rb") as kept:
                 rgb = outline.picture(kept.read())
@@ -1172,6 +1219,7 @@ def forget():
 
 detections.add_marks_listener(_seen)
 detections.set_arrival_hold(hold_arrival)
+cameras.set_face_listener(_face_look)
 cameras.set_still_listener(_still)
 
 # Unfinished sightings finished, old ones deleted, once a start, off the thread that imports this.

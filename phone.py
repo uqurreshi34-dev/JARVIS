@@ -1367,6 +1367,29 @@ class PhoneServer:
 
             return jsonify({"ok": True}), 200
 
+        @app.post("/camera/face")
+        def camera_face():
+            """A look's own picture in which the house cam's face finder saw a face: passed to the
+            sighting it belongs to (actions/sightings.py), to tell at once whether it is you; checked
+            for size before the body is read, never kept here."""
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            if request.content_length is None or request.content_length > cameras.MAX_STILL_BYTES:
+                return jsonify({"error": "too large"}), 413
+
+            try:
+                score = float(request.headers.get("X-Jarvis-Face", ""))
+            except ValueError:
+                score = None
+
+            refused = cameras.take_face(request.headers.get("X-Jarvis-Camera", ""), request.get_data(cache=False), score)
+
+            if refused:
+                return jsonify({"error": refused}), 400
+
+            return jsonify({"ok": True}), 200
+
         @app.get("/sighting/picture")
         def sighting_picture():
             """The newest sighting's best picture, for the phone ("show me the last sighting"): over the
