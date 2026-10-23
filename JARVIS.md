@@ -1889,6 +1889,24 @@ finder apart) and FEMTO-ML made faster for it, the board stops at the
 first look with a face, rather than running it on three: the greeting
 came 3 s after the alert, as live view's had.
 
+What the step timer said (s3profile, 23 October 2026): 1834 ms a run,
+1659 of it in convs, and the slowest were all depthwise (one filter per
+channel): 274 ms for an 80 x 64 x 64 layer, 269 for 160 x 128 x 16.
+Every depthwise layer, in YuNet and in YOLO alike, ran at about 11
+million multiply-adds a second, where the regular convs beside them ran
+at 85 to 260. FEMTO-ML's depthwise S3 path converted a layer's whole
+input to int16 first (674 KB for the 160 x 128 one, more PSRAM than the
+camera leaves, so the slow plain-C one ran) and read the vector unit's
+sums back with unaligned loads. Made in his fork (fourth round): a few
+input rows at a time in the fast buffer the convs already use, on both
+cores, the same answers to the bit (on a PC with the vector steps
+emulated, every layer shape of both models; YOLO's golden outputs and
+the face finder's unchanged). It checks itself against the plain-C path
+before its first use and never runs if they disagree; the console says
+which at start: `[jarvis] detection: depthwise convs by rows, both
+cores (check passed)`. The sketch declares the check weak, so a
+FEMTO-ML from before it still builds.
+
 **Count the work, then time it.** A model with a sixth of the sums was
 expected to take a sixth of the time; it took nine-tenths. Why is for
 the step timer to say, not a guess: YuNet keeps 160 x 128 for its first

@@ -19,6 +19,8 @@ Without a camera: reports are made here as the sketch sends them. Checked:
 - the sketch: detection only in the s3detect build, beside live view, and labels from the model;
 - the sketch's face finder: after the report, for the first looks with someone in them until one
   picture with a face in it is sent; built only when its sources were made; timed apart in s3profile;
+- the sketch says once whether FEMTO-ML's depthwise convs passed their own check, and still builds
+  with a FEMTO-ML from before that check;
 - tools/femto_build.py: the labels header, the model it expects, and the face finder's tuning frames,
   left out (and none left from before) without what it needs.
 """
@@ -354,6 +356,11 @@ check(detect_part.index("sendSeen(seen, count, took);") < detect_part.index("fac
 check('#if __has_include("face_model.h")' in sketch and "-I faces" in ini and "+<faces/*.c>" in ini
       and "-D FEMTO_NO_FLOAT_INPUT" in ini and "face_MODEL_INPUT_W" in sketch and "320" not in send_face,
       "the face finder is built only when its sources were made, sized from them, and no float inputs taken")
+said_check = sketch[sketch.index("void sayDepthwiseCheck"):sketch.index("void takeFastBuffer")]
+check("esp_nn_depthwise_conv_s8_simd_self_check(void) __attribute__((weak))" in sketch
+      and "if (!esp_nn_depthwise_conv_s8_simd_self_check)" in said_check
+      and sketch.index("esp_nn_conv_s8_simd_set_cores(2)") < sketch.index("sayDepthwiseCheck();"),
+      "the depthwise check is said once, after both cores are set, and weak for an older FEMTO-ML")
 gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
 check("arduino/jarvis_camera/detect/" in gitignore and "arduino/jarvis_camera/faces/" in gitignore,
       "the made sources are kept out of git")

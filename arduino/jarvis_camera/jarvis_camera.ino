@@ -1066,6 +1066,24 @@ void sendSeen(const Seen *seen, int count, unsigned long took, const Seen *now =
 // block to stay in the data cache.
 static const size_t DETECT_KEEP_INTERNAL = 96 * 1024;
 
+// FEMTO-ML's depthwise convs (October 2026 on) work a few rows at a time in the
+// fast buffer, on both cores, after checking themselves against FEMTO-ML's plain-C
+// ones; if that check ever fails they are never used and the old way runs. Weak,
+// so a FEMTO-ML from before still builds (and says so).
+extern "C" int esp_nn_depthwise_conv_s8_simd_self_check(void) __attribute__((weak));
+
+void sayDepthwiseCheck() {
+  if (!esp_nn_depthwise_conv_s8_simd_self_check) {
+    Serial.println("[jarvis] detection: depthwise convs the old way (FEMTO-ML from before October 2026)");
+    return;
+  }
+
+  int check = esp_nn_depthwise_conv_s8_simd_self_check();
+  Serial.printf("[jarvis] detection: depthwise convs %s\n",
+                check == 1 ? "by rows, both cores (check passed)" :
+                check == 0 ? "the old way: the rows check FAILED" : "the old way (no rows path here)");
+}
+
 void takeFastBuffer() {
   static const int sizes[] = {49152, 32768, 24576, 16384, 8192};
   size_t free_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -1240,6 +1258,7 @@ void detectTask(void *) {
       // view -- which mostly waits on the network, so it has the time; live view
       // and detection share it while both run.
       Serial.printf("[jarvis] detection: convolutions on %d cores\n", esp_nn_conv_s8_simd_set_cores(2));
+      sayDepthwiseCheck();
     }
 
     unsigned long asked = millis();

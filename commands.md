@@ -729,6 +729,9 @@ has even started. One picture that is clearly you (0.6 alike or more) is enough;
 alike, live view's frames carry on the check as before. The picture is kept in the
 sighting as `look-01.jpg`, untouched. On the board the face finder takes about 1.9 s and
 sending the picture 0.4 s, once each time someone arrives; nobody in view, nothing changes. The console says `[jarvis] face: <score> in <ms> ms, sent in <ms> ms` for each one.
+At start it also says how FEMTO-ML's depthwise convs run: `by rows, both cores (check
+passed)` is the fast way; `the old way` means an older FEMTO-ML or a failed check, and both
+models then run as before, only slower.
 What JARVIS knows of you is `~/JARVIS/faces/known.json`, on this PC only; "forget
 my face" deletes it. Recognising faces of people in the street is not the same as
 in your own home under data protection law: keep it to your own home.
