@@ -1905,7 +1905,20 @@ the face finder's unchanged). It checks itself against the plain-C path
 before its first use and never runs if they disagree; the console says
 which at start: `[jarvis] detection: depthwise convs by rows, both
 cores (check passed)`. The sketch declares the check weak, so a
-FEMTO-ML from before it still builds.
+FEMTO-ML from before it still builds. Measured after (23 October 2026):
+the face finder 1838 -> 1319 ms with JARVIS running (1012 ms with
+JARVIS closed: the other core then has no wifi to do), YOLO 2.2 -> 2.0 s.
+
+Then the ops that only move bytes (fifth round, his fork): YOLO spent
+228 ms a look gluing layers together (Concat) and 136 ms on SiLU table
+lookups. A SiLU after a conv is now looked up as the conv stores each
+byte (42 of 57), a Concat input made from one byte goes through a
+256-entry table made once, and the working memory is packed largest
+first: 1.4 MB less PSRAM (YOLO's 3.9 -> 2.6 MB). The same bytes out,
+proven on a PC as before. On the board: YOLO 2.0 -> 1.87 s with
+JARVIS closed, 2.2 -> 2.1 s with it running and live view on; less
+than the 1.7 to 1.8 s estimated, as the convs' own sums (about 1.35 s)
+are most of what is left.
 
 **Count the work, then time it.** A model with a sixth of the sums was
 expected to take a sixth of the time; it took nine-tenths. Why is for

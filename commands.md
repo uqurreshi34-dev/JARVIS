@@ -727,7 +727,7 @@ runs it after YOLO on up to 3 looks with someone in them, until one has a face i
 and sends JARVIS that look's own picture -- so "It's you, sir" can come before live view
 has even started. One picture that is clearly you (0.6 alike or more) is enough; less
 alike, live view's frames carry on the check as before. The picture is kept in the
-sighting as `look-01.jpg`, untouched. On the board the face finder takes about 1.9 s and
+sighting as `look-01.jpg`, untouched. On the board the face finder takes about 1.3 s and
 sending the picture 0.4 s, once each time someone arrives; nobody in view, nothing changes. The console says `[jarvis] face: <score> in <ms> ms, sent in <ms> ms` for each one.
 At start it also says how FEMTO-ML's depthwise convs run: `by rows, both cores (check
 passed)` is the fast way; `the old way` means an older FEMTO-ML or a failed check, and both
