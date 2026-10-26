@@ -122,10 +122,28 @@ GOLD = "XAU_USD"
 SCALED_EXITS = ("atr", "trail")
 
 
-def variants_for(instrument):
+# Gold's price when its dollar distances were set ($10 a stop, $2 a touch of a line): another instrument's
+# are scaled by its price over this, so a line on $100 oil is touched within cents, not within $2.
+GOLD_REFERENCE_PRICE = 4000.0
+
+
+def scale_for(instrument, candles):
+    """1 on gold; elsewhere the instrument's median close over GOLD_REFERENCE_PRICE."""
+    if instrument == GOLD or not candles:
+        return 1.0
+
+    closes = sorted(candle[4] for candle in candles)
+    return closes[len(closes) // 2] / GOLD_REFERENCE_PRICE
+
+
+def variants_for(instrument, scale=1.0):
     """The versions worth running on [instrument]: all of them on gold, whose dollars the fixed stops and
-    targets are set in; elsewhere only those whose exits are sized by ATR."""
-    return VARIANTS if instrument == GOLD else [rules for rules in VARIANTS if rules.exits in SCALED_EXITS]
+    targets are set in; elsewhere only those whose exits are sized by ATR, with gold's other dollar
+    distances (a line's touch, a stop's width, a range's room) scaled to the instrument's price."""
+    if instrument == GOLD:
+        return VARIANTS
+
+    return [replace(rules, scale=scale) for rules in VARIANTS if rules.exits in SCALED_EXITS]
 
 
 def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=SESSION, periods=2, most_open=1,
@@ -135,7 +153,8 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=S
 
     unit = ("Each trade 1 oz (Fortrade's 0.01 lot, OANDA's 1 unit): $1 a dollar of movement." if instrument == GOLD
             else f"Each trade 1 unit of {instrument}: $1 a dollar of movement. Only the exits sized by ATR are run, as"
-                 " the fixed stops and targets are in gold's dollars.")
+                 " the fixed stops and targets are in gold's dollars; gold's other dollar distances (a line's touch,"
+                 f" a stop's width) are scaled to its price, x{scale_for(instrument, candles):.4g}.")
     print(f"{unit} Spread ${spread:.2f}, candles "
           f"closing {session[0]}:00 to {session[1]}:00 {ZONE_NAMES[zone]} time. 'fixed' exits: stop ${STOP_DOLLARS:g}, target "
           f"${TARGET_DOLLARS:g}.\n'bands' exits: stop ${WICK_BUFFER:g} past candle 1's wick, target the middle band."
@@ -153,7 +172,7 @@ def report(candles, lot_ounces=1.0, spread=SPREAD, source="Spot gold", session=S
     passing = []
     failing = []   # what the trader is set to trade, where it falls short: (key, why)
 
-    for rules in variants_for(instrument):
+    for rules in variants_for(instrument, scale_for(instrument, candles)):
         mark = "+" if rules in traded else "*" if rules == AS_WRITTEN else " "
         trades = backtest(candles, replace(rules, spread=spread, session=session, zone=zone), worked_out)
         summary = summarise(trades)

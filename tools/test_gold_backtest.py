@@ -25,6 +25,7 @@ import lzma
 import math
 import struct
 import sys
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -192,7 +193,7 @@ summary = gb.summarise([gb.Trade("buy", start, 0, 0, 0, result=value) for value 
 check(summary.trades == 6 and summary.wins == 2 and summary.net == 20 and summary.worst_run == 3
       and summary.deepest == 30, "the summary: trades, wins, net, worst run of losses, deepest dip")
 
-check(len(gb.VARIANTS) == 80 and len(gb.REGISTRY) == 80 and "pullback-1:3-room2" in gb.REGISTRY and "range30-1:3" in gb.REGISTRY and "retest60-atr-1:3" in gb.REGISTRY and "pullback-atr-1:3" in gb.REGISTRY and "orb-1:3" in gb.REGISTRY and "orb-atr-1:2-no-trend" in gb.REGISTRY and
+check(len(gb.VARIANTS) == 84 and len(gb.REGISTRY) == 84 and "pullback-1:3-room2" in gb.REGISTRY and "range30-1:3" in gb.REGISTRY and "retest60-atr-1:3" in gb.REGISTRY and "pullback-atr-1:3" in gb.REGISTRY and "orb-1:3" in gb.REGISTRY and "orb-atr-1:2-no-trend" in gb.REGISTRY and
       {"pullback-1:1.5", "pullback-1:2", "pullback-1:3", "pullback-1:3-be", "pullback-1:4", "pullback-1:4-be"}
       <= set(gb.REGISTRY) and gb.AS_WRITTEN in gb.VARIANTS and gb.CHOSEN in gb.VARIANTS
       and gb.REGISTRY["bounce-1:3-be"] == gb.CHOSEN, "every combination of the open choices is run")
@@ -680,6 +681,58 @@ check(gb.signal(49, retested, *gb.indicators(retested)[:3], gb.Rules(setup="rete
       "and signal() gives the same, for the backtest and the trader alike")
 check(gb.history_needed(gb.REGISTRY["range60-1:3"]) > 60 * 16 and gb.history_needed(gb.CHOSEN) == 300,
       "the trader asks OANDA for enough candles for a ten-day box")
+
+# ---- the retest as traded by hand: a fifteen-minute break, and the momentum candle ----------------------
+
+hand = gb.REGISTRY["retest60-15m-atr-1:3"]
+strong_rules = gb.REGISTRY["retest60-15m-strong-atr-1:3"]
+check(hand.break_on == "15m" and not hand.strong and strong_rules.strong and "retest30-15m-atr-1:3" in gb.REGISTRY
+      and "retest30-15m-strong-atr-1:3" in gb.REGISTRY and gb.REGISTRY["retest60-atr-1:3"].break_on == "4h",
+      "the hand-traded retest is run four ways, and the four-hour one is unchanged")
+check(hand.name().startswith("retest60 15m ") and strong_rules.name().startswith("retest60 strong ")
+      and len(hand.name()) == len(gb.REGISTRY["retest60-atr-1:3"].name()), "and named within the table's column")
+
+# The range, then two green candles climbing to the 4060 ceiling, then a candle closing at 4075 across it.
+climb = [(4040.0, 4050.0, 4039.0, 4049.0), (4049.0, 4058.0, 4048.0, 4057.0)]
+crossing = flat + climb
+big = (4057.0, 4076.0, 4055.0, 4075.0)                  # body 18 of a 21 height, a $1 wick above: momentum
+weak = (4057.0, 4080.0, 4040.0, 4061.0)                 # closes $1 over the line under a $19 wick: the fake-out
+pull = [(4075.0, 4076.0, 4066.0, 4068.0), (4063.0, 4070.0, 4059.0, 4069.0), (4069.0, 4072.0, 4066.0, 4070.0)]
+strong_run = quarter_hours(utc(2026, 10, 6, 0, 0), crossing + [big] + pull)
+weak_run = quarter_hours(utc(2026, 10, 6, 0, 0), crossing + [weak] + pull)
+check(gb.strong_candle(strong_run, 34, "buy") and not gb.strong_candle(weak_run, 34, "buy")
+      and not gb.strong_candle(strong_run, 34, "sell"),
+      "a big green body with almost no wick above, after green candles, is a momentum candle; a close just over"
+      " the line under a long wick is not")
+red_before = quarter_hours(utc(2026, 10, 6, 0, 0), flat + [(4049.0, 4050.0, 4039.0, 4040.0)] * 2 + [big])
+check(not gb.strong_candle(red_before, 34, "buy"), "nor one after red candles: no momentum building into the line")
+in_hand = gb.levels(strong_run, 2, break_on="15m")["retest"]
+check(in_hand[34] is None and in_hand[36] == "buy" and in_hand[37] is None,
+      "a fifteen-minute close across the ceiling arms the retest at once, no four-hour close needed; the return"
+      " to the line closing green above it buys, once")
+check(gb.levels(strong_run, 2)["retest"][36] is None, "the four-hour rule waits for its four-hour close instead")
+check(gb.levels(strong_run, 2, break_on="15m", strong=True)["retest"][36] == "buy"
+      and gb.levels(weak_run, 2, break_on="15m", strong=True)["retest"][36] is None
+      and gb.levels(weak_run, 2, break_on="15m")["retest"][36] == "buy",
+      "with the momentum filter the strong break trades and the fake-out does not; without it both do")
+check(gb.signal(36, strong_run, *gb.indicators(strong_run)[:3], replace(strong_rules, box=2, session=(0, 24)))
+      == "buy", "and signal() gives the same for the backtest and the trader")
+
+# Another instrument: gold's $2 touch and $10 stop's width scaled to its price, so $100 oil is not touched
+# from $2 away. A line at 100.50 and a retest dipping to 100.80: 30 cents off, a touch only at gold's dollars.
+oil = [(100.30, 100.40, 100.20, 100.30)] * 32
+oil[3] = (100.30, 100.50, 100.20, 100.40)
+oil_run = quarter_hours(utc(2026, 10, 6, 0, 0), oil + [(100.30, 100.40, 100.25, 100.38), (100.38, 100.45, 100.36, 100.44),
+                                                       (100.44, 100.70, 100.43, 100.69), (100.69, 100.95, 100.80, 100.90)])
+scale = cli.scale_for("WTICO_USD", oil_run)
+check(abs(scale - 100.3 / 4000.0) < 1e-3 and cli.scale_for(cli.GOLD, oil_run) == 1.0,
+      "another instrument's scale is its price over gold's; gold's is 1")
+check(gb.levels(oil_run, 2, break_on="15m")["retest"][35] == "buy"
+      and gb.levels(oil_run, 2, 10.0 * scale, 2.0 * scale, "15m")["retest"][35] is None,
+      "in gold's dollars a candle 30 cents above an oil line touches it; scaled, it does not")
+scaled = cli.variants_for("WTICO_USD", scale)
+check(all(rules.scale == scale and rules.exits in cli.SCALED_EXITS for rules in scaled)
+      and all(rules.scale == 1.0 for rules in cli.variants_for(cli.GOLD)), "the backtest scales every version run off gold")
 
 # ---- several trades open at once ----------------------------------------------------------------
 

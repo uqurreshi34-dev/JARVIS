@@ -443,6 +443,12 @@ class Rules:
     zone: str = "uk"             # whose clock [session] is in (ZONES)
     box: int = 0                 # "range" and "retest": how many four-hour candles the floor and ceiling span
     room: float = 0.0            # > 0: at least this many R of clear space before the first four-hour line
+    break_on: str = "4h"         # "retest" only -- "4h": the break is a four-hour close beyond the line;
+                                 # "15m": a fifteen-minute close beyond it, as traded by hand
+    strong: bool = False         # "retest" on "15m" only: the breaking candle must be a momentum candle
+                                 # (strong_candle)
+    scale: float = 1.0           # gold's dollar distances (the touch, a stop's width, a range's room) times
+                                 # this: 1 on gold, about its price over gold's on another instrument
 
     def _exits(self):
         if self.exits == "fixed":
@@ -458,6 +464,10 @@ class Rules:
             entry = f"rsi={self.rsi:11}"
         elif self.setup == "line":
             entry = f"{'line ' + self.entry + ('+4h' if self.agree_4h else ''):15}"
+        elif self.box and self.break_on == "15m":
+            # Within the column: "retest60 15m" breaks on any fifteen-minute close; "retest60 strong" on a
+            # momentum candle (which is fifteen-minute too).
+            entry = f"{self.setup + str(self.box) + (' strong' if self.strong else ' 15m'):15}"
         elif self.box:
             entry = f"{self.setup + ' ' + str(self.box) + 'x4h':15}"
         else:
@@ -475,7 +485,8 @@ class Rules:
         room = f"-room{self.room:g}" if self.room else ""
 
         if self.box:
-            return f"{self.setup}{self.box}-{exits}{room}"
+            broke = "-15m" + ("-strong" if self.strong else "") if self.break_on == "15m" else ""
+            return f"{self.setup}{self.box}{broke}-{exits}{room}"
 
         if self.setup == "line":
             return f"line-{self.entry}{'-4h' if self.agree_4h else ''}-{exits}{room}"
@@ -527,7 +538,8 @@ def signal(index, candles, bands, rsis, squeezes, rules, averages=None, fast=Non
         return _opening_range_break(index, candles, rules, trend)
 
     if rules.setup in ("range", "retest"):
-        return levels(candles, rules.box)[rules.setup][index]
+        return levels(candles, rules.box, STOP_DOLLARS * rules.scale, TOUCH_DOLLARS * rules.scale,
+                      rules.break_on, rules.strong)[rules.setup][index]
 
     if rules.setup == "line":
         return line_bounces(candles, rules.entry, agree_4h=rules.agree_4h)[index]
@@ -712,6 +724,33 @@ RANGE_ROOM = 4.0
 # How long after a four-hour close beyond a line its retest is still waited for.
 RETEST_HOURS = 24
 
+# A momentum candle, the break a trader trusts (a buy; a sell is the mirror image): a big green body, at
+# least this share of the candle's height; almost no wick above it, at most this share; and the candles just
+# before it green too. A close a few cents past the line, under a long wick, is the fake-out it keeps out.
+STRONG_BODY = 0.6
+STRONG_WICK = 0.15
+STRONG_BEFORE = 2
+
+
+def strong_candle(candles, index, side):
+    """True when the candle at [index] is a momentum candle [side]'s way (STRONG_BODY, STRONG_WICK,
+    STRONG_BEFORE). A long wick behind it -- below a buy -- is allowed: dips there were bought."""
+    if index < STRONG_BEFORE:
+        return False
+
+    _start, open_, high, low, shut = candles[index]
+    height = high - low
+
+    if height <= 0 or abs(shut - open_) < STRONG_BODY * height:
+        return False
+
+    if side == "buy":
+        return (shut > open_ and high - shut <= STRONG_WICK * height
+                and all(candles[before][4] > candles[before][1] for before in range(index - STRONG_BEFORE, index)))
+
+    return (shut < open_ and shut - low <= STRONG_WICK * height
+            and all(candles[before][4] < candles[before][1] for before in range(index - STRONG_BEFORE, index)))
+
 _LEVELS = {}
 
 
@@ -731,7 +770,7 @@ def _blocks(candles):
     return [block[1:] for block in blocks]
 
 
-def levels(candles, box, stop=STOP_DOLLARS):
+def levels(candles, box, stop=STOP_DOLLARS, touch=TOUCH_DOLLARS, break_on="4h", strong=False):
     """For each fifteen-minute candle, the side a "range" bounce and a "retest" would take on its close, or None.
 
     {"range": [...], "retest": [...], "box": [(floor, ceiling) or None, ...]}, worked out once for each
@@ -745,8 +784,12 @@ def levels(candles, box, stop=STOP_DOLLARS):
     for RETEST_HOURS. The first fifteen-minute candle to come back to it and close the breakout's way --
     green above it after a break up, red below it after a break down -- is the trade; one closing a stop's
     width back through it, or a four-hour close back inside, disarms it.
+
+    With [break_on] "15m" the break is a fifteen-minute candle closing across the line instead, as traded by
+    hand -- and with [strong], only a momentum candle (strong_candle) counts; the retest is the same.
+    [stop] and [touch] are gold's dollars, scaled for another instrument.
     """
-    signature = (id(candles), len(candles), candles[0][0] if candles else None, box, stop)
+    signature = (id(candles), len(candles), candles[0][0] if candles else None, box, stop, touch, break_on, strong)
 
     if signature in _LEVELS:
         return _LEVELS[signature]
@@ -769,20 +812,33 @@ def levels(candles, box, stop=STOP_DOLLARS):
             boxes[index] = (floor, ceiling)
 
             if ceiling - floor >= RANGE_ROOM * stop:
-                if low <= floor + TOUCH_DOLLARS and shut > floor and shut > open_:
+                if low <= floor + touch and shut > floor and shut > open_:
                     ranges[index] = "buy"
-                elif high >= ceiling - TOUCH_DOLLARS and shut < ceiling and shut < open_:
+                elif high >= ceiling - touch and shut < ceiling and shut < open_:
                     ranges[index] = "sell"
 
             if armed and armed[2] <= index <= armed[3]:
                 side, line = armed[0], armed[1]
 
-                if side == "buy" and low <= line + TOUCH_DOLLARS and shut > line and shut > open_:
+                if side == "buy" and low <= line + touch and shut > line and shut > open_:
                     retests[index], armed = "buy", None
-                elif side == "sell" and high >= line - TOUCH_DOLLARS and shut < line and shut < open_:
+                elif side == "sell" and high >= line - touch and shut < line and shut < open_:
                     retests[index], armed = "sell", None
                 elif (side == "buy" and shut < line - stop) or (side == "sell" and shut > line + stop):
                     armed = None
+
+            # A fifteen-minute break: this candle closes across the line, the one before it did not.
+            if break_on == "15m" and index > 0:
+                before = candles[index - 1][4]
+                waits = index + RETEST_HOURS * 60 // CANDLE_MINUTES
+
+                if shut > ceiling >= before and (not strong or strong_candle(candles, index, "buy")):
+                    armed = ("buy", ceiling, index + 1, waits)
+                elif shut < floor <= before and (not strong or strong_candle(candles, index, "sell")):
+                    armed = ("sell", floor, index + 1, waits)
+
+        if break_on == "15m":
+            continue
 
         # This four-hour candle has closed: a close beyond its range arms the retest; back inside disarms it.
         expires = last + RETEST_HOURS * 60 // CANDLE_MINUTES
@@ -1359,6 +1415,11 @@ VARIANTS += [Rules(setup="orb", trend_filter=trend, exits="atr", ratio=ratio) fo
 VARIANTS += [Rules(setup=setup, box=box, target=target) for setup in ("range", "retest") for box in (30, 60)
              for target in (20.0, 30.0)]
 VARIANTS += [Rules(setup=setup, box=box, exits="atr", ratio=3.0) for setup in ("range", "retest") for box in (30, 60)]
+
+# The retest as traded by hand: the break a fifteen-minute close across the line rather than a four-hour one,
+# on any candle or only a momentum candle (strong_candle); stops sized by ATR at 1:3.
+VARIANTS += [Rules(setup="retest", box=box, exits="atr", ratio=3.0, break_on="15m", strong=strong)
+             for box in (30, 60) for strong in (False, True)]
 
 # The bounce off support and resistance as the trade plan draws them, three ways in: on the candle that
 # reaches the line and closes back beyond it; the same, only when its wick on the line's side is the longer

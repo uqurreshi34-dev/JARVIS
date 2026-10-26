@@ -2259,7 +2259,13 @@ without the trend filter, fixed or ATR exits; `gold_strategy.opening_range`),
 horizontal lines on the four-hour chart (`range`: a bounce off the floor or
 ceiling of the last 30 or 60 four-hour candles; `retest`: after a four-hour
 close beyond one, the first fifteen-minute candle to come back to the line
-and close the breakout's way; `gold_strategy.levels`, the four-hour candles
+and close the breakout's way; or, as traded by hand, the break a
+fifteen-minute close across the line, `retest60-15m-atr-1:3`, and the same
+broken only by a momentum candle, `retest60-15m-strong-atr-1:3`: a body at
+least 60% of the candle, a wick ahead of it at most 15%, the two candles
+before it the same colour, `gold_strategy.strong_candle`, so a close a few
+cents over the line under a long wick, the fake-out, is not a break;
+`gold_strategy.levels`, the four-hour candles
 built on the UTC clock, so they differ a little from OANDA's chart, which
 starts its at 17:00 New York; the trader asks for as many candles as the
 box needs, `history_needed`), a bounce off the support or resistance the
@@ -2354,7 +2360,14 @@ against a pretend OANDA, clock and calendar.
 The same backtest runs on silver, or any instrument OANDA prices, with
 `--instrument XAG_USD` (OANDA's prices only): there only the exits sized by
 ATR are run, as the fixed $10 stops and targets are gold's dollars, and
-nothing is marked as the trader's, which trades gold.
+nothing is marked as the trader's, which trades gold. Gold's other dollar
+distances -- a line touched within $2, the retest called off a stop's
+width ($10) back through it, a range at least four stops wide -- are scaled
+by the instrument's median price over $4,000 (`gold_backtest.scale_for`).
+Before 26 October 2026 they were not: on $100 oil a line counted as
+touched from $2 away, about 2%, and a retest was never called off, so the
+range and retest results for other instruments before then are not
+comparable with gold's.
 
 A second, slow strategy is tested beside it: a daily trend-follower,
 `actions/trend_strategy.py` (time-series momentum, the strategy with the
