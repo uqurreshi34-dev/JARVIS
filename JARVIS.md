@@ -1990,7 +1990,8 @@ taskbar button and no minimise, so the HUD draws its own, top right. The
 bar minimises: `hud_mini.Minimiser` hides the HUD and every other window of
 ours that is showing (the beams excepted: they hide with the HUD and come
 back with it on their own), and leaves `MiniCore`, a small core in his
-state's colour, where the minimise button was. Clicking the core shows the
+state's colour, where the minimise button was (or where it was last
+dragged). A click on its centre, not a drag, shows the
 HUD, then the panels that should be showing. While minimised, a panel's own
 `show()` and `hide()` (an announcement opening the news, a timer closing
 it) are remembered instead of done, by shadowing the two methods on the

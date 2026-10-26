@@ -29,6 +29,12 @@ _INSET = 6
 
 _FRAME_MS = 50
 
+# Only a click on the glowing centre brings the HUD back; the rim is for dragging.
+_CENTRE_RADIUS = _SIZE / 3.0
+
+# Pixels the pointer must travel before a press becomes a drag.
+_DRAG_START = 6
+
 
 class MiniCore(QWidget):
     """The minimised HUD: a small core in his current colour. Click to restore; drag to move."""
@@ -44,6 +50,11 @@ class MiniCore(QWidget):
         self._muted = False
         self._press = None
         self._drag_offset = None
+        self._dragged = False
+        self._on_centre = False
+
+        # True once dragged somewhere: minimising again leaves it there.
+        self.placed = False
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -52,7 +63,7 @@ class MiniCore(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(_SIZE, _SIZE)
-        self.setToolTip("JARVIS -- click to show")
+        self.setToolTip("JARVIS -- click the centre to show, drag the rim to move")
 
         self.state_changed.connect(self._on_state)
         self.muted_changed.connect(self._on_muted)
@@ -77,22 +88,40 @@ class MiniCore(QWidget):
         self._timer.stop()
         super().hideEvent(event)
 
+    # Measured on the screen, not in the core: dragged, the core moves with the
+    # pointer, so where it is pressed inside the core never changes, and a drag
+    # measured there looked like a click and brought the HUD back.
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self._press = event.position()
+            self._press = event.globalPosition()
+            self._dragged = False
+            self._on_centre = math.hypot(event.position().x() - _SIZE / 2.0,
+                                         event.position().y() - _SIZE / 2.0) <= _CENTRE_RADIUS
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
 
     def mouseMoveEvent(self, event):
-        if self._drag_offset is not None:
+        if self._drag_offset is None:
+            return
+
+        if not self._dragged and (event.globalPosition() - self._press).manhattanLength() >= _DRAG_START:
+            self._dragged = True
+
+        if self._dragged:
             self.move(event.globalPosition().toPoint() - self._drag_offset)
+
+            # Put somewhere on purpose: the next minimise leaves it there.
+            self.placed = True
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self._press is not None:
-            if (event.position() - self._press).manhattanLength() < 6:
+            moved = (event.globalPosition() - self._press).manhattanLength()
+
+            if not self._dragged and moved < _DRAG_START and self._on_centre:
                 self.clicked.emit()
 
         self._press = None
         self._drag_offset = None
+        self._dragged = False
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -182,8 +211,12 @@ class Minimiser(QObject):
         # First, so a panel hidden below can tell a minimise from being closed.
         self._hud.minimised = True
 
-        corner = self._hud.frameGeometry().topRight()
-        self._core.move(QPoint(corner.x() - _SIZE - _INSET, corner.y() + _INSET))
+        # Where the minimise button was, until the core is dragged somewhere;
+        # then where it was left.
+        if not self._core.placed:
+            corner = self._hud.frameGeometry().topRight()
+            self._core.move(QPoint(corner.x() - _SIZE - _INSET, corner.y() + _INSET))
+
         self._core.show()
 
         for panel in self._panels():

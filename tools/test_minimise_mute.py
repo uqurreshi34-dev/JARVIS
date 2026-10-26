@@ -272,6 +272,60 @@ check(quran.isVisible(), "a panel opened after restoring shows at once")
 minimiser.restore()
 check(widget.isVisible() and not core.isVisible(), "restoring when not minimised changes nothing")
 
+# ---- the core dragged, as a real mouse does it -----------------------------------------------------
+
+from PyQt6.QtCore import QEvent, QPointF  # noqa: E402
+from PyQt6.QtGui import QMouseEvent  # noqa: E402
+
+
+def mouse(kind, screen_point, held):
+    """An event as Windows sends it: the position inside the core worked out from where the core is now."""
+    local = QPointF(screen_point - QPointF(core.frameGeometry().topLeft()))
+    button = Qt.MouseButton.LeftButton if kind != QEvent.Type.MouseMove else Qt.MouseButton.NoButton
+    buttons = Qt.MouseButton.LeftButton if held else Qt.MouseButton.NoButton
+    QApplication.sendEvent(core, QMouseEvent(kind, local, screen_point, button, buttons,
+                                             Qt.KeyboardModifier.NoModifier))
+
+
+def drag(start, offset, steps=6):
+    mouse(QEvent.Type.MouseButtonPress, start, True)
+
+    for step in range(1, steps + 1):
+        mouse(QEvent.Type.MouseMove, start + offset * (step / steps), True)
+
+    mouse(QEvent.Type.MouseButtonRelease, start + offset, False)
+    app.processEvents()
+
+
+minimiser.minimise()
+app.processEvents()
+first_place = core.frameGeometry().topLeft()
+centre_on_screen = QPointF(first_place) + QPointF(core.width() / 2.0, core.height() / 2.0)
+
+drag(centre_on_screen, QPointF(-150.0, 90.0))
+check(widget.minimised and core.isVisible(), "dragging the core by its centre moves it and does not bring the HUD back")
+check(core.frameGeometry().topLeft() == first_place + QPoint(-150, 90), "it is where it was dropped")
+
+rim = QPointF(core.frameGeometry().topLeft()) + QPointF(4.0, core.height() / 2.0)
+mouse(QEvent.Type.MouseButtonPress, rim, True)
+mouse(QEvent.Type.MouseButtonRelease, rim, False)
+app.processEvents()
+check(widget.minimised, "a click on the rim does nothing: only the centre brings the HUD back")
+
+dropped = core.frameGeometry().topLeft()
+centre_on_screen = QPointF(dropped) + QPointF(core.width() / 2.0, core.height() / 2.0)
+mouse(QEvent.Type.MouseButtonPress, centre_on_screen, True)
+mouse(QEvent.Type.MouseMove, centre_on_screen + QPointF(2.0, 1.0), True)
+mouse(QEvent.Type.MouseButtonRelease, centre_on_screen + QPointF(2.0, 1.0), False)
+app.processEvents()
+check(not widget.minimised and widget.isVisible(), "a click on the centre, a wobble of a pixel or two, brings it back")
+
+minimiser.minimise()
+app.processEvents()
+check(core.frameGeometry().topLeft() == dropped, "minimised again, the core is where it was left, not back at the corner")
+minimiser.restore()
+app.processEvents()
+
 widget.muted_changed.connect(core.muted_changed.emit)
 widget.state_changed.connect(core.state_changed.emit)
 widget.muted_changed.emit(True)
