@@ -1300,6 +1300,30 @@ Signed commits work normally: he runs real git, so your GPG passphrase
 prompt appears just as it would if you'd typed the command yourself.
 That's also a useful tell — if a prompt appears, a real commit happened.
 
+## The HUD's buttons
+
+Top right of the HUD, always showing:
+
+| Click | Does |
+|---|---|
+| the bar (-), in the corner | minimises: the HUD and every panel open (the Quran page, the radar, a chart...) give way to a small glowing core |
+| the small core | brings the HUD back, with the panels that were open |
+| the microphone | mutes: the PC stops listening, and the label reads MUTED; click again to unmute |
+
+**Minimised, he carries on as normal.** He still hears you (unless muted),
+still talks, and the core glows in his colour: blue waiting, green
+speaking. Drag the core anywhere. A panel he opens meanwhile, from the
+phone say, appears when you bring the HUD back; one that closes itself
+meanwhile stays closed.
+
+**Muted, he still talks.** Announcements, reminders and replies are
+spoken as usual, and the phone works as always: only the PC's
+microphone stops counting. For saying "Jarvis" to another of his
+devices in the room, or a call or a video, without the PC answering
+too. Muting is not remembered: a JARVIS started again always listens.
+While muted, "Jarvis, stop" is not heard either; the HUD's stop button
+still works.
+
 ## The brain view
 
 | Say | Does |

@@ -60,6 +60,14 @@ _CENTRE = QPointF(132.0, 135.0)
 # ring. The click area is a little larger than what is drawn.
 _STOP_RECT = QRectF(22.0, 22.0, 26.0, 26.0)
 _STOP_HIT = _STOP_RECT.adjusted(-6.0, -6.0, 6.0, 6.0)
+
+# Minimise and mute, top right, drawn always: minimise inside the corner
+# bracket, mute just left of it. Small, so their click areas are larger.
+_MINIMISE_RECT = QRectF(419.0, 19.0, 18.0, 12.0)
+_MUTE_RECT = QRectF(395.0, 19.0, 18.0, 12.0)
+_MINIMISE_HIT = _MINIMISE_RECT.adjusted(-4.0, -6.0, 4.0, 5.0)
+_MUTE_HIT = _MUTE_RECT.adjusted(-4.0, -6.0, 1.0, 5.0)
+_MUTED_COLOUR = QColor(255, 110, 110)
 _R_OUTER = 108.0
 _R_TICKS = 96.0
 _R_RING1 = 84.0
@@ -142,7 +150,7 @@ _FLASH_SECONDS = 2.2
 # above the state label, clear of the reply, so an announcement arriving
 # meanwhile never covers it. The newest piece of work is the one shown.
 _PROGRESS_Y = 27
-_PROGRESS_RIGHT = _PANEL_RIGHT - 30
+_PROGRESS_RIGHT = int(_MUTE_RECT.left()) - 12
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
@@ -177,6 +185,11 @@ class Hud(QWidget):
     core_clicked = pyqtSignal()
     speaking_changed = pyqtSignal(bool)
     stop_clicked = pyqtSignal()
+    minimise_clicked = pyqtSignal()
+    mute_clicked = pyqtSignal()
+
+    # True while the PC microphone is muted: the mute button and the label show it.
+    muted_changed = pyqtSignal(bool)
 
     # (seconds, "") when a held question is asked; (0, outcome) when it ends.
     confirmation_changed = pyqtSignal(float, str)
@@ -217,8 +230,15 @@ class Hud(QWidget):
         self._drag_offset = None
         self._press_pos = None
         self._press_on_stop = False
+        self._press_button = None       # "minimise" or "mute", decided at the press
+        self._hover_button = None
         self._drag_hover = False
         self._speaking = False
+        self._muted = False
+
+        # True while minimised, so a panel told to hide by the minimise does
+        # not take it as being closed (see hud_mini.py).
+        self.minimised = False
 
         self._confirm_until = None      # monotonic deadline of a held question
         self._confirm_total = 0.0
@@ -276,6 +296,10 @@ class Hud(QWidget):
         self.services_listed.connect(self._on_services_listed)
         self.service_activity.connect(self._on_service_activity)
         self.progress_changed.connect(self._on_progress)
+        self.muted_changed.connect(self._on_muted)
+
+        # Moves without a button held light the button under the pointer.
+        self.setMouseTracking(True)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -353,6 +377,10 @@ class Hud(QWidget):
             self.files_dropped.emit(paths)
 
         event.acceptProposedAction()
+
+    def _on_muted(self, muted):
+        self._muted = bool(muted)
+        self.update()
 
     def _on_speaking(self, active):
         self._speaking = bool(active)
@@ -552,13 +580,39 @@ class Hud(QWidget):
             # a press made while he spoke could be released after the HUD
             # had caught up with a pause, and be ignored.
             self._press_on_stop = self._speaking and _STOP_HIT.contains(self._press_pos)
+            self._press_button = self._button_at(self._press_pos)
             self._drag_offset = (
                 event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             )
 
+    @staticmethod
+    def _button_at(pos):
+        """"minimise", "mute" or None: which of the two buttons is at pos."""
+        if _MINIMISE_HIT.contains(pos):
+            return "minimise"
+
+        if _MUTE_HIT.contains(pos):
+            return "mute"
+
+        return None
+
     def mouseMoveEvent(self, event):
         if self._drag_offset is not None:
             self.move(event.globalPosition().toPoint() - self._drag_offset)
+            return
+
+        hover = self._button_at(event.position())
+
+        if hover != self._hover_button:
+            self._hover_button = hover
+            self.update()
+
+    def leaveEvent(self, event):
+        if self._hover_button is not None:
+            self._hover_button = None
+            self.update()
+
+        super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event):
         if (
@@ -570,12 +624,19 @@ class Hud(QWidget):
             if moved < 6 and self._press_on_stop:
                 self.stop_clicked.emit()
 
+            elif moved < 6 and self._press_button == "minimise":
+                self.minimise_clicked.emit()
+
+            elif moved < 6 and self._press_button == "mute":
+                self.mute_clicked.emit()
+
             elif moved < 6 and self._distance_from_centre(self._press_pos) <= _R_RING3:
                 self.core_clicked.emit()
 
         self._drag_offset = None
         self._press_pos = None
         self._press_on_stop = False
+        self._press_button = None
 
     @staticmethod
     def _distance_from_centre(pos):
@@ -618,6 +679,7 @@ class Hud(QWidget):
         self._paint_telemetry(painter, accent)
         self._paint_scanline(painter, accent)
         self._paint_stop(painter)
+        self._paint_buttons(painter, accent)
         self._paint_drop_hint(painter, accent)
 
         painter.end()
@@ -643,6 +705,44 @@ class Hud(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(red)
         painter.drawRect(_STOP_RECT.adjusted(8, 8, -8, -8))
+
+        painter.restore()
+
+    def _paint_buttons(self, painter, accent):
+        """Minimise (a bar) and mute (a microphone, red and struck through while muted)."""
+        painter.save()
+
+        alpha = {name: (235 if self._hover_button == name else 120) for name in ("minimise", "mute")}
+
+        # Minimise: a bar along the bottom of its box.
+        box = _MINIMISE_RECT
+        painter.setPen(QPen(self._tint(accent, alpha["minimise"]), 2.0,
+                            Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(QPointF(box.left() + 3, box.bottom() - 1), QPointF(box.right() - 3, box.bottom() - 1))
+
+        # Mute: a microphone -- a capsule, the cup under it and its stand.
+        box = _MUTE_RECT
+        colour = _MUTED_COLOUR if self._muted else self._tint(accent, alpha["mute"])
+
+        if self._muted and self._hover_button != "mute":
+            colour = QColor(colour)
+            colour.setAlpha(215)
+
+        mid = box.center().x()
+        painter.setPen(QPen(colour, 1.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(QRectF(mid - 2.5, box.top(), 5.0, 7.5), 2.5, 2.5)
+
+        cup = QPainterPath()
+        cup.moveTo(mid - 5.0, box.top() + 4.5)
+        cup.quadTo(mid - 5.0, box.top() + 10.0, mid, box.top() + 10.0)
+        cup.quadTo(mid + 5.0, box.top() + 10.0, mid + 5.0, box.top() + 4.5)
+        painter.drawPath(cup)
+        painter.drawLine(QPointF(mid, box.top() + 10.0), QPointF(mid, box.bottom()))
+
+        if self._muted:
+            painter.setPen(QPen(colour, 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.drawLine(QPointF(mid - 6.5, box.top() - 0.5), QPointF(mid + 6.5, box.bottom() + 0.5))
 
         painter.restore()
 
@@ -1283,14 +1383,19 @@ class Hud(QWidget):
         left = _PANEL_X
         width = _PANEL_RIGHT - _PANEL_X
 
-        painter.setPen(QPen(accent))
+        # Muted, he is not listening, so STANDBY and LISTENING both read MUTED.
+        # Thinking and speaking still say what he is doing.
+        muted_label = self._muted and self._state in (IDLE, LISTENING)
+        label = "MUTED" if muted_label else _LABEL[self._state]
+
+        painter.setPen(QPen(_MUTED_COLOUR if muted_label else accent))
         font = QFont("Consolas", 11, QFont.Weight.Bold)
         font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2.2)
         painter.setFont(font)
-        painter.drawText(left, 48, _LABEL[self._state])
+        painter.drawText(left, 48, label)
 
         # Sit the meter to the right of the label, on the same line.
-        label_width = QFontMetrics(font).horizontalAdvance(_LABEL[self._state])
+        label_width = QFontMetrics(font).horizontalAdvance(label)
         wave_x = left + label_width + 16
         wave_width = _PANEL_RIGHT - wave_x
 

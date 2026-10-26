@@ -3,10 +3,12 @@ from voice import (
     arm_follow_up,
     consume_follow_up_answer,
     disarm,
+    is_muted,
     last_was_named,
     listen,
     set_follow_up_expired_listener,
     set_level_listener,
+    set_muted,
     set_status_listener,
     set_wake_listener,
     user_talking,
@@ -30,6 +32,7 @@ from sensor_panel import SensorPanel
 from files_panel import FilesPanel
 from house_panel import HousePanel
 from hud import IDLE, LISTENING, RECITING, SPEAKING, THINKING, Hud
+from hud_mini import MiniCore, Minimiser
 from commands import (
     handle_command,
     look_at_phone_picture,
@@ -1662,6 +1665,24 @@ def main():
     hud.shutdown.connect(dex_beam.hidden.emit)
 
     hud.stop_clicked.connect(assistant.stop_speaking)
+
+    # Minimise: the HUD and every panel showing give way to a small core, and
+    # clicking the core brings them all back. The beams look after themselves.
+    mini_core = MiniCore()
+    minimiser = Minimiser(hud, mini_core, skip=lambda widget: isinstance(widget, Beam))
+    hud.minimise_clicked.connect(minimiser.minimise)
+    hud.state_changed.connect(mini_core.state_changed.emit)
+    hud.muted_changed.connect(mini_core.muted_changed.emit)
+    hud.shutdown.connect(mini_core.hide)
+
+    # Mute: the PC microphone stops counting until pressed again. He still speaks.
+    def toggle_mute():
+        muted = not is_muted()
+        set_muted(muted)
+        hud.muted_changed.emit(muted)
+        print(f"[JARVIS] microphone {'muted' if muted else 'listening again'}")
+
+    hud.mute_clicked.connect(toggle_mute)
 
     hud.shutdown.connect(panel.hide_news.emit)
     hud.shutdown.connect(beam.hidden.emit)

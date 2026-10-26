@@ -1984,6 +1984,29 @@ JARVIS_STALL_WATCH=off turns it off. `tools/test_stall_watch.py`.
 The first run with it printed nothing for the start-up freeze, though it
 was still felt; the pause report is for exactly that case.
 
+### Minimise and mute - `hud.py`, `hud_mini.py`, `voice.py`, `main.py`
+The HUD and its panels are frameless tool windows: Windows gives them no
+taskbar button and no minimise, so the HUD draws its own, top right. The
+bar minimises: `hud_mini.Minimiser` hides the HUD and every other window of
+ours that is showing (the beams excepted: they hide with the HUD and come
+back with it on their own), and leaves `MiniCore`, a small core in his
+state's colour, where the minimise button was. Clicking the core shows the
+HUD, then the panels that should be showing. While minimised, a panel's own
+`show()` and `hide()` (an announcement opening the news, a timer closing
+it) are remembered instead of done, by shadowing the two methods on the
+panel itself; restoring removes the shadows and does what was asked last.
+Only Python's calls are caught, never Qt's own handling of the window. A
+hide makes the radar emit `closed`, which stops the aircraft feed, so it
+checks the HUD's `minimised` first.
+
+The microphone mutes the PC: `voice.set_muted` makes `listen()` throw away
+everything heard, as it does while the phone holds the voice channel, keeps
+follow-up windows shut, and on unmuting starts the recogniser afresh so
+half a sentence from before the mute is not finished by what follows. He
+still speaks, and the phone is unaffected. For one "Jarvis" heard by two of
+his microphones in the same room, the PC's and a board's, which would
+otherwise both answer. Not kept across a restart. `tools/test_minimise_mute.py`.
+
 ### The cameras on the phone - `phone.py`, `actions/cameras.py`
 The point of a wifi camera is not being at the desk. The phone page has a
 cameras button (the film camera in its header): with one camera online it

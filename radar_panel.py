@@ -315,7 +315,11 @@ class RadarPanel(QWidget):
     def hideEvent(self, event):
         self._animate.stop()
         super().hideEvent(event)
-        self.closed.emit()
+
+        # Hidden by the HUD minimising is not closed: the feed carries on, and the
+        # next sweep starts the animation again once the HUD is back.
+        if not getattr(self._anchor, "minimised", False):
+            self.closed.emit()
 
     # ---- placement and dragging ----------------------------------------
 

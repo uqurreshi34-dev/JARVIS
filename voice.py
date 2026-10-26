@@ -117,6 +117,12 @@ _phone_active = threading.Event()
 PHONE_ACTIVE_TIMEOUT = 90.0
 
 _phone_active_until = 0.0
+
+# Set by the HUD's mute button: the PC microphone hears nothing until it is
+# pressed again. JARVIS still speaks, and the phone still works. Not kept
+# across a restart, so a JARVIS started again always listens.
+_muted = threading.Event()
+
 _wake_listener = None
 _status_listener = None
 _level_listener = None
@@ -425,9 +431,37 @@ def _phone_owns_voice():
     return False
 
 
+def set_muted(muted):
+    """Stop, or start again, acting on anything the PC microphone hears.
+
+    Only this microphone stops counting: announcements, reminders and
+    replies are still spoken, and the phone still talks to him. For
+    talking to another device in the room by his name without the PC
+    answering too.
+    """
+    if muted:
+        _muted.set()
+        _disarm()
+    else:
+        _muted.clear()
+
+    _drain_queue()
+    _report_status(force=True)
+
+
+def is_muted():
+    """True while the PC microphone is muted."""
+    return _muted.is_set()
+
+
 def arm_follow_up(seconds=FOLLOW_UP_SECONDS):
     """Listen for a bare follow-up command without the wake word."""
     global _armed_until
+
+    # Muted, nothing said here is acted on, so the HUD must not say LISTENING.
+    if _muted.is_set():
+        return
+
     _armed_until = time.monotonic() + seconds
 
 
@@ -472,6 +506,10 @@ def listen():
     follow_up_started = armed_at_start
     follow_up_expired_reported = False
 
+    # Set while muted, so half a sentence heard before the mute is not
+    # finished off by what is said after it.
+    was_muted = False
+
     with sd.RawInputStream(
         samplerate=SAMPLE_RATE,
         blocksize=BLOCK_SIZE,
@@ -486,6 +524,24 @@ def listen():
                 _drain_queue()
                 time.sleep(0.05)
                 continue
+
+            if _muted.is_set():
+                was_muted = True
+                _drain_queue()
+                time.sleep(0.05)
+                continue
+
+            if was_muted:
+                was_muted = False
+                engine.reset()
+
+                if waker:
+                    waker.Reset()
+
+                wake_pending = False
+                woken_by_name = False
+                armed_at_start = follow_up_started = False
+                _report_status(force=True)
 
             if (
                 follow_up_started

@@ -44,7 +44,7 @@ def load_main():
     voice = types.ModuleType("voice")
     for name in ("arm_follow_up", "consume_follow_up_answer", "disarm", "last_was_named", "listen",
                  "set_follow_up_expired_listener", "set_level_listener", "set_status_listener",
-                 "set_wake_listener", "user_talking"):
+                 "set_wake_listener", "user_talking", "is_muted", "set_muted"):
         setattr(voice, name, MagicMock())
     sys.modules["voice"] = voice
     sys.modules.setdefault("actions.phone_server", MagicMock())
