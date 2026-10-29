@@ -248,6 +248,10 @@ check("quietLevel * 0.98f + level * 0.02f" in task and "loudRun < TALK_START_FRA
 check('"X-Jarvis-Toy", button ? "button" : "sound"' in talk_part and "code == 204" in talk_part
       and "TALK_BUTTON_PIN = 0;" in talk_part and "letGo(TALK_AFTER_ANSWER_MS);" in task,
       "says whether BOOT was held; plays nothing for a 204; and does not hear its own answer")
+read_part = talk_part[talk_part.index("static float readFrame"):talk_part.index("static void letGo")]
+check("out = in - dcIn + DC_KEEP * dcOut;" in read_part and "frame[i] = (int16_t)out;" in read_part
+      and "total += fabsf(out);" in read_part,
+      "the microphone's steady offset is taken out before its level is judged, and from what is sent")
 check("TALK_MIC_CLOCK_PIN = 38" in talk_part and "TALK_MIC_DATA_PIN = 39" in talk_part
       and "TALK_SPEAKER_BCLK_PIN = 45" in talk_part and "TALK_SPEAKER_LRC_PIN = 46" in talk_part
       and "TALK_SPEAKER_DOUT_PIN = 42" in talk_part and "I2S_MODE_PDM_RX" in talk_part,

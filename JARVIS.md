@@ -1723,7 +1723,8 @@ pins and both envs.
 
 The toy talks, hands-free (`startTalk`, its own task, only on this board). It
 listens to its PDM microphone (clock 38, data 39) at 16 kHz all the time,
-20 ms at a time, learning the room's quiet while nobody speaks; speech louder
+20 ms at a time, its steady offset taken out first (a DC blocker: the offset
+alone had read as speech, so every recording ran ten seconds), learning the room's quiet while nobody speaks; speech louder
 than that (3.5 times, three frames running) is recorded into PSRAM from half a
 second before it began until 0.8 s of quiet, the LED (3) lit, ten seconds at
 most, and posted to `POST /toy/talk` with `X-Jarvis-Toy: sound` over its own

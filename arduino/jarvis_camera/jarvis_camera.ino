@@ -1557,7 +1557,14 @@ static void blinkTalkLed(int times) {
   }
 }
 
-// One frame of the microphone into [frame]; its level, the mean of the samples' size.
+// The microphone's steady offset, taken out of every sample as it is read (a DC blocker: what is left
+// is the sound itself). Without it the offset alone read as speech: the toy "heard" someone all the
+// time, every recording ran its full ten seconds, and the room's quiet was never learnt (29 October 2026).
+static float dcIn = 0.0f;
+static float dcOut = 0.0f;
+static const float DC_KEEP = 0.995f;
+
+// One frame of the microphone into [frame], its offset taken out; its level, the mean of the samples' size.
 static float readFrame(int16_t *frame) {
   size_t got = 0;
 
@@ -1571,13 +1578,19 @@ static float readFrame(int16_t *frame) {
     got += read;
   }
 
-  uint32_t total = 0;
+  float total = 0.0f;
 
   for (int i = 0; i < TALK_FRAME; i++) {
-    total += abs(frame[i]);
+    float in = frame[i];
+    float out = in - dcIn + DC_KEEP * dcOut;
+    dcIn = in;
+    dcOut = out;
+    out = out > 32767.0f ? 32767.0f : (out < -32768.0f ? -32768.0f : out);
+    frame[i] = (int16_t)out;
+    total += fabsf(out);
   }
 
-  return (float)total / TALK_FRAME;
+  return total / TALK_FRAME;
 }
 
 // Throws away what the microphone heard over the next [ms]: the toy's own answer, still echoing.
@@ -1723,6 +1736,15 @@ void talkTask(void *) {
         quietLevel = quietLevel * 0.98f + level * 0.02f;
       }
 
+      // Now and then, what it is hearing: the numbers to tune it by.
+      static unsigned long lastSaid = 0;
+
+      if (millis() - lastSaid >= 60000UL) {
+        lastSaid = millis();
+        Serial.printf("[jarvis] talk: listening; the room's quiet %.0f, speech starts above %.0f\n", quietLevel,
+                      trigger);
+      }
+
       continue;
     }
 
@@ -1741,6 +1763,7 @@ void talkTask(void *) {
     }
 
     int quietRun = 0;
+    float loudest = level;
     unsigned long began = millis();
     digitalWrite(TALK_LED_PIN, HIGH);
 
@@ -1748,6 +1771,10 @@ void talkTask(void *) {
       level = readFrame(frame);
       memcpy(talkBuffer + WAV_HEADER + got, frame, sizeof(frame));
       got += sizeof(frame);
+
+      if (level > loudest) {
+        loudest = level;
+      }
 
       if (button) {
         if (digitalRead(TALK_BUTTON_PIN) != LOW) {
@@ -1771,8 +1798,8 @@ void talkTask(void *) {
       continue;
     }
 
-    Serial.printf("[jarvis] talk: %lu ms heard%s (the room's quiet %.0f)\n", heard,
-                  button ? " with BOOT held" : "", quietLevel);
+    Serial.printf("[jarvis] talk: %lu ms heard%s (the room's quiet %.0f, the loudest %.0f)\n", heard,
+                  button ? " with BOOT held" : "", quietLevel, loudest);
     int answered = askAndPlay(got, button);
 
     if (answered < 0) {
