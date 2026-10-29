@@ -83,6 +83,11 @@ struct Seen {
   float x1, y1, x2, y2;
 };
 
+#if defined(JARVIS_BOARD_DFR1154)
+// The toy's head turns to whoever detection sees (toySawPeople, with the toy's body below).
+void toySawPeople(const Seen *seen, int count);
+#endif
+
 // The S3 board is a second camera, with its own name: jarvis_secrets.h names
 // the first ("my room cam"), and this one is called by what it watches. Say
 // "show me the house cam", or "show me all the cameras" for both at once.
@@ -1368,6 +1373,9 @@ void detectTask(void *) {
 
     Seen seen[DETECT_MAX], looked[DETECT_MAX];
     int lookedCount = readOutput(looked, width, height);
+#if defined(JARVIS_BOARD_DFR1154)
+    toySawPeople(looked, lookedCount);
+#endif
     memcpy(seen, looked, sizeof(Seen) * lookedCount);
     int count = steadyOnes(seen, lookedCount);
     String now = kinds(seen, count);
@@ -1523,8 +1531,11 @@ static const float TALK_LEAST_LEVEL = 150.0f;
 static const unsigned long TALK_AFTER_ANSWER_MS = 400UL;   // its own voice's echo, let go
 
 // What the toy is doing, for its light ring and head (toyBodyTask, below): set as the talk goes.
-enum ToyMood { TOY_IDLE, TOY_LISTENING, TOY_THINKING, TOY_SPEAKING };
+enum ToyMood { TOY_IDLE, TOY_LISTENING, TOY_THINKING, TOY_SPEAKING, TOY_SPEAKING_FOND };
 static volatile int toyMood = TOY_IDLE;
+
+// How loud his answer is right now, 0 to 1, from what the speaker is playing: the ring pulses with it.
+static volatile float toyVoice = 0.0f;
 
 static I2SClass talkMic;
 static I2SClass talkSpeaker;
@@ -1627,6 +1638,8 @@ static int askAndPlay(size_t pcm, bool button) {
   https.addHeader("X-Jarvis-Token", JARVIS_TOKEN);
   https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
   https.addHeader("X-Jarvis-Toy", button ? "button" : "sound");
+  const char *wanted[] = {"X-Jarvis-Mood"};
+  https.collectHeaders(wanted, 1);
 
   unsigned long sent = millis();
   int code = https.POST(talkBuffer, WAV_HEADER + pcm);
@@ -1645,6 +1658,8 @@ static int askAndPlay(size_t pcm, bool button) {
   }
 
   lastDelivered = millis();
+  // Something warm ("I love you"): his words pulse red instead of green.
+  bool fond = https.header("X-Jarvis-Mood") == "affection";
   NetworkClient *answer = https.getStreamPtr();
   int remaining = https.getSize();          // -1: until the connection closes
   uint8_t chunk[1024];
@@ -1701,7 +1716,16 @@ static int askAndPlay(size_t pcm, bool button) {
       have--;
     }
 
-    toyMood = TOY_SPEAKING;
+    // How loud this piece is, for the ring to pulse with: the samples' mean size, over a loud voice's.
+    uint32_t loud = 0;
+
+    for (size_t i = 0; i + 1 < have; i += 2) {
+      loud += abs((int16_t)(chunk[i] | (chunk[i + 1] << 8)));
+    }
+
+    float level = have >= 2 ? (float)loud / (have / 2) / 6000.0f : 0.0f;
+    toyVoice = level > 1.0f ? 1.0f : level;
+    toyMood = fond ? TOY_SPEAKING_FOND : TOY_SPEAKING;
     taken += talkSpeaker.write(chunk, have);
     played += have;
   }
@@ -1860,14 +1884,24 @@ static void chime() {
 // The toy's body: its light ring (WS2812 LEDs, data on Gravity 43) shows what JARVIS is doing, and
 // its servo (signal on Gravity 44) moves its head. Both powered from the power bank's 5 V on the
 // breadboard, never from the board; their ground joined to the board's.
-//   hearing you: blue      waiting for JARVIS: red, flashing      speaking: green, the head nodding
-//   otherwise: off, the head still and centred
+//   hearing you: blue, steady        waiting for JARVIS: amber, breathing
+//   speaking: green, pulsing with his voice, the head nodding        something warm: red, pulsing
+//   otherwise: off
+// The colours are the HUD's (hud.py's palette): amber thinking, as on the desk.
+// The head turns to whoever detection sees (toySawPeople), and back to the middle when nobody has
+// been seen for a while.
 static const int TOY_RING_PIN = 43;
 static const int TOY_SERVO_PIN = 44;
 static const int TOY_RING_LEDS = 16;           // two rings of eight, chained; one ring ignores the rest
 static const uint8_t TOY_BRIGHT = 60;          // of 255: bright enough, and kind to the power bank
 static const int TOY_CENTRE = 90;              // degrees
-static const int TOY_NOD = 15;                 // degrees either side while speaking
+static const int TOY_NOD = 12;                 // degrees either side while speaking
+static const int TOY_HEAD_LEAST = 30;          // the furthest it turns either way
+static const int TOY_HEAD_MOST = 150;
+static const float TOY_VIEW = 90.0f;           // degrees from the picture's left edge to its right
+static const float TOY_FOLLOW = 0.6f;          // of the way to a person each look: steady, never past them
+static const float TOY_STILL = 0.06f;          // a person this near the middle is faced already
+static const unsigned long TOY_GONE_MS = 30000UL;   // nobody seen this long: back to the middle
 // The servo's own timer and channel, set directly: the camera's clock is LEDC timer 0, channel 0,
 // set by its driver where Arduino's ledcAttach cannot see it -- ledcAttach would take timer 0 for
 // itself at 50 Hz and stop the camera.
@@ -1910,9 +1944,68 @@ static void toyServo(int degrees) {
   ledc_update_duty(LEDC_LOW_SPEED_MODE, TOY_SERVO_CHANNEL);
 }
 
+// Where the head should face, and where it is: the head walks there a little each frame.
+static volatile float toyHeadAim = TOY_CENTRE;
+static float toyHeadNow = TOY_CENTRE;
+static volatile unsigned long toyLastSeen = 0;
+
+// Which way the servo turns the picture: +1 or -1. Learnt: a turn that leaves the person further
+// from the middle, twice running, was the wrong way, and it turns the other way from then on.
+static int toyTurnSign = 1;
+static float toyLastError = 0.0f;
+static bool toyLastTurned = false;
+static int toyWrongWay = 0;
+
+void toySawPeople(const Seen *seen, int count) {
+  int best = -1;
+  float biggest = 0.0f;
+
+  // The nearest person: the largest box.
+  for (int i = 0; i < count; i++) {
+    float area = (seen[i].x2 - seen[i].x1) * (seen[i].y2 - seen[i].y1);
+
+    if (seen[i].label == 0 && area > biggest) {
+      biggest = area;
+      best = i;
+    }
+  }
+
+  if (best < 0) {
+    toyLastTurned = false;
+    return;
+  }
+
+  toyLastSeen = millis();
+  float error = (seen[best].x1 + seen[best].x2) / 2.0f - 0.5f;   // -0.5 left edge, +0.5 right edge
+
+  if (toyLastTurned) {
+    bool worse = (error > 0) == (toyLastError > 0) && fabsf(error) > fabsf(toyLastError) + 0.05f;
+    toyWrongWay = worse ? toyWrongWay + 1 : 0;
+
+    if (toyWrongWay >= 2) {
+      toyTurnSign = -toyTurnSign;
+      toyWrongWay = 0;
+      Serial.println("[jarvis] toy: the head was turning away; it turns the other way now");
+    }
+  }
+
+  toyLastError = error;
+  toyLastTurned = fabsf(error) >= TOY_STILL;
+
+  if (toyLastTurned) {
+    float aim = toyHeadAim - toyTurnSign * error * TOY_VIEW * TOY_FOLLOW;
+    toyHeadAim = aim < TOY_HEAD_LEAST ? TOY_HEAD_LEAST : (aim > TOY_HEAD_MOST ? TOY_HEAD_MOST : aim);
+  }
+}
+
+static uint8_t toyScale(int colour, float amount) {
+  return (uint8_t)(colour * amount * TOY_BRIGHT / 255.0f);
+}
+
 void toyBodyTask(void *) {
-  int shown = -1;
   unsigned long since = millis();
+  int shown = -1;
+  float voice = 0.0f;
 
   for (;;) {
     int mood = toyMood;
@@ -1921,27 +2014,44 @@ void toyBodyTask(void *) {
     if (mood != shown) {
       shown = mood;
       since = now;
-
-      if (mood == TOY_IDLE) {
-        toyRing(0, 0, 0);
-        toyServo(TOY_CENTRE);
-      } else if (mood == TOY_LISTENING) {
-        toyRing(0, 0, TOY_BRIGHT);
-      } else if (mood == TOY_SPEAKING) {
-        toyRing(0, TOY_BRIGHT, 0);
-      }
     }
 
-    if (mood == TOY_THINKING) {
-      // Red, flashing twice a second, until his answer starts.
-      bool on = ((now - since) / 250) % 2 == 0;
-      toyRing(on ? TOY_BRIGHT : 0, 0, 0);
+    // The ring. Breathing is a slow rise and fall; speaking follows his voice, quick up, slower down.
+    float breath = 0.5f + 0.5f * sinf(2.0f * PI * (now - since) / 1400.0f);
+    float heard = toyVoice;
+    voice = heard > voice ? voice + (heard - voice) * 0.6f : voice + (heard - voice) * 0.15f;
+    float pulse = 0.15f + 0.85f * (voice > 1.0f ? 1.0f : voice);
+
+    if (mood == TOY_LISTENING) {
+      toyRing(0, 0, TOY_BRIGHT);
+    } else if (mood == TOY_THINKING) {
+      float amount = 0.15f + 0.85f * breath;
+      toyRing(toyScale(255, amount), toyScale(180, amount), toyScale(40, amount));
     } else if (mood == TOY_SPEAKING) {
-      // A gentle nod, side to side, about once a second.
-      float swing = sinf(2.0f * PI * (now - since) / 1200.0f);
-      toyServo(TOY_CENTRE + (int)(TOY_NOD * swing));
+      toyRing(0, toyScale(255, pulse), 0);
+    } else if (mood == TOY_SPEAKING_FOND) {
+      toyRing(toyScale(255, pulse), 0, toyScale(30, pulse));
+    } else {
+      toyRing(0, 0, 0);
+      toyVoice = 0.0f;
     }
 
+    // The head: back to the middle when nobody has been seen for a while, then a little way each
+    // frame toward where it should face, nodding about it while he speaks.
+    if (toyLastSeen && now - toyLastSeen > TOY_GONE_MS) {
+      toyHeadAim = TOY_CENTRE;
+      toyLastSeen = 0;
+    }
+
+    float gap = toyHeadAim - toyHeadNow;
+    toyHeadNow += gap > 2.0f ? 2.0f : (gap < -2.0f ? -2.0f : gap);
+    float nod = 0.0f;
+
+    if (mood == TOY_SPEAKING || mood == TOY_SPEAKING_FOND) {
+      nod = TOY_NOD * sinf(2.0f * PI * (now - since) / 1200.0f);
+    }
+
+    toyServo((int)(toyHeadNow + nod));
     delay(30);
   }
 }

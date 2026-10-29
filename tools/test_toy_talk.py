@@ -255,6 +255,16 @@ if phone:
     woken.append(True)
     heard_texts.append("Jarvis, what is the time")
     check(hear(recording(1.5)).status_code == 200 and handled == ["what is the time"], "and answers again")
+    woken.append(True)
+    heard_texts.append("Jarvis, I love you")
+    replies.append("And I'm very fond of you, sir.")
+    answer = hear(recording(1.5))
+    check(answer.headers.get("X-Jarvis-Mood") == "affection", "'I love you': the answer is marked warm, for a red ring")
+    woken.append(True)
+    heard_texts.append("Jarvis, what is the time")
+    replies.append("Seven, sir.")
+    answer = hear(recording(1.5))
+    check(answer.headers.get("X-Jarvis-Mood") == "normal", "and the next, ordinary answer is not")
     check(phone.PhoneServer._toy_mute_asked("Unmute please.") == "unmute"
           and phone.PhoneServer._toy_mute_asked("be quiet") == "mute"
           and phone.PhoneServer._toy_mute_asked("mute the television") is None,
@@ -320,10 +330,23 @@ check("LEDC_TIMER_3" in body and "LEDC_CHANNEL_7" in body and "ledcAttach" not i
 task = talk_part[talk_part.index("void talkTask"):talk_part.index("// The toy's body")]
 check(task.index("toyMood = TOY_LISTENING;") < task.index("toyMood = TOY_THINKING;") < task.index("askAndPlay(got, button)")
       < task.index("toyMood = TOY_IDLE;", task.index("askAndPlay(got, button)"))
-      and "toyMood = TOY_SPEAKING;" in talk_part[talk_part.index("static int askAndPlay"):],
-      "blue while it hears you, red while it waits, green as the answer plays, off after")
+      and "toyMood = fond ? TOY_SPEAKING_FOND : TOY_SPEAKING;" in talk_part[talk_part.index("static int askAndPlay"):],
+      "hearing you, waiting, speaking as the answer plays, off after")
 setup = sketch[sketch.index("void setup() {"):sketch.index("void loop() {")]
 check(setup.index("startToyBody();") < setup.index("startTalk();"), "the body is started before the talk")
+
+tracking = body[body.index("void toySawPeople"):body.index("static uint8_t toyScale")]
+check("seen[i].label == 0 && area > biggest" in tracking and "toyTurnSign = -toyTurnSign;" in tracking
+      and "TOY_HEAD_LEAST" in tracking and "TOY_FOLLOW" in tracking,
+      "the head turns toward the nearest person, never too far, and learns which way is toward")
+detect = sketch[sketch.index("void detectTask"):sketch.index("void startDetection")]
+check("toySawPeople(looked, lookedCount);" in detect, "fed by every look detection takes")
+anim = body[body.index("void toyBodyTask"):]
+check("toyScale(255, amount), toyScale(180, amount)" in anim and "toyRing(0, 0, TOY_BRIGHT);" in anim
+      and "toyRing(0, toyScale(255, pulse), 0);" in anim and "TOY_SPEAKING_FOND" in anim,
+      "thinking breathes amber, hearing stays blue, speech pulses green -- red when it is warm")
+check('https.header("X-Jarvis-Mood") == "affection"' in talk_part and "toyVoice = level" in talk_part,
+      "the ring pulses with his voice, red for an answer JARVIS marks warm")
 
 failed = [label for ok, label in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(failed)} of {len(RESULTS)} passed")

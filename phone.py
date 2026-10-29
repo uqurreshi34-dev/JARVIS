@@ -35,6 +35,7 @@ from pywebpush import webpush, WebPushException
 import phone_tls
 import transcriber
 from actions import location, askfiles, cameras, detections, files, highlight, sighting_search, sightings
+from actions import social
 from voice import FILLERS, FOLLOW_UP_SECONDS, addressed_command, set_phone_active, wake_heard
 
 import speech
@@ -143,6 +144,9 @@ TOY_TALK_PEAK = 0.95
 
 # Said to the toy, these mute and unmute it (_toy_mute_asked): muted, it answers nothing but
 # "Jarvis, unmute". Its own, not the desk's microphone.
+# What social.py calls the warm things said to him: answered on the toy with its ring pulsing red.
+TOY_FOND_KINDS = frozenset({"love", "fond", "friend", "missed"})
+
 TOY_MUTE_WORDS = frozenset({"mute", "mute yourself", "be quiet", "go quiet", "stop listening"})
 TOY_UNMUTE_WORDS = frozenset({"unmute", "unmute yourself", "start listening", "listen again",
                               "you can listen again"})
@@ -678,6 +682,10 @@ class PhoneServer:
         # Whether the toy was told "Jarvis, mute": then only "Jarvis, unmute" is answered. Not kept
         # across a restart.
         self._toy_muted = False
+
+        # "affection" when the toy's last answer was to something warm ("I love you"): sent to the
+        # toy as X-Jarvis-Mood, and its ring pulses red rather than green while he says it.
+        self._toy_mood = ""
         self._server = None
         self._thread = None
         self._look_handler = None
@@ -1747,6 +1755,7 @@ class PhoneServer:
             return data, 200, {
                 "Content-Type": f"audio/L16; rate={TOY_TALK_RATE}; channels=1",
                 "Cache-Control": "no-store",
+                "X-Jarvis-Mood": self._toy_mood or "normal",
             }
 
         @app.post("/audio")
@@ -1794,6 +1803,7 @@ class PhoneServer:
         """
         hands_free = heard_by == "sound"
         following = hands_free and time.monotonic() < self._toy_follow_until
+        self._toy_mood = ""
 
         if len(audio) < MIN_VOICE_BYTES:
             return None if hands_free else "That was too short, sir. Hold the button while you speak."
@@ -1852,6 +1862,10 @@ class PhoneServer:
                 return "Muted, sir. Say Jarvis, unmute, when you want me."
 
             print(f'[toy] heard "{text}"')
+
+            if social.kind(text) in TOY_FOND_KINDS:
+                self._toy_mood = "affection"
+
             reply = self._handler(text)
             self._toy_follow_until = time.monotonic() + FOLLOW_UP_SECONDS if hands_free else 0.0
 

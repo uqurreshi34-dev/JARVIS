@@ -660,10 +660,16 @@ power bank) show what JARVIS is doing:
 
 | The ring | When |
 |---|---|
-| blue | it is hearing you |
-| red, flashing | it is waiting for JARVIS's answer |
-| green, the head nodding side to side | JARVIS is speaking |
-| off, the head centred | otherwise |
+| blue, steady | it is hearing you |
+| amber, breathing | it is waiting for JARVIS's answer (the HUD's thinking colour) |
+| green, pulsing with his voice, the head nodding | JARVIS is speaking |
+| red, pulsing with his voice | JARVIS is answering something warm ("I love you", "you're my friend") |
+| off | otherwise |
+
+The head turns to face the nearest person the camera sees, a little each
+look, and back to the middle when nobody has been seen for 30 seconds. If
+it turns away from you at first, it notices within a couple of looks and
+turns the right way from then on.
 
 On starting, the ring flashes white and the head looks left, right and
 back to the middle: both are working.

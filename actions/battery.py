@@ -147,7 +147,7 @@ class BatteryMonitor:
                     )
 
                 return f"Battery is at {percent} percent, sir."
-
+ 
         return None
 
 

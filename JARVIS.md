@@ -1748,8 +1748,15 @@ to the toy mutes it in `_toy_mute_asked`, before the command is run: then only
 Its body (`startToyBody`, `toyBodyTask`): a WS2812 light ring on Gravity 43
 (RMT, 10 MHz, GRB) and an SG90 servo on Gravity 44, both on the power bank's
 5 V from the breadboard with grounds joined, follow `toyMood`, set by the talk:
-hearing you blue, waiting for the answer red flashing at 2 Hz, speaking green
-with the head nodding 15 degrees either side, otherwise off and centred. The
+hearing you blue, waiting for the answer amber breathing (the HUD's thinking
+colour), speaking green pulsing with his voice (`toyVoice`, the level of each
+piece the speaker plays) with the head nodding 12 degrees either side -- red
+when JARVIS marks the answer warm (`X-Jarvis-Mood: affection`, from
+`social.kind` in `phone.py`) -- otherwise off. The head faces the nearest
+person detection sees (`toySawPeople`, every look: 60% of the way, from a
+90-degree view, 30 to 150 degrees), back to the middle after 30 s of nobody;
+which way turns toward them is learnt (`toyTurnSign`, flipped after two turns
+running that left them further from the middle). The
 servo's PWM is LEDC timer 3, channel 7, set through ESP-IDF directly: the
 camera's clock is timer 0, channel 0, set by its driver where Arduino's
 `ledcAttach` cannot see it, and `ledcAttach` would have taken timer 0 at 50 Hz.
