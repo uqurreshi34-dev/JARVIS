@@ -97,8 +97,10 @@ class Beam(QWidget):
         if not self._timer.isActive():
             self._timer.start(_FRAME_MS)
 
+        # Shown only where _reposition finds both windows up and a gap between them. Shown here
+        # regardless, a camera's live view -- which asks for its beam with every frame -- flashed the
+        # beam on for a frame at a time while the HUD was minimised (29 October 2026).
         self._reposition()
-        self.show()
 
     def _stop(self):
         """Stop tracking. Main thread only."""

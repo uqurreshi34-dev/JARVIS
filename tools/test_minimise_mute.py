@@ -335,6 +335,38 @@ check(core._muted and core._state == hud.SPEAKING, "the core shows his state and
 check(not core.grab().isNull(), "and draws itself without error")
 widget.muted_changed.emit(False)
 
+# ---- a beam asked for while minimised stays hidden ---------------------------------------------------
+
+from beam import Beam  # noqa: E402
+
+panel = tool_window()
+panel.move(100, 100)
+panel.show()
+widget.move(600, 100)
+app.processEvents()
+real_beam = Beam(panel, widget)
+real_beam.shown.emit()
+app.processEvents()
+check(real_beam.isVisible(), "a beam joins a panel to the HUD")
+# The beams skipped, as main.py skips them: they hide and show themselves.
+minimiser = hud_mini.Minimiser(widget, hud_mini.MiniCore(), skip=lambda w: isinstance(w, (FakeBeam, Beam)))
+minimiser.minimise()
+app.processEvents()
+real_beam._tick()
+check(not real_beam.isVisible(), "minimised, the beam goes with them")
+for _ in range(5):
+    real_beam.shown.emit()      # a live view asks for its beam with every frame
+    app.processEvents()
+check(not real_beam.isVisible(), "and stays gone though a live view keeps asking for it, not flashing on")
+minimiser.restore()
+app.processEvents()
+real_beam.shown.emit()
+app.processEvents()
+check(real_beam.isVisible(), "back with the HUD")
+real_beam.hidden.emit()
+panel.hide()
+app.processEvents()
+
 # ---- the radar: hidden by a minimise is not closed ------------------------------------------------
 
 source = (ROOT / "radar_panel.py").read_text(encoding="utf-8")
