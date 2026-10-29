@@ -311,6 +311,20 @@ check("mbedtls_platform_set_calloc_free(tlsCalloc, tlsFree);" in talk_part and "
 check("TALK_RATE = 16000" in talk_part and "TOY_TALK_RATE = 16000" in (ROOT / "phone.py").read_text(encoding="utf-8"),
       "the board and JARVIS agree on the rate")
 
+body = talk_part[talk_part.index("// The toy's body"):talk_part.index("// mbedTLS's memory")]
+check("TOY_RING_PIN = 43" in body and "TOY_SERVO_PIN = 44" in body and "rmtInit(TOY_RING_PIN" in body,
+      "the light ring on Gravity 43, the servo on 44")
+check("LEDC_TIMER_3" in body and "LEDC_CHANNEL_7" in body and "ledcAttach" not in body.replace("ledcAttach cannot", "")
+      .replace("`ledcAttach`", "").replace("Arduino's ledcAttach", "").replace("-- ledcAttach would", ""),
+      "the servo on its own LEDC timer, never the camera's timer 0")
+task = talk_part[talk_part.index("void talkTask"):talk_part.index("// The toy's body")]
+check(task.index("toyMood = TOY_LISTENING;") < task.index("toyMood = TOY_THINKING;") < task.index("askAndPlay(got, button)")
+      < task.index("toyMood = TOY_IDLE;", task.index("askAndPlay(got, button)"))
+      and "toyMood = TOY_SPEAKING;" in talk_part[talk_part.index("static int askAndPlay"):],
+      "blue while it hears you, red while it waits, green as the answer plays, off after")
+setup = sketch[sketch.index("void setup() {"):sketch.index("void loop() {")]
+check(setup.index("startToyBody();") < setup.index("startTalk();"), "the body is started before the talk")
+
 failed = [label for ok, label in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(failed)} of {len(RESULTS)} passed")
 sys.exit(1 if failed else 0)

@@ -78,6 +78,26 @@ for said in PRAISE:
 for said in WELLBEING:
     check(social.kind(said) == "wellbeing", f"wellbeing: {said!r}")
 
+AFFECTION = [
+    ("i love you", "love"), ("Jarvis, I love you!", "love"), ("love you so much jarvis", "love"),
+    ("i really love you", "love"), ("I like you", "fond"), ("you're cool", "fond"),
+    ("you are so funny jarvis", "fond"), ("you're my friend", "friend"), ("you're my best friend", "friend"),
+    ("we're best friends", "friend"), ("will you be my friend", "friend"), ("are you my friend", "friend"),
+    ("I missed you", "missed"), ("missed you jarvis", "missed"),
+]
+
+for said, which in AFFECTION:
+    check(social.kind(said) == which, f"affection: {said!r} -> {which}")
+
+for said in ("i love you, now play some music", "i like you playing music", "you're my friend's dad",
+             "i love pizza", "do you like me", "i miss my bus", "love you play the next song"):
+    check(social.kind(said) is None, f"left alone: {said!r}")
+
+for which in ("love", "fond", "friend", "missed"):
+    lines = {social.reply(which) for _ in range(12)}
+    check(len(lines) > 1 and all(line.endswith((".", "!")) and "sir" in line for line in lines),
+          f"affection '{which}': a warm reply, varied")
+
 for said in COMMANDS:
     check(social.kind(said) is None, f"left alone: {said!r}")
 
@@ -95,7 +115,9 @@ except Exception as error:  # needs JARVIS's full Windows environment
     print(f"SKIP fast-path wiring (could not import commands: {error})")
 else:
     for said, intent in (("thank you jarvis", "gratitude"), ("you good?", "wellbeing_check"),
-                         ("well done", "praise"), ("are you okay", "wellbeing_check")):
+                         ("well done", "praise"), ("are you okay", "wellbeing_check"),
+                         ("jarvis i love you", "affection_love"), ("you're my friend", "affection_friend"),
+                         ("i like you", "affection_like"), ("i missed you", "affection_missed")):
         result = commands._fast_path(said)
         check(bool(result) and result["intent"] == intent, f"fast path: {said!r} -> {intent}")
 

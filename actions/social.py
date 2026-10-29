@@ -1,4 +1,4 @@
-"""Thanks, praise and "you good?": things said to JARVIS rather than asked of him.
+"""Thanks, praise, "you good?" and affection: things said to JARVIS rather than asked of him.
 
 None of these is a request, so none of them is worth a model call, and
 answering "thank you" with "I'm not equipped for that yet" is the wrong
@@ -72,6 +72,38 @@ _WELLBEING = re.compile(
 )
 
 
+# Affection: "I love you", "I like you", "you're my friend", "I missed you" -- said to him by
+# whoever is there, a child at the toy as often as not, and answered warmly, in his own voice.
+# Whole utterances only, as everything here: "I love you, now play some music" is a command.
+_FEELING = r"(?:\s+(?:so\s+much|very\s+much|loads|lots|a\s+lot|too|as\s+well|3000|forever|always))*"
+
+_LOVE = re.compile(
+    rf"^{_LEAD}(?:i\s+)?(?:really\s+|just\s+|do\s+)?(?:love|luv|adore)\s+(?:you|u|ya){_FEELING}{_ADDRESS}$"
+    rf"|^{_LEAD}love\s+(?:you|u|ya){_FEELING}{_ADDRESS}$"
+    rf"|^{_LEAD}(?:we|i)\s+love\s+(?:you|u){_FEELING}{_ADDRESS}$"
+)
+
+_FOND = re.compile(
+    rf"^{_LEAD}(?:i\s+)?(?:really\s+|just\s+|do\s+)?(?:like|fancy|dig)\s+(?:you|u|ya){_FEELING}{_ADDRESS}$"
+    rf"|^{_LEAD}(?:you\s+are|youre|you\s+re|ur)\s+(?:so\s+|really\s+|very\s+)?"
+    rf"(?:cool|nice|sweet|kind|lovely|cute|funny|great|fun|clever|smart){_ADDRESS}$"
+)
+
+_FRIEND = re.compile(
+    rf"^{_LEAD}(?:you\s+are|youre|you\s+re|ur)\s+(?:my\s+)?(?:best\s+|bestest\s+|good\s+|true\s+)?"
+    rf"(?:friend|buddy|pal|mate|bestie|bff){_ADDRESS}$"
+    rf"|^{_LEAD}(?:we\s+are|were|we\s+re)\s+(?:best\s+|good\s+)?friends{_ADDRESS}$"
+    rf"|^{_LEAD}(?:will\s+you\s+be|can\s+you\s+be|be)\s+my\s+(?:best\s+)?friend{_ADDRESS}$"
+    rf"|^{_LEAD}(?:are\s+you|r\s+u)\s+my\s+(?:best\s+)?friend{_ADDRESS}$"
+)
+
+_MISSED = re.compile(
+    rf"^{_LEAD}(?:i\s+)?(?:really\s+)?(?:missed|miss)\s+(?:you|u|ya){_FEELING}{_ADDRESS}$"
+)
+
+_AFFECTION = (("love", _LOVE), ("fond", _FOND), ("friend", _FRIEND), ("missed", _MISSED))
+
+
 # Only the ways of getting his attention come off the front. The command
 # router's normaliser also trims words like "well" and "okay" from the
 # ends, which would turn "well done" into "done" and "are you okay" into
@@ -93,7 +125,8 @@ def _normalise(said):
 
 
 def kind(said):
-    """'gratitude', 'praise', 'wellbeing', or None, for a raw utterance."""
+    """'gratitude', 'praise', 'wellbeing', 'love', 'fond', 'friend', 'missed', or None, for a raw
+    utterance."""
     text = _normalise(said)
 
     if not text:
@@ -108,6 +141,10 @@ def kind(said):
     if _WELLBEING.match(text):
         return "wellbeing"
 
+    for which, shape in _AFFECTION:
+        if shape.match(text):
+            return which
+
     return None
 
 
@@ -121,6 +158,9 @@ def reply(which):
 
     if which == "wellbeing":
         return _wellbeing()
+
+    if which in ("love", "fond", "friend", "missed"):
+        return phrases.pick(f"affection_{which}")
 
     return None
 

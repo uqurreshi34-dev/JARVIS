@@ -4100,6 +4100,10 @@ _SOCIAL_INTENTS = {
     "gratitude": "gratitude",
     "praise": "praise",
     "wellbeing": "wellbeing_check",
+    "love": "affection_love",
+    "fond": "affection_like",
+    "friend": "affection_friend",
+    "missed": "affection_missed",
 }
 # Questions about what JARVIS himself has recorded. A connected service
 # named inside one ("what did I note about github") is only its topic.
@@ -4324,7 +4328,7 @@ def _fast_path(command):
     if _PRESENCE.match(text):
         return _blank_result("presence_check")
 
-    # Thanks, praise and "you good?" -- said to him, not asked of him.
+    # Thanks, praise, "you good?" and affection -- said to him, not asked of him.
     # Whole utterances only, so "thanks, now open chrome" is a command.
     said = social.kind(command)
 

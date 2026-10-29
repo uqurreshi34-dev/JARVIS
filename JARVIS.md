@@ -1745,6 +1745,17 @@ own echo is let go. Answers are raised so their loudest moment is TOY_TALK_PEAK
 voice was quiet on the toy's small speaker. "Jarvis, mute" (or "be quiet") said
 to the toy mutes it in `_toy_mute_asked`, before the command is run: then only
 "Jarvis, unmute" is answered, BOOT held or not; not kept across a restart.
+Its body (`startToyBody`, `toyBodyTask`): a WS2812 light ring on Gravity 43
+(RMT, 10 MHz, GRB) and an SG90 servo on Gravity 44, both on the power bank's
+5 V from the breadboard with grounds joined, follow `toyMood`, set by the talk:
+hearing you blue, waiting for the answer red flashing at 2 Hz, speaking green
+with the head nodding 15 degrees either side, otherwise off and centred. The
+servo's PWM is LEDC timer 3, channel 7, set through ESP-IDF directly: the
+camera's clock is timer 0, channel 0, set by its driver where Arduino's
+`ledcAttach` cannot see it, and `ledcAttach` would have taken timer 0 at 50 Hz.
+Affection said to him ("I love you", "I like you", "you're my friend", "I
+missed you") is matched in `actions/social.py` and answered warmly from
+`phrases.py`, free, wherever it is said.
 On starting it chimes two notes (`chime`): answers had
 been "played" with nothing heard, so the chime, and the bytes the speaker took
 logged beside those that came, say whether the speaker end works. mbedTLS's larger pieces come from PSRAM on this board

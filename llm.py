@@ -477,7 +477,10 @@ or closing things, for volume or media, or for the time, weather, or
 system status.
 
 Use gratitude when the whole utterance only thanks JARVIS, praise when it
-only compliments him, and wellbeing_check when it only asks how he is. An
+only compliments him, and wellbeing_check when it only asks how he is.
+Use affection_love for "I love you", affection_like for "I like you" or
+"you're cool", affection_friend for "you're my friend", and
+affection_missed for "I missed you", when that is the whole utterance. An
 utterance that also asks for something is not one of these.
 
 Use unknown for anything else.
@@ -516,6 +519,10 @@ _SCHEMA = {
                 "gratitude",
                 "praise",
                 "wellbeing_check",
+                "affection_love",
+                "affection_like",
+                "affection_friend",
+                "affection_missed",
                 "aircraft_overhead",
                 "aircraft_hide",
                 "aircraft_range",

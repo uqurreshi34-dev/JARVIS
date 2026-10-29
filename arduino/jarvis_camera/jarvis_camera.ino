@@ -52,6 +52,8 @@
 #include "ESP_I2S.h"
 #include "esp_heap_caps.h"
 #include "mbedtls/platform.h"
+#include "driver/ledc.h"
+#include "esp32-hal-rmt.h"
 #endif
 
 #ifdef JARVIS_DETECT
@@ -1520,6 +1522,10 @@ static const int TALK_END_FRAMES = 40;                // 0.8 s of quiet
 static const float TALK_LEAST_LEVEL = 150.0f;
 static const unsigned long TALK_AFTER_ANSWER_MS = 400UL;   // its own voice's echo, let go
 
+// What the toy is doing, for its light ring and head (toyBodyTask, below): set as the talk goes.
+enum ToyMood { TOY_IDLE, TOY_LISTENING, TOY_THINKING, TOY_SPEAKING };
+static volatile int toyMood = TOY_IDLE;
+
 static I2SClass talkMic;
 static I2SClass talkSpeaker;
 NetworkClientSecure talkLink;
@@ -1695,6 +1701,7 @@ static int askAndPlay(size_t pcm, bool button) {
       have--;
     }
 
+    toyMood = TOY_SPEAKING;
     taken += talkSpeaker.write(chunk, have);
     played += have;
   }
@@ -1769,6 +1776,7 @@ void talkTask(void *) {
     float loudest = level;
     unsigned long began = millis();
     digitalWrite(TALK_LED_PIN, HIGH);
+    toyMood = TOY_LISTENING;
 
     while (got + sizeof(frame) <= most) {
       level = readFrame(frame);
@@ -1798,12 +1806,16 @@ void talkTask(void *) {
     prerollCount = 0;
 
     if (heard < TALK_LEAST_MS) {
+      toyMood = TOY_IDLE;
       continue;
     }
+
+    toyMood = TOY_THINKING;
 
     Serial.printf("[jarvis] talk: %lu ms heard%s (the room's quiet %.0f, the loudest %.0f)\n", heard,
                   button ? " with BOOT held" : "", quietLevel, loudest);
     int answered = askAndPlay(got, button);
+    toyMood = TOY_IDLE;
 
     if (answered < 0) {
       blinkTalkLed(3);
@@ -1843,6 +1855,139 @@ static void chime() {
   }
 
   Serial.printf("[jarvis] talk: chimed (the speaker took %u of %u bytes)\n", (unsigned)taken, (unsigned)sent);
+}
+
+// The toy's body: its light ring (WS2812 LEDs, data on Gravity 43) shows what JARVIS is doing, and
+// its servo (signal on Gravity 44) moves its head. Both powered from the power bank's 5 V on the
+// breadboard, never from the board; their ground joined to the board's.
+//   hearing you: blue      waiting for JARVIS: red, flashing      speaking: green, the head nodding
+//   otherwise: off, the head still and centred
+static const int TOY_RING_PIN = 43;
+static const int TOY_SERVO_PIN = 44;
+static const int TOY_RING_LEDS = 16;           // two rings of eight, chained; one ring ignores the rest
+static const uint8_t TOY_BRIGHT = 60;          // of 255: bright enough, and kind to the power bank
+static const int TOY_CENTRE = 90;              // degrees
+static const int TOY_NOD = 15;                 // degrees either side while speaking
+// The servo's own timer and channel, set directly: the camera's clock is LEDC timer 0, channel 0,
+// set by its driver where Arduino's ledcAttach cannot see it -- ledcAttach would take timer 0 for
+// itself at 50 Hz and stop the camera.
+static const ledc_timer_t TOY_SERVO_TIMER = LEDC_TIMER_3;
+static const ledc_channel_t TOY_SERVO_CHANNEL = LEDC_CHANNEL_7;
+static const int TOY_SERVO_BITS = 14;
+
+static bool toyRingReady = false;
+static rmt_data_t toyBits[TOY_RING_LEDS * 24];
+
+static void toyRing(uint8_t red, uint8_t green, uint8_t blue) {
+  if (!toyRingReady) {
+    return;
+  }
+
+  // WS2812: green, red, blue, highest bit first; at 10 MHz, a 1 is 0.8 us high then 0.4 low, a 0 the reverse.
+  int at = 0;
+
+  for (int led = 0; led < TOY_RING_LEDS; led++) {
+    uint32_t colour = ((uint32_t)green << 16) | ((uint32_t)red << 8) | blue;
+
+    for (int bit = 23; bit >= 0; bit--) {
+      bool one = colour & (1UL << bit);
+      toyBits[at].level0 = 1;
+      toyBits[at].duration0 = one ? 8 : 4;
+      toyBits[at].level1 = 0;
+      toyBits[at].duration1 = one ? 4 : 8;
+      at++;
+    }
+  }
+
+  rmtWrite(TOY_RING_PIN, toyBits, at, 100);
+}
+
+static void toyServo(int degrees) {
+  degrees = degrees < 0 ? 0 : (degrees > 180 ? 180 : degrees);
+  // SG90: 0.5 ms is 0 degrees, 2.5 ms is 180, every 20 ms.
+  uint32_t micros = 500 + (uint32_t)degrees * 2000 / 180;
+  ledc_set_duty(LEDC_LOW_SPEED_MODE, TOY_SERVO_CHANNEL, micros * (1UL << TOY_SERVO_BITS) / 20000);
+  ledc_update_duty(LEDC_LOW_SPEED_MODE, TOY_SERVO_CHANNEL);
+}
+
+void toyBodyTask(void *) {
+  int shown = -1;
+  unsigned long since = millis();
+
+  for (;;) {
+    int mood = toyMood;
+    unsigned long now = millis();
+
+    if (mood != shown) {
+      shown = mood;
+      since = now;
+
+      if (mood == TOY_IDLE) {
+        toyRing(0, 0, 0);
+        toyServo(TOY_CENTRE);
+      } else if (mood == TOY_LISTENING) {
+        toyRing(0, 0, TOY_BRIGHT);
+      } else if (mood == TOY_SPEAKING) {
+        toyRing(0, TOY_BRIGHT, 0);
+      }
+    }
+
+    if (mood == TOY_THINKING) {
+      // Red, flashing twice a second, until his answer starts.
+      bool on = ((now - since) / 250) % 2 == 0;
+      toyRing(on ? TOY_BRIGHT : 0, 0, 0);
+    } else if (mood == TOY_SPEAKING) {
+      // A gentle nod, side to side, about once a second.
+      float swing = sinf(2.0f * PI * (now - since) / 1200.0f);
+      toyServo(TOY_CENTRE + (int)(TOY_NOD * swing));
+    }
+
+    delay(30);
+  }
+}
+
+void startToyBody() {
+  toyRingReady = rmtInit(TOY_RING_PIN, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_2, 10000000);
+
+  if (!toyRingReady) {
+    Serial.println("[jarvis] toy: the light ring could not be started");
+  }
+
+  ledc_timer_config_t timer = {};
+  timer.speed_mode = LEDC_LOW_SPEED_MODE;
+  timer.timer_num = TOY_SERVO_TIMER;
+  timer.duty_resolution = (ledc_timer_bit_t)TOY_SERVO_BITS;
+  timer.freq_hz = 50;
+  timer.clk_cfg = LEDC_AUTO_CLK;
+
+  ledc_channel_config_t channel = {};
+  channel.speed_mode = LEDC_LOW_SPEED_MODE;
+  channel.channel = TOY_SERVO_CHANNEL;
+  channel.timer_sel = TOY_SERVO_TIMER;
+  channel.gpio_num = TOY_SERVO_PIN;
+  channel.duty = 0;
+
+  bool servo = ledc_timer_config(&timer) == ESP_OK && ledc_channel_config(&channel) == ESP_OK;
+
+  if (!servo) {
+    Serial.println("[jarvis] toy: the servo could not be started");
+  }
+
+  // Hello: the ring white for a moment, the head looking left, right, and back to the middle.
+  toyRing(TOY_BRIGHT / 2, TOY_BRIGHT / 2, TOY_BRIGHT / 2);
+
+  if (servo) {
+    toyServo(TOY_CENTRE - 30);
+    delay(400);
+    toyServo(TOY_CENTRE + 30);
+    delay(400);
+    toyServo(TOY_CENTRE);
+    delay(300);
+  }
+
+  toyRing(0, 0, 0);
+  xTaskCreatePinnedToCore(toyBodyTask, "toy body", 4096, nullptr, 2, nullptr, 1);
+  Serial.println("[jarvis] toy: light ring on 43, servo on 44");
 }
 
 // mbedTLS's memory, the larger pieces from PSRAM. Each TLS connection takes some 40 KB, from internal
@@ -1969,6 +2114,7 @@ void setup() {
 #endif
 
 #if defined(JARVIS_BOARD_DFR1154)
+  startToyBody();
   startTalk();
 #endif
 }

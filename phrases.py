@@ -94,6 +94,35 @@ POOLS = {
         "Very well, sir. Thank you for asking.",
         "Running like clockwork, sir.",
     ),
+    # Affection said to him (social.py), by you or a child at the toy: warm, in his own voice, and
+    # never more than he is -- fond of whoever is there, not claiming a heart he does not have.
+    "affection_love": (
+        "And I'm very fond of you, sir. It's an honour to look after you.",
+        "That's kind of you to say, sir. You've made my circuits glow.",
+        "Thank you, sir. I'll always be here when you need me.",
+        "The feeling is entirely mutual, sir, in every way a machine can manage.",
+        "That means a great deal, sir. You're my favourite person to help.",
+    ),
+    "affection_fond": (
+        "And I like you very much, sir.",
+        "The feeling's mutual, sir. You're rather good company.",
+        "Thank you, sir. You're not so bad yourself.",
+        "You've made my day, sir.",
+        "Most kind, sir. I enjoy our chats too.",
+    ),
+    "affection_friend": (
+        "Always, sir. You can count on me.",
+        "I'd be honoured to be your friend, sir.",
+        "Friends it is, sir. I'll be right here.",
+        "The very best of friends, sir.",
+        "Of course, sir. That's what I'm here for.",
+    ),
+    "affection_missed": (
+        "And I missed you, sir. Welcome back.",
+        "It's good to hear your voice again, sir.",
+        "I kept everything running while you were away, sir. Good to have you back.",
+        "Welcome back, sir. It was rather quiet without you.",
+    ),
     "declined": (
         "Very well, sir. I'll leave it to you.",
         "As you wish, sir.",

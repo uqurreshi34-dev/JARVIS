@@ -653,6 +653,21 @@ recorded: JARVIS keeps the newest picture in memory and nothing on disk.
 
 What a camera looks at is the "looks" of its room's window in house.json.
 
+### The toy's lights and head
+
+The toy's light ring and servo (wired on the breadboard, powered by the
+power bank) show what JARVIS is doing:
+
+| The ring | When |
+|---|---|
+| blue | it is hearing you |
+| red, flashing | it is waiting for JARVIS's answer |
+| green, the head nodding side to side | JARVIS is speaking |
+| off, the head centred | otherwise |
+
+On starting, the ring flashes white and the head looks left, right and
+back to the middle: both are working.
+
 ### Talking through the toy
 
 Say **"Jarvis, ..."** to the toy, as you would to the desk: "Jarvis, what
@@ -827,7 +842,7 @@ Seven replies, never the same one twice running. Costs nothing and
 answers instantly — being asked whether you are there is not a question
 worth a model request.
 
-## Thanks, praise and how he is
+## Thanks, praise, affection and how he is
 
 | Say | Does |
 |---|---|
@@ -838,6 +853,10 @@ worth a model request.
 | good job jarvis | Kind of you to say, sir. |
 | jarvis, you good? | Never better, sir. |
 | how are you | Very well, sir. Thank you for asking. |
+| jarvis, I love you | And I'm very fond of you, sir. It's an honour to look after you. |
+| I like you / you're cool | The feeling's mutual, sir. You're rather good company. |
+| you're my friend / will you be my friend | Always, sir. You can count on me. |
+| I missed you | And I missed you, sir. Welcome back. |
 
 Improvise freely — "excellent, thank you so much", "brilliant, cheers",
 "are you okay jarvis" all work. Free and instant. Anything more than the
