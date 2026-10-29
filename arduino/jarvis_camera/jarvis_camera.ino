@@ -1643,6 +1643,7 @@ static int askAndPlay(size_t pcm, bool button) {
   int remaining = https.getSize();          // -1: until the connection closes
   uint8_t chunk[1024];
   size_t played = 0;
+  size_t taken = 0;
   bool odd = false;
   uint8_t carry = 0;
   unsigned long quiet = millis();
@@ -1694,12 +1695,14 @@ static int askAndPlay(size_t pcm, bool button) {
       have--;
     }
 
-    talkSpeaker.write(chunk, have);
+    taken += talkSpeaker.write(chunk, have);
     played += have;
   }
 
   https.end();
-  Serial.printf("[jarvis] talk: %u ms of answer played\n", (unsigned)(played * 1000UL / (TALK_RATE * 2)));
+  // What the speaker really took, beside what came: the two differ only if the speaker refused it.
+  Serial.printf("[jarvis] talk: %u ms of answer played (the speaker took %u of %u bytes)\n",
+                (unsigned)(played * 1000UL / (TALK_RATE * 2)), (unsigned)taken, (unsigned)played);
   return played > 0 ? 1 : 0;
 }
 
@@ -1815,6 +1818,33 @@ void talkTask(void *) {
   }
 }
 
+// Two short notes on the toy's speaker when it is ready to listen: heard, the speaker works; not heard,
+// its plug is not right home in the SPK socket. Answers had come back and been "played" with nothing
+// heard (29 October 2026), and this says which end to look at.
+static void chime() {
+  static const int NOTE_MS = 120;
+  static const float NOTES[] = {880.0f, 1320.0f};
+  int16_t piece[TALK_FRAME];
+  size_t taken = 0, sent = 0;
+
+  for (float note : NOTES) {
+    int samples = TALK_RATE * NOTE_MS / 1000;
+
+    for (int done = 0; done < samples; done += TALK_FRAME) {
+      int count = samples - done < TALK_FRAME ? samples - done : TALK_FRAME;
+
+      for (int i = 0; i < count; i++) {
+        piece[i] = (int16_t)(6000.0f * sinf(2.0f * PI * note * (done + i) / TALK_RATE));
+      }
+
+      taken += talkSpeaker.write((uint8_t *)piece, count * 2);
+      sent += count * 2;
+    }
+  }
+
+  Serial.printf("[jarvis] talk: chimed (the speaker took %u of %u bytes)\n", (unsigned)taken, (unsigned)sent);
+}
+
 // mbedTLS's memory, the larger pieces from PSRAM. Each TLS connection takes some 40 KB, from internal
 // RAM in the Arduino build; with the polls, live view, detection's reports and the toy's talk all
 // connected at once that ran out -- "SSL - Memory allocation failed" (29 October 2026). Small pieces
@@ -1866,6 +1896,7 @@ void startTalk() {
 
   talkLink.setCACert(JARVIS_CA);
   talkLink.setHandshakeTimeout(HANDSHAKE_SECONDS);
+  chime();
 
   if (xTaskCreatePinnedToCore(talkTask, "talk", 12288, nullptr, 1, nullptr, 1) != pdPASS) {
     Serial.println("[jarvis] talk: could not start");

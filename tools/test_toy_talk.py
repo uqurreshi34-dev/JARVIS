@@ -259,8 +259,11 @@ check("TALK_MIC_CLOCK_PIN = 38" in talk_part and "TALK_MIC_DATA_PIN = 39" in tal
 check("MALLOC_CAP_SPIRAM" in talk_part and '"/toy/talk"' in talk_part and "https.begin(talkLink, url)" in talk_part
       and "talkLink.setCACert(JARVIS_CA);" in talk_part and "setInsecure" not in talk_part,
       "into PSRAM, then to /toy/talk over its own connection, checked against JARVIS's authority")
-check("talkSpeaker.write(chunk, have);" in talk_part and "getStreamPtr()" in talk_part,
-      "and the answer played as it arrives, not held whole")
+check("taken += talkSpeaker.write(chunk, have);" in talk_part and "getStreamPtr()" in talk_part,
+      "and the answer played as it arrives, not held whole, counting what the speaker took")
+start_part = talk_part[talk_part.index("void startTalk()"):]
+check("static void chime()" in talk_part and start_part.index("chime();") < start_part.index("xTaskCreatePinnedToCore(talkTask"),
+      "a chime on the speaker when it is ready: heard, the speaker works")
 setup = sketch[sketch.index("void setup() {"):sketch.index("void loop() {")]
 check("mbedtls_platform_set_calloc_free(tlsCalloc, tlsFree);" in talk_part and "MALLOC_CAP_SPIRAM" in
       talk_part[talk_part.index("static void *tlsCalloc"):] and setup.index("talkTlsInPsram();") < setup.index("joinWifi();"),
