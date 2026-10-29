@@ -736,6 +736,26 @@ class SpeechEngine:
                 print(f"[JARVIS] could not read cached audio: {error}")
                 return None
 
+    def pcm16(self, text, rate=16000):
+        """Some text spoken as raw 16-bit mono PCM at [rate], without playing it here.
+
+        For a board with a speaker of its own and no MP3 decoder (the toy cam): the same voice
+        and the same disk cache as speak(), only decoded and resampled on this side. None when
+        there is nothing to say or the voice could not be made.
+        """
+        text = _plain(text)
+
+        if not text or not text.strip():
+            return None
+
+        try:
+            samples, samplerate, _boundaries = self._audio_for(text)
+        except Exception as error:
+            print(f"[JARVIS] could not synthesise for the toy: {error}")
+            return None
+
+        return to_pcm16(samples, samplerate, rate)
+
     @staticmethod
     def _touch(path):
         """Mark a cache file as just used, for mtime-based LRU eviction.
@@ -1355,6 +1375,40 @@ def play_file(path):
 def audio_bytes(text):
     """Synthesised MP3 for text, without playing it on this machine."""
     return speech.audio_bytes(text)
+
+
+def to_pcm16(samples, samplerate, rate=16000):
+    """Float samples (-1 to 1, mono or not) as little-endian 16-bit mono PCM at [rate].
+
+    Going down in rate, each output sample is first averaged over the input samples it stands
+    for, so the voice's highest notes fold back as a faint hiss at most rather than as chirps;
+    then read off by straight-line interpolation. numpy only.
+    """
+    data = np.asarray(samples, dtype=np.float32)
+
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+
+    if not len(data):
+        return b""
+
+    if samplerate != rate:
+        if samplerate > rate:
+            width = max(1, int(round(samplerate / rate)))
+
+            if width > 1:
+                data = np.convolve(data, np.full(width, 1.0 / width, dtype=np.float32), mode="same")
+
+        count = max(1, int(round(len(data) * rate / samplerate)))
+        positions = np.arange(count, dtype=np.float64) * (samplerate / rate)
+        data = np.interp(positions, np.arange(len(data), dtype=np.float64), data).astype(np.float32)
+
+    return (np.clip(data, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+
+
+def pcm16(text, rate=16000):
+    """Text spoken as raw 16-bit mono PCM at [rate], for a board's own speaker."""
+    return speech.pcm16(text, rate)
 
 
 def invalidate(text):

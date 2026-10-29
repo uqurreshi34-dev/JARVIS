@@ -1718,8 +1718,20 @@ as `s3detect`). `JARVIS_BOARD_DFR1154` gives it DFRobot's camera pins (XCLK 5,
 SDA 8, SCL 9, data 4 6 7 14 17 21 18 16, VSYNC 1, HREF 2, PCLK 15, from
 DFRobot's DFR1154_Examples), holds its infrared lights (47) off, and reads it
 over the chip's own USB (`ARDUINO_USB_CDC_ON_BOOT=1`), its only socket. Its
-microphone (PDM, 38 and 39), speaker (I2S, 45 46 42) and Gravity port (43, 44)
-are not used yet. `tools/test_detections.py` checks the pins and both envs.
+Gravity port (43, 44) is not used yet. `tools/test_detections.py` checks the
+pins and both envs.
+
+The toy talks (`startTalk`, its own task, only on this board): BOOT (GPIO 0)
+held records its PDM microphone (clock 38, data 39) at 16 kHz into PSRAM, the
+LED (3) lit, ten seconds at most; let go, the WAV goes to `POST /toy/talk` over
+its own TLS connection (`talkLink`, JARVIS's authority), and the answer comes
+back as raw 16-bit mono PCM at 16 kHz, played through its MAX98357 (I2S, BCLK
+45, LRC 46, DOUT 42) as it arrives. JARVIS runs it as a phone command
+(`_toy_answer`: transcribed, the lone-filler filter, `_handler`, the desk
+microphone quiet meanwhile) and speaks the reply with `speech.pcm16`: the same
+voice and cache as the desk, decoded and resampled (`speech.to_pcm16`, numpy
+only) because the board has no MP3 decoder. Too short, nothing made out, or a
+failure are answered aloud too. `tools/test_toy_talk.py`.
 
 An ESP32-CAM (AI Thinker) takes a picture only when asked. It reports
 "online" to `/sensor` like any board, named after its room ("my room cam"),

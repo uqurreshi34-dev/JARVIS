@@ -653,6 +653,15 @@ recorded: JARVIS keeps the newest picture in memory and nothing on disk.
 
 What a camera looks at is the "looks" of its room's window in house.json.
 
+### Talking through the toy
+
+Hold the toy cam's **BOOT** button, speak, and let go. Its light is on
+while it listens (ten seconds at most). JARVIS hears it, does it, and
+answers through the toy's own speaker, not the desk's: anything you could
+say to him at the desk. Nothing is heard unless the button is held, so
+"Jarvis" said to the PC never reaches the toy. Three quick blinks: no
+answer came (JARVIS not running, or not on the same wifi).
+
 ### What the house cam recognises
 
 Flashed as `s3detect`, the house cam runs YOLO26n (FEMTO-ML) on its own board,

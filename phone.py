@@ -131,6 +131,12 @@ DEFAULT_HOME_NETWORKS = "192.168.,10.,172.16.,127.0.0.1,::1"
 # through.
 MIN_VOICE_BYTES = 44 + 32000 // 3
 
+# The toy cam's talk (POST /toy/talk): what it sends at most -- the board stops recording at ten
+# seconds, 16 kHz mono 16-bit, 32000 bytes a second -- with room to spare; and the rate of the
+# raw PCM it is answered in, which its speaker plays as it arrives.
+MAX_TOY_TALK_BYTES = 44 + 32000 * 12
+TOY_TALK_RATE = 16000
+
 
 def home_networks():
     """Address prefixes counted as being at home."""
@@ -1689,6 +1695,36 @@ class PhoneServer:
                     "error": "I couldn't process that voice command."
                 }), 500
 
+        @app.post("/toy/talk")
+        def toy_talk():
+            """The toy cam's push-to-talk: a WAV of what was said while its button was held, answered
+            with the reply spoken as raw 16-bit mono PCM at TOY_TALK_RATE, for its speaker to play as
+            it arrives. Size checked before the body is read; nothing kept."""
+            if not self._authorised():
+                return jsonify({"error": "unauthorised"}), 403
+
+            if not self._handler:
+                return jsonify({"error": "JARVIS is still starting up."}), 503
+
+            if request.content_length is None or request.content_length > MAX_TOY_TALK_BYTES:
+                return jsonify({"error": "too large"}), 413
+
+            content_type = request.headers.get("Content-Type", "").split(";", 1)[0].strip().casefold()
+
+            if content_type != "audio/wav":
+                return jsonify({"error": "toy talk must be WAV audio"}), 400
+
+            said = self._toy_answer(request.get_data(cache=False))
+            data = speech.pcm16(said, TOY_TALK_RATE) if said else b""
+
+            if said and not data:
+                return jsonify({"error": "No audio."}), 503
+
+            return data, 200, {
+                "Content-Type": f"audio/L16; rate={TOY_TALK_RATE}; channels=1",
+                "Cache-Control": "no-store",
+            }
+
         @app.post("/audio")
         def audio():
             """The spoken form of a reply, as MP3, for the phone to play.
@@ -1721,6 +1757,39 @@ class PhoneServer:
                 "Content-Type": "audio/mpeg",
                 "Cache-Control": "no-store",
             }
+
+    def _toy_answer(self, audio):
+        """What to say back to the toy for [audio], a WAV it recorded: the command's reply, or why
+        there is none. Run as the phone's are (_handler): the desk shows it and stays quiet."""
+        if len(audio) < MIN_VOICE_BYTES:
+            return "That was too short, sir. Hold the button while you speak."
+
+        set_phone_active(True)
+
+        try:
+            text = transcriber.transcribe_wav(audio)
+
+            if not text:
+                return "I couldn't make out what you said, sir."
+
+            words = text.split()
+
+            if len(words) == 1 and words[0].casefold() in FILLERS:
+                print(f'[filtered] "{text}" (single filler word, toy)')
+                return "I only caught a stray word, sir."
+
+            print(f'[toy] heard "{text}"')
+            reply = self._handler(text)
+
+            if isinstance(reply, dict):
+                reply = reply.get("spoken", "")
+
+            return str(reply or "")
+        except Exception as error:
+            print(f"[JARVIS] toy talk failed: {error}")
+            return "Something went wrong there, sir."
+        finally:
+            set_phone_active(False)
 
     @staticmethod
     def _alarm_ttl():

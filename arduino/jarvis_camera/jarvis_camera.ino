@@ -48,6 +48,11 @@
 #include "jarvis_config.h"
 #include "jarvis_secrets.h"
 
+#if defined(JARVIS_BOARD_DFR1154)
+#include "ESP_I2S.h"
+#include "esp_heap_caps.h"
+#endif
+
 #ifdef JARVIS_DETECT
 // On-board detection (PlatformIO env "s3detect"): YOLO26n, compiled to C by
 // FEMTO-ML into detect/ by tools/femto_build.py. It runs on the other core,
@@ -93,8 +98,8 @@ struct Seen {
 // DFRobot ESP32-S3 AI Camera (DFR1154, V1.1): the camera's pins, as DFRobot's own examples
 // (DFR1154_Examples, CameraWebServer) wire them -- not the S3-EYE's below. No power-down or reset pin.
 // Its infrared lights (47) and LED (3) are left off here: a camera looking out of a window at
-// night would only see its own reflection. Its microphone (PDM, clock 38, data 39), speaker
-// (I2S, BCLK 45, LRC 46, DOUT 42) and Gravity port (43, 44) are not used by this sketch.
+// night would only see its own reflection. Its microphone and speaker are the toy's talk (startTalk,
+// below); its Gravity port (43, 44) is not used by this sketch.
 #define PWDN_GPIO_NUM -1
 #define RESET_GPIO_NUM -1
 #define XCLK_GPIO_NUM 5
@@ -1478,6 +1483,230 @@ void startDetection() {
 }
 #endif
 
+#if defined(JARVIS_BOARD_DFR1154)
+// Talking to JARVIS through the toy: hold BOOT and speak, let go, and JARVIS's answer comes out of
+// the toy's own speaker. While the button is held the board records its microphone (PDM, 16 kHz,
+// the LED on); on letting go it posts the recording to POST /toy/talk and plays the reply -- raw
+// 16-bit PCM at the same rate -- as it arrives. Nothing is recorded unless the button is held, so
+// "Jarvis" said to the PC is never heard here. Its own task and its own connection: the polls,
+// live view and detection carry on meanwhile.
+static const int TALK_BUTTON_PIN = 0;        // BOOT: free once the board has started
+static const int TALK_LED_PIN = 3;
+static const int TALK_MIC_CLOCK_PIN = 38;
+static const int TALK_MIC_DATA_PIN = 39;
+static const int TALK_SPEAKER_BCLK_PIN = 45;
+static const int TALK_SPEAKER_LRC_PIN = 46;
+static const int TALK_SPEAKER_DOUT_PIN = 42;
+static const uint32_t TALK_RATE = 16000;
+static const unsigned long TALK_MOST_MS = 10000UL;    // a recording stops here, button or not
+static const unsigned long TALK_LEAST_MS = 400UL;     // shorter is a stray press: nothing sent
+static const unsigned long TALK_ANSWER_MS = 45000UL;  // hearing, thinking and speaking, at most
+static const size_t WAV_HEADER = 44;
+
+static I2SClass talkMic;
+static I2SClass talkSpeaker;
+NetworkClientSecure talkLink;
+static uint8_t *talkBuffer = nullptr;
+
+static void putLittle(uint8_t *at, uint32_t value, int bytes) {
+  for (int i = 0; i < bytes; i++) {
+    at[i] = (value >> (8 * i)) & 0xFF;
+  }
+}
+
+// A 44-byte WAV header for [dataBytes] of 16-bit mono PCM at TALK_RATE.
+static void wavHeader(uint8_t *at, uint32_t dataBytes) {
+  memcpy(at, "RIFF", 4);
+  putLittle(at + 4, 36 + dataBytes, 4);
+  memcpy(at + 8, "WAVEfmt ", 8);
+  putLittle(at + 16, 16, 4);
+  putLittle(at + 20, 1, 2);                 // PCM
+  putLittle(at + 22, 1, 2);                 // mono
+  putLittle(at + 24, TALK_RATE, 4);
+  putLittle(at + 28, TALK_RATE * 2, 4);
+  putLittle(at + 32, 2, 2);
+  putLittle(at + 34, 16, 2);
+  memcpy(at + 36, "data", 4);
+  putLittle(at + 40, dataBytes, 4);
+}
+
+static void blinkTalkLed(int times) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(TALK_LED_PIN, HIGH);
+    delay(120);
+    digitalWrite(TALK_LED_PIN, LOW);
+    delay(120);
+  }
+}
+
+// Records while the button is held; the number of PCM bytes after the header.
+static size_t recordWhileHeld() {
+  const size_t most = TALK_MOST_MS * TALK_RATE * 2 / 1000;
+  size_t got = 0;
+  unsigned long began = millis();
+
+  digitalWrite(TALK_LED_PIN, HIGH);
+
+  while (digitalRead(TALK_BUTTON_PIN) == LOW && got < most) {
+    size_t want = most - got < 1024 ? most - got : 1024;
+    got += talkMic.readBytes((char *)(talkBuffer + WAV_HEADER + got), want);
+  }
+
+  digitalWrite(TALK_LED_PIN, LOW);
+  Serial.printf("[jarvis] talk: %lu ms recorded\n", millis() - began);
+  return got & ~(size_t)1;
+}
+
+// Sends [pcm] bytes of recording and plays the answer as it comes. True if an answer was played.
+static bool askAndPlay(size_t pcm) {
+  wavHeader(talkBuffer, pcm);
+
+  HTTPClient https;
+  String url = String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + "/toy/talk";
+
+  if (!https.begin(talkLink, url)) {
+    Serial.println("[jarvis] talk: could not start the request");
+    return false;
+  }
+
+  https.setTimeout(TALK_ANSWER_MS);
+  https.addHeader("Content-Type", "audio/wav");
+  https.addHeader("X-Jarvis-Token", JARVIS_TOKEN);
+  https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
+
+  unsigned long sent = millis();
+  int code = https.POST(talkBuffer, WAV_HEADER + pcm);
+
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("[jarvis] talk: JARVIS answered %d\n", code);
+    https.end();
+    return false;
+  }
+
+  lastDelivered = millis();
+  NetworkClient *answer = https.getStreamPtr();
+  int remaining = https.getSize();          // -1: until the connection closes
+  uint8_t chunk[1024];
+  size_t played = 0;
+  bool odd = false;
+  uint8_t carry = 0;
+  unsigned long quiet = millis();
+
+  Serial.printf("[jarvis] talk: answered in %lu ms\n", millis() - sent);
+
+  while (https.connected() && (remaining > 0 || remaining == -1)) {
+    int ready = answer->available();
+
+    if (ready <= 0) {
+      if (millis() - quiet > 5000UL) {
+        break;
+      }
+
+      delay(2);
+      continue;
+    }
+
+    quiet = millis();
+    int wanted = ready > (int)sizeof(chunk) - 1 ? (int)sizeof(chunk) - 1 : ready;
+
+    if (remaining > 0 && wanted > remaining) {
+      wanted = remaining;
+    }
+
+    // Keep the samples whole: a byte left over waits for the next read.
+    size_t start = 0;
+
+    if (odd) {
+      chunk[0] = carry;
+      start = 1;
+    }
+
+    int got = answer->readBytes(chunk + start, wanted);
+
+    if (got <= 0) {
+      break;
+    }
+
+    if (remaining > 0) {
+      remaining -= got;
+    }
+
+    size_t have = start + got;
+    odd = have & 1;
+
+    if (odd) {
+      carry = chunk[have - 1];
+      have--;
+    }
+
+    talkSpeaker.write(chunk, have);
+    played += have;
+  }
+
+  https.end();
+  Serial.printf("[jarvis] talk: %u ms of answer played\n", (unsigned)(played * 1000UL / (TALK_RATE * 2)));
+  return played > 0;
+}
+
+void talkTask(void *) {
+  for (;;) {
+    if (digitalRead(TALK_BUTTON_PIN) != LOW || WiFi.status() != WL_CONNECTED) {
+      delay(20);
+      continue;
+    }
+
+    size_t pcm = recordWhileHeld();
+
+    if (pcm < TALK_LEAST_MS * TALK_RATE * 2 / 1000) {
+      Serial.println("[jarvis] talk: too short, not sent");
+    } else if (!askAndPlay(pcm)) {
+      blinkTalkLed(3);
+    }
+
+    // Let go of the button before listening again.
+    while (digitalRead(TALK_BUTTON_PIN) == LOW) {
+      delay(20);
+    }
+  }
+}
+
+void startTalk() {
+  pinMode(TALK_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(TALK_LED_PIN, OUTPUT);
+  digitalWrite(TALK_LED_PIN, LOW);
+
+  talkBuffer = (uint8_t *)heap_caps_malloc(WAV_HEADER + TALK_MOST_MS * TALK_RATE * 2 / 1000,
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  talkMic.setPinsPdmRx(TALK_MIC_CLOCK_PIN, TALK_MIC_DATA_PIN);
+  talkSpeaker.setPins(TALK_SPEAKER_BCLK_PIN, TALK_SPEAKER_LRC_PIN, TALK_SPEAKER_DOUT_PIN);
+
+  if (!talkBuffer) {
+    Serial.println("[jarvis] talk: no room to record; the toy cannot talk");
+    return;
+  }
+
+  if (!talkMic.begin(I2S_MODE_PDM_RX, TALK_RATE, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO)) {
+    Serial.println("[jarvis] talk: the microphone did not start");
+    return;
+  }
+
+  if (!talkSpeaker.begin(I2S_MODE_STD, TALK_RATE, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO)) {
+    Serial.println("[jarvis] talk: the speaker did not start");
+    return;
+  }
+
+  talkLink.setCACert(JARVIS_CA);
+  talkLink.setHandshakeTimeout(HANDSHAKE_SECONDS);
+
+  if (xTaskCreatePinnedToCore(talkTask, "talk", 8192, nullptr, 1, nullptr, 1) != pdPASS) {
+    Serial.println("[jarvis] talk: could not start");
+    return;
+  }
+
+  Serial.println("[jarvis] talk: hold BOOT and speak");
+}
+#endif
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -1531,6 +1760,10 @@ void setup() {
   if (cameraReady) {
     startDetection();
   }
+#endif
+
+#if defined(JARVIS_BOARD_DFR1154)
+  startTalk();
 #endif
 }
 
