@@ -35,7 +35,7 @@ from pywebpush import webpush, WebPushException
 import phone_tls
 import transcriber
 from actions import location, askfiles, cameras, detections, files, highlight, sighting_search, sightings
-from voice import FILLERS, set_phone_active
+from voice import FILLERS, FOLLOW_UP_SECONDS, addressed_command, set_phone_active, wake_heard
 
 import speech
 
@@ -660,6 +660,10 @@ class PhoneServer:
         self.token = token or os.getenv(TOKEN_ENV) or secrets.token_urlsafe(8)
 
         self._handler = None
+
+        # Until when the toy cam's next words, heard hands-free, need not start with "Jarvis": a
+        # follow-up to his last answer there (_toy_answer).
+        self._toy_follow_until = 0.0
         self._server = None
         self._thread = None
         self._look_handler = None
@@ -1714,7 +1718,13 @@ class PhoneServer:
             if content_type != "audio/wav":
                 return jsonify({"error": "toy talk must be WAV audio"}), 400
 
-            said = self._toy_answer(request.get_data(cache=False))
+            heard_by = (request.headers.get("X-Jarvis-Toy") or "button").strip().casefold()
+            said = self._toy_answer(request.get_data(cache=False), heard_by)
+
+            # Heard unasked and not said to JARVIS: nothing to play, the toy listens on.
+            if said is None:
+                return "", 204
+
             data = speech.pcm16(said, TOY_TALK_RATE) if said else b""
 
             if said and not data:
@@ -1758,11 +1768,24 @@ class PhoneServer:
                 "Cache-Control": "no-store",
             }
 
-    def _toy_answer(self, audio):
+    def _toy_answer(self, audio, heard_by="button"):
         """What to say back to the toy for [audio], a WAV it recorded: the command's reply, or why
-        there is none. Run as the phone's are (_handler): the desk shows it and stays quiet."""
+        there is none; None to say nothing at all. Run as the phone's are (_handler): the desk shows
+        it and stays quiet.
+
+        [heard_by] "button": BOOT was held, so it was meant for JARVIS. "sound": the toy heard someone
+        speak and sent it unasked, so it is his only when it starts with his name -- the wake grammar
+        first, here and offline, then the transcript, as the desk's microphone -- or comes within a
+        follow-up window of his last answer. Anything else is not his: silence, no complaint.
+        """
+        hands_free = heard_by == "sound"
+        following = hands_free and time.monotonic() < self._toy_follow_until
+
         if len(audio) < MIN_VOICE_BYTES:
-            return "That was too short, sir. Hold the button while you speak."
+            return None if hands_free else "That was too short, sir. Hold the button while you speak."
+
+        if hands_free and not following and not wake_heard(audio[44:]):
+            return None
 
         set_phone_active(True)
 
@@ -1770,16 +1793,32 @@ class PhoneServer:
             text = transcriber.transcribe_wav(audio)
 
             if not text:
-                return "I couldn't make out what you said, sir."
+                return None if hands_free else "I couldn't make out what you said, sir."
 
             words = text.split()
 
             if len(words) == 1 and words[0].casefold() in FILLERS:
                 print(f'[filtered] "{text}" (single filler word, toy)')
-                return "I only caught a stray word, sir."
+                return None if hands_free else "I only caught a stray word, sir."
+
+            if hands_free and not following:
+                command = addressed_command(text)
+
+                if command is None:
+                    print(f'[ignored] "{text}" (toy: not said to JARVIS)')
+                    return None
+
+                print(f'[toy] woken by "{text}"')
+
+                if not command:
+                    self._toy_follow_until = time.monotonic() + FOLLOW_UP_SECONDS
+                    return "Yes, sir?"
+
+                text = command
 
             print(f'[toy] heard "{text}"')
             reply = self._handler(text)
+            self._toy_follow_until = time.monotonic() + FOLLOW_UP_SECONDS if hands_free else 0.0
 
             if isinstance(reply, dict):
                 reply = reply.get("spoken", "")

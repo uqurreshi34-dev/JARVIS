@@ -1721,17 +1721,28 @@ over the chip's own USB (`ARDUINO_USB_CDC_ON_BOOT=1`), its only socket. Its
 Gravity port (43, 44) is not used yet. `tools/test_detections.py` checks the
 pins and both envs.
 
-The toy talks (`startTalk`, its own task, only on this board): BOOT (GPIO 0)
-held records its PDM microphone (clock 38, data 39) at 16 kHz into PSRAM, the
-LED (3) lit, ten seconds at most; let go, the WAV goes to `POST /toy/talk` over
-its own TLS connection (`talkLink`, JARVIS's authority), and the answer comes
-back as raw 16-bit mono PCM at 16 kHz, played through its MAX98357 (I2S, BCLK
-45, LRC 46, DOUT 42) as it arrives. JARVIS runs it as a phone command
-(`_toy_answer`: transcribed, the lone-filler filter, `_handler`, the desk
-microphone quiet meanwhile) and speaks the reply with `speech.pcm16`: the same
-voice and cache as the desk, decoded and resampled (`speech.to_pcm16`, numpy
-only) because the board has no MP3 decoder. Too short, nothing made out, or a
-failure are answered aloud too. `tools/test_toy_talk.py`.
+The toy talks, hands-free (`startTalk`, its own task, only on this board). It
+listens to its PDM microphone (clock 38, data 39) at 16 kHz all the time,
+20 ms at a time, learning the room's quiet while nobody speaks; speech louder
+than that (3.5 times, three frames running) is recorded into PSRAM from half a
+second before it began until 0.8 s of quiet, the LED (3) lit, ten seconds at
+most, and posted to `POST /toy/talk` with `X-Jarvis-Toy: sound` over its own
+TLS connection (`talkLink`, JARVIS's authority). BOOT (GPIO 0) held records
+until it is let go, sent as `button`. JARVIS turns a `sound` away with 204,
+the toy playing nothing, unless it is his: the wake grammar run over it on
+this PC first (`voice.wake_heard`, so a television is never sent to the
+transcriber), then the transcript addressed to him by the desk's own rules
+(`voice.addressed_command`) -- or within FOLLOW_UP_SECONDS of his last answer
+there. His name alone is answered "Yes, sir?" and opens that window. The
+command runs as a phone command (`_toy_answer`: `_handler`, the desk
+microphone quiet meanwhile), and the reply comes back as raw 16-bit mono PCM
+at 16 kHz (`speech.pcm16`, the desk's voice and cache, decoded and resampled
+by `speech.to_pcm16` because the board has no MP3 decoder), played through
+its MAX98357 (I2S, BCLK 45, LRC 46, DOUT 42) as it arrives; then 0.4 s of its
+own echo is let go. mbedTLS's larger pieces come from PSRAM on this board
+(`talkTlsInPsram`, set before the first connection): with the polls, live
+view, detection's reports and the talk all connected, internal RAM ran out
+("SSL - Memory allocation failed", 29 October 2026). `tools/test_toy_talk.py`.
 
 An ESP32-CAM (AI Thinker) takes a picture only when asked. It reports
 "online" to `/sensor` like any board, named after its room ("my room cam"),

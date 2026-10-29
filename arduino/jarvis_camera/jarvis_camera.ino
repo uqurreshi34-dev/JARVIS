@@ -51,6 +51,7 @@
 #if defined(JARVIS_BOARD_DFR1154)
 #include "ESP_I2S.h"
 #include "esp_heap_caps.h"
+#include "mbedtls/platform.h"
 #endif
 
 #ifdef JARVIS_DETECT
@@ -1484,12 +1485,14 @@ void startDetection() {
 #endif
 
 #if defined(JARVIS_BOARD_DFR1154)
-// Talking to JARVIS through the toy: hold BOOT and speak, let go, and JARVIS's answer comes out of
-// the toy's own speaker. While the button is held the board records its microphone (PDM, 16 kHz,
-// the LED on); on letting go it posts the recording to POST /toy/talk and plays the reply -- raw
-// 16-bit PCM at the same rate -- as it arrives. Nothing is recorded unless the button is held, so
-// "Jarvis" said to the PC is never heard here. Its own task and its own connection: the polls,
-// live view and detection carry on meanwhile.
+// Talking to JARVIS through the toy, hands-free: the toy listens all the time, and when someone
+// speaks it records what they say -- from half a second before the sound began to most of a second
+// after it stops -- and posts it to POST /toy/talk. JARVIS turns away anything not said to him
+// ("Jarvis, ..." first, as at the desk, or a follow-up to his last answer): the toy plays nothing,
+// and listens on. His answer comes back as raw 16-bit PCM and plays on the toy's own speaker as it
+// arrives. BOOT held is the same without his name: everything said while it is held is his. The LED
+// is on while the toy is recording. Its own task and its own connection, so the polls, live view
+// and detection carry on meanwhile.
 static const int TALK_BUTTON_PIN = 0;        // BOOT: free once the board has started
 static const int TALK_LED_PIN = 3;
 static const int TALK_MIC_CLOCK_PIN = 38;
@@ -1498,15 +1501,30 @@ static const int TALK_SPEAKER_BCLK_PIN = 45;
 static const int TALK_SPEAKER_LRC_PIN = 46;
 static const int TALK_SPEAKER_DOUT_PIN = 42;
 static const uint32_t TALK_RATE = 16000;
-static const unsigned long TALK_MOST_MS = 10000UL;    // a recording stops here, button or not
-static const unsigned long TALK_LEAST_MS = 400UL;     // shorter is a stray press: nothing sent
+static const unsigned long TALK_MOST_MS = 10000UL;    // a recording stops here, whatever is said
+static const unsigned long TALK_LEAST_MS = 500UL;     // shorter is a cough or a knock: nothing sent
 static const unsigned long TALK_ANSWER_MS = 45000UL;  // hearing, thinking and speaking, at most
 static const size_t WAV_HEADER = 44;
+
+// Hearing someone speak: the level of each 20 ms of sound against the room's own quiet, which the
+// toy keeps learning while nobody speaks. Speech is louder than the quiet by TALK_START_TIMES for
+// TALK_START_FRAMES frames running; it has ended after TALK_END_FRAMES frames back under
+// TALK_END_TIMES. Never quieter than TALK_LEAST_LEVEL (of 32767), so a silent room's hiss is not
+// taken for a voice.
+static const int TALK_FRAME = 320;                    // samples: 20 ms
+static const int TALK_PREROLL_FRAMES = 25;            // half a second kept before the sound began
+static const float TALK_START_TIMES = 3.5f;
+static const float TALK_END_TIMES = 2.0f;
+static const int TALK_START_FRAMES = 3;
+static const int TALK_END_FRAMES = 40;                // 0.8 s of quiet
+static const float TALK_LEAST_LEVEL = 150.0f;
+static const unsigned long TALK_AFTER_ANSWER_MS = 400UL;   // its own voice's echo, let go
 
 static I2SClass talkMic;
 static I2SClass talkSpeaker;
 NetworkClientSecure talkLink;
 static uint8_t *talkBuffer = nullptr;
+static int16_t *talkPreroll = nullptr;
 
 static void putLittle(uint8_t *at, uint32_t value, int bytes) {
   for (int i = 0; i < bytes; i++) {
@@ -1539,26 +1557,42 @@ static void blinkTalkLed(int times) {
   }
 }
 
-// Records while the button is held; the number of PCM bytes after the header.
-static size_t recordWhileHeld() {
-  const size_t most = TALK_MOST_MS * TALK_RATE * 2 / 1000;
+// One frame of the microphone into [frame]; its level, the mean of the samples' size.
+static float readFrame(int16_t *frame) {
   size_t got = 0;
-  unsigned long began = millis();
 
-  digitalWrite(TALK_LED_PIN, HIGH);
+  while (got < TALK_FRAME * 2) {
+    size_t read = talkMic.readBytes((char *)frame + got, TALK_FRAME * 2 - got);
 
-  while (digitalRead(TALK_BUTTON_PIN) == LOW && got < most) {
-    size_t want = most - got < 1024 ? most - got : 1024;
-    got += talkMic.readBytes((char *)(talkBuffer + WAV_HEADER + got), want);
+    if (read == 0) {
+      delay(1);
+    }
+
+    got += read;
   }
 
-  digitalWrite(TALK_LED_PIN, LOW);
-  Serial.printf("[jarvis] talk: %lu ms recorded\n", millis() - began);
-  return got & ~(size_t)1;
+  uint32_t total = 0;
+
+  for (int i = 0; i < TALK_FRAME; i++) {
+    total += abs(frame[i]);
+  }
+
+  return (float)total / TALK_FRAME;
 }
 
-// Sends [pcm] bytes of recording and plays the answer as it comes. True if an answer was played.
-static bool askAndPlay(size_t pcm) {
+// Throws away what the microphone heard over the next [ms]: the toy's own answer, still echoing.
+static void letGo(unsigned long ms) {
+  int16_t frame[TALK_FRAME];
+  unsigned long until = millis() + ms;
+
+  while ((long)(until - millis()) > 0) {
+    readFrame(frame);
+  }
+}
+
+// Sends [pcm] bytes of recording and plays the answer as it comes: 1 if an answer was played, 0 if
+// JARVIS had nothing to say (it was not said to him), -1 if he could not be reached.
+static int askAndPlay(size_t pcm, bool button) {
   wavHeader(talkBuffer, pcm);
 
   HTTPClient https;
@@ -1566,21 +1600,29 @@ static bool askAndPlay(size_t pcm) {
 
   if (!https.begin(talkLink, url)) {
     Serial.println("[jarvis] talk: could not start the request");
-    return false;
+    return -1;
   }
 
   https.setTimeout(TALK_ANSWER_MS);
   https.addHeader("Content-Type", "audio/wav");
   https.addHeader("X-Jarvis-Token", JARVIS_TOKEN);
   https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
+  https.addHeader("X-Jarvis-Toy", button ? "button" : "sound");
 
   unsigned long sent = millis();
   int code = https.POST(talkBuffer, WAV_HEADER + pcm);
 
-  if (code != HTTP_CODE_OK) {
-    Serial.printf("[jarvis] talk: JARVIS answered %d\n", code);
+  if (code == 204) {
     https.end();
-    return false;
+    return 0;
+  }
+
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("[jarvis] talk: JARVIS answered %d (%u bytes of internal memory free, largest %u)\n", code,
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    https.end();
+    return -1;
   }
 
   lastDelivered = millis();
@@ -1645,29 +1687,128 @@ static bool askAndPlay(size_t pcm) {
 
   https.end();
   Serial.printf("[jarvis] talk: %u ms of answer played\n", (unsigned)(played * 1000UL / (TALK_RATE * 2)));
-  return played > 0;
+  return played > 0 ? 1 : 0;
 }
 
 void talkTask(void *) {
+  const size_t most = TALK_MOST_MS * TALK_RATE * 2 / 1000;
+  int16_t frame[TALK_FRAME];
+  float quietLevel = TALK_LEAST_LEVEL;
+  int prerollAt = 0;          // the oldest frame in the ring
+  int prerollCount = 0;
+  int loudRun = 0;
+
   for (;;) {
-    if (digitalRead(TALK_BUTTON_PIN) != LOW || WiFi.status() != WL_CONNECTED) {
-      delay(20);
+    float level = readFrame(frame);
+    bool button = digitalRead(TALK_BUTTON_PIN) == LOW;
+    float trigger = quietLevel * TALK_START_TIMES;
+
+    if (trigger < TALK_LEAST_LEVEL) {
+      trigger = TALK_LEAST_LEVEL;
+    }
+
+    // The ring of the last half second, so the first word is not cut.
+    memcpy(talkPreroll + prerollAt * TALK_FRAME, frame, sizeof(frame));
+    prerollAt = (prerollAt + 1) % TALK_PREROLL_FRAMES;
+
+    if (prerollCount < TALK_PREROLL_FRAMES) {
+      prerollCount++;
+    }
+
+    loudRun = level > trigger ? loudRun + 1 : 0;
+
+    if (!button && loudRun < TALK_START_FRAMES) {
+      // Nobody speaking: learn the room's quiet, slowly, from quiet frames only.
+      if (level < trigger) {
+        quietLevel = quietLevel * 0.98f + level * 0.02f;
+      }
+
       continue;
     }
 
-    size_t pcm = recordWhileHeld();
+    if (WiFi.status() != WL_CONNECTED) {
+      loudRun = 0;
+      continue;
+    }
 
-    if (pcm < TALK_LEAST_MS * TALK_RATE * 2 / 1000) {
-      Serial.println("[jarvis] talk: too short, not sent");
-    } else if (!askAndPlay(pcm)) {
+    // Recording: the half second before, then on until the quiet comes back (or the button is let go).
+    size_t got = 0;
+
+    for (int i = 0; i < prerollCount; i++) {
+      int index = (prerollAt + TALK_PREROLL_FRAMES - prerollCount + i) % TALK_PREROLL_FRAMES;
+      memcpy(talkBuffer + WAV_HEADER + got, talkPreroll + index * TALK_FRAME, sizeof(frame));
+      got += sizeof(frame);
+    }
+
+    int quietRun = 0;
+    unsigned long began = millis();
+    digitalWrite(TALK_LED_PIN, HIGH);
+
+    while (got + sizeof(frame) <= most) {
+      level = readFrame(frame);
+      memcpy(talkBuffer + WAV_HEADER + got, frame, sizeof(frame));
+      got += sizeof(frame);
+
+      if (button) {
+        if (digitalRead(TALK_BUTTON_PIN) != LOW) {
+          break;
+        }
+      } else {
+        quietRun = level < quietLevel * TALK_END_TIMES ? quietRun + 1 : 0;
+
+        if (quietRun >= TALK_END_FRAMES) {
+          break;
+        }
+      }
+    }
+
+    digitalWrite(TALK_LED_PIN, LOW);
+    unsigned long heard = millis() - began;
+    loudRun = 0;
+    prerollCount = 0;
+
+    if (heard < TALK_LEAST_MS) {
+      continue;
+    }
+
+    Serial.printf("[jarvis] talk: %lu ms heard%s (the room's quiet %.0f)\n", heard,
+                  button ? " with BOOT held" : "", quietLevel);
+    int answered = askAndPlay(got, button);
+
+    if (answered < 0) {
       blinkTalkLed(3);
     }
 
-    // Let go of the button before listening again.
+    // Its own answer is not for it to hear; nor a button still held.
     while (digitalRead(TALK_BUTTON_PIN) == LOW) {
       delay(20);
     }
+
+    letGo(TALK_AFTER_ANSWER_MS);
   }
+}
+
+// mbedTLS's memory, the larger pieces from PSRAM. Each TLS connection takes some 40 KB, from internal
+// RAM in the Arduino build; with the polls, live view, detection's reports and the toy's talk all
+// connected at once that ran out -- "SSL - Memory allocation failed" (29 October 2026). Small pieces
+// stay internal, where they are fastest; a piece PSRAM cannot give comes from internal RAM.
+static void *tlsCalloc(size_t count, size_t size) {
+  size_t bytes = count * size;
+  void *piece = nullptr;
+
+  if (bytes >= 1024) {
+    piece = heap_caps_calloc(count, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  }
+
+  return piece ? piece : heap_caps_calloc(count, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+
+static void tlsFree(void *piece) {
+  heap_caps_free(piece);
+}
+
+void talkTlsInPsram() {
+  mbedtls_platform_set_calloc_free(tlsCalloc, tlsFree);
 }
 
 void startTalk() {
@@ -1677,10 +1818,11 @@ void startTalk() {
 
   talkBuffer = (uint8_t *)heap_caps_malloc(WAV_HEADER + TALK_MOST_MS * TALK_RATE * 2 / 1000,
                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  talkPreroll = (int16_t *)heap_caps_malloc(TALK_PREROLL_FRAMES * TALK_FRAME * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   talkMic.setPinsPdmRx(TALK_MIC_CLOCK_PIN, TALK_MIC_DATA_PIN);
   talkSpeaker.setPins(TALK_SPEAKER_BCLK_PIN, TALK_SPEAKER_LRC_PIN, TALK_SPEAKER_DOUT_PIN);
 
-  if (!talkBuffer) {
+  if (!talkBuffer || !talkPreroll) {
     Serial.println("[jarvis] talk: no room to record; the toy cannot talk");
     return;
   }
@@ -1698,18 +1840,24 @@ void startTalk() {
   talkLink.setCACert(JARVIS_CA);
   talkLink.setHandshakeTimeout(HANDSHAKE_SECONDS);
 
-  if (xTaskCreatePinnedToCore(talkTask, "talk", 8192, nullptr, 1, nullptr, 1) != pdPASS) {
+  if (xTaskCreatePinnedToCore(talkTask, "talk", 12288, nullptr, 1, nullptr, 1) != pdPASS) {
     Serial.println("[jarvis] talk: could not start");
     return;
   }
 
-  Serial.println("[jarvis] talk: hold BOOT and speak");
+  Serial.printf("[jarvis] talk: listening -- say \"Jarvis, ...\" (%u bytes of internal memory free)\n",
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 }
 #endif
 
 void setup() {
   Serial.begin(115200);
   delay(200);
+
+#if defined(JARVIS_BOARD_DFR1154)
+  // Before any connection is made: its memory and its freeing must come from the same place.
+  talkTlsInPsram();
+#endif
 
   if (FLASH_LED_PIN >= 0) {
     pinMode(FLASH_LED_PIN, OUTPUT);

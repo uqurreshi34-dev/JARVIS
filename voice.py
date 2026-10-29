@@ -375,6 +375,37 @@ def _strip_wake(text):
     return None
 
 
+def wake_heard(pcm):
+    """Whether "Jarvis" may be in [pcm], 16-bit mono at SAMPLE_RATE: the wake grammar run over it here,
+    on this PC, whatever engine transcribes. For a board that sends what it hears (the toy cam), so
+    a room's chatter and a television are turned away without being transcribed. The grammar hears
+    the name in sounds that are not it, so it only rules out: True when it cannot be run at all."""
+    try:
+        recognizer = KaldiRecognizer(model, SAMPLE_RATE, WAKE_GRAMMAR)
+        recognizer.AcceptWaveform(pcm)
+        heard = json.loads(recognizer.FinalResult()).get("text", "")
+    except Exception as error:
+        print(f"[JARVIS] wake check unavailable ({error}); transcribing instead")
+        return True
+
+    return WAKE_WORD in heard.split()
+
+
+def addressed_command(text):
+    """The command in [text] when it is said to JARVIS by name -- "Jarvis, what time is it" ->
+    "what time is it", his name alone -> "" -- or None when it is not addressed to him. The desk's
+    own rules (listen()), for a recording the wake grammar has already heard the name in."""
+    addressed, remainder = _split_wake(text)
+
+    if addressed:
+        return remainder
+
+    if _mentions_wake(text):
+        return None
+
+    return _strip_wake(text)
+
+
 def _armed():
     return time.monotonic() < _armed_until
 

@@ -1,4 +1,4 @@
-"""Talking to JARVIS through the toy cam: hold BOOT, speak, let go, and the answer comes out of the toy.
+"""Talking to JARVIS through the toy cam, hands-free: "Jarvis, ..." to the toy, and the answer comes out of it.
 
     python tools/test_toy_talk.py
 
@@ -7,11 +7,15 @@ back are set by hand, and the server is called as the board calls it. Checked:
 
 - speech.to_pcm16: any voice's samples become 16-bit mono PCM at 16 kHz -- the right length, the
   right pitch, mono from stereo, nothing past full scale;
-- POST /toy/talk: only with the token; size and type checked before anything is heard; a recording
-  too short, or nothing made out, answered aloud with why; a command run as the phone's are (the
-  desk quiet meanwhile, and listening again after), its reply sent back as raw PCM for the speaker;
-- the toy's firmware: push-to-talk only on DFRobot's board, on BOOT, recorded into PSRAM, sent to
-  /toy/talk over its own connection checked against JARVIS's authority, and played as it arrives.
+- POST /toy/talk, BOOT held: only with the token; size and type checked before anything is heard; a
+  recording too short, or nothing made out, answered aloud with why; a command run as the phone's
+  are (the desk quiet meanwhile, and listening again after), its reply sent back as raw PCM;
+- hands-free: what the toy heard unasked is turned away in silence unless the wake grammar hears his
+  name and the transcript starts with it -- never transcribed when the grammar does not; his name
+  alone is answered "Yes, sir?"; a follow-up within the window needs no name, and after it, it does;
+- the toy's firmware: only on DFRobot's board; listening for speech against the room's quiet, with
+  half a second kept from before it began; recorded into PSRAM, sent to /toy/talk over its own
+  connection checked against JARVIS's authority, played as it arrives; TLS memory from PSRAM.
 """
 
 import io
@@ -150,6 +154,74 @@ if phone:
     talk(recording(1.5))
     check(spoken[-1][0] == "Calling mum on your phone, sir.", "a phone action's words are said, its link ignored")
 
+    # ---- hands-free: what the toy heard unasked ----
+
+    server.set_handler(handler)
+    woken, transcribed = [], []
+    phone.wake_heard = lambda pcm: woken.pop(0)
+    real_transcribe = phone.transcriber.transcribe_wav
+
+    def counting(audio):
+        transcribed.append(1)
+        return heard_texts.pop(0)
+
+    phone.transcriber.transcribe_wav = counting
+
+    def hear(audio):
+        return client.post("/toy/talk", data=audio, headers={
+            "X-Jarvis-Token": "right-token", "X-Jarvis-Camera": "toy cam",
+            "Content-Type": "audio/wav", "X-Jarvis-Toy": "sound"})
+
+    handled.clear()
+    spoken.clear()
+    woken.append(False)
+    answer = hear(recording(1.5))
+    check(answer.status_code == 204 and not answer.data and not transcribed and not handled and not spoken,
+          "the room's chatter, no name in it: turned away in silence, never transcribed")
+
+    woken.append(True)
+    heard_texts.append("oh yeah that was good")
+    answer = hear(recording(1.5))
+    check(answer.status_code == 204 and len(transcribed) == 1 and not handled,
+          "the grammar heard a name the transcript does not have: still silence")
+
+    woken.append(True)
+    heard_texts.append("yesterday I told my brother that jarvis is clever")
+    check(hear(recording(1.5)).status_code == 204 and not handled, "his name in the middle is not him called")
+
+    woken.append(True)
+    heard_texts.append("Jarvis, what time is it")
+    replies.append("It's five o'clock, sir.")
+    answer = hear(recording(1.5))
+    check(answer.status_code == 200 and handled == ["what time is it"] and spoken[-1][0] == "It's five o'clock, sir.",
+          "'Jarvis, what time is it': the command without his name, answered on the toy")
+
+    heard_texts.append("and tomorrow's weather")
+    replies.append("Rain, sir.")
+    answer = hear(recording(1.5))
+    check(answer.status_code == 200 and handled[-1] == "and tomorrow's weather" and not woken,
+          "a follow-up straight after needs no name, and is not even checked for one")
+
+    server._toy_follow_until = 0.0
+    woken.append(False)
+    check(hear(recording(1.5)).status_code == 204 and handled[-1] == "and tomorrow's weather",
+          "once the window has passed, it does again")
+
+    woken.append(True)
+    heard_texts.append("Jarvis")
+    answer = hear(recording(1))
+    check(answer.status_code == 200 and spoken[-1][0] == "Yes, sir?" and server._toy_follow_until > 0,
+          "his name alone: 'Yes, sir?', and the next words need no name")
+    heard_texts.append("play some music")
+    replies.append("Playing, sir.")
+    hear(recording(1.5))
+    check(handled[-1] == "play some music", "so the command after it is taken")
+
+    server._toy_follow_until = 0.0
+    check(hear(recording(0.1)).status_code == 204, "heard unasked and too short: silence, not a complaint")
+
+    phone.transcriber.transcribe_wav = real_transcribe
+
     def broken(text):
         raise RuntimeError("model down")
 
@@ -167,10 +239,15 @@ talk_part = sketch[sketch.index("// Talking to JARVIS through the toy"):sketch.i
 check(talk_part.startswith("// Talking to JARVIS through the toy") and
       sketch[:sketch.index("// Talking to JARVIS through the toy")].rstrip().endswith("#if defined(JARVIS_BOARD_DFR1154)")
       and "startTalk();" in sketch[sketch.index("void setup() {"):sketch.index("void loop() {")],
-      "push-to-talk is built only for DFRobot's board, and started with it")
-check("TALK_BUTTON_PIN = 0;" in talk_part and "digitalRead(TALK_BUTTON_PIN) == LOW" in talk_part
+      "talking is built only for DFRobot's board, and started with it")
+task = talk_part[talk_part.index("void talkTask"):talk_part.index("static void *tlsCalloc")]
+check("quietLevel * 0.98f + level * 0.02f" in task and "loudRun < TALK_START_FRAMES" in task
+      and "TALK_PREROLL_FRAMES = 25" in talk_part and "quietRun >= TALK_END_FRAMES" in task
       and "TALK_MOST_MS = 10000UL" in talk_part,
-      "recorded only while BOOT is held, ten seconds at most")
+      "it listens for speech against the room's own quiet, keeps half a second from before, ten seconds at most")
+check('"X-Jarvis-Toy", button ? "button" : "sound"' in talk_part and "code == 204" in talk_part
+      and "TALK_BUTTON_PIN = 0;" in talk_part and "letGo(TALK_AFTER_ANSWER_MS);" in task,
+      "says whether BOOT was held; plays nothing for a 204; and does not hear its own answer")
 check("TALK_MIC_CLOCK_PIN = 38" in talk_part and "TALK_MIC_DATA_PIN = 39" in talk_part
       and "TALK_SPEAKER_BCLK_PIN = 45" in talk_part and "TALK_SPEAKER_LRC_PIN = 46" in talk_part
       and "TALK_SPEAKER_DOUT_PIN = 42" in talk_part and "I2S_MODE_PDM_RX" in talk_part,
@@ -180,6 +257,10 @@ check("MALLOC_CAP_SPIRAM" in talk_part and '"/toy/talk"' in talk_part and "https
       "into PSRAM, then to /toy/talk over its own connection, checked against JARVIS's authority")
 check("talkSpeaker.write(chunk, have);" in talk_part and "getStreamPtr()" in talk_part,
       "and the answer played as it arrives, not held whole")
+setup = sketch[sketch.index("void setup() {"):sketch.index("void loop() {")]
+check("mbedtls_platform_set_calloc_free(tlsCalloc, tlsFree);" in talk_part and "MALLOC_CAP_SPIRAM" in
+      talk_part[talk_part.index("static void *tlsCalloc"):] and setup.index("talkTlsInPsram();") < setup.index("joinWifi();"),
+      "TLS's larger pieces from PSRAM, set before the first connection")
 check("TALK_RATE = 16000" in talk_part and "TOY_TALK_RATE = 16000" in (ROOT / "phone.py").read_text(encoding="utf-8"),
       "the board and JARVIS agree on the rate")
 

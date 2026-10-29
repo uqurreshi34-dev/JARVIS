@@ -655,12 +655,18 @@ What a camera looks at is the "looks" of its room's window in house.json.
 
 ### Talking through the toy
 
-Hold the toy cam's **BOOT** button, speak, and let go. Its light is on
-while it listens (ten seconds at most). JARVIS hears it, does it, and
-answers through the toy's own speaker, not the desk's: anything you could
-say to him at the desk. Nothing is heard unless the button is held, so
-"Jarvis" said to the PC never reaches the toy. Three quick blinks: no
-answer came (JARVIS not running, or not on the same wifi).
+Say **"Jarvis, ..."** to the toy, as you would to the desk: "Jarvis, what
+time is it". Its light is on while it hears you. JARVIS answers through the
+toy's own speaker, not the desk's, and for a few seconds after an answer
+the next thing you say needs no "Jarvis" at all. Said without his name,
+nothing happens: the toy keeps listening, and nothing it heard is kept.
+"Jarvis" alone gets "Yes, sir?".
+
+Holding **BOOT** while you speak does the same without his name.
+
+If you talk to the toy in the same room as the desk, mute the desk (the
+microphone on the HUD), or both answer. Three quick blinks: no answer came
+(JARVIS not running, or not on the same wifi).
 
 ### What the house cam recognises
 
