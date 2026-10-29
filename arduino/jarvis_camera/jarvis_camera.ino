@@ -1,6 +1,8 @@
-// JARVIS camera: an ESP32-CAM (AI Thinker), or an ESP32-S3-CAM, that takes a
-// picture only when asked. The same sketch for both: the S3's camera pins and
-// name are chosen below by the chip it is built for (PlatformIO env "s3cam").
+// JARVIS camera: an ESP32-CAM (AI Thinker), an ESP32-S3-CAM, or DFRobot's
+// ESP32-S3 AI Camera (DFR1154), that takes a picture only when asked. The same
+// sketch for all three: the S3's camera pins and name are chosen below by the
+// chip it is built for (PlatformIO env "s3cam"), and DFRobot's by its own env
+// ("aicam").
 //
 // It reports to JARVIS over HTTPS, checking JARVIS's certificate against
 // JARVIS's own certificate authority (setCACert) -- never setInsecure().
@@ -81,7 +83,37 @@ struct Seen {
 #define SENSOR_NAME "house cam"
 #endif
 
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
+// DFRobot's ESP32-S3 AI Camera is a third, the toy's eyes: "show me the toy cam".
+#ifdef JARVIS_CAMERA_NAME_TOY
+#undef SENSOR_NAME
+#define SENSOR_NAME "toy cam"
+#endif
+
+#if defined(JARVIS_BOARD_DFR1154)
+// DFRobot ESP32-S3 AI Camera (DFR1154, V1.1): the camera's pins, as DFRobot's own examples
+// (DFR1154_Examples, CameraWebServer) wire them -- not the S3-EYE's below. No power-down or reset pin.
+// Its infrared lights (47) and LED (3) are left off here: a camera looking out of a window at
+// night would only see its own reflection. Its microphone (PDM, clock 38, data 39), speaker
+// (I2S, BCLK 45, LRC 46, DOUT 42) and Gravity port (43, 44) are not used by this sketch.
+#define PWDN_GPIO_NUM -1
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM 5
+#define SIOD_GPIO_NUM 8
+#define SIOC_GPIO_NUM 9
+#define Y9_GPIO_NUM 4
+#define Y8_GPIO_NUM 6
+#define Y7_GPIO_NUM 7
+#define Y6_GPIO_NUM 14
+#define Y5_GPIO_NUM 17
+#define Y4_GPIO_NUM 21
+#define Y3_GPIO_NUM 18
+#define Y2_GPIO_NUM 16
+#define VSYNC_GPIO_NUM 1
+#define HREF_GPIO_NUM 2
+#define PCLK_GPIO_NUM 15
+#define FLASH_LED_PIN -1
+#define DFR1154_IR_PIN 47
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
 // ESP32-S3-CAM (Goouuu, ESP32-S3-N16R8): the camera's pins, as Espressif's
 // ESP32-S3-EYE and the boards that copy it wire them. No power-down or reset
 // pin, and no white flash LED (its RGB light, on 48, is left alone).
@@ -620,7 +652,9 @@ bool startCamera() {
 
   if (problem != ESP_OK) {
     Serial.printf("[jarvis] the camera did not start (0x%x): is its ribbon pushed in and latched?\n", problem);
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
+#if defined(JARVIS_BOARD_DFR1154)
+    Serial.println("[jarvis] (DFRobot AI Camera: is it the V1.1 board, flashed as aicam?)");
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
     Serial.println("[jarvis] (ESP32-S3: if the ribbon is in, this board's camera pins differ from the S3-EYE's)");
 #endif
     return false;
@@ -1453,7 +1487,15 @@ void setup() {
     digitalWrite(FLASH_LED_PIN, LOW);
   }
 
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
+#if defined(JARVIS_BOARD_DFR1154)
+  // Its infrared lights held off, never left to float.
+  pinMode(DFR1154_IR_PIN, OUTPUT);
+  digitalWrite(DFR1154_IR_PIN, LOW);
+#endif
+
+#if defined(JARVIS_BOARD_DFR1154)
+  Serial.print("[jarvis] DFRobot ESP32-S3 AI Camera as ");
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
   Serial.print("[jarvis] ESP32-S3-CAM as ");
 #else
   Serial.print("[jarvis] ESP32-CAM as ");

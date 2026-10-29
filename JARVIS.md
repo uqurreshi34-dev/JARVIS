@@ -1712,6 +1712,15 @@ room with none says so. Only with a house.json of your own, never the
 starter.
 
 ### Cameras - `actions/cameras.py`, `arduino/jarvis_camera/`
+DFRobot's ESP32-S3 AI Camera (DFR1154, V1.1), the toy's eyes, runs the same
+sketch as "toy cam": `pio run -e aicam -t upload` (or `aicamdetect`, recognising,
+as `s3detect`). `JARVIS_BOARD_DFR1154` gives it DFRobot's camera pins (XCLK 5,
+SDA 8, SCL 9, data 4 6 7 14 17 21 18 16, VSYNC 1, HREF 2, PCLK 15, from
+DFRobot's DFR1154_Examples), holds its infrared lights (47) off, and reads it
+over the chip's own USB (`ARDUINO_USB_CDC_ON_BOOT=1`), its only socket. Its
+microphone (PDM, 38 and 39), speaker (I2S, 45 46 42) and Gravity port (43, 44)
+are not used yet. `tools/test_detections.py` checks the pins and both envs.
+
 An ESP32-CAM (AI Thinker) takes a picture only when asked. It reports
 "online" to `/sensor` like any board, named after its room ("my room cam"),
 so the house plan places it and points its cone out of that room's window;

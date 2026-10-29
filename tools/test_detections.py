@@ -361,6 +361,26 @@ check("esp_nn_depthwise_conv_s8_simd_self_check(void) __attribute__((weak))" in 
       and "if (!esp_nn_depthwise_conv_s8_simd_self_check)" in said_check
       and sketch.index("esp_nn_conv_s8_simd_set_cores(2)") < sketch.index("sayDepthwiseCheck();"),
       "the depthwise check is said once, after both cores are set, and weak for an older FEMTO-ML")
+# DFRobot's ESP32-S3 AI Camera: its own pins and name, its USB the chip's own; the S3-CAM's untouched.
+import re  # noqa: E402
+dfr = sketch[sketch.index("#if defined(JARVIS_BOARD_DFR1154)"):sketch.index("#elif defined(CONFIG_IDF_TARGET_ESP32S3)")]
+pins = dict(re.findall(r"#define (\w+_GPIO_NUM) (-?\d+)", dfr))
+check(pins == {"PWDN_GPIO_NUM": "-1", "RESET_GPIO_NUM": "-1", "XCLK_GPIO_NUM": "5", "SIOD_GPIO_NUM": "8",
+               "SIOC_GPIO_NUM": "9", "Y9_GPIO_NUM": "4", "Y8_GPIO_NUM": "6", "Y7_GPIO_NUM": "7",
+               "Y6_GPIO_NUM": "14", "Y5_GPIO_NUM": "17", "Y4_GPIO_NUM": "21", "Y3_GPIO_NUM": "18",
+               "Y2_GPIO_NUM": "16", "VSYNC_GPIO_NUM": "1", "HREF_GPIO_NUM": "2", "PCLK_GPIO_NUM": "15"},
+      "the AI Camera's camera pins are DFRobot's own, all sixteen")
+s3 = sketch[sketch.index("#elif defined(CONFIG_IDF_TARGET_ESP32S3)"):sketch.index("#else\n// AI Thinker")]
+check("#define XCLK_GPIO_NUM 15" in s3 and "#define SIOD_GPIO_NUM 4" in s3,
+      "and the S3-CAM keeps its own")
+aicam = ini[ini.index("[env:aicam]"):ini.index("[env:aicamdetect]")]
+aidetect = ini[ini.index("[env:aicamdetect]"):]
+check("extends = env:s3cam" in aicam and "-D JARVIS_BOARD_DFR1154" in aicam and "-D JARVIS_CAMERA_NAME_TOY" in aicam
+      and "-D ARDUINO_USB_CDC_ON_BOOT=1" in aicam and "JARVIS_CAMERA_NAME_HOUSE" not in aicam
+      and "extends = env:aicam" in aidetect and "-D JARVIS_DETECT" in aidetect and "+<detect/*.c>" in aidetect,
+      "aicam: the AI Camera as toy cam, read over its own USB; aicamdetect the same, recognising")
+check('#define SENSOR_NAME "toy cam"' in sketch and "digitalWrite(DFR1154_IR_PIN, LOW);" in sketch,
+      "named toy cam, its infrared lights held off")
 gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
 check("arduino/jarvis_camera/detect/" in gitignore and "arduino/jarvis_camera/faces/" in gitignore,
       "the made sources are kept out of git")

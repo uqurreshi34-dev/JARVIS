@@ -301,6 +301,12 @@ check(steady["coins"] == [["BTC", 45, round(steady["net"], 2)]] and steady["styl
 
 # ---- saved, shown, said -------------------------------------------------------------------------
 
+# The board's clock held at NOW, the day the made-up records end: on the real clock the board saved at
+# NOW is stale, and its refresh reads the last 90 days from today, so these checks failed once today was
+# three weeks past NOW (29 October 2026), with nothing in the trader watch changed.
+real_time = tw.time
+tw.time = __import__("types").SimpleNamespace(time=lambda: NOW / 1000, sleep=real_time.sleep)
+
 check(tw.cached()["traders"][0]["address"] == steady["address"] and os.path.exists(os.path.join(folder, tw.CACHE_NAME)),
       "the board is saved")
 shown, announced = [], []
@@ -338,6 +344,7 @@ for _ in range(100):
     __import__("time").sleep(0.05)
 check(tw.cached() is not None and shown[-1]["focus"] is None, "and opened when it lands")
 check(tw.hide() and shown[-1] == "hidden", "and put away")
+tw.time = real_time
 
 # ---- what is asked --------------------------------------------------------------------------------
 
