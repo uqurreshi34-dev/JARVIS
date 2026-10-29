@@ -137,6 +137,16 @@ MIN_VOICE_BYTES = 44 + 32000 // 3
 MAX_TOY_TALK_BYTES = 44 + 32000 * 12
 TOY_TALK_RATE = 16000
 
+# Its answers' loudest moment raised (or lowered) to this, of full scale: the desk's voice, made for
+# PC speakers, was quiet on the toy's small one (29 October 2026).
+TOY_TALK_PEAK = 0.95
+
+# Said to the toy, these mute and unmute it (_toy_mute_asked): muted, it answers nothing but
+# "Jarvis, unmute". Its own, not the desk's microphone.
+TOY_MUTE_WORDS = frozenset({"mute", "mute yourself", "be quiet", "go quiet", "stop listening"})
+TOY_UNMUTE_WORDS = frozenset({"unmute", "unmute yourself", "start listening", "listen again",
+                              "you can listen again"})
+
 
 def home_networks():
     """Address prefixes counted as being at home."""
@@ -664,6 +674,10 @@ class PhoneServer:
         # Until when the toy cam's next words, heard hands-free, need not start with "Jarvis": a
         # follow-up to his last answer there (_toy_answer).
         self._toy_follow_until = 0.0
+
+        # Whether the toy was told "Jarvis, mute": then only "Jarvis, unmute" is answered. Not kept
+        # across a restart.
+        self._toy_muted = False
         self._server = None
         self._thread = None
         self._look_handler = None
@@ -1725,7 +1739,7 @@ class PhoneServer:
             if said is None:
                 return "", 204
 
-            data = speech.pcm16(said, TOY_TALK_RATE) if said else b""
+            data = speech.pcm16(said, TOY_TALK_RATE, TOY_TALK_PEAK) if said else b""
 
             if said and not data:
                 return jsonify({"error": "No audio."}), 503
@@ -1811,10 +1825,31 @@ class PhoneServer:
                 print(f'[toy] woken by "{text}"')
 
                 if not command:
+                    if self._toy_muted:
+                        return None
+
                     self._toy_follow_until = time.monotonic() + FOLLOW_UP_SECONDS
                     return "Yes, sir?"
 
                 text = command
+
+            asked = self._toy_mute_asked(text)
+
+            if asked == "unmute":
+                self._toy_muted = False
+                self._toy_follow_until = 0.0
+                print("[toy] unmuted")
+                return "I'm listening again, sir."
+
+            if self._toy_muted:
+                print(f'[ignored] "{text}" (toy muted)')
+                return None
+
+            if asked == "mute":
+                self._toy_muted = True
+                self._toy_follow_until = 0.0
+                print("[toy] muted")
+                return "Muted, sir. Say Jarvis, unmute, when you want me."
 
             print(f'[toy] heard "{text}"')
             reply = self._handler(text)
@@ -1829,6 +1864,22 @@ class PhoneServer:
             return "Something went wrong there, sir."
         finally:
             set_phone_active(False)
+
+    @staticmethod
+    def _toy_mute_asked(text):
+        """"mute" or "unmute" when [text] asks the toy to be muted or unmuted ("mute", "un-mute.",
+        "unmute please"); otherwise None."""
+        words = text.casefold().replace("-", "")
+        words = " ".join(word.strip(".,!?'\"") for word in words.split())
+        words = " ".join(word for word in words.split() if word not in ("please", "sir", "now", "jarvis"))
+
+        if words in TOY_UNMUTE_WORDS or words.replace(" ", "") == "unmute":
+            return "unmute"
+
+        if words in TOY_MUTE_WORDS:
+            return "mute"
+
+        return None
 
     @staticmethod
     def _alarm_ttl():

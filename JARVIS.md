@@ -1740,7 +1740,12 @@ microphone quiet meanwhile), and the reply comes back as raw 16-bit mono PCM
 at 16 kHz (`speech.pcm16`, the desk's voice and cache, decoded and resampled
 by `speech.to_pcm16` because the board has no MP3 decoder), played through
 its MAX98357 (I2S, BCLK 45, LRC 46, DOUT 42) as it arrives; then 0.4 s of its
-own echo is let go. On starting it chimes two notes (`chime`): answers had
+own echo is let go. Answers are raised so their loudest moment is TOY_TALK_PEAK
+(0.95) of full scale, at most four times (`speech.to_pcm16`'s peak): the desk's
+voice was quiet on the toy's small speaker. "Jarvis, mute" (or "be quiet") said
+to the toy mutes it in `_toy_mute_asked`, before the command is run: then only
+"Jarvis, unmute" is answered, BOOT held or not; not kept across a restart.
+On starting it chimes two notes (`chime`): answers had
 been "played" with nothing heard, so the chime, and the bytes the speaker took
 logged beside those that came, say whether the speaker end works. mbedTLS's larger pieces come from PSRAM on this board
 (`talkTlsInPsram`, set before the first connection): with the polls, live

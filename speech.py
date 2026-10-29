@@ -736,7 +736,7 @@ class SpeechEngine:
                 print(f"[JARVIS] could not read cached audio: {error}")
                 return None
 
-    def pcm16(self, text, rate=16000):
+    def pcm16(self, text, rate=16000, peak=None):
         """Some text spoken as raw 16-bit mono PCM at [rate], without playing it here.
 
         For a board with a speaker of its own and no MP3 decoder (the toy cam): the same voice
@@ -754,7 +754,7 @@ class SpeechEngine:
             print(f"[JARVIS] could not synthesise for the toy: {error}")
             return None
 
-        return to_pcm16(samples, samplerate, rate)
+        return to_pcm16(samples, samplerate, rate, peak)
 
     @staticmethod
     def _touch(path):
@@ -1377,12 +1377,18 @@ def audio_bytes(text):
     return speech.audio_bytes(text)
 
 
-def to_pcm16(samples, samplerate, rate=16000):
+# The most a quiet recording is raised to reach the peak asked for (to_pcm16): a whisper is not
+# turned into a shout, nor near-silence into hiss.
+_MOST_GAIN = 4.0
+
+
+def to_pcm16(samples, samplerate, rate=16000, peak=None):
     """Float samples (-1 to 1, mono or not) as little-endian 16-bit mono PCM at [rate].
 
     Going down in rate, each output sample is first averaged over the input samples it stands
     for, so the voice's highest notes fold back as a faint hiss at most rather than as chirps;
-    then read off by straight-line interpolation. numpy only.
+    then read off by straight-line interpolation. numpy only. [peak], when given (0 to 1): the
+    whole raised or lowered so its loudest moment reaches that, raised at most _MOST_GAIN times.
     """
     data = np.asarray(samples, dtype=np.float32)
 
@@ -1403,12 +1409,18 @@ def to_pcm16(samples, samplerate, rate=16000):
         positions = np.arange(count, dtype=np.float64) * (samplerate / rate)
         data = np.interp(positions, np.arange(len(data), dtype=np.float64), data).astype(np.float32)
 
+    if peak is not None:
+        loudest = float(np.max(np.abs(data)))
+
+        if loudest > 0.0:
+            data = data * min(peak / loudest, _MOST_GAIN)
+
     return (np.clip(data, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
 
 
-def pcm16(text, rate=16000):
-    """Text spoken as raw 16-bit mono PCM at [rate], for a board's own speaker."""
-    return speech.pcm16(text, rate)
+def pcm16(text, rate=16000, peak=None):
+    """Text spoken as raw 16-bit mono PCM at [rate], for a board's own speaker; [peak] as to_pcm16."""
+    return speech.pcm16(text, rate, peak)
 
 
 def invalidate(text):

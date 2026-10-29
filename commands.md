@@ -664,6 +664,14 @@ nothing happens: the toy keeps listening, and nothing it heard is kept.
 
 Holding **BOOT** while you speak does the same without his name.
 
+| Say to the toy | Does |
+|---|---|
+| Jarvis, mute / Jarvis, be quiet | the toy stops answering anything, BOOT included |
+| Jarvis, unmute | it answers again |
+
+Muting the toy leaves the desk as it was, and the desk's mute leaves the toy.
+A JARVIS started again always answers on the toy.
+
 If you talk to the toy in the same room as the desk, mute the desk (the
 microphone on the HUD), or both answer. Three quick blinks: no answer came
 (JARVIS not running, or not on the same wifi).

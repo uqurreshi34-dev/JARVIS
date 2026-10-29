@@ -68,6 +68,12 @@ check(speech.to_pcm16(stereo, rate, 16000) == pcm, "stereo is made mono")
 loud = speech.to_pcm16(np.array([2.0, -2.0, 0.0], dtype=np.float32), 16000, 16000)
 check(struct.unpack("<3h", loud) == (32767, -32767, 0), "nothing past full scale; at its own rate, unchanged")
 check(speech.to_pcm16(np.zeros(0, dtype=np.float32), rate, 16000) == b"", "no samples, no bytes")
+raised = np.frombuffer(speech.to_pcm16(tone, rate, 16000, peak=0.95), dtype="<i2").astype(np.float32) / 32767.0
+check(0.93 < np.max(np.abs(raised)) <= 0.95, "asked for a peak, a quiet voice is raised to it")
+whisper = np.frombuffer(speech.to_pcm16(tone * 0.01, rate, 16000, peak=0.95), dtype="<i2").astype(np.float32) / 32767.0
+check(np.max(np.abs(whisper)) < 0.03, "but at most four times: near-silence is not made a shout")
+check(speech.to_pcm16(np.zeros(100, dtype=np.float32), 16000, 16000, peak=0.95) == b"\x00\x00" * 100,
+      "and silence stays silence")
 
 # ---- the server, as the board calls it --------------------------------------------------------------
 
@@ -108,7 +114,9 @@ if phone:
     heard_texts, handled, active, spoken = [], [], [], []
     phone.transcriber.transcribe_wav = lambda audio: heard_texts.pop(0)
     phone.set_phone_active = active.append
-    phone.speech.pcm16 = lambda text, rate=16000: (spoken.append((text, rate)) or b"\x01\x00" * 8)
+    peaks = []
+    phone.speech.pcm16 = lambda text, rate=16000, peak=None: (peaks.append(peak) or spoken.append((text, rate))
+                                                             or b"\x01\x00" * 8)
 
     def handler(text):
         handled.append(text)
@@ -219,6 +227,38 @@ if phone:
 
     server._toy_follow_until = 0.0
     check(hear(recording(0.1)).status_code == 204, "heard unasked and too short: silence, not a complaint")
+    check(peaks and all(peak == phone.TOY_TALK_PEAK == 0.95 for peak in peaks),
+          "every answer raised to the toy's loudness")
+
+    # ---- "Jarvis, mute" and "Jarvis, unmute", said to the toy ----
+
+    handled.clear()
+    woken.append(True)
+    heard_texts.append("Jarvis, mute.")
+    answer = hear(recording(1))
+    check(answer.status_code == 200 and spoken[-1][0].startswith("Muted, sir") and server._toy_muted
+          and not handled, "'Jarvis, mute': muted, said so, and not passed on as a command")
+    woken.append(True)
+    heard_texts.append("Jarvis, what is the time")
+    check(hear(recording(1.5)).status_code == 204 and not handled, "muted, 'Jarvis, what is ...' gets nothing")
+    woken.append(True)
+    heard_texts.append("Jarvis")
+    check(hear(recording(1)).status_code == 204, "nor his name alone")
+    heard_texts.append("what is the time")
+    replies.append("Six, sir.")
+    check(talk(recording(1.5)).status_code == 204 and not handled, "nor BOOT held")
+    woken.append(True)
+    heard_texts.append("Jarvis, un-mute.")
+    answer = hear(recording(1))
+    check(answer.status_code == 200 and spoken[-1][0] == "I'm listening again, sir." and not server._toy_muted,
+          "'Jarvis, un-mute': listening again")
+    woken.append(True)
+    heard_texts.append("Jarvis, what is the time")
+    check(hear(recording(1.5)).status_code == 200 and handled == ["what is the time"], "and answers again")
+    check(phone.PhoneServer._toy_mute_asked("Unmute please.") == "unmute"
+          and phone.PhoneServer._toy_mute_asked("be quiet") == "mute"
+          and phone.PhoneServer._toy_mute_asked("mute the television") is None,
+          "'unmute please', 'be quiet'; 'mute the television' is a command, not the toy muted")
 
     phone.transcriber.transcribe_wav = real_transcribe
 
