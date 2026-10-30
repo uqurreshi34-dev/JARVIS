@@ -715,6 +715,24 @@ says so first: "Defaulting to the cloud, sir: your PC isn't answering. Turn
 it on and try again for PC mode." It says that once, and again only after
 ten minutes.
 
+In cloud mode the toy also knows, with the PC off:
+
+| Say to the toy | Does |
+|---|---|
+| Jarvis, what time is it / what's the date | answered at once, in the toy's own time zone |
+| Jarvis, what's the weather like / will it rain tomorrow | the weather where the toy is |
+| Jarvis, I live in Leeds | where it is, kept, for the time and the weather |
+| Jarvis, who's top of the Premier League | looked up live before it answers |
+| Jarvis, what can you see / is anyone there | what its camera sees now |
+| Jarvis, learn my face, I'm Sarah | look at it for a few seconds: it knows Sarah from then on |
+| Jarvis, who am I / who do you know | the face it saw last, by name; everyone it knows |
+| Jarvis, forget my face / forget Sarah / forget everyone | deleted |
+
+Anyone can teach it their face, each by their own name, and it greets them by
+name when they come into view ("Good evening, Sarah."), once in ten minutes.
+A stranger's face is never kept. Faces and where it lives are kept in the
+cloud's own database, not on this PC.
+
 Set it up once, then flash the toy: add `TOY_TOKEN=...` to `.env` (the same
 value as TOY_TOKEN in Render), run `python tools/toy_cloud_setup.py`, then
 `pio run -e aicamdetect -t upload --upload-port COM8`.

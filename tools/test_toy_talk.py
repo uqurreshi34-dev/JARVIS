@@ -404,6 +404,14 @@ check("sayWhatWasSeen();" in task and 'cloudUrl("/toy/announce")' in talk_part,
 loop = sketch[sketch.index("void loop() {"):]
 check(loop.index("if (toyCloudMode) {") < loop.index("reportOnline()") and "pcReachable = online == HTTP_CODE_OK;" in loop,
       "cloud mode asks the PC nothing; PC mode's heartbeat says whether the PC is there")
+check('"X-Jarvis-Faces"' in ask and "toyFacesWanted = facesWanted > 10 ? 10 : facesWanted;" in ask,
+      "'learn my face': the cloud asks for faces, at most ten")
+faces_part = detect[detect.index("#ifdef JARVIS_FACES"):]
+check("if (toyFacesWanted > 0) {" in faces_part and "toyFacesWanted--;" in faces_part
+      and faces_part.index("faceSent = false;") < faces_part.index("sendFace(face);"),
+      "and the face finder sends one from each look with someone in it until they are given")
+check('"\\"say\\":true"' in face_part and "toyAnnounceDue = true;" in face_part,
+      "a known face greeted by name, said on the toy")
 ca = (ROOT / "arduino" / "jarvis_camera" / "toy_cloud_ca.h").read_text(encoding="ascii")
 check(ca.count("-----BEGIN CERTIFICATE-----") == 4 and "TOY_CLOUD_CA[]" in ca,
       "the cloud's authorities: Google's and Let's Encrypt's roots, public, in git")

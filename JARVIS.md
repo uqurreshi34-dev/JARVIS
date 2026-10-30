@@ -1789,6 +1789,12 @@ picture polls); the cloud's `/health` every minute counts as JARVIS reached, so 
 board does not restart for want of the PC. In cloud mode `/camera/seen` answers
 `"say": true` when something has come into view and the talk task fetches the words
 from `/toy/announce`, between recordings. `tools/test_toy_cloud_setup.py`.
+"Jarvis, learn my face, I'm Sarah", heard by the cloud, answers with `X-Jarvis-Faces`
+(how many faces it wants, at most ten, `toyFacesWanted`): the face finder then sends a
+face from each look with someone in it, not only the first after they come into view,
+until that many have gone. `/camera/face`'s answer says `"say": true` when a known
+face is greeted by name, or a lesson is done, and the words are fetched as above.
+The faces, and where the toy lives, are kept in the cloud's database (Neon), never here.
 
 An ESP32-CAM (AI Thinker) takes a picture only when asked. It reports
 "online" to `/sensor` like any board, named after its room ("my room cam"),

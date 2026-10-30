@@ -292,6 +292,10 @@ static Preferences toyPrefs;
 static volatile bool toyCloudMode = true;
 static volatile bool pcReachable = false;   // the PC answered its last heartbeat
 static volatile bool toyAnnounceDue = false;   // the cloud has words about what the toy sees
+// "Jarvis, learn my face, I'm Sarah": the cloud asks for this many faces (X-Jarvis-Faces), and the
+// face finder sends one from each look with someone in it until they are given -- not just the one
+// it sends when someone comes into view.
+static volatile int toyFacesWanted = 0;
 static const unsigned long CLOUD_PING_MS = 60UL * 1000UL;
 static unsigned long lastCloudPing = 0;
 NetworkClientSecure cloudLink;   // the loop's: the cloud's /health
@@ -1362,6 +1366,19 @@ static void sendFace(float score) {
   https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
   https.addHeader("X-Jarvis-Face", String(score, 2));
   int code = https.POST(lookJpeg, lookJpegLength);
+
+#ifdef JARVIS_TOY_CLOUD
+  // A known face is greeted by name, and a face lesson says how it went: fetched and said by the talk task.
+  if (cloud && code == HTTP_CODE_OK) {
+    String answer = https.getString();
+    answer.replace(" ", "");
+
+    if (answer.indexOf("\"say\":true") >= 0) {
+      toyAnnounceDue = true;
+    }
+  }
+#endif
+
   https.end();
 
   if (code != HTTP_CODE_OK) {
@@ -1563,6 +1580,14 @@ void detectTask(void *) {
       faceSent = false;
     }
 
+#ifdef JARVIS_TOY_CLOUD
+    // Learning a face: one from every look with someone in it, until enough have gone.
+    if (toyFacesWanted > 0) {
+      faceLooks = 0;
+      faceSent = false;
+    }
+#endif
+
     if (personHere && !faceSent && faceLooks < FACE_LOOKS && lookJpegLength &&
         fillFaceInput(rgb, width, height, bgr)) {
       faceLooks++;
@@ -1583,6 +1608,11 @@ void detectTask(void *) {
         unsigned long sendStarted = millis();
         sendFace(face);
         faceSent = true;
+#ifdef JARVIS_TOY_CLOUD
+        if (toyFacesWanted > 0) {
+          toyFacesWanted--;
+        }
+#endif
         Serial.printf("[jarvis] face: %.2f in %lu ms, sent in %lu ms\n", face, faceTook, millis() - sendStarted);
       } else {
         Serial.printf("[jarvis] face: none in %lu ms (surest %.2f)\n", faceTook, face);
@@ -1785,8 +1815,8 @@ static int askAndPlay(size_t pcm, bool button, bool toCloud = false) {
 #endif
   https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
   https.addHeader("X-Jarvis-Toy", button ? "button" : "sound");
-  const char *wanted[] = {"X-Jarvis-Mood", "X-Jarvis-Switch"};
-  https.collectHeaders(wanted, 2);
+  const char *wanted[] = {"X-Jarvis-Mood", "X-Jarvis-Switch", "X-Jarvis-Faces"};
+  https.collectHeaders(wanted, 3);
 
   unsigned long sent = millis();
   int code = https.POST(talkBuffer, WAV_HEADER + pcm);
@@ -1827,6 +1857,14 @@ static int askAndPlay(size_t pcm, bool button, bool toCloud = false) {
 
   if (switched == "cloud" || switched == "pc") {
     saveToyMode(switched == "cloud");
+  }
+
+  // "Learn my face": the faces it asks for, from the next looks with someone in them.
+  int facesWanted = https.header("X-Jarvis-Faces").toInt();
+
+  if (facesWanted > 0) {
+    toyFacesWanted = facesWanted > 10 ? 10 : facesWanted;
+    Serial.printf("[jarvis] face: %d wanted, to learn\n", (int)toyFacesWanted);
   }
 #endif
 
