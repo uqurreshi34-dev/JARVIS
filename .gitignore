@@ -29,6 +29,7 @@ blender_extension/**/*.zip
 # ESP32 sensor sketch: made by tools/esp32_setup.py, machine-specific or secret
 arduino/*/jarvis_secrets.h
 arduino/*/jarvis_config.h
+arduino/jarvis_camera/toy_cloud.h
 # PlatformIO's build output and the editor index it makes on each machine.
 arduino/*/.pio/
 arduino/*/compile_commands.json

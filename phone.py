@@ -19,6 +19,7 @@ an ssl_context, which is what phase three will need.
 
 import json
 import os
+import re
 import secrets
 import socket
 import ssl
@@ -150,6 +151,20 @@ TOY_FOND_KINDS = frozenset({"love", "fond", "friend", "missed"})
 TOY_MUTE_WORDS = frozenset({"mute", "mute yourself", "be quiet", "go quiet", "stop listening"})
 TOY_UNMUTE_WORDS = frozenset({"unmute", "unmute yourself", "start listening", "listen again",
                               "you can listen again"})
+
+# "Jarvis, switch to cloud mode" / "... PC mode", said to the toy: it keeps the choice itself, told by
+# the X-Jarvis-Switch header ("cloud" or "pc"). In cloud mode it talks to jarvis-toy-cloud on Render
+# and needs no PC; in PC mode it talks here, falling back to the cloud while the PC is off. The same
+# matcher is in jarvis-toy-cloud's toy/modes.py: keep them alike. Only the toy's talk hears these.
+TOY_SWITCH = re.compile(
+    r"^(?:please\s+)?"
+    r"(?:(?:switch|change|go|move|swap|turn|put\s+yourself)\s+(?:yourself\s+)?(?:over\s+)?(?:back\s+)?(?:to|into|in)\s+)?"
+    r"(?:the\s+)?(pc|computer|cloud)\s+mode(?:\s+please)?$"
+)
+TOY_SWITCH_WORDS = {
+    "pc": "I'm already in PC mode, sir.",
+    "cloud": "Switching to cloud mode, sir. You can switch your PC off whenever you like.",
+}
 
 
 def home_networks():
@@ -686,6 +701,10 @@ class PhoneServer:
         # "affection" when the toy's last answer was to something warm ("I love you"): sent to the
         # toy as X-Jarvis-Mood, and its ring pulses red rather than green while he says it.
         self._toy_mood = ""
+
+        # "cloud" or "pc" when the toy's last answer was to "switch to cloud mode" (or PC): sent to the
+        # toy as X-Jarvis-Switch, and it keeps the choice.
+        self._toy_switch = ""
         self._server = None
         self._thread = None
         self._look_handler = None
@@ -1756,6 +1775,7 @@ class PhoneServer:
                 "Content-Type": f"audio/L16; rate={TOY_TALK_RATE}; channels=1",
                 "Cache-Control": "no-store",
                 "X-Jarvis-Mood": self._toy_mood or "normal",
+                **({"X-Jarvis-Switch": self._toy_switch} if self._toy_switch else {}),
             }
 
         @app.post("/audio")
@@ -1804,6 +1824,7 @@ class PhoneServer:
         hands_free = heard_by == "sound"
         following = hands_free and time.monotonic() < self._toy_follow_until
         self._toy_mood = ""
+        self._toy_switch = ""
 
         if len(audio) < MIN_VOICE_BYTES:
             return None if hands_free else "That was too short, sir. Hold the button while you speak."
@@ -1861,6 +1882,14 @@ class PhoneServer:
                 print("[toy] muted")
                 return "Muted, sir. Say Jarvis, unmute, when you want me."
 
+            switch = self._toy_switch_asked(text)
+
+            if switch:
+                self._toy_switch = switch
+                self._toy_follow_until = 0.0
+                print(f"[toy] switching to {switch} mode")
+                return TOY_SWITCH_WORDS[switch]
+
             print(f'[toy] heard "{text}"')
 
             if social.kind(text) in TOY_FOND_KINDS:
@@ -1878,6 +1907,21 @@ class PhoneServer:
             return "Something went wrong there, sir."
         finally:
             set_phone_active(False)
+
+    @staticmethod
+    def _toy_switch_asked(text):
+        """"pc" or "cloud" when [text] asks the toy to change mode ("switch to cloud mode", "P.C. mode"),
+        otherwise None."""
+        words = str(text or "").casefold().replace(".", "").replace("'s", "")
+        words = " ".join(re.sub(r"[^\w\s]", " ", words).split())
+        words = re.sub(r"\bp c\b", "pc", words)
+        words = " ".join(word for word in words.split() if word not in ("jarvis", "sir", "now"))
+        found = TOY_SWITCH.match(words)
+
+        if not found:
+            return None
+
+        return "cloud" if found.group(1) == "cloud" else "pc"
 
     @staticmethod
     def _toy_mute_asked(text):

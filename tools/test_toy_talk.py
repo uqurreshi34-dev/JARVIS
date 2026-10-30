@@ -270,6 +270,30 @@ if phone:
           and phone.PhoneServer._toy_mute_asked("mute the television") is None,
           "'unmute please', 'be quiet'; 'mute the television' is a command, not the toy muted")
 
+    # ---- "Jarvis, switch to cloud mode" / "... PC mode", said to the toy ----
+
+    handled.clear()
+    woken.append(True)
+    heard_texts.append("Jarvis, switch to cloud mode.")
+    answer = hear(recording(1.5))
+    check(answer.status_code == 200 and answer.headers.get("X-Jarvis-Switch") == "cloud"
+          and spoken[-1][0].startswith("Switching to cloud mode") and not handled,
+          "'Jarvis, switch to cloud mode': said so, the toy told to switch, and not passed on as a command")
+    woken.append(True)
+    heard_texts.append("Jarvis, switch to P.C. mode please")
+    answer = hear(recording(1.5))
+    check(answer.headers.get("X-Jarvis-Switch") == "pc" and spoken[-1][0] == "I'm already in PC mode, sir.",
+          "'switch to PC mode', heard by the PC: already there")
+    woken.append(True)
+    heard_texts.append("Jarvis, what is the time")
+    replies.append("Eight, sir.")
+    answer = hear(recording(1.5))
+    check("X-Jarvis-Switch" not in answer.headers, "and an ordinary answer switches nothing")
+    asked = phone.PhoneServer._toy_switch_asked
+    check(asked("Cloud mode.") == "cloud" and asked("go back to computer mode") == "pc"
+          and asked("what is cloud mode") is None and asked("switch on the PC") is None,
+          "'cloud mode', 'go back to computer mode'; 'what is cloud mode' is a question, not a switch")
+
     phone.transcriber.transcribe_wav = real_transcribe
 
     def broken(text):
@@ -306,7 +330,8 @@ check("TALK_MIC_CLOCK_PIN = 38" in talk_part and "TALK_MIC_DATA_PIN = 39" in tal
       and "TALK_SPEAKER_BCLK_PIN = 45" in talk_part and "TALK_SPEAKER_LRC_PIN = 46" in talk_part
       and "TALK_SPEAKER_DOUT_PIN = 42" in talk_part and "I2S_MODE_PDM_RX" in talk_part,
       "on DFRobot's microphone and speaker pins")
-check("MALLOC_CAP_SPIRAM" in talk_part and '"/toy/talk"' in talk_part and "https.begin(talkLink, url)" in talk_part
+check("MALLOC_CAP_SPIRAM" in talk_part and '"/toy/talk"' in talk_part and "https.begin(link, url)" in talk_part
+      and "NetworkClientSecure &link = talkLink;" in talk_part
       and "talkLink.setCACert(JARVIS_CA);" in talk_part and "setInsecure" not in talk_part,
       "into PSRAM, then to /toy/talk over its own connection, checked against JARVIS's authority")
 check("taken += talkSpeaker.write(chunk, have);" in talk_part and "getStreamPtr()" in talk_part,
@@ -347,6 +372,43 @@ check("toyScale(255, amount), toyScale(180, amount)" in anim and "toyRing(0, 0, 
       "thinking breathes amber, hearing stays blue, speech pulses green -- red when it is warm")
 check('https.header("X-Jarvis-Mood") == "affection"' in talk_part and "toyVoice = level" in talk_part,
       "the ring pulses with his voice, red for an answer JARVIS marks warm")
+
+# ---- PC mode and cloud mode, on the toy ----
+
+cloud_part = sketch[sketch.index("// ---- PC mode and cloud mode"):sketch.index("int reportOnline() {")]
+check('#if defined(JARVIS_BOARD_DFR1154) && __has_include("toy_cloud.h")' in sketch
+      and sketch.count("#define JARVIS_TOY_CLOUD") == 1,
+      "the cloud only on the toy, and only once tools/toy_cloud_setup.py has written toy_cloud.h")
+check('toyPrefs.getBool("cloud", true)' in cloud_part and 'toyPrefs.putBool("cloud", cloud)' in cloud_part,
+      "the mode kept in the toy's flash, cloud until told otherwise")
+check("return toyCloudMode || !pcReachable;" in cloud_part, "PC mode with the PC not answering: the cloud")
+check('cloudUrl("/health")' in cloud_part and "lastDelivered = millis();" in cloud_part,
+      "the cloud answering counts as JARVIS reached, so the board does not restart for want of the PC")
+ask = talk_part[talk_part.index("static int askAndPlay"):talk_part.index("static int playAnswer(HTTPClient &https, bool fond) {")]
+check('"X-Jarvis-Fallback", "pc"' in ask and "cloud && !toyCloudMode" in ask,
+      "falling back from the PC, the toy says so, and the cloud tells you")
+check("return askAndPlay(pcm, button, true);" in ask and "!cloud && code < 0" in ask,
+      "a PC that stops answering mid-question: the same question asked of the cloud")
+check('https.header("X-Jarvis-Switch")' in ask and 'saveToyMode(switched == "cloud");' in ask,
+      "'switch to ... mode' answered by either side is kept")
+check("cloud ? TOY_CLOUD_TOKEN : JARVIS_TOKEN" in ask, "each side gets its own token")
+check(sketch.count("setCACert(TOY_CLOUD_CA);") == 3 and "setInsecure()" not in sketch.replace("never setInsecure()", ""),
+      "the cloud checked against its own authorities, on every connection to it -- never setInsecure")
+seen_part = sketch[sketch.index("void sendSeen"):sketch.index("// FEMTO-ML runs each conv")]
+check('cloudUrl("/camera/seen")' in seen_part and "toyAnnounceDue = true;" in seen_part,
+      "what the toy sees goes to the cloud in cloud mode, which says when there are words for it")
+face_part = sketch[sketch.index("static void sendFace"):sketch.index("void reserveDetection")]
+check('cloudUrl("/camera/face")' in face_part, "and the faces it finds")
+check("sayWhatWasSeen();" in task and 'cloudUrl("/toy/announce")' in talk_part,
+      "the words fetched and said between recordings, never over anyone")
+loop = sketch[sketch.index("void loop() {"):]
+check(loop.index("if (toyCloudMode) {") < loop.index("reportOnline()") and "pcReachable = online == HTTP_CODE_OK;" in loop,
+      "cloud mode asks the PC nothing; PC mode's heartbeat says whether the PC is there")
+ca = (ROOT / "arduino" / "jarvis_camera" / "toy_cloud_ca.h").read_text(encoding="ascii")
+check(ca.count("-----BEGIN CERTIFICATE-----") == 4 and "TOY_CLOUD_CA[]" in ca,
+      "the cloud's authorities: Google's and Let's Encrypt's roots, public, in git")
+ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
+check("arduino/jarvis_camera/toy_cloud.h" in ignored, "the toy's cloud token kept out of git")
 
 failed = [label for ok, label in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(failed)} of {len(RESULTS)} passed")

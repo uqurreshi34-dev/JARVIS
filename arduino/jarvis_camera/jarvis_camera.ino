@@ -48,6 +48,16 @@
 #include "jarvis_config.h"
 #include "jarvis_secrets.h"
 
+// The toy's cloud brain (jarvis-toy-cloud on Render), when tools/toy_cloud_setup.py has written
+// toy_cloud.h (its address and token): the toy then has a PC mode and a cloud mode. Without that
+// file, and on every other board, nothing here changes.
+#if defined(JARVIS_BOARD_DFR1154) && __has_include("toy_cloud.h")
+#define JARVIS_TOY_CLOUD
+#include "toy_cloud.h"
+#include "toy_cloud_ca.h"
+#include <Preferences.h>
+#endif
+
 #if defined(JARVIS_BOARD_DFR1154)
 #include "ESP_I2S.h"
 #include "esp_heap_caps.h"
@@ -268,6 +278,76 @@ int post(const char *path, const char *type, const uint8_t *body, size_t length,
 int postJson(const char *path, const String &json, String *answer, unsigned long timeoutMs) {
   return post(path, "application/json", (const uint8_t *)json.c_str(), json.length(), answer, timeoutMs);
 }
+
+#ifdef JARVIS_TOY_CLOUD
+// ---- PC mode and cloud mode ------------------------------------------------------------------
+//
+// "Jarvis, switch to cloud mode": the toy talks, sends what it sees and the faces it finds to
+// jarvis-toy-cloud, and needs no PC. "Jarvis, switch to PC mode": all of it goes to JARVIS on the
+// PC, as before, live view too -- and while the PC does not answer its heartbeat, to the cloud
+// instead, which says so ("Defaulting to the cloud, sir ..."). Whichever side hears the words
+// answers with X-Jarvis-Switch; the toy keeps the choice in its own flash, so a restart keeps it.
+// Cloud mode until told otherwise: the toy is meant to work with the PC off.
+static Preferences toyPrefs;
+static volatile bool toyCloudMode = true;
+static volatile bool pcReachable = false;   // the PC answered its last heartbeat
+static volatile bool toyAnnounceDue = false;   // the cloud has words about what the toy sees
+static const unsigned long CLOUD_PING_MS = 60UL * 1000UL;
+static unsigned long lastCloudPing = 0;
+NetworkClientSecure cloudLink;   // the loop's: the cloud's /health
+
+void loadToyMode() {
+  toyPrefs.begin("toy", false);
+  toyCloudMode = toyPrefs.getBool("cloud", true);
+  Serial.printf("[jarvis] toy: %s mode\n", toyCloudMode ? "cloud" : "PC");
+}
+
+void saveToyMode(bool cloud) {
+  if (cloud != toyCloudMode) {
+    toyPrefs.putBool("cloud", cloud);
+  }
+
+  toyCloudMode = cloud;
+
+  if (!cloud) {
+    // Asked about at once: the PC's heartbeat says whether it is there.
+    pcReachable = false;
+    saidOnline = false;
+  }
+
+  Serial.printf("[jarvis] toy: switched to %s mode\n", cloud ? "cloud" : "PC");
+}
+
+// Where talk, detections and faces go now: the PC in PC mode while it answers, else the cloud.
+bool toyUsesCloud() {
+  return toyCloudMode || !pcReachable;
+}
+
+String cloudUrl(const char *path) {
+  return String("https://") + TOY_CLOUD_HOST + path;
+}
+
+// The cloud is there: counts as JARVIS reached, so the board does not restart for want of the PC.
+bool cloudPing() {
+  HTTPClient https;
+
+  if (!https.begin(cloudLink, cloudUrl("/health"))) {
+    return false;
+  }
+
+  https.setTimeout(POST_TIMEOUT_MS);
+  int code = https.GET();
+  https.end();
+
+  if (code == HTTP_CODE_OK) {
+    lastDelivered = millis();
+    return true;
+  }
+
+  Serial.printf("[jarvis] cloud: /health answered %d\n", code);
+  return false;
+}
+#endif
 
 int reportOnline() {
   String json = String("{\"name\":") + quoted(SENSOR_NAME) + ",\"event\":\"online\"}";
@@ -795,6 +875,9 @@ void run_model(void);
 }
 
 NetworkClientSecure detectLink;
+#ifdef JARVIS_TOY_CLOUD
+NetworkClientSecure cloudDetectLink;   // the same reports, in cloud mode
+#endif
 bool detectReady = false;
 
 // Set by the loop (core 1) when JARVIS asks what this camera sees; the next
@@ -1086,17 +1169,43 @@ void sendSeen(const Seen *seen, int count, unsigned long took, const Seen *now =
   json += "}";
 
   HTTPClient https;
+#ifdef JARVIS_TOY_CLOUD
+  // In cloud mode (or with the PC off) the cloud hears it, and answers "say" when something has
+  // come into view: the talk task fetches the words and says them on the toy's speaker.
+  bool cloud = toyUsesCloud();
+  String url = cloud ? cloudUrl("/camera/seen") : String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + "/camera/seen";
+
+  if (!https.begin(cloud ? cloudDetectLink : detectLink, url)) {
+    return;
+  }
+
+  https.addHeader("X-Jarvis-Token", cloud ? TOY_CLOUD_TOKEN : JARVIS_TOKEN);
+#else
   String url = String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + "/camera/seen";
 
   if (!https.begin(detectLink, url)) {
     return;
   }
 
+  https.addHeader("X-Jarvis-Token", JARVIS_TOKEN);
+#endif
+
   https.setTimeout(8000);
   https.addHeader("Content-Type", "application/json");
-  https.addHeader("X-Jarvis-Token", JARVIS_TOKEN);
   https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
   int code = https.POST(json);
+
+#ifdef JARVIS_TOY_CLOUD
+  if (cloud && code == HTTP_CODE_OK) {
+    String answer = https.getString();
+    answer.replace(" ", "");
+
+    if (answer.indexOf("\"say\":true") >= 0) {
+      toyAnnounceDue = true;
+    }
+  }
+#endif
+
   https.end();
 
   if (code != HTTP_CODE_OK) {
@@ -1229,15 +1338,27 @@ static float bestFace() {
 // The look's own picture, with a face in it, to JARVIS: untouched, as the camera made it.
 static void sendFace(float score) {
   HTTPClient https;
+#ifdef JARVIS_TOY_CLOUD
+  bool cloud = toyUsesCloud();
+  String url = cloud ? cloudUrl("/camera/face") : String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + "/camera/face";
+
+  if (!https.begin(cloud ? cloudDetectLink : detectLink, url)) {
+    return;
+  }
+
+  https.addHeader("X-Jarvis-Token", cloud ? TOY_CLOUD_TOKEN : JARVIS_TOKEN);
+#else
   String url = String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + "/camera/face";
 
   if (!https.begin(detectLink, url)) {
     return;
   }
 
+  https.addHeader("X-Jarvis-Token", JARVIS_TOKEN);
+#endif
+
   https.setTimeout(8000);
   https.addHeader("Content-Type", "image/jpeg");
-  https.addHeader("X-Jarvis-Token", JARVIS_TOKEN);
   https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
   https.addHeader("X-Jarvis-Face", String(score, 2));
   int code = https.POST(lookJpeg, lookJpegLength);
@@ -1478,6 +1599,10 @@ void startDetection() {
 
   detectLink.setCACert(JARVIS_CA);
   detectLink.setHandshakeTimeout(HANDSHAKE_SECONDS);
+#ifdef JARVIS_TOY_CLOUD
+  cloudDetectLink.setCACert(TOY_CLOUD_CA);
+  cloudDetectLink.setHandshakeTimeout(HANDSHAKE_SECONDS);
+#endif
 
   // Core 0, below the wifi's own tasks; pictures and live view run on core 1.
   if (xTaskCreatePinnedToCore(detectTask, "detect", 16384, nullptr, 1, nullptr, 0) == pdPASS) {
@@ -1540,6 +1665,9 @@ static volatile float toyVoice = 0.0f;
 static I2SClass talkMic;
 static I2SClass talkSpeaker;
 NetworkClientSecure talkLink;
+#ifdef JARVIS_TOY_CLOUD
+NetworkClientSecure cloudTalkLink;   // talk, and what was seen, in cloud mode
+#endif
 static uint8_t *talkBuffer = nullptr;
 static int16_t *talkPreroll = nullptr;
 
@@ -1620,26 +1748,45 @@ static void letGo(unsigned long ms) {
   }
 }
 
+static int playAnswer(HTTPClient &https, bool fond);
+
 // Sends [pcm] bytes of recording and plays the answer as it comes: 1 if an answer was played, 0 if
-// JARVIS had nothing to say (it was not said to him), -1 if he could not be reached.
-static int askAndPlay(size_t pcm, bool button) {
+// JARVIS had nothing to say (it was not said to him), -1 if he could not be reached. With the toy's
+// cloud brain: to the cloud in cloud mode, or in PC mode while the PC does not answer (saying so,
+// X-Jarvis-Fallback); a PC that stops answering mid-ask is asked of the cloud at once [toCloud].
+static int askAndPlay(size_t pcm, bool button, bool toCloud = false) {
   wavHeader(talkBuffer, pcm);
 
   HTTPClient https;
+#ifdef JARVIS_TOY_CLOUD
+  bool cloud = toCloud || toyUsesCloud();
+  String url = cloud ? cloudUrl("/toy/talk") : String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + "/toy/talk";
+  NetworkClientSecure &link = cloud ? cloudTalkLink : talkLink;
+#else
   String url = String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + "/toy/talk";
+  NetworkClientSecure &link = talkLink;
+#endif
 
-  if (!https.begin(talkLink, url)) {
+  if (!https.begin(link, url)) {
     Serial.println("[jarvis] talk: could not start the request");
     return -1;
   }
 
   https.setTimeout(TALK_ANSWER_MS);
   https.addHeader("Content-Type", "audio/wav");
+#ifdef JARVIS_TOY_CLOUD
+  https.addHeader("X-Jarvis-Token", cloud ? TOY_CLOUD_TOKEN : JARVIS_TOKEN);
+
+  if (cloud && !toyCloudMode) {
+    https.addHeader("X-Jarvis-Fallback", "pc");
+  }
+#else
   https.addHeader("X-Jarvis-Token", JARVIS_TOKEN);
+#endif
   https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
   https.addHeader("X-Jarvis-Toy", button ? "button" : "sound");
-  const char *wanted[] = {"X-Jarvis-Mood"};
-  https.collectHeaders(wanted, 1);
+  const char *wanted[] = {"X-Jarvis-Mood", "X-Jarvis-Switch"};
+  https.collectHeaders(wanted, 2);
 
   unsigned long sent = millis();
   int code = https.POST(talkBuffer, WAV_HEADER + pcm);
@@ -1648,6 +1795,16 @@ static int askAndPlay(size_t pcm, bool button) {
     https.end();
     return 0;
   }
+
+#ifdef JARVIS_TOY_CLOUD
+  if (!cloud && code < 0) {
+    // The PC went away: this question goes to the cloud, and so does what follows until it is back.
+    https.end();
+    pcReachable = false;
+    Serial.println("[jarvis] talk: the PC did not answer; asking the cloud");
+    return askAndPlay(pcm, button, true);
+  }
+#endif
 
   if (code != HTTP_CODE_OK) {
     Serial.printf("[jarvis] talk: JARVIS answered %d (%u bytes of internal memory free, largest %u)\n", code,
@@ -1658,8 +1815,28 @@ static int askAndPlay(size_t pcm, bool button) {
   }
 
   lastDelivered = millis();
+#ifdef JARVIS_TOY_CLOUD
+  Serial.printf("[jarvis] talk: answered in %lu ms (%s)\n", millis() - sent, cloud ? "cloud" : "PC");
+#else
+  Serial.printf("[jarvis] talk: answered in %lu ms\n", millis() - sent);
+#endif
+
+#ifdef JARVIS_TOY_CLOUD
+  // "Switch to PC mode" / "... cloud mode": kept, and said in the answer playing now.
+  String switched = https.header("X-Jarvis-Switch");
+
+  if (switched == "cloud" || switched == "pc") {
+    saveToyMode(switched == "cloud");
+  }
+#endif
+
   // Something warm ("I love you"): his words pulse red instead of green.
-  bool fond = https.header("X-Jarvis-Mood") == "affection";
+  return playAnswer(https, https.header("X-Jarvis-Mood") == "affection");
+}
+
+// Plays an answer as it arrives (raw 16-bit PCM at TALK_RATE), the ring pulsing with it; 1 if
+// anything was played, else 0. Ends the request.
+static int playAnswer(HTTPClient &https, bool fond) {
   NetworkClient *answer = https.getStreamPtr();
   int remaining = https.getSize();          // -1: until the connection closes
   uint8_t chunk[1024];
@@ -1668,8 +1845,6 @@ static int askAndPlay(size_t pcm, bool button) {
   bool odd = false;
   uint8_t carry = 0;
   unsigned long quiet = millis();
-
-  Serial.printf("[jarvis] talk: answered in %lu ms\n", millis() - sent);
 
   while (https.connected() && (remaining > 0 || remaining == -1)) {
     int ready = answer->available();
@@ -1737,6 +1912,35 @@ static int askAndPlay(size_t pcm, bool button) {
   return played > 0 ? 1 : 0;
 }
 
+#ifdef JARVIS_TOY_CLOUD
+// What the toy's camera has seen, said on its speaker: the cloud's words (POST /toy/announce), when
+// /camera/seen said there were some. Asked between recordings, so it never talks over anyone.
+static void sayWhatWasSeen() {
+  toyAnnounceDue = false;
+
+  HTTPClient https;
+
+  if (!https.begin(cloudTalkLink, cloudUrl("/toy/announce"))) {
+    return;
+  }
+
+  https.setTimeout(TALK_ANSWER_MS);
+  https.addHeader("X-Jarvis-Token", TOY_CLOUD_TOKEN);
+  https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
+  int code = https.POST((uint8_t *)nullptr, 0);
+
+  if (code != HTTP_CODE_OK) {
+    https.end();
+    return;
+  }
+
+  lastDelivered = millis();
+  playAnswer(https, false);
+  toyMood = TOY_IDLE;
+  letGo(TALK_AFTER_ANSWER_MS);
+}
+#endif
+
 void talkTask(void *) {
   const size_t most = TALK_MOST_MS * TALK_RATE * 2 / 1000;
   int16_t frame[TALK_FRAME];
@@ -1778,6 +1982,14 @@ void talkTask(void *) {
         Serial.printf("[jarvis] talk: listening; the room's quiet %.0f, speech starts above %.0f\n", quietLevel,
                       trigger);
       }
+
+#ifdef JARVIS_TOY_CLOUD
+      if (toyAnnounceDue && WiFi.status() == WL_CONNECTED) {
+        sayWhatWasSeen();
+        loudRun = 0;
+        prerollCount = 0;
+      }
+#endif
 
       continue;
     }
@@ -2151,6 +2363,11 @@ void startTalk() {
 
   talkLink.setCACert(JARVIS_CA);
   talkLink.setHandshakeTimeout(HANDSHAKE_SECONDS);
+#ifdef JARVIS_TOY_CLOUD
+  // The cloud's own signers (toy_cloud_ca.h): Google's and Let's Encrypt's roots, checked like JARVIS's.
+  cloudTalkLink.setCACert(TOY_CLOUD_CA);
+  cloudTalkLink.setHandshakeTimeout(HANDSHAKE_SECONDS);
+#endif
   chime();
 
   if (xTaskCreatePinnedToCore(talkTask, "talk", 12288, nullptr, 1, nullptr, 1) != pdPASS) {
@@ -2202,6 +2419,11 @@ void setup() {
   secure.setHandshakeTimeout(HANDSHAKE_SECONDS);
   liveLink.setCACert(JARVIS_CA);
   liveLink.setHandshakeTimeout(HANDSHAKE_SECONDS);
+#ifdef JARVIS_TOY_CLOUD
+  cloudLink.setCACert(TOY_CLOUD_CA);
+  cloudLink.setHandshakeTimeout(HANDSHAKE_SECONDS);
+  loadToyMode();
+#endif
 
   esp_task_wdt_config_t watchdog = {};
   watchdog.timeout_ms = WATCHDOG_MS;
@@ -2244,13 +2466,32 @@ void loop() {
 
   unsigned long now = millis();
 
+#ifdef JARVIS_TOY_CLOUD
+  // While the cloud is where the toy talks, it is kept in touch with (and counts as JARVIS reached).
+  if (toyUsesCloud() && (lastCloudPing == 0 || now - lastCloudPing >= CLOUD_PING_MS)) {
+    lastCloudPing = now;
+    cloudPing();
+  }
+
+  // Cloud mode asks the PC nothing: pictures and live view are PC mode's.
+  if (toyCloudMode) {
+    delay(50);
+    return;
+  }
+#endif
+
   // Online only with a working camera: a camera that cannot see should
   // not be drawn on the plan as if it could.
   if (cameraReady && (!saidOnline || now - lastHeartbeat >= HEARTBEAT_EVERY_MS)) {
-    if (reportOnline() == HTTP_CODE_OK) {
+    int online = reportOnline();
+
+    if (online == HTTP_CODE_OK) {
       saidOnline = true;
     }
 
+#ifdef JARVIS_TOY_CLOUD
+    pcReachable = online == HTTP_CODE_OK;
+#endif
     lastHeartbeat = now;
   }
 

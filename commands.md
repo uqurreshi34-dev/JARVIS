@@ -697,6 +697,28 @@ If you talk to the toy in the same room as the desk, mute the desk (the
 microphone on the HUD), or both answer. Three quick blinks: no answer came
 (JARVIS not running, or not on the same wifi).
 
+### The toy with the PC switched off: cloud mode
+
+The toy has two homes. In **cloud mode** it talks to jarvis-toy-cloud on
+Render (its own repo), so it hears, answers, says what it sees ("I can see
+someone, sir.") and sends the faces it finds with this PC switched off. In
+**PC mode** it works with JARVIS here, as before, live view included. It
+starts in cloud mode and keeps whichever you choose, even after a restart.
+
+| Say to the toy | Does |
+|---|---|
+| Jarvis, switch to cloud mode | the toy uses the cloud; the PC can be off |
+| Jarvis, switch to PC mode | the toy uses JARVIS on this PC |
+
+In PC mode with the PC off, the toy falls back to the cloud by itself and
+says so first: "Defaulting to the cloud, sir: your PC isn't answering. Turn
+it on and try again for PC mode." It says that once, and again only after
+ten minutes.
+
+Set it up once, then flash the toy: add `TOY_TOKEN=...` to `.env` (the same
+value as TOY_TOKEN in Render), run `python tools/toy_cloud_setup.py`, then
+`pio run -e aicamdetect -t upload --upload-port COM8`.
+
 ### What the house cam recognises
 
 Flashed as `s3detect`, the house cam runs YOLO26n (FEMTO-ML) on its own board,

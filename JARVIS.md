@@ -1770,6 +1770,26 @@ logged beside those that came, say whether the speaker end works. mbedTLS's larg
 view, detection's reports and the talk all connected, internal RAM ran out
 ("SSL - Memory allocation failed", 29 October 2026). `tools/test_toy_talk.py`.
 
+The toy's cloud brain: PC mode and cloud mode. jarvis-toy-cloud (its own repo, on
+Render) answers the same `POST /toy/talk`, and takes `/camera/seen` and `/camera/face`,
+so the toy works with the PC off. Built in only when `tools/toy_cloud_setup.py` has
+written `toy_cloud.h` beside the sketch (the cloud's address and TOY_TOKEN from
+`.env`, kept out of git; `JARVIS_TOY_CLOUD`); the cloud's authorities are
+`toy_cloud_ca.h` (public roots of Google Trust Services and Let's Encrypt, in git),
+checked with `setCACert` on each connection to it (`cloudLink`, `cloudTalkLink`,
+`cloudDetectLink`). The mode is kept in the toy's flash (`Preferences`, "toy"/"cloud",
+cloud by default) and changed by `X-Jarvis-Switch` on an answer: either side
+recognises "switch to cloud mode" / "PC mode" (here `TOY_SWITCH` and
+`_toy_switch_asked` in phone.py, only on the toy's talk; there `toy/modes.py`). In
+PC mode, talk, detections and faces go to the PC while its heartbeat (`/sensor`)
+is answered (`pcReachable`), else to the cloud with `X-Jarvis-Fallback: pc`, which
+says so once in ten minutes; a PC that stops answering mid-question has the same
+question asked of the cloud. Cloud mode asks the PC nothing (no heartbeat, no
+picture polls); the cloud's `/health` every minute counts as JARVIS reached, so the
+board does not restart for want of the PC. In cloud mode `/camera/seen` answers
+`"say": true` when something has come into view and the talk task fetches the words
+from `/toy/announce`, between recordings. `tools/test_toy_cloud_setup.py`.
+
 An ESP32-CAM (AI Thinker) takes a picture only when asked. It reports
 "online" to `/sensor` like any board, named after its room ("my room cam"),
 so the house plan places it and points its cone out of that room's window;
