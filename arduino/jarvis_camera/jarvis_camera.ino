@@ -1624,6 +1624,7 @@ void detectTask(void *) {
 #ifdef JARVIS_TOY_CLOUD
         if (toyFacesWanted > 0) {
           toyFacesWanted--;
+          Serial.printf("[jarvis] face: sent to learn, %d more wanted\n", (int)toyFacesWanted);
         }
 #endif
         Serial.printf("[jarvis] face: %.2f in %lu ms, sent in %lu ms\n", face, faceTook, millis() - sendStarted);
@@ -1872,18 +1873,23 @@ static int askAndPlay(size_t pcm, bool button, bool toCloud = false) {
     saveToyMode(switched == "cloud");
   }
 
-  // "Learn my face": the faces it asks for, from the next looks with someone in them.
+  // "Learn my face": the faces it asks for, looked for once "look at me" has been said, so he is
+  // facing it and the ring can breathe white while it learns.
   int facesWanted = https.header("X-Jarvis-Faces").toInt();
+  bool fond = https.header("X-Jarvis-Mood") == "affection";
+  int played = playAnswer(https, fond);
 
   if (facesWanted > 0) {
-    toyFacesWanted = facesWanted > 10 ? 10 : facesWanted;
     toyLearnUntil = millis() + TOY_LEARN_MS;
+    toyFacesWanted = facesWanted > 10 ? 10 : facesWanted;
     Serial.printf("[jarvis] face: %d wanted, to learn\n", (int)toyFacesWanted);
   }
-#endif
 
+  return played;
+#else
   // Something warm ("I love you"): his words pulse red instead of green.
   return playAnswer(https, https.header("X-Jarvis-Mood") == "affection");
+#endif
 }
 
 // Plays an answer as it arrives (raw 16-bit PCM at TALK_RATE), the ring pulsing with it; 1 if

@@ -1790,7 +1790,8 @@ board does not restart for want of the PC. In cloud mode `/camera/seen` answers
 `"say": true` when something has come into view and the talk task fetches the words
 from `/toy/announce`, between recordings. `tools/test_toy_cloud_setup.py`.
 "Jarvis, learn my face, I'm Sarah", heard by the cloud, answers with `X-Jarvis-Faces`
-(how many faces it wants, at most ten, `toyFacesWanted`): the face finder then runs on
+(how many faces it wants, at most ten, `toyFacesWanted`, set once the answer has been
+played, so he has heard "look at me"): the face finder then runs on
 every look, whether or not YOLO calls anyone a person (close up, or behind a laptop, it
 often sees only the laptop), and sends each face it is sure of until that many have gone
 or a minute has passed (`TOY_LEARN_MS`, as the cloud's own limit). Meanwhile the ring

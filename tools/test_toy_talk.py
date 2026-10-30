@@ -414,6 +414,8 @@ check("if ((personHere || learning) && !faceSent" in faces_part and "learning = 
       "while learning, the face finder runs on every look, even when YOLO sees no person")
 check("toyLearnUntil = millis() + TOY_LEARN_MS;" in ask and "toyFacesWanted = 0;" in faces_part,
       "and learning stops after a minute, as the cloud's does")
+check(ask.index("int played = playAnswer(https, fond);") < ask.index("toyFacesWanted = facesWanted > 10 ? 10 : facesWanted;"),
+      "learning starts once look at me has been said, so he is facing it and the ring shows white")
 check("} else if (toyFacesWanted > 0) {" in anim and "toyRing(toyScale(255, amount), toyScale(255, amount), toyScale(255, amount));" in anim,
       "the ring breathes white while it learns a face")
 check('"\\"say\\":true"' in face_part and "toyAnnounceDue = true;" in face_part,
