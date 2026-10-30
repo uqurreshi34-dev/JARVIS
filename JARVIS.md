@@ -1797,6 +1797,11 @@ often sees only the laptop), and sends each face it is sure of until that many h
 or a minute has passed (`TOY_LEARN_MS`, as the cloud's own limit). Meanwhile the ring
 breathes white, so he knows to keep looking. `/camera/face`'s answer says `"say": true` when a known
 face is greeted by name, or a lesson is done, and the words are fetched as above.
+In cloud mode the face finder also runs every 10 s whether or not YOLO sees a person
+(`FACE_PROBE_MS`), and a face in view is sent again each minute (`FACE_RESEND_MS`): at a desk
+YOLO often sees only the laptop, and the cloud needs a recent face to say who is there. The
+cloud holds "I can see someone" a moment for the face that follows it and says "I can see you,
+Umer" instead; someone known back after 90 s out of sight is named even if greeted lately.
 The faces, and where the toy lives, are kept in the cloud's database (Neon), never here.
 
 An ESP32-CAM (AI Thinker) takes a picture only when asked. It reports

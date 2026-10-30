@@ -299,6 +299,11 @@ static volatile int toyFacesWanted = 0;
 // Learning stops here even if faces are still wanted, as the cloud gives up after a minute too.
 static const unsigned long TOY_LEARN_MS = 60UL * 1000UL;
 static volatile unsigned long toyLearnUntil = 0;
+// In cloud mode faces are also looked for now and then whether or not YOLO sees a person (at a desk,
+// behind a laptop, it sees the laptop), and a face in view is sent again each minute: so the cloud
+// greets whoever it knows and can say who is there. The face finder takes about 1.9 s, so not often.
+static const unsigned long FACE_PROBE_MS = 10UL * 1000UL;
+static const unsigned long FACE_RESEND_MS = 60UL * 1000UL;
 static const unsigned long CLOUD_PING_MS = 60UL * 1000UL;
 static unsigned long lastCloudPing = 0;
 NetworkClientSecure cloudLink;   // the loop's: the cloud's /health
@@ -1584,6 +1589,7 @@ void detectTask(void *) {
     }
 
     bool learning = false;
+    bool probing = false;
 
 #ifdef JARVIS_TOY_CLOUD
     // Learning a face: the face finder runs on every look, whether or not YOLO calls it a person
@@ -1599,11 +1605,23 @@ void detectTask(void *) {
       faceLooks = 0;
       faceSent = false;
     }
+
+    static unsigned long lastProbe = 0, lastFaceSent = 0;
+
+    if (!learning && toyUsesCloud() && millis() - lastProbe >= FACE_PROBE_MS &&
+        (lastFaceSent == 0 || millis() - lastFaceSent >= FACE_RESEND_MS)) {
+      lastProbe = millis();
+      probing = true;
+    }
 #endif
 
-    if ((personHere || learning) && !faceSent && faceLooks < FACE_LOOKS && lookJpegLength &&
-        fillFaceInput(rgb, width, height, bgr)) {
-      faceLooks++;
+    bool arriving = personHere && !faceSent && faceLooks < FACE_LOOKS;
+
+    if ((arriving || learning || probing) && lookJpegLength && fillFaceInput(rgb, width, height, bgr)) {
+      if (arriving || learning) {
+        faceLooks++;
+      }
+
       unsigned long faceStarted = millis();
       face_run_model_int8_input();
       float face = bestFace();
@@ -1622,6 +1640,7 @@ void detectTask(void *) {
         sendFace(face);
         faceSent = true;
 #ifdef JARVIS_TOY_CLOUD
+        lastFaceSent = millis();
         if (toyFacesWanted > 0) {
           toyFacesWanted--;
           Serial.printf("[jarvis] face: sent to learn, %d more wanted\n", (int)toyFacesWanted);

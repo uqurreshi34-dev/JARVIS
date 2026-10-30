@@ -725,6 +725,7 @@ In cloud mode the toy also knows, with the PC off:
 | Jarvis, who's top of the Premier League | looked up live before it answers |
 | Jarvis, what can you see / is anyone there | what its camera sees now |
 | Jarvis, learn my face, I'm Sarah (or casually: can you remember me, I'm Sarah) | the ring breathes white: look at it until it stops (a minute at most), and it knows Sarah from then on |
+| (someone it knows walks in) | I can see you, Umer (or Good evening, Umer): it waits a moment for the face, and looks for faces every 10 s even when it sees no person |
 | Jarvis, who am I / who do you know | the face it saw last, by name; everyone it knows |
 | Jarvis, forget my face / forget Sarah / forget everyone | deleted |
 

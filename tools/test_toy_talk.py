@@ -410,12 +410,16 @@ faces_part = detect[detect.index("#ifdef JARVIS_FACES"):]
 check("if (toyFacesWanted > 0) {" in faces_part and "toyFacesWanted--;" in faces_part
       and faces_part.index("faceSent = false;") < faces_part.index("sendFace(face);"),
       "and the face finder sends one from each look with someone in it until they are given")
-check("if ((personHere || learning) && !faceSent" in faces_part and "learning = toyFacesWanted > 0;" in faces_part,
+check("bool arriving = personHere && !faceSent && faceLooks < FACE_LOOKS;" in faces_part
+      and "(arriving || learning || probing)" in faces_part and "learning = toyFacesWanted > 0;" in faces_part,
       "while learning, the face finder runs on every look, even when YOLO sees no person")
 check("toyLearnUntil = millis() + TOY_LEARN_MS;" in ask and "toyFacesWanted = 0;" in faces_part,
       "and learning stops after a minute, as the cloud's does")
 check(ask.index("int played = playAnswer(https, fond);") < ask.index("toyFacesWanted = facesWanted > 10 ? 10 : facesWanted;"),
       "learning starts once look at me has been said, so he is facing it and the ring shows white")
+check("probing = true;" in faces_part and "toyUsesCloud() && millis() - lastProbe >= FACE_PROBE_MS" in faces_part
+      and "lastFaceSent = millis();" in faces_part and "(arriving || learning || probing)" in faces_part,
+      "in cloud mode faces are looked for every 10 s, person or not, and one in view sent each minute")
 check("} else if (toyFacesWanted > 0) {" in anim and "toyRing(toyScale(255, amount), toyScale(255, amount), toyScale(255, amount));" in anim,
       "the ring breathes white while it learns a face")
 check('"\\"say\\":true"' in face_part and "toyAnnounceDue = true;" in face_part,
