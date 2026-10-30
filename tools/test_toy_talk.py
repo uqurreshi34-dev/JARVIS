@@ -410,6 +410,12 @@ faces_part = detect[detect.index("#ifdef JARVIS_FACES"):]
 check("if (toyFacesWanted > 0) {" in faces_part and "toyFacesWanted--;" in faces_part
       and faces_part.index("faceSent = false;") < faces_part.index("sendFace(face);"),
       "and the face finder sends one from each look with someone in it until they are given")
+check("if ((personHere || learning) && !faceSent" in faces_part and "learning = toyFacesWanted > 0;" in faces_part,
+      "while learning, the face finder runs on every look, even when YOLO sees no person")
+check("toyLearnUntil = millis() + TOY_LEARN_MS;" in ask and "toyFacesWanted = 0;" in faces_part,
+      "and learning stops after a minute, as the cloud's does")
+check("} else if (toyFacesWanted > 0) {" in anim and "toyRing(toyScale(255, amount), toyScale(255, amount), toyScale(255, amount));" in anim,
+      "the ring breathes white while it learns a face")
 check('"\\"say\\":true"' in face_part and "toyAnnounceDue = true;" in face_part,
       "a known face greeted by name, said on the toy")
 ca = (ROOT / "arduino" / "jarvis_camera" / "toy_cloud_ca.h").read_text(encoding="ascii")

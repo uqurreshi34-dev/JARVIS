@@ -296,6 +296,9 @@ static volatile bool toyAnnounceDue = false;   // the cloud has words about what
 // face finder sends one from each look with someone in it until they are given -- not just the one
 // it sends when someone comes into view.
 static volatile int toyFacesWanted = 0;
+// Learning stops here even if faces are still wanted, as the cloud gives up after a minute too.
+static const unsigned long TOY_LEARN_MS = 60UL * 1000UL;
+static volatile unsigned long toyLearnUntil = 0;
 static const unsigned long CLOUD_PING_MS = 60UL * 1000UL;
 static unsigned long lastCloudPing = 0;
 NetworkClientSecure cloudLink;   // the loop's: the cloud's /health
@@ -1580,15 +1583,25 @@ void detectTask(void *) {
       faceSent = false;
     }
 
+    bool learning = false;
+
 #ifdef JARVIS_TOY_CLOUD
-    // Learning a face: one from every look with someone in it, until enough have gone.
-    if (toyFacesWanted > 0) {
+    // Learning a face: the face finder runs on every look, whether or not YOLO calls it a person
+    // (close up, or behind a laptop, it often doesn't), until enough faces have gone or time is up.
+    if (toyFacesWanted > 0 && (long)(millis() - toyLearnUntil) >= 0) {
+      Serial.println("[jarvis] face: learning timed out");
+      toyFacesWanted = 0;
+    }
+
+    learning = toyFacesWanted > 0;
+
+    if (learning) {
       faceLooks = 0;
       faceSent = false;
     }
 #endif
 
-    if (personHere && !faceSent && faceLooks < FACE_LOOKS && lookJpegLength &&
+    if ((personHere || learning) && !faceSent && faceLooks < FACE_LOOKS && lookJpegLength &&
         fillFaceInput(rgb, width, height, bgr)) {
       faceLooks++;
       unsigned long faceStarted = millis();
@@ -1864,6 +1877,7 @@ static int askAndPlay(size_t pcm, bool button, bool toCloud = false) {
 
   if (facesWanted > 0) {
     toyFacesWanted = facesWanted > 10 ? 10 : facesWanted;
+    toyLearnUntil = millis() + TOY_LEARN_MS;
     Serial.printf("[jarvis] face: %d wanted, to learn\n", (int)toyFacesWanted);
   }
 #endif
@@ -2281,6 +2295,12 @@ void toyBodyTask(void *) {
       toyRing(0, toyScale(255, pulse), 0);
     } else if (mood == TOY_SPEAKING_FOND) {
       toyRing(toyScale(255, pulse), 0, toyScale(30, pulse));
+#ifdef JARVIS_TOY_CLOUD
+    } else if (toyFacesWanted > 0) {
+      // Learning a face: a slow white breath until it has enough, so he knows to keep still.
+      float amount = 0.15f + 0.85f * breath;
+      toyRing(toyScale(255, amount), toyScale(255, amount), toyScale(255, amount));
+#endif
     } else {
       toyRing(0, 0, 0);
       toyVoice = 0.0f;

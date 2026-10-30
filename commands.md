@@ -724,7 +724,7 @@ In cloud mode the toy also knows, with the PC off:
 | Jarvis, I live in Leeds | where it is, kept, for the time and the weather |
 | Jarvis, who's top of the Premier League | looked up live before it answers |
 | Jarvis, what can you see / is anyone there | what its camera sees now |
-| Jarvis, learn my face, I'm Sarah | look at it for a few seconds: it knows Sarah from then on |
+| Jarvis, learn my face, I'm Sarah | the ring breathes white: look at it until it stops (a minute at most), and it knows Sarah from then on |
 | Jarvis, who am I / who do you know | the face it saw last, by name; everyone it knows |
 | Jarvis, forget my face / forget Sarah / forget everyone | deleted |
 
