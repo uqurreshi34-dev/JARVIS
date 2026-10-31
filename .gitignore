@@ -39,6 +39,8 @@ arduino/*/.cache/
 # model (11 MB, and the model's licence is its own), never kept in git.
 arduino/jarvis_camera/detect/
 arduino/jarvis_camera/faces/
+# The toy's "Jarvis" wake word model (ESP-SR), made by tools/toy_wake_model.py.
+arduino/jarvis_camera/wake/
 # The gold backtest's trade list (python tools/gold_backtest.py --trades).
 gold-backtest-trades.csv
 .venv-mev/

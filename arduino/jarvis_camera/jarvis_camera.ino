@@ -64,6 +64,9 @@
 #include "mbedtls/platform.h"
 #include "driver/ledc.h"
 #include "esp32-hal-rmt.h"
+#include "model_path.h"
+#include "esp_wn_iface.h"
+#include "esp_wn_models.h"
 #endif
 
 #ifdef JARVIS_DETECT
@@ -1734,6 +1737,75 @@ NetworkClientSecure cloudTalkLink;   // talk, and what was seen, in cloud mode
 static uint8_t *talkBuffer = nullptr;
 static int16_t *talkPreroll = nullptr;
 
+// "Jarvis" heard on the board itself (Espressif's WakeNet, the model from tools/toy_wake_model.py in the
+// flash's "model" partition): a recording leaves the toy only when "Jarvis" was said in it (or just
+// before it), with BOOT held, or as a follow-up within TOY_FOLLOW_MS of an answer, as the cloud's and
+// the PC's own follow-up window. Anything else -- chat, the TV -- is never sent anywhere. Without the
+// model every recording goes to be checked for "Jarvis" as before, and the toy says so as it starts.
+static const char *WAKE_PARTITION = "model";
+static const unsigned long WAKE_BEFORE_MS = 2000UL;   // "Jarvis" this long before the recording began counts
+static const unsigned long TOY_FOLLOW_MS = 12000UL;   // FOLLOW_UP_SECONDS in the cloud and phone.py
+static const esp_wn_iface_t *wakeNet = nullptr;
+static model_iface_data_t *wakeModel = nullptr;
+static int16_t *wakeChunk = nullptr;
+static int wakeChunkSize = 0;
+static int wakeFilled = 0;
+static volatile unsigned long wakeHeardAt = 0;
+static bool wakeEverHeard = false;
+
+static bool startWake() {
+  srmodel_list_t *models = esp_srmodel_init(WAKE_PARTITION);
+  char *name = models && models->num > 0 ? esp_srmodel_filter(models, ESP_WN_PREFIX, NULL) : nullptr;
+
+  if (!name) {
+    Serial.println("[jarvis] wake: no \"Jarvis\" model on the board (python tools/toy_wake_model.py, then flash): "
+                   "every recording goes to be checked for Jarvis");
+    return false;
+  }
+
+  wakeNet = esp_wn_handle_from_name(name);
+  wakeModel = wakeNet ? wakeNet->create(name, DET_MODE_90) : nullptr;
+  wakeChunkSize = wakeModel ? wakeNet->get_samp_chunksize(wakeModel) : 0;
+  wakeChunk = wakeChunkSize > 0 ? (int16_t *)heap_caps_malloc(wakeChunkSize * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+                                : nullptr;
+
+  if (!wakeChunk) {
+    Serial.printf("[jarvis] wake: %s did not start: every recording goes to be checked for Jarvis\n", name);
+    wakeModel = nullptr;
+    return false;
+  }
+
+  Serial.printf("[jarvis] wake: listening for \"Jarvis\" on the board (%s, %d samples at a time; %u bytes of "
+                "internal memory free)\n", name, wakeChunkSize, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+  return true;
+}
+
+// Every frame the microphone gives, while listening and while recording: "Jarvis" noted when heard.
+static void listenForWake(const int16_t *frame) {
+  if (!wakeModel) {
+    return;
+  }
+
+  int at = 0;
+
+  while (at < TALK_FRAME) {
+    int take = wakeChunkSize - wakeFilled < TALK_FRAME - at ? wakeChunkSize - wakeFilled : TALK_FRAME - at;
+    memcpy(wakeChunk + wakeFilled, frame + at, take * 2);
+    wakeFilled += take;
+    at += take;
+
+    if (wakeFilled == wakeChunkSize) {
+      wakeFilled = 0;
+
+      if (wakeNet->detect(wakeModel, wakeChunk) == WAKENET_DETECTED) {
+        wakeHeardAt = millis();
+        wakeEverHeard = true;
+        Serial.println("[jarvis] wake: \"Jarvis\" heard on the board");
+      }
+    }
+  }
+}
+
 static void putLittle(uint8_t *at, uint32_t value, int bytes) {
   for (int i = 0; i < bytes; i++) {
     at[i] = (value >> (8 * i)) & 0xFF;
@@ -2025,9 +2097,11 @@ void talkTask(void *) {
   int prerollAt = 0;          // the oldest frame in the ring
   int prerollCount = 0;
   int loudRun = 0;
+  unsigned long followUntil = 0;
 
   for (;;) {
     float level = readFrame(frame);
+    listenForWake(frame);
     bool button = digitalRead(TALK_BUTTON_PIN) == LOW;
     float trigger = quietLevel * TALK_START_TIMES;
 
@@ -2093,6 +2167,7 @@ void talkTask(void *) {
 
     while (got + sizeof(frame) <= most) {
       level = readFrame(frame);
+      listenForWake(frame);
       memcpy(talkBuffer + WAV_HEADER + got, frame, sizeof(frame));
       got += sizeof(frame);
 
@@ -2123,12 +2198,25 @@ void talkTask(void *) {
       continue;
     }
 
+    // Not said to Jarvis: it stays here, and is forgotten.
+    bool named = wakeEverHeard && (long)(wakeHeardAt + WAKE_BEFORE_MS - began) >= 0;
+    bool following = (long)(followUntil - millis()) > 0;
+
+    if (wakeModel && !button && !named && !following) {
+      Serial.printf("[jarvis] talk: %lu ms heard, no \"Jarvis\": kept on the toy, nothing sent\n", heard);
+      toyMood = TOY_IDLE;
+      continue;
+    }
+
     toyMood = TOY_THINKING;
 
     Serial.printf("[jarvis] talk: %lu ms heard%s (the room's quiet %.0f, the loudest %.0f)\n", heard,
-                  button ? " with BOOT held" : "", quietLevel, loudest);
+                  button ? " with BOOT held" : (named ? ", Jarvis heard" : (following ? ", a follow-up" : "")),
+                  quietLevel, loudest);
+    unsigned long asked = millis();
     int answered = askAndPlay(got, button);
     toyMood = TOY_IDLE;
+    followUntil = answered > 0 ? asked + TOY_FOLLOW_MS : 0;
 
     if (answered < 0) {
       blinkTalkLed(3);
@@ -2452,6 +2540,7 @@ void startTalk() {
   cloudTalkLink.setHandshakeTimeout(HANDSHAKE_SECONDS);
 #endif
   chime();
+  startWake();
 
   if (xTaskCreatePinnedToCore(talkTask, "talk", 12288, nullptr, 1, nullptr, 1) != pdPASS) {
     Serial.println("[jarvis] talk: could not start");

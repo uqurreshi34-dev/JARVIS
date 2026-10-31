@@ -1721,6 +1721,18 @@ over the chip's own USB (`ARDUINO_USB_CDC_ON_BOOT=1`), its only socket. Its
 Gravity port (43, 44) is not used yet. `tools/test_detections.py` checks the
 pins and both envs.
 
+"Jarvis" is heard on the board itself: ESP-SR's WakeNet (wn9_jarvis_tts, from the
+ESP-SR v1.9.5 built into the Arduino core) runs over every 20 ms frame, waiting
+and recording (`listenForWake`), and a recording is sent only when "Jarvis" was
+heard in it or up to WAKE_BEFORE_MS (2 s) before it, with BOOT held, or within
+TOY_FOLLOW_MS (12 s, FOLLOW_UP_SECONDS) of an answer; anything else is kept on
+the toy and forgotten. The model is packed by `tools/toy_wake_model.py` (fetched
+from ESP-SR at that release, checked by SHA-256) into `wake/srmodels.bin`, out of
+git, and `toy_wake_image.py` adds it to every upload of the toy at 0xEF0000, the
+"model" partition of `toy_partitions.csv` (default_16MB.csv with 1 MB of spiffs
+given to it; the apps and nvs where they were). Without the model the board
+says so as it starts and sends every recording, the PC and the cloud checking
+for "Jarvis" as before. `tools/test_toy_wake_model.py`.
 The toy talks, hands-free (`startTalk`, its own task, only on this board). It
 listens to its PDM microphone (clock 38, data 39) at 16 kHz all the time,
 20 ms at a time, its steady offset taken out first (a DC blocker: the offset

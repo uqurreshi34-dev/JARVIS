@@ -685,6 +685,12 @@ nothing happens: the toy keeps listening, and nothing it heard is kept.
 
 Holding **BOOT** while you speak does the same without his name.
 
+"Jarvis" is heard by the toy itself (Espressif's WakeNet, on the board): what
+you say without it never leaves the toy at all, not even to be checked. Once,
+before flashing: `python tools/toy_wake_model.py` (it makes the model the
+upload then writes to the toy). Without it the toy sends everything it hears
+to be checked for "Jarvis", as before, and says so as it starts.
+
 | Say to the toy | Does |
 |---|---|
 | Jarvis, mute / Jarvis, be quiet | the toy stops answering anything, BOOT included |
