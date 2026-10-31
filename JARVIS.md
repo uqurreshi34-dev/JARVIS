@@ -1814,6 +1814,11 @@ In cloud mode the face finder also runs every 10 s whether or not YOLO sees a pe
 YOLO often sees only the laptop, and the cloud needs a recent face to say who is there. The
 cloud holds "I can see someone" a moment for the face that follows it and says "I can see you,
 Umer" instead; someone known back after 90 s out of sight is named even if greeted lately.
+Greetings come only as someone comes into view (first seen, or back after 90 s), never
+because ten minutes passed while they sat there. Every other question is the cloud model's
+(Groq, Gemini, DeepSeek): it first decides LIVE or KNOWN itself, no list of words kept;
+LIVE writes its own search words, searched thoroughly (Tavily "advanced"), then the past
+week's news if those pages do not answer it; each decision and search is in Render's log.
 The faces, and where the toy lives, are kept in the cloud's database (Neon), never here.
 
 An ESP32-CAM (AI Thinker) takes a picture only when asked. It reports

@@ -114,7 +114,7 @@ check("arduino/jarvis_camera/wake/" in ignored, "the model itself kept out of gi
 
 sketch = (sketch_dir / "jarvis_camera.ino").read_text(encoding="ascii")
 check('WAKE_PARTITION = "model"' in sketch and "esp_srmodel_init(WAKE_PARTITION)" in sketch
-      and "esp_srmodel_filter(models, ESP_WN_PREFIX, NULL)" in sketch and "->create(name, DET_MODE_90)" in sketch,
+      and "esp_srmodel_filter(models, ESP_WN_PREFIX, NULL)" in sketch and "->create(name, DET_MODE_95)" in sketch,
       "the board finds the model in that partition and starts listening for Jarvis")
 task = sketch[sketch.index("void talkTask(void *)"):sketch.index("static void chime()")]
 check(task.count("listenForWake(frame);") == 2, "every frame heard, waiting and recording, goes past the wake word")
@@ -125,6 +125,11 @@ check("followUntil = answered > 0 ? asked + TOY_FOLLOW_MS : 0;" in task and "TOY
       "follow-ups for twelve seconds after an answer, as the cloud's and the PC's window")
 check("(long)(wakeHeardAt + WAKE_BEFORE_MS - began) >= 0" in task,
       "Jarvis said just before the recording began still counts")
+check("WAKE_GAIN = 8.0f" in sketch and "float raised = frame[at + i] * WAKE_GAIN;" in sketch
+      and "memcpy(wakeChunk" not in sketch and "set_det_threshold(wakeModel, WAKE_THRESHOLD, 1)" in sketch,
+      "31 October 2026, no Jarvis ever heard: the quiet microphone raised for WakeNet alone, and WakeNet eager")
+check("memcpy(talkBuffer + WAV_HEADER + got, frame, sizeof(frame));" in task,
+      "what is sent is the sound as heard, never the raised copy")
 check("every recording goes to be checked for Jarvis" in sketch and "if (!wakeModel) {" in sketch,
       "with no model, every recording goes to be checked, as before, and the toy says so")
 check(sketch.index("startWake();") < sketch.index("xTaskCreatePinnedToCore(talkTask"),

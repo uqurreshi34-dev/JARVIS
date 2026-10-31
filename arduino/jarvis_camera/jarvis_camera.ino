@@ -1753,6 +1753,15 @@ static int wakeFilled = 0;
 static volatile unsigned long wakeHeardAt = 0;
 static bool wakeEverHeard = false;
 
+// This microphone is quiet: speech averages a few hundred of 32767 (the room 15), far below what
+// WakeNet was trained on, and it heard no "Jarvis" at all (31 October 2026). Its copy of the sound is
+// raised WAKE_GAIN times (what is sent is not), and it is told to be eager (DET_MODE_95, threshold
+// WAKE_THRESHOLD, below its own 0.63): a false "Jarvis" only sends that recording to be checked,
+// as every recording was before, while a missed one leaves him unanswered.
+static const float WAKE_GAIN = 8.0f;
+static const float WAKE_THRESHOLD = 0.5f;
+static int wakeLoudest = 0;   // the loudest sample WakeNet was given since the last recording began
+
 static bool startWake() {
   srmodel_list_t *models = esp_srmodel_init(WAKE_PARTITION);
   char *name = models && models->num > 0 ? esp_srmodel_filter(models, ESP_WN_PREFIX, NULL) : nullptr;
@@ -1764,7 +1773,7 @@ static bool startWake() {
   }
 
   wakeNet = esp_wn_handle_from_name(name);
-  wakeModel = wakeNet ? wakeNet->create(name, DET_MODE_90) : nullptr;
+  wakeModel = wakeNet ? wakeNet->create(name, DET_MODE_95) : nullptr;
   wakeChunkSize = wakeModel ? wakeNet->get_samp_chunksize(wakeModel) : 0;
   wakeChunk = wakeChunkSize > 0 ? (int16_t *)heap_caps_malloc(wakeChunkSize * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
                                 : nullptr;
@@ -1775,8 +1784,12 @@ static bool startWake() {
     return false;
   }
 
-  Serial.printf("[jarvis] wake: listening for \"Jarvis\" on the board (%s, %d samples at a time; %u bytes of "
-                "internal memory free)\n", name, wakeChunkSize, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+  float own = wakeNet->get_det_threshold(wakeModel, 1);
+  wakeNet->set_det_threshold(wakeModel, WAKE_THRESHOLD, 1);
+  Serial.printf("[jarvis] wake: listening for \"Jarvis\" on the board (%s, %d samples at a time, the sound raised "
+                "%.0f times, threshold %.2f, its own %.2f; %u bytes of internal memory free)\n", name, wakeChunkSize,
+                WAKE_GAIN, wakeNet->get_det_threshold(wakeModel, 1), own,
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
   return true;
 }
 
@@ -1790,7 +1803,14 @@ static void listenForWake(const int16_t *frame) {
 
   while (at < TALK_FRAME) {
     int take = wakeChunkSize - wakeFilled < TALK_FRAME - at ? wakeChunkSize - wakeFilled : TALK_FRAME - at;
-    memcpy(wakeChunk + wakeFilled, frame + at, take * 2);
+    for (int i = 0; i < take; i++) {
+      float raised = frame[at + i] * WAKE_GAIN;
+      int16_t sample = raised > 32767.0f ? 32767 : (raised < -32768.0f ? -32768 : (int16_t)raised);
+      int size = sample < 0 ? -sample : sample;
+      wakeLoudest = size > wakeLoudest ? size : wakeLoudest;
+      wakeChunk[wakeFilled + i] = sample;
+    }
+
     wakeFilled += take;
     at += take;
 
@@ -2162,6 +2182,7 @@ void talkTask(void *) {
     int quietRun = 0;
     float loudest = level;
     unsigned long began = millis();
+    wakeLoudest = 0;
     digitalWrite(TALK_LED_PIN, HIGH);
     toyMood = TOY_LISTENING;
 
@@ -2203,7 +2224,8 @@ void talkTask(void *) {
     bool following = (long)(followUntil - millis()) > 0;
 
     if (wakeModel && !button && !named && !following) {
-      Serial.printf("[jarvis] talk: %lu ms heard, no \"Jarvis\": kept on the toy, nothing sent\n", heard);
+      Serial.printf("[jarvis] talk: %lu ms heard, no \"Jarvis\": kept on the toy, nothing sent (the loudest the wake "
+                    "word heard %d of 32767)\n", heard, wakeLoudest);
       toyMood = TOY_IDLE;
       continue;
     }

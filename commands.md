@@ -728,7 +728,7 @@ In cloud mode the toy also knows, with the PC off:
 | Jarvis, what time is it / what's the date | answered at once, in the toy's own time zone |
 | Jarvis, what's the weather like / will it rain tomorrow | the weather where the toy is |
 | Jarvis, I live in Leeds | where it is, kept, for the time and the weather |
-| Jarvis, who's top of the Premier League | looked up live before it answers |
+| Jarvis, who's top of the Premier League / who's first in the Bundesliga | the AI decides itself whether it needs a live search (no list of words), writes its own search words, and tries the past week's news if the first search misses |
 | Jarvis, what can you see / is anyone there | what its camera sees now |
 | Jarvis, learn my face, I'm Sarah (or casually: can you remember me, I'm Sarah) | the ring breathes white: look at it until it stops (a minute at most), and it knows Sarah from then on |
 | (someone it knows walks in) | I can see you, Umer (or Good evening, Umer): it waits a moment for the face, and looks for faces every 10 s even when it sees no person |
@@ -736,7 +736,8 @@ In cloud mode the toy also knows, with the PC off:
 | Jarvis, forget my face / forget Sarah / forget everyone | deleted |
 
 Anyone can teach it their face, each by their own name, and it greets them by
-name when they come into view ("Good evening, Sarah."), once in ten minutes.
+name as they come into view ("Good evening, Sarah.", once in ten minutes; "I can
+see you, Sarah." when back sooner), never minutes later while they sit there.
 A stranger's face is never kept. Faces and where it lives are kept in the
 cloud's own database, not on this PC.
 
