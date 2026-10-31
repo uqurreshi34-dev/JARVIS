@@ -64,9 +64,19 @@
 #include "mbedtls/platform.h"
 #include "driver/ledc.h"
 #include "esp32-hal-rmt.h"
-#include "model_path.h"
-#include "esp_wn_iface.h"
-#include "esp_wn_models.h"
+#endif
+
+// The toy's "Hey Jarvis" ear, when tools/toy_wake_model.py has made it (wake/, kept out of git).
+#if defined(JARVIS_BOARD_DFR1154) && __has_include("hey_jarvis_model.h") && \
+    __has_include("tensorflow/lite/experimental/microfrontend/lib/frontend.h")
+#define JARVIS_WAKE
+#include "hey_jarvis_model.h"
+#include "tensorflow/lite/experimental/microfrontend/lib/frontend.h"
+#include "tensorflow/lite/experimental/microfrontend/lib/frontend_util.h"
+#include "tensorflow/lite/micro/micro_interpreter.h"
+#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+#include "tensorflow/lite/micro/micro_allocator.h"
+#include "tensorflow/lite/micro/micro_resource_variable.h"
 #endif
 
 #ifdef JARVIS_DETECT
@@ -1737,93 +1747,213 @@ NetworkClientSecure cloudTalkLink;   // talk, and what was seen, in cloud mode
 static uint8_t *talkBuffer = nullptr;
 static int16_t *talkPreroll = nullptr;
 
-// "Jarvis" heard on the board itself (Espressif's WakeNet, the model from tools/toy_wake_model.py in the
-// flash's "model" partition): a recording leaves the toy only when "Jarvis" was said in it (or just
-// before it), with BOOT held, or as a follow-up within TOY_FOLLOW_MS of an answer, as the cloud's and
-// the PC's own follow-up window. Anything else -- chat, the TV -- is never sent anywhere. Without the
-// model every recording goes to be checked for "Jarvis" as before, and the toy says so as it starts.
-static const char *WAKE_PARTITION = "model";
-static const unsigned long WAKE_BEFORE_MS = 2000UL;   // "Jarvis" this long before the recording began counts
+// "Hey Jarvis" heard on the board itself: Home Assistant's microWakeWord model (tools/toy_wake_model.py,
+// built in from wake/), trained on thousands of voices, so it works for anyone. A recording leaves the
+// toy only when "Hey Jarvis" was said in it (or just before it), with BOOT held, or as a follow-up
+// within TOY_FOLLOW_MS of an answer, as the cloud's and the PC's own follow-up window. Anything else --
+// chat, the TV -- is never sent anywhere. Built without the model, every recording goes to be checked
+// for Jarvis as before, and the toy says so as it starts.
+static const unsigned long WAKE_BEFORE_MS = 2000UL;   // "Hey Jarvis" this long before the recording began counts
 static const unsigned long TOY_FOLLOW_MS = 12000UL;   // FOLLOW_UP_SECONDS in the cloud and phone.py
-static const esp_wn_iface_t *wakeNet = nullptr;
-static model_iface_data_t *wakeModel = nullptr;
-static int16_t *wakeChunk = nullptr;
-static int wakeChunkSize = 0;
-static int wakeFilled = 0;
+static bool wakeReady = false;
 static volatile unsigned long wakeHeardAt = 0;
 static bool wakeEverHeard = false;
 
-// This microphone is quiet: speech averages a few hundred of 32767 (the room 15), far below what
-// WakeNet was trained on, and it heard no "Jarvis" at all (31 October 2026). Its copy of the sound is
-// raised WAKE_GAIN times (what is sent is not), and it is told to be eager (DET_MODE_95, threshold
-// WAKE_THRESHOLD, below its own 0.63): a false "Jarvis" only sends that recording to be checked,
-// as every recording was before, while a missed one leaves him unanswered.
-static const float WAKE_GAIN = 8.0f;
-static const float WAKE_THRESHOLD = 0.5f;
-static int wakeLoudest = 0;   // the loudest sample WakeNet was given since the last recording began
+// This microphone is quiet: speech averages a few hundred of 32767 (the room 15). ESP-SR's ear needed
+// it raised eight times to hear anything; microWakeWord's frontend evens loudness out itself (its PCAN
+// gain control), and tried on "hey jarvis" at the toy's own level it was surest unraised (0.97, against
+// 0.96 at four times and 0.93 at sixteen). WAKE_GAIN is kept to tune by, and what is sent is never raised.
+static const float WAKE_GAIN = 1.0f;
+static int wakeLoudest = 0;   // the loudest sample the ear was given since the last recording began
+
+#ifdef JARVIS_WAKE
+// The model's settings, as it was trained (and as ESPHome's micro_wake_word runs it): 40 features of
+// each 30 ms of sound, every 10 ms, from TensorFlow's micro audio frontend; each feature scaled from
+// the frontend's 0..~670 to the model's int8 (x 256 / 666 - 128); the model run each time its input's
+// stride of features is full, and "heard" when the mean of its last WAKE_SLIDING_WINDOW outputs is over
+// WAKE_CUTOFF. After hearing it, and as it starts, it waits WAKE_COOL_SLICES features (1 s) before
+// hearing it again.
+static const int WAKE_FEATURES = 40;
+static const int WAKE_COOL_SLICES = 100;
+static const size_t WAKE_VARIABLE_ARENA = 1024;
+static FrontendConfig wakeFrontendConfig;
+static FrontendState wakeFrontend;
+static tflite::MicroMutableOpResolver<20> wakeOps;
+static tflite::MicroInterpreter *wakeModel = nullptr;
+static int wakeStride = 0;
+static int wakeStrideAt = 0;
+static uint8_t wakeRecent[WAKE_SLIDING_WINDOW];
+static int wakeRecentAt = 0;
+static int wakeCooling = -WAKE_COOL_SLICES;
+static uint8_t wakeBest = 0;   // the most sure the ear was since the last recording began, of 255
+
+static bool wakeAddOps() {
+  return wakeOps.AddCallOnce() == kTfLiteOk && wakeOps.AddVarHandle() == kTfLiteOk && wakeOps.AddReshape() == kTfLiteOk &&
+         wakeOps.AddReadVariable() == kTfLiteOk && wakeOps.AddStridedSlice() == kTfLiteOk &&
+         wakeOps.AddConcatenation() == kTfLiteOk && wakeOps.AddAssignVariable() == kTfLiteOk &&
+         wakeOps.AddConv2D() == kTfLiteOk && wakeOps.AddMul() == kTfLiteOk && wakeOps.AddAdd() == kTfLiteOk &&
+         wakeOps.AddMean() == kTfLiteOk && wakeOps.AddFullyConnected() == kTfLiteOk &&
+         wakeOps.AddLogistic() == kTfLiteOk && wakeOps.AddQuantize() == kTfLiteOk &&
+         wakeOps.AddDepthwiseConv2D() == kTfLiteOk && wakeOps.AddAveragePool2D() == kTfLiteOk &&
+         wakeOps.AddMaxPool2D() == kTfLiteOk && wakeOps.AddPad() == kTfLiteOk && wakeOps.AddPack() == kTfLiteOk &&
+         wakeOps.AddSplitV() == kTfLiteOk;
+}
 
 static bool startWake() {
-  srmodel_list_t *models = esp_srmodel_init(WAKE_PARTITION);
-  char *name = models && models->num > 0 ? esp_srmodel_filter(models, ESP_WN_PREFIX, NULL) : nullptr;
+  wakeFrontendConfig.window.size_ms = 30;
+  wakeFrontendConfig.window.step_size_ms = WAKE_FEATURE_STEP_MS;
+  wakeFrontendConfig.filterbank.num_channels = WAKE_FEATURES;
+  wakeFrontendConfig.filterbank.lower_band_limit = 125.0f;
+  wakeFrontendConfig.filterbank.upper_band_limit = 7500.0f;
+  wakeFrontendConfig.noise_reduction.smoothing_bits = 10;
+  wakeFrontendConfig.noise_reduction.even_smoothing = 0.025f;
+  wakeFrontendConfig.noise_reduction.odd_smoothing = 0.06f;
+  wakeFrontendConfig.noise_reduction.min_signal_remaining = 0.05f;
+  wakeFrontendConfig.pcan_gain_control.enable_pcan = 1;
+  wakeFrontendConfig.pcan_gain_control.strength = 0.95f;
+  wakeFrontendConfig.pcan_gain_control.offset = 80.0f;
+  wakeFrontendConfig.pcan_gain_control.gain_bits = 21;
+  wakeFrontendConfig.log_scale.enable_log = 1;
+  wakeFrontendConfig.log_scale.scale_shift = 6;
 
-  if (!name) {
-    Serial.println("[jarvis] wake: no \"Jarvis\" model on the board (python tools/toy_wake_model.py, then flash): "
-                   "every recording goes to be checked for Jarvis");
+  if (!FrontendPopulateState(&wakeFrontendConfig, &wakeFrontend, TALK_RATE) || !wakeAddOps()) {
+    Serial.println("[jarvis] wake: the ear did not start: every recording goes to be checked for Jarvis");
     return false;
   }
 
-  wakeNet = esp_wn_handle_from_name(name);
-  wakeModel = wakeNet ? wakeNet->create(name, DET_MODE_95) : nullptr;
-  wakeChunkSize = wakeModel ? wakeNet->get_samp_chunksize(wakeModel) : 0;
-  wakeChunk = wakeChunkSize > 0 ? (int16_t *)heap_caps_malloc(wakeChunkSize * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
-                                : nullptr;
+  // Its working memory in the fast internal memory if there is room, else in PSRAM.
+  uint8_t *arena = (uint8_t *)heap_caps_aligned_alloc(16, WAKE_TENSOR_ARENA, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  arena = arena ? arena : (uint8_t *)heap_caps_aligned_alloc(16, WAKE_TENSOR_ARENA, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  uint8_t *variables = (uint8_t *)heap_caps_aligned_alloc(16, WAKE_VARIABLE_ARENA, MALLOC_CAP_8BIT);
 
-  if (!wakeChunk) {
-    Serial.printf("[jarvis] wake: %s did not start: every recording goes to be checked for Jarvis\n", name);
+  if (!arena || !variables) {
+    Serial.println("[jarvis] wake: no room for the ear: every recording goes to be checked for Jarvis");
+    return false;
+  }
+
+  tflite::MicroAllocator *allocator = tflite::MicroAllocator::Create(variables, WAKE_VARIABLE_ARENA);
+  tflite::MicroResourceVariables *state = tflite::MicroResourceVariables::Create(allocator, 20);
+  wakeModel = new tflite::MicroInterpreter(tflite::GetModel(WAKE_MODEL), wakeOps, arena, WAKE_TENSOR_ARENA, state);
+  TfLiteTensor *input = wakeModel->AllocateTensors() == kTfLiteOk ? wakeModel->input(0) : nullptr;
+
+  if (!input || input->dims->size != 3 || input->dims->data[2] != WAKE_FEATURES || input->type != kTfLiteInt8 ||
+      wakeModel->output(0)->type != kTfLiteUInt8) {
+    Serial.println("[jarvis] wake: the ear's model did not load: every recording goes to be checked for Jarvis");
     wakeModel = nullptr;
     return false;
   }
 
-  float own = wakeNet->get_det_threshold(wakeModel, 1);
-  wakeNet->set_det_threshold(wakeModel, WAKE_THRESHOLD, 1);
-  Serial.printf("[jarvis] wake: listening for \"Jarvis\" on the board (%s, %d samples at a time, the sound raised "
-                "%.0f times, threshold %.2f, its own %.2f; %u bytes of internal memory free)\n", name, wakeChunkSize,
-                WAKE_GAIN, wakeNet->get_det_threshold(wakeModel, 1), own,
-                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+  wakeStride = input->dims->data[1];
+  memset(wakeRecent, 0, sizeof(wakeRecent));
+  wakeReady = true;
+  Serial.printf("[jarvis] wake: listening for \"%s\" on the board (microWakeWord, %d features a run, sure at %.2f, "
+                "the sound raised %.0f times; %u bytes of internal memory free)\n", WAKE_WORD_NAME, wakeStride,
+                WAKE_CUTOFF, WAKE_GAIN, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
   return true;
 }
 
-// Every frame the microphone gives, while listening and while recording: "Jarvis" noted when heard.
+// One slice of features into the model; true when the wake word is heard.
+static bool wakeSlice(const uint16_t *values, size_t count) {
+  int8_t *input = wakeModel->input(0)->data.int8 + WAKE_FEATURES * wakeStrideAt;
+
+  for (size_t i = 0; i < count && i < (size_t)WAKE_FEATURES; i++) {
+    int32_t value = ((int32_t)values[i] * 256 + 333) / 666 - 128;
+    input[i] = (int8_t)(value < -128 ? -128 : (value > 127 ? 127 : value));
+  }
+
+  if (++wakeStrideAt < wakeStride) {
+    return false;
+  }
+
+  wakeStrideAt = 0;
+
+  if (wakeModel->Invoke() != kTfLiteOk) {
+    return false;
+  }
+
+  uint8_t sure = wakeModel->output(0)->data.uint8[0];
+  wakeBest = sure > wakeBest ? sure : wakeBest;
+  wakeRecentAt = (wakeRecentAt + 1) % WAKE_SLIDING_WINDOW;
+  wakeRecent[wakeRecentAt] = sure;
+  int total = 0;
+
+  for (int i = 0; i < WAKE_SLIDING_WINDOW; i++) {
+    total += wakeRecent[i];
+  }
+
+  if (sure < WAKE_CUTOFF * 255.0f) {
+    wakeCooling = wakeCooling + wakeStride < 0 ? wakeCooling + wakeStride : 0;
+  }
+
+  if (wakeCooling < 0 || total <= WAKE_CUTOFF * 255.0f * WAKE_SLIDING_WINDOW) {
+    return false;
+  }
+
+  memset(wakeRecent, 0, sizeof(wakeRecent));
+  wakeCooling = -WAKE_COOL_SLICES;
+  return true;
+}
+#else
+static bool startWake() {
+  Serial.println("[jarvis] wake: no \"Hey Jarvis\" ear built in (python tools/toy_wake_model.py, then flash): "
+                 "every recording goes to be checked for Jarvis");
+  return false;
+}
+#endif
+
+// How sure the ear has been, at most, since the last recording began (0 to 100), and forgetting it.
+static int wakeSurest() {
+#ifdef JARVIS_WAKE
+  return wakeBest * 100 / 255;
+#else
+  return 0;
+#endif
+}
+
+static void wakeForgetSurest() {
+#ifdef JARVIS_WAKE
+  wakeBest = 0;
+#endif
+}
+
+// Every frame the microphone gives, while listening and while recording: "Hey Jarvis" noted when heard.
 static void listenForWake(const int16_t *frame) {
-  if (!wakeModel) {
+#ifdef JARVIS_WAKE
+  if (!wakeReady) {
     return;
   }
 
-  int at = 0;
+  int16_t raised[TALK_FRAME];
 
-  while (at < TALK_FRAME) {
-    int take = wakeChunkSize - wakeFilled < TALK_FRAME - at ? wakeChunkSize - wakeFilled : TALK_FRAME - at;
-    for (int i = 0; i < take; i++) {
-      float raised = frame[at + i] * WAKE_GAIN;
-      int16_t sample = raised > 32767.0f ? 32767 : (raised < -32768.0f ? -32768 : (int16_t)raised);
-      int size = sample < 0 ? -sample : sample;
-      wakeLoudest = size > wakeLoudest ? size : wakeLoudest;
-      wakeChunk[wakeFilled + i] = sample;
+  for (int i = 0; i < TALK_FRAME; i++) {
+    float louder = frame[i] * WAKE_GAIN;
+    raised[i] = louder > 32767.0f ? 32767 : (louder < -32768.0f ? -32768 : (int16_t)louder);
+    int size = raised[i] < 0 ? -raised[i] : raised[i];
+    wakeLoudest = size > wakeLoudest ? size : wakeLoudest;
+  }
+
+  const int16_t *at = raised;
+  size_t left = TALK_FRAME;
+
+  while (left > 0) {
+    size_t used = 0;
+    FrontendOutput features = FrontendProcessSamples(&wakeFrontend, at, left, &used);
+    at += used;
+    left -= used;
+
+    if (features.size > 0 && wakeSlice(features.values, features.size)) {
+      wakeHeardAt = millis();
+      wakeEverHeard = true;
+      Serial.printf("[jarvis] wake: \"%s\" heard on the board\n", WAKE_WORD_NAME);
     }
 
-    wakeFilled += take;
-    at += take;
-
-    if (wakeFilled == wakeChunkSize) {
-      wakeFilled = 0;
-
-      if (wakeNet->detect(wakeModel, wakeChunk) == WAKENET_DETECTED) {
-        wakeHeardAt = millis();
-        wakeEverHeard = true;
-        Serial.println("[jarvis] wake: \"Jarvis\" heard on the board");
-      }
+    if (used == 0) {
+      break;
     }
   }
+#else
+  (void)frame;
+#endif
 }
 
 static void putLittle(uint8_t *at, uint32_t value, int bytes) {
@@ -2185,6 +2315,7 @@ void talkTask(void *) {
     float loudest = level;
     unsigned long began = millis();
     wakeLoudest = 0;
+    wakeForgetSurest();
     digitalWrite(TALK_LED_PIN, HIGH);
     toyMood = TOY_LISTENING;
 
@@ -2225,9 +2356,9 @@ void talkTask(void *) {
     bool named = wakeEverHeard && (long)(wakeHeardAt + WAKE_BEFORE_MS - began) >= 0;
     bool following = (long)(followUntil - millis()) > 0;
 
-    if (wakeModel && !button && !named && !following) {
-      Serial.printf("[jarvis] talk: %lu ms heard, no \"Jarvis\": kept on the toy, nothing sent (the loudest the wake "
-                    "word heard %d of 32767)\n", heard, wakeLoudest);
+    if (wakeReady && !button && !named && !following) {
+      Serial.printf("[jarvis] talk: %lu ms heard, no \"Hey Jarvis\": kept on the toy, nothing sent (the ear heard "
+                    "it at most %d of 32767, and was at most %d%% sure)\n", heard, wakeLoudest, wakeSurest());
       toyMood = TOY_IDLE;
       continue;
     }
@@ -2235,7 +2366,7 @@ void talkTask(void *) {
     toyMood = TOY_THINKING;
 
     Serial.printf("[jarvis] talk: %lu ms heard%s (the room's quiet %.0f, the loudest %.0f)\n", heard,
-                  button ? " with BOOT held" : (named ? ", Jarvis heard" : (following ? ", a follow-up" : "")),
+                  button ? " with BOOT held" : (named ? ", Hey Jarvis heard" : (following ? ", a follow-up" : "")),
                   quietLevel, loudest);
     unsigned long asked = millis();
     int answered = askAndPlay(got, button, named);

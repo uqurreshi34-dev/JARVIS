@@ -685,11 +685,13 @@ nothing happens: the toy keeps listening, and nothing it heard is kept.
 
 Holding **BOOT** while you speak does the same without his name.
 
-"Jarvis" is heard by the toy itself (Espressif's WakeNet, on the board): what
-you say without it never leaves the toy at all, not even to be checked. Once,
-before flashing: `python tools/toy_wake_model.py` (it makes the model the
-upload then writes to the toy). Without it the toy sends everything it hears
-to be checked for "Jarvis", as before, and says so as it starts.
+On the toy, say **"Hey Jarvis, ..."**: the toy hears "Hey Jarvis" itself, on
+its own chip (Home Assistant's microWakeWord ear, trained on thousands of
+voices, so it works for anyone), and what you say without it never leaves
+the toy at all, not even to be checked. "Hey Jarvis" alone gets "Yes, sir?".
+Once, before flashing: `python tools/toy_wake_model.py` (it fetches the ear,
+built into the firmware from then on). Without it the toy sends everything
+it hears to be checked for "Jarvis", as before, and says so as it starts.
 
 | Say to the toy | Does |
 |---|---|

@@ -1,13 +1,14 @@
-"""Checks for the toy's own "Jarvis" wake word: the model tool, the flash map that holds it, and the
-firmware that only lets what was said to Jarvis leave the toy. No network: the downloads are faked.
+"""Checks for the toy's own "Hey Jarvis" ear: the tool that fetches the microWakeWord model and the
+audio frontend, and the firmware that only lets what was said to Jarvis leave the toy. No network:
+the downloads are faked.
 
     python tools/test_toy_wake_model.py
 """
 
 import hashlib
 import io
+import json
 import re
-import struct
 import sys
 import tempfile
 from pathlib import Path
@@ -25,21 +26,26 @@ def check(ok, label):
     print(("PASS " if ok else "FAIL ") + label)
 
 
-# ---- packing, as ESP-SR's pack_model.py -------------------------------------------------------------
+# ---- what is fetched, and from where ------------------------------------------------------------------
 
-files = {"_MODEL_INFO_": b"wakenet9l_tts1h8_Jarvis_3_0.627_0.632", "wn9_index": b"\x01" * 12, "wn9_data": b"\x02" * 40}
-packed = wake.pack({"wn9_jarvis_tts": files})
-check(struct.unpack_from("<I", packed)[0] == 1 and packed[4:4 + 14] == b"wn9_jarvis_tts",
-      "one model, its name first, as ESP-SR reads it")
-check(wake.unpack(packed) == {"wn9_jarvis_tts": files}, "and it reads back file by file")
-header = 4 + (32 + 4) + 3 * (32 + 4 + 4)
-check(struct.unpack_from("<II", packed, 4 + 36 + 32) == (header, len(files["_MODEL_INFO_"])),
-      "each file's start counted from the end of the header")
-check(list(wake.FILES) == ["_MODEL_INFO_", "wn9_index", "wn9_data"] and wake.ESP_SR_VERSION == "v1.9.5"
-      and wake.MODEL == "wn9_jarvis_tts",
-      "the Jarvis model, from the ESP-SR release built into the toy's Arduino core, files in its order")
+check(re.fullmatch(r"[0-9a-f]{40}", wake.MODELS_COMMIT) and wake.FRONTEND_VERSION == "v2.18.0",
+      "the model at one fixed commit of esphome/micro-wake-word-models, the frontend at TensorFlow v2.18.0")
+check(all(re.fullmatch(r"[0-9a-f]{64}", digest) for digest in {**wake.MODEL_FILES, **wake.FRONTEND_FILES}.values()),
+      "every file pinned by SHA-256")
+check({"frontend.c", "frontend_util.c", "fft.cc", "fft_util.cc", "filterbank.c", "noise_reduction.c",
+       "pcan_gain_control.c", "log_scale.c", "window.c"} <= set(wake.FRONTEND_FILES),
+      "the whole micro audio frontend, as the model was trained with")
 
-# ---- fetching: only the expected files ---------------------------------------------------------------
+# ---- building, with the downloads faked ---------------------------------------------------------------
+
+settings = {"type": "micro", "wake_word": "Hey Jarvis", "author": "Kevin Ahrendt", "model": "hey_jarvis.tflite",
+            "version": 2, "micro": {"probability_cutoff": 0.97, "feature_step_size": 10, "sliding_window_size": 5,
+                                    "tensor_arena_size": 22860}}
+model = bytes(range(256)) * 3
+files = {"hey_jarvis.tflite": model, "hey_jarvis.json": json.dumps(settings).encode()}
+
+for name in wake.FRONTEND_FILES:
+    files[name] = (wake.KISS_GLOBAL if name in ("fft.cc", "fft_util.cc") else "").encode() + name.encode()
 
 
 class Reply(io.BytesIO):
@@ -50,90 +56,103 @@ class Reply(io.BytesIO):
         return False
 
 
-real = {name: name.encode() * 3 for name in wake.FILES}
-saved_hashes = dict(wake.FILES)
-wake.FILES.update({name: hashlib.sha256(content).hexdigest() for name, content in real.items()})
+saved = dict(wake.MODEL_FILES), dict(wake.FRONTEND_FILES)
+wake.MODEL_FILES.update({name: hashlib.sha256(files[name]).hexdigest() for name in wake.MODEL_FILES})
+wake.FRONTEND_FILES.update({name: hashlib.sha256(files[name]).hexdigest() for name in wake.FRONTEND_FILES})
 asked = []
 
 
 def opener(url, timeout=None):
     asked.append(url)
-    return Reply(real[url.rsplit("/", 1)[1]])
+    return Reply(files[url.rsplit("/", 1)[1]])
 
 
 with tempfile.TemporaryDirectory() as folder:
-    out = wake.build(out=Path(folder) / "wake" / "srmodels.bin", opener=opener)
-    check(out.is_file() and wake.unpack(out.read_bytes()) == {"wn9_jarvis_tts": real},
-          "built into wake/srmodels.bin from the three files")
-    check(all(url.startswith("https://raw.githubusercontent.com/espressif/esp-sr/v1.9.5/model/wakenet_model/"
-                             "wn9_jarvis_tts/") for url in asked) and len(asked) == 3,
-          "fetched from ESP-SR's own repository at that release")
+    out = wake.build(out=Path(folder) / "wake", opener=opener)
+    header = (out / "hey_jarvis_model.h").read_text(encoding="ascii")
+    check('#define WAKE_WORD_NAME "Hey Jarvis"' in header and "#define WAKE_CUTOFF 0.97f" in header
+          and "#define WAKE_SLIDING_WINDOW 5" in header and "#define WAKE_TENSOR_ARENA 22860" in header
+          and f"WAKE_MODEL_SIZE = {len(model)};" in header and "alignas(16) static const uint8_t WAKE_MODEL[]" in header,
+          "hey_jarvis_model.h: the model as an aligned C array, with its own settings")
+    check(header.count("0x") == len(model), "every byte of the model in it")
+    lib = out / wake.FRONTEND_PATH
+    fft = (lib / "fft.cc").read_text()
+    check(wake.KISS_CORE in fft and wake.KISS_GLOBAL not in fft and (lib / "frontend.c").is_file(),
+          "the frontend under wake/tensorflow/..., its FFT the core's own kiss fft (kiss_fft_fixed16)")
+    check(any("esphome/micro-wake-word-models/" + wake.MODELS_COMMIT in url for url in asked)
+          and any("tensorflow/tensorflow/v2.18.0/" in url for url in asked),
+          "fetched from those repositories at those versions")
+
+    def tampered(url, timeout=None):
+        return Reply(b"tampered")
 
     try:
-        wake.build(out=Path(folder) / "bad.bin", opener=lambda url, timeout=None: Reply(b"tampered"))
+        wake.build(out=Path(folder) / "bad", opener=tampered)
         refused = False
     except wake.ModelError:
         refused = True
 
-    check(refused and not (Path(folder) / "bad.bin").exists(), "a file that is not the one expected is refused")
+    check(refused and not (Path(folder) / "bad").exists(), "a file that is not the one expected is refused")
 
-wake.FILES.clear()
-wake.FILES.update(saved_hashes)
-check(all(re.fullmatch(r"[0-9a-f]{64}", digest) for digest in wake.FILES.values()), "every file pinned by SHA-256")
+    try:
+        wake.model_header(model, {**settings, "version": 1})
+        old_refused = False
+    except wake.ModelError:
+        old_refused = True
 
-# ---- the flash map and the upload ---------------------------------------------------------------------
+    check(old_refused, "only a version 2 model with 10 ms features, as the firmware runs it")
+
+wake.MODEL_FILES.clear()
+wake.MODEL_FILES.update(saved[0])
+wake.FRONTEND_FILES.clear()
+wake.FRONTEND_FILES.update(saved[1])
+
+# ---- the build ----------------------------------------------------------------------------------------
 
 sketch_dir = ROOT / "arduino" / "jarvis_camera"
-rows = {}
-
-for line in (sketch_dir / "toy_partitions.csv").read_text(encoding="ascii").splitlines():
-    if line.strip() and not line.startswith("#"):
-        name, kind, sub, offset, size = [part.strip() for part in line.split(",")[:5]]
-        rows[name] = (kind, sub, int(offset, 16), int(size, 16))
-
-check(rows["app0"][2:] == (0x10000, 0x640000) and rows["app1"][2:] == (0x650000, 0x640000)
-      and rows["nvs"][2] == 0x9000,
-      "the apps and the toy's saved settings (nvs) where they always were: nothing kept is lost")
-check(rows["model"] == ("data", "spiffs", 0xEF0000, 0x100000), "a 1 MB model partition, as ESP-SR looks for")
-order = sorted(rows.values(), key=lambda row: row[2])
-check(all(a[2] + a[3] <= b[2] for a, b in zip(order, order[1:])) and order[-1][2] + order[-1][3] <= 16 * 1024 * 1024,
-      "no partition overlaps the next, and all fit the 16 MB flash")
-image = (sketch_dir / "toy_wake_image.py").read_text(encoding="ascii")
-check('MODEL_OFFSET = "0xef0000"' in image and 'join(env.subst("$PROJECT_DIR"), "wake", "srmodels.bin")' in image
-      and "FLASH_EXTRA_IMAGES" in image, "every upload writes the model to that partition, when it has been made")
 ini = (sketch_dir / "platformio.ini").read_text(encoding="ascii")
 aicam = ini[ini.index("[env:aicam]"):ini.index("[env:aicamdetect]")]
-check("board_build.partitions = toy_partitions.csv" in aicam and "extra_scripts = pre:toy_wake_image.py" in aicam,
-      "the toy's builds (aicam and aicamdetect) use them")
-s3 = ini[ini.index("[env:s3cam]"):ini.index("[env:s3detect]")]
-check("default_16MB.csv" in s3 and "toy_wake_image" not in s3, "the house cam's flash is left as it was")
+check("-I wake" in aicam and "+<wake/tensorflow/lite/experimental/microfrontend/lib/*.c>" in aicam
+      and "+<wake/tensorflow/lite/experimental/microfrontend/lib/*.cc>" in aicam,
+      "the toy's builds compile the ear from wake/ when it is there")
+detect = ini[ini.index("[env:aicamdetect]"):]
+check("+<wake/tensorflow/lite/experimental/microfrontend/lib/*.cc> +<detect/*.c> +<faces/*.c>" in detect,
+      "aicamdetect too, beside its detection")
+check("toy_wake_image" not in ini and not (sketch_dir / "toy_partitions.csv").exists(),
+      "no flash partition or extra upload step: the ear is in the firmware itself")
 ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
-check("arduino/jarvis_camera/wake/" in ignored, "the model itself kept out of git")
+check("arduino/jarvis_camera/wake/" in ignored, "the ear itself kept out of git")
 
 # ---- the firmware -------------------------------------------------------------------------------------
 
 sketch = (sketch_dir / "jarvis_camera.ino").read_text(encoding="ascii")
-check('WAKE_PARTITION = "model"' in sketch and "esp_srmodel_init(WAKE_PARTITION)" in sketch
-      and "esp_srmodel_filter(models, ESP_WN_PREFIX, NULL)" in sketch and "->create(name, DET_MODE_95)" in sketch,
-      "the board finds the model in that partition and starts listening for Jarvis")
+check('__has_include("hey_jarvis_model.h")' in sketch and "#define JARVIS_WAKE" in sketch
+      and "esp_srmodel" not in sketch and "esp_wn_" not in sketch,
+      "built with the ear when wake/ has it, and ESP-SR's WakeNet gone")
+check("wakeFrontendConfig.window.size_ms = 30;" in sketch and "filterbank.num_channels = WAKE_FEATURES;" in sketch
+      and "lower_band_limit = 125.0f" in sketch and "upper_band_limit = 7500.0f" in sketch
+      and "pcan_gain_control.strength = 0.95f" in sketch and "log_scale.scale_shift = 6" in sketch,
+      "the frontend set as the model was trained")
+check("((int32_t)values[i] * 256 + 333) / 666 - 128" in sketch,
+      "each feature scaled to the model's int8 as in training")
+check("MicroResourceVariables::Create(allocator, 20)" in sketch and "wakeOps.AddVarHandle()" in sketch
+      and "wakeOps.AddSplitV()" in sketch, "a streaming model: its state kept between runs, every op it uses")
+check("total <= WAKE_CUTOFF * 255.0f * WAKE_SLIDING_WINDOW" in sketch and "wakeCooling = -WAKE_COOL_SLICES;" in sketch,
+      "heard when its last few outputs average over its cutoff, then a second's rest before hearing it again")
 task = sketch[sketch.index("void talkTask(void *)"):sketch.index("static void chime()")]
-check(task.count("listenForWake(frame);") == 2, "every frame heard, waiting and recording, goes past the wake word")
-check("if (wakeModel && !button && !named && !following) {" in task
+check(task.count("listenForWake(frame);") == 2, "every frame heard, waiting and recording, goes past the ear")
+check("if (wakeReady && !button && !named && !following) {" in task
       and task.index("!named && !following") < task.index("askAndPlay(got, button, named)"),
-      "a recording without Jarvis, BOOT or a follow-up is kept on the toy, never sent")
+      "a recording without Hey Jarvis, BOOT or a follow-up is kept on the toy, never sent")
 check("followUntil = answered > 0 ? asked + TOY_FOLLOW_MS : 0;" in task and "TOY_FOLLOW_MS = 12000UL" in sketch,
       "follow-ups for twelve seconds after an answer, as the cloud's and the PC's window")
-check("(long)(wakeHeardAt + WAKE_BEFORE_MS - began) >= 0" in task,
-      "Jarvis said just before the recording began still counts")
-check("WAKE_GAIN = 8.0f" in sketch and "float raised = frame[at + i] * WAKE_GAIN;" in sketch
-      and "memcpy(wakeChunk" not in sketch and "set_det_threshold(wakeModel, WAKE_THRESHOLD, 1)" in sketch,
-      "31 October 2026, no Jarvis ever heard: the quiet microphone raised for WakeNet alone, and WakeNet eager")
+check("(long)(wakeHeardAt + WAKE_BEFORE_MS - began) >= 0" in task, "Hey Jarvis said just before the recording counts")
 check("memcpy(talkBuffer + WAV_HEADER + got, frame, sizeof(frame));" in task,
-      "what is sent is the sound as heard, never the raised copy")
-check("every recording goes to be checked for Jarvis" in sketch and "if (!wakeModel) {" in sketch,
-      "with no model, every recording goes to be checked, as before, and the toy says so")
+      "what is sent is the sound as heard, never the ear's copy")
+check("every recording goes to be checked for Jarvis" in sketch and "static bool startWake() {\n  Serial.println" in sketch,
+      "built without the ear, every recording goes to be checked, as before, and the toy says so")
 check(sketch.index("startWake();") < sketch.index("xTaskCreatePinnedToCore(talkTask"),
-      "listening for Jarvis starts before the talk does")
+      "listening for Hey Jarvis starts before the talk does")
 
 failed = [label for ok, label in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(failed)} of {len(RESULTS)} passed")
