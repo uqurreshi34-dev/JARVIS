@@ -119,7 +119,7 @@ check('WAKE_PARTITION = "model"' in sketch and "esp_srmodel_init(WAKE_PARTITION)
 task = sketch[sketch.index("void talkTask(void *)"):sketch.index("static void chime()")]
 check(task.count("listenForWake(frame);") == 2, "every frame heard, waiting and recording, goes past the wake word")
 check("if (wakeModel && !button && !named && !following) {" in task
-      and task.index("!named && !following") < task.index("askAndPlay(got, button)"),
+      and task.index("!named && !following") < task.index("askAndPlay(got, button, named)"),
       "a recording without Jarvis, BOOT or a follow-up is kept on the toy, never sent")
 check("followUntil = answered > 0 ? asked + TOY_FOLLOW_MS : 0;" in task and "TOY_FOLLOW_MS = 12000UL" in sketch,
       "follow-ups for twelve seconds after an answer, as the cloud's and the PC's window")

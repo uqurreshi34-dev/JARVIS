@@ -1732,7 +1732,10 @@ git, and `toy_wake_image.py` adds it to every upload of the toy at 0xEF0000, the
 "model" partition of `toy_partitions.csv` (default_16MB.csv with 1 MB of spiffs
 given to it; the apps and nvs where they were). Without the model the board
 says so as it starts and sends every recording, the PC and the cloud checking
-for "Jarvis" as before. `tools/test_toy_wake_model.py`.
+for "Jarvis" as before. `tools/test_toy_wake_model.py`. A recording sent because the chip
+heard "Jarvis" goes as `X-Jarvis-Toy: wake`: often the name was said just before the
+recording began and is not in it, so phone.py (and the cloud) take it as his without the wake
+grammar or the name in the transcript (`voice.named_command` strips it when it is there).
 The toy talks, hands-free (`startTalk`, its own task, only on this board). It
 listens to its PDM microphone (clock 38, data 39) at 16 kHz all the time,
 20 ms at a time, its steady offset taken out first (a DC blocker: the offset

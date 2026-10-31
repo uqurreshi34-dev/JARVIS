@@ -225,6 +225,24 @@ if phone:
     hear(recording(1.5))
     check(handled[-1] == "play some music", "so the command after it is taken")
 
+    def heard_on_board(audio):
+        return client.post("/toy/talk", data=audio, headers={
+            "X-Jarvis-Token": "right-token", "X-Jarvis-Camera": "toy cam",
+            "Content-Type": "audio/wav", "X-Jarvis-Toy": "wake"})
+
+    server._toy_follow_until = 0.0
+    heard_texts.append("what time is it")
+    replies.append("It's six o'clock, sir.")
+    answer = heard_on_board(recording(1.5))
+    check(answer.status_code == 200 and handled[-1] == "what time is it" and not woken
+          and server._toy_follow_until > 0,
+          "31 October 2026: Jarvis heard on the toy's chip, the name not in the recording: still his, "
+          "not checked again, and follow-ups open")
+    server._toy_follow_until = 0.0
+    heard_texts.append("Jarvis")
+    check(heard_on_board(recording(1)).status_code == 200 and spoken[-1][0] == "Yes, sir?",
+          "and his name alone, heard on the chip: 'Yes, sir?'")
+
     server._toy_follow_until = 0.0
     check(hear(recording(0.1)).status_code == 204, "heard unasked and too short: silence, not a complaint")
     check(peaks and all(peak == phone.TOY_TALK_PEAK == 0.95 for peak in peaks),
@@ -319,7 +337,7 @@ check("quietLevel * 0.98f + level * 0.02f" in task and "loudRun < TALK_START_FRA
       and "TALK_PREROLL_FRAMES = 25" in talk_part and "quietRun >= TALK_END_FRAMES" in task
       and "TALK_MOST_MS = 10000UL" in talk_part,
       "it listens for speech against the room's own quiet, keeps half a second from before, ten seconds at most")
-check('"X-Jarvis-Toy", button ? "button" : "sound"' in talk_part and "code == 204" in talk_part
+check('"X-Jarvis-Toy", button ? "button" : (named ? "wake" : "sound")' in talk_part and "code == 204" in talk_part
       and "TALK_BUTTON_PIN = 0;" in talk_part and "letGo(TALK_AFTER_ANSWER_MS);" in task,
       "says whether BOOT was held; plays nothing for a 204; and does not hear its own answer")
 read_part = talk_part[talk_part.index("static float readFrame"):talk_part.index("static void letGo")]
@@ -353,8 +371,8 @@ check("LEDC_TIMER_3" in body and "LEDC_CHANNEL_7" in body and "ledcAttach" not i
       .replace("`ledcAttach`", "").replace("Arduino's ledcAttach", "").replace("-- ledcAttach would", ""),
       "the servo on its own LEDC timer, never the camera's timer 0")
 task = talk_part[talk_part.index("void talkTask"):talk_part.index("// The toy's body")]
-check(task.index("toyMood = TOY_LISTENING;") < task.index("toyMood = TOY_THINKING;") < task.index("askAndPlay(got, button)")
-      < task.index("toyMood = TOY_IDLE;", task.index("askAndPlay(got, button)"))
+check(task.index("toyMood = TOY_LISTENING;") < task.index("toyMood = TOY_THINKING;") < task.index("askAndPlay(got, button, named)")
+      < task.index("toyMood = TOY_IDLE;", task.index("askAndPlay(got, button, named)"))
       and "toyMood = fond ? TOY_SPEAKING_FOND : TOY_SPEAKING;" in talk_part[talk_part.index("static int askAndPlay"):],
       "hearing you, waiting, speaking as the answer plays, off after")
 setup = sketch[sketch.index("void setup() {"):sketch.index("void loop() {")]
@@ -387,7 +405,7 @@ check('cloudUrl("/health")' in cloud_part and "lastDelivered = millis();" in clo
 ask = talk_part[talk_part.index("static int askAndPlay"):talk_part.index("static int playAnswer(HTTPClient &https, bool fond) {")]
 check('"X-Jarvis-Fallback", "pc"' in ask and "cloud && !toyCloudMode" in ask,
       "falling back from the PC, the toy says so, and the cloud tells you")
-check("return askAndPlay(pcm, button, true);" in ask and "!cloud && code < 0" in ask,
+check("return askAndPlay(pcm, button, named, true);" in ask and "!cloud && code < 0" in ask,
       "a PC that stops answering mid-question: the same question asked of the cloud")
 check('https.header("X-Jarvis-Switch")' in ask and 'saveToyMode(switched == "cloud");' in ask,
       "'switch to ... mode' answered by either side is kept")

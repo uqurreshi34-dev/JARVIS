@@ -406,6 +406,14 @@ def addressed_command(text):
     return _strip_wake(text)
 
 
+def named_command(text):
+    """The command in [text] when it starts with his name ("Jarvis, what time is it" -> "what time
+    is it", his name alone -> ""), else None. For a recording the toy's chip heard "Jarvis" in, or
+    just before: the name may well not be in it, and then the whole of it is the command."""
+    addressed, remainder = _split_wake(text)
+    return remainder if addressed else None
+
+
 def _armed():
     return time.monotonic() < _armed_until
 

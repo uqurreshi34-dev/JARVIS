@@ -37,7 +37,7 @@ import phone_tls
 import transcriber
 from actions import location, askfiles, cameras, detections, files, highlight, sighting_search, sightings
 from actions import social
-from voice import FILLERS, FOLLOW_UP_SECONDS, addressed_command, set_phone_active, wake_heard
+from voice import FILLERS, FOLLOW_UP_SECONDS, addressed_command, named_command, set_phone_active, wake_heard
 
 import speech
 
@@ -1820,8 +1820,11 @@ class PhoneServer:
         speak and sent it unasked, so it is his only when it starts with his name -- the wake grammar
         first, here and offline, then the transcript, as the desk's microphone -- or comes within a
         follow-up window of his last answer. Anything else is not his: silence, no complaint.
+        "wake": the toy heard "Jarvis" itself, on its own chip, in this recording or just before it
+        (so the name may not be in the audio at all): his, without checking again.
         """
-        hands_free = heard_by == "sound"
+        board_heard = heard_by == "wake"
+        hands_free = heard_by in ("sound", "wake")
         following = hands_free and time.monotonic() < self._toy_follow_until
         self._toy_mood = ""
         self._toy_switch = ""
@@ -1829,7 +1832,7 @@ class PhoneServer:
         if len(audio) < MIN_VOICE_BYTES:
             return None if hands_free else "That was too short, sir. Hold the button while you speak."
 
-        if hands_free and not following and not wake_heard(audio[44:]):
+        if hands_free and not following and not board_heard and not wake_heard(audio[44:]):
             return None
 
         set_phone_active(True)
@@ -1847,13 +1850,18 @@ class PhoneServer:
                 return None if hands_free else "I only caught a stray word, sir."
 
             if hands_free and not following:
-                command = addressed_command(text)
+                if board_heard:
+                    # His name said just before the recording, or lost in it: the rest is the command.
+                    command = named_command(text)
+                    command = text if command is None else command
+                else:
+                    command = addressed_command(text)
 
                 if command is None:
                     print(f'[ignored] "{text}" (toy: not said to JARVIS)')
                     return None
 
-                print(f'[toy] woken by "{text}"')
+                print(f'[toy] woken by "{text}"{" (Jarvis heard on the toy)" if board_heard else ""}')
 
                 if not command:
                     if self._toy_muted:

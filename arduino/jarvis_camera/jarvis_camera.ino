@@ -1909,7 +1909,7 @@ static int playAnswer(HTTPClient &https, bool fond);
 // JARVIS had nothing to say (it was not said to him), -1 if he could not be reached. With the toy's
 // cloud brain: to the cloud in cloud mode, or in PC mode while the PC does not answer (saying so,
 // X-Jarvis-Fallback); a PC that stops answering mid-ask is asked of the cloud at once [toCloud].
-static int askAndPlay(size_t pcm, bool button, bool toCloud = false) {
+static int askAndPlay(size_t pcm, bool button, bool named = false, bool toCloud = false) {
   wavHeader(talkBuffer, pcm);
 
   HTTPClient https;
@@ -1939,7 +1939,9 @@ static int askAndPlay(size_t pcm, bool button, bool toCloud = false) {
   https.addHeader("X-Jarvis-Token", JARVIS_TOKEN);
 #endif
   https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
-  https.addHeader("X-Jarvis-Toy", button ? "button" : "sound");
+  // "wake": "Jarvis" was heard on this chip, perhaps just before the recording began, so the name
+  // may not be in what is sent: JARVIS and the cloud take it as his without looking for it again.
+  https.addHeader("X-Jarvis-Toy", button ? "button" : (named ? "wake" : "sound"));
   const char *wanted[] = {"X-Jarvis-Mood", "X-Jarvis-Switch", "X-Jarvis-Faces"};
   https.collectHeaders(wanted, 3);
 
@@ -1957,7 +1959,7 @@ static int askAndPlay(size_t pcm, bool button, bool toCloud = false) {
     https.end();
     pcReachable = false;
     Serial.println("[jarvis] talk: the PC did not answer; asking the cloud");
-    return askAndPlay(pcm, button, true);
+    return askAndPlay(pcm, button, named, true);
   }
 #endif
 
@@ -2236,7 +2238,7 @@ void talkTask(void *) {
                   button ? " with BOOT held" : (named ? ", Jarvis heard" : (following ? ", a follow-up" : "")),
                   quietLevel, loudest);
     unsigned long asked = millis();
-    int answered = askAndPlay(got, button);
+    int answered = askAndPlay(got, button, named);
     toyMood = TOY_IDLE;
     followUntil = answered > 0 ? asked + TOY_FOLLOW_MS : 0;
 
