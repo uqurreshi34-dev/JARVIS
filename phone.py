@@ -161,6 +161,8 @@ TOY_SWITCH = re.compile(
     r"(?:(?:switch|change|go|move|swap|turn|put\s+yourself)\s+(?:yourself\s+)?(?:over\s+)?(?:back\s+)?(?:to|into|in)\s+)?"
     r"(?:the\s+)?(pc|computer|cloud)\s+mode(?:\s+please)?$"
 )
+# What the toy listens for on its own chip (its microWakeWord ear), so what it tells people to say.
+TOY_WAKE_PHRASE = "Hey Jarvis"
 TOY_SWITCH_WORDS = {
     "pc": "I'm already in PC mode, sir.",
     "cloud": "Switching to cloud mode, sir. You can switch your PC off whenever you like.",
@@ -1888,7 +1890,7 @@ class PhoneServer:
                 self._toy_muted = True
                 self._toy_follow_until = 0.0
                 print("[toy] muted")
-                return "Muted, sir. Say Jarvis, unmute, when you want me."
+                return f"Muted, sir. Say {TOY_WAKE_PHRASE}, unmute, when you want me."
 
             switch = self._toy_switch_asked(text)
 

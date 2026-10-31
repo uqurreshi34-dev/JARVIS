@@ -676,12 +676,13 @@ back to the middle: both are working.
 
 ### Talking through the toy
 
-Say **"Jarvis, ..."** to the toy, as you would to the desk: "Jarvis, what
-time is it". Its light is on while it hears you. JARVIS answers through the
+Say **"Hey Jarvis, ..."** to the toy: "Hey Jarvis, what time is it" (the
+desk still answers plain "Jarvis"). Its light is on while it hears you. JARVIS answers through the
 toy's own speaker, not the desk's, and for a few seconds after an answer
-the next thing you say needs no "Jarvis" at all. Said without his name,
+the next thing you say needs no "Hey Jarvis" at all. Said without his name,
 nothing happens: the toy keeps listening, and nothing it heard is kept.
-"Jarvis" alone gets "Yes, sir?".
+"Hey Jarvis" alone gets "Yes, sir?", and whatever it asks you to say
+(unmuting, learning a face, where you live) starts "Hey Jarvis" too.
 
 Holding **BOOT** while you speak does the same without his name.
 
@@ -695,8 +696,8 @@ it hears to be checked for "Jarvis", as before, and says so as it starts.
 
 | Say to the toy | Does |
 |---|---|
-| Jarvis, mute / Jarvis, be quiet | the toy stops answering anything, BOOT included |
-| Jarvis, unmute | it answers again |
+| Hey Jarvis, mute / Hey Jarvis, be quiet | the toy stops answering anything, BOOT included |
+| Hey Jarvis, unmute | it answers again |
 
 Muting the toy leaves the desk as it was, and the desk's mute leaves the toy.
 A JARVIS started again always answers on the toy.
@@ -715,8 +716,8 @@ starts in cloud mode and keeps whichever you choose, even after a restart.
 
 | Say to the toy | Does |
 |---|---|
-| Jarvis, switch to cloud mode | the toy uses the cloud; the PC can be off |
-| Jarvis, switch to PC mode | the toy uses JARVIS on this PC |
+| Hey Jarvis, switch to cloud mode | the toy uses the cloud; the PC can be off |
+| Hey Jarvis, switch to PC mode | the toy uses JARVIS on this PC |
 
 In PC mode with the PC off, the toy falls back to the cloud by itself and
 says so first: "Defaulting to the cloud, sir: your PC isn't answering. Turn
@@ -727,15 +728,15 @@ In cloud mode the toy also knows, with the PC off:
 
 | Say to the toy | Does |
 |---|---|
-| Jarvis, what time is it / what's the date | answered at once, in the toy's own time zone |
-| Jarvis, what's the weather like / will it rain tomorrow | the weather where the toy is |
-| Jarvis, I live in Leeds | where it is, kept, for the time and the weather |
-| Jarvis, who's top of the Premier League / who's first in the Bundesliga | the AI decides itself whether it needs a live search (no list of words), writes its own search words, and tries the past week's news if the first search misses |
-| Jarvis, what can you see / is anyone there | what its camera sees now |
-| Jarvis, learn my face, I'm Sarah (or casually: can you remember me, I'm Sarah) | the ring breathes white: look at it until it stops (a minute at most), and it knows Sarah from then on |
+| Hey Jarvis, what time is it / what's the date | answered at once, in the toy's own time zone |
+| Hey Jarvis, what's the weather like / will it rain tomorrow | the weather where the toy is |
+| Hey Jarvis, I live in Leeds | where it is, kept, for the time and the weather |
+| Hey Jarvis, who's top of the Premier League / who's first in the Bundesliga | the AI decides itself whether it needs a live search (no list of words), writes its own search words, and tries the past week's news if the first search misses |
+| Hey Jarvis, what can you see / is anyone there | what its camera sees now |
+| Hey Jarvis, learn my face, I'm Sarah (or casually: can you remember me, I'm Sarah) | the ring breathes white: look at it until it stops (a minute at most), and it knows Sarah from then on |
 | (someone it knows walks in) | I can see you, Umer (or Good evening, Umer): it waits a moment for the face, and looks for faces every 10 s even when it sees no person |
-| Jarvis, who am I / who do you know | the face it saw last, by name; everyone it knows |
-| Jarvis, forget my face / forget Sarah / forget everyone | deleted |
+| Hey Jarvis, who am I / who do you know | the face it saw last, by name; everyone it knows |
+| Hey Jarvis, forget my face / forget Sarah / forget everyone | deleted |
 
 Anyone can teach it their face, each by their own name, and it greets them by
 name as they come into view ("Good evening, Sarah.", once in ten minutes; "I can

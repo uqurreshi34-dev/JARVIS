@@ -254,7 +254,7 @@ if phone:
     woken.append(True)
     heard_texts.append("Jarvis, mute.")
     answer = hear(recording(1))
-    check(answer.status_code == 200 and spoken[-1][0].startswith("Muted, sir") and server._toy_muted
+    check(answer.status_code == 200 and spoken[-1][0] == "Muted, sir. Say Hey Jarvis, unmute, when you want me." and server._toy_muted
           and not handled, "'Jarvis, mute': muted, said so, and not passed on as a command")
     woken.append(True)
     heard_texts.append("Jarvis, what is the time")
