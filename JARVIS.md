@@ -1830,13 +1830,20 @@ as `X-Jarvis-Play` -- its HTTPS address, or "pause", "resume" or "stop" -- read 
 ends the request and acted on after it is said (`radioCommand`). The radio task (core 1) joins
 the stream itself (HTTP/1.0, `Icy-MetaData: 0`, up to three redirects, HTTPS checked against
 the core's own bundle of public roots, `setCACertBundle`), decodes the MP3 on the chip
-(libhelix, in the core), makes it mono, plays it at its own rate and RADIO_VOLUME (0.5), and
-joins again when dropped, letting the station go after RADIO_TRIES (3) failures running. One
+(libhelix, in the core), makes it mono and 16 kHz like the talk (`radioTo16k`, low-passed first),
+plays it at RADIO_VOLUME (0.5), and joins again when dropped, letting the station go after RADIO_TRIES (3) failures running. One
 speaker: `speakerLock` is held by whoever writes to it; the talk takes it for answers and the
-cloud's words (`speakerForTalk`, `radioHeld` asking the music to let go, the speaker back at
-TALK_RATE). While music plays nothing the microphone hears is recorded; BOOT pauses it, and a
-press under RADIO_RESUME_TAP_MS resumes it (held longer, it is a question); "Hey Jarvis" heard
-over it quiets it for the command, and it comes back after the answer, or after
+cloud's words (`speakerForTalk`), and the music's pieces are let go meanwhile, carrying on live
+underneath. Echo cancellation: everything the speaker plays, music and answers, is kept
+(`echoHeard`, a PSRAM ring) and, while music plays, taken back out of each microphone frame by
+Espressif's echo canceller (ESP-SR's `aec_pro_create(16, 1, 4)`, already in the core) before the
+"Hey Jarvis" ear hears it (`cancelEcho`); its reference is read ECHO_LAG (1200 samples, 75 ms)
+behind the speaker, and "echo: ... dB quieter" is logged every ten seconds to tune it by (1 November
+2026: before it, Hey Jarvis was heard over the music only with the speaker held away from the
+microphone). While music plays nothing else the microphone hears is recorded; BOOT pauses it, and
+a press under RADIO_RESUME_TAP_MS resumes it (held longer, it is a question); "Hey Jarvis" heard
+over it ducks it (RADIO_DUCKED, 0.08, still playing) for the command, which ends when the voice
+drops below a quarter of its loudest, and it is back up after the answer, or after
 RADIO_WAKE_HOLD_MS (6 s) if nothing follows. What the camera sees waits until it is paused or
 stopped. The music's memory is in PSRAM -- the decoder (made only when a station first plays) and
 its buffers, though not its task's stack, which lwIP will not open a connection from -- and so is the wake word's working memory: the fast internal

@@ -739,11 +739,12 @@ In cloud mode the toy also knows, with the PC off:
 | Hey Jarvis, forget my face / forget Sarah / forget everyone | deleted |
 | Hey Jarvis, play some jazz / play Capital FM / play a Quran station / play something relaxing | internet radio: a station by name, else by genre (the AI picks the genre for "something relaxing") |
 | (BOOT, while music plays) | pauses it; a brief press resumes it |
-| Hey Jarvis, pause / resume / stop | the music, any time: it goes quiet as soon as it hears "Hey Jarvis" and comes back after |
+| Hey Jarvis, pause / resume / stop | the music, any time: it ducks (goes quiet, still playing) as soon as it hears "Hey Jarvis" and comes back up after |
 
 Music is internet radio (Radio Browser's free directory of stations), in cloud mode: a station
 or a genre, not a particular song. A live station cannot pick up where it paused, so resuming
-joins it again.
+joins it again. The toy takes its own music out of what it hears (echo cancellation), so
+"Hey Jarvis" works with the speaker where it is, over the music.
 
 Anyone can teach it their face, each by their own name, and it greets them by
 name as they come into view ("Good evening, Sarah.", once in ten minutes; "I can

@@ -68,6 +68,7 @@
 
 #ifdef JARVIS_TOY_CLOUD
 #include "mp3dec.h"
+#include "esp_aec.h"
 #endif
 
 // The toy's "Hey Jarvis" ear, when tools/toy_wake_model.py has made it (wake/, kept out of git).
@@ -2046,18 +2047,22 @@ static int playAnswer(HTTPClient &https, bool fond);
 // roots, on its own task. "pause", "resume" and "stop" come the same way. A live station cannot carry on
 // where it paused, so resuming joins it again.
 //
-// One speaker: whoever writes to it holds speakerLock. The talk takes it for its answers and the cloud's
-// words (radioHeld asks the radio to let go first), and while it hears "Hey Jarvis" over the music, the
-// music stops for the command and comes back after. BOOT pauses it; pressed again (briefly), it resumes;
-// held, it is a question, as ever.
+// One speaker, always at TALK_RATE: the music is made 16 kHz mono as it is decoded. Whoever writes to it
+// holds speakerLock, the music a piece at a time; while the talk holds it for an answer, the music goes on
+// being decoded and is not played, so it carries on live afterwards without joining the station again.
+// "Hey Jarvis" heard over it ducks it (RADIO_DUCKED) for the command, and it is back up after the answer.
+// The toy hears itself through its own microphone: what the speaker plays is kept (echoHeard) and taken
+// back out of what the microphone hears while music plays (cancelEcho, Espressif's echo canceller), so
+// "Hey Jarvis" is heard over it. BOOT pauses it; pressed again (briefly), it resumes; held, it is a
+// question, as ever.
 enum RadioState { RADIO_OFF, RADIO_PLAYING, RADIO_PAUSED };
 static volatile int radioState = RADIO_OFF;
-static volatile bool radioHeld = false;         // the talk has, or wants, the speaker
+static volatile bool radioDucked = false;       // quiet while a command is heard
 static volatile uint32_t radioAsked = 0;        // bumped with each new station: the stream starts again
 static char radioUrl[420] = "";
 static SemaphoreHandle_t speakerLock = nullptr;
-static uint32_t speakerRate = 0;                // what the speaker runs at now; TALK_RATE for talk
 static const float RADIO_VOLUME = 0.5f;         // of full: music is loud on a small speaker
+static const float RADIO_DUCKED = 0.08f;        // while "Hey Jarvis, ..." is being said
 static const unsigned long RADIO_STALL_MS = 10000UL;
 static const unsigned long RADIO_ANSWER_MS = 8000UL;   // for the station to start answering
 static const int RADIO_TRIES = 3;               // a station that fails this often running is let go
@@ -2067,30 +2072,34 @@ static const unsigned long RADIO_WAKE_HOLD_MS = 6000UL;   // "Hey Jarvis" with n
 extern const uint8_t radioRoots[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t radioRootsEnd[] asm("_binary_x509_crt_bundle_end");
 
-static void speakerAt(uint32_t rate) {
-  if (rate == speakerRate) {
+// ---- What the speaker played, kept for the echo canceller ----
+// The last ECHO_RING samples played (16 kHz), and how many have been, ever. The microphone hears a sample
+// some time after it is written -- the speaker's queue, then the microphone's -- so the canceller is given
+// what was written ECHO_LAG samples before; its own filter covers the rest of the way (AEC_FILTER_LENGTH).
+static const uint32_t ECHO_RING = 16384;
+static const uint32_t ECHO_LAG = 1200;          // 75 ms: no later than the echo itself can be
+static int16_t *echoRing = nullptr;
+static volatile uint32_t echoWritten = 0;
+
+static void echoHeard(const uint8_t *bytes, size_t count) {
+  if (!echoRing) {
     return;
   }
 
-  talkSpeaker.end();
-  talkSpeaker.setPins(TALK_SPEAKER_BCLK_PIN, TALK_SPEAKER_LRC_PIN, TALK_SPEAKER_DOUT_PIN);
+  uint32_t at = echoWritten;
 
-  if (!talkSpeaker.begin(I2S_MODE_STD, rate, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO)) {
-    Serial.printf("[jarvis] radio: the speaker would not run at %u Hz\n", (unsigned)rate);
+  for (size_t i = 0; i + 1 < count; i += 2) {
+    echoRing[at++ % ECHO_RING] = (int16_t)(bytes[i] | (bytes[i + 1] << 8));
   }
 
-  speakerRate = rate;
+  echoWritten = at;
 }
 
-// The talk's turn at the speaker: the music lets go of it first.
+// The talk's turn at the speaker: the music's next piece waits, and is let go.
 static void speakerForTalk() {
-  radioHeld = true;
-
   if (speakerLock) {
     xSemaphoreTake(speakerLock, portMAX_DELAY);
   }
-
-  speakerAt(TALK_RATE);
 }
 
 static void speakerDone() {
@@ -2100,7 +2109,37 @@ static void speakerDone() {
 }
 
 static bool radioPlaying() {
-  return radioState == RADIO_PLAYING && !radioHeld;
+  return radioState == RADIO_PLAYING;
+}
+
+// The music, any rate, mono, made 16 kHz: a little low-passed first when it comes faster (no harshness
+// folded down from above 8 kHz), then read off between its samples. Carries on from piece to piece.
+static int radioTo16k(const int16_t *in, int count, int rate, int16_t *out) {
+  static float at = 0.0f;       // where the next sample is read, from this piece's first sample
+  static float before = 0.0f;   // the last sample of the piece before
+  static float smooth = 0.0f;
+  float step = rate / (float)TALK_RATE;
+  float keep = rate > TALK_RATE * 1.5f ? 0.55f : 1.0f;
+  int made = 0;
+
+  for (;;) {
+    int whole = (int)floorf(at);
+
+    if (whole + 1 >= count) {
+      break;
+    }
+
+    float a = whole < 0 ? before : in[whole];
+    float b = in[whole + 1];
+    float frac = at - whole;
+    smooth += keep * ((a + (b - a) * frac) - smooth);
+    out[made++] = (int16_t)smooth;
+    at += step;
+  }
+
+  at -= count;
+  before = in[count - 1];
+  return made;
 }
 
 // What the cloud said to do with the music (X-Jarvis-Play): a station's address, "pause", "resume" or "stop".
@@ -2195,10 +2234,10 @@ static bool radioConnect(NetworkClientSecure &client, String url) {
   return false;
 }
 
-// Plays the station until it is paused, stopped, changed, held for the talk, or stops sending: true if
-// any music was played (the station works).
+// Plays the station until it is paused, stopped, changed, or stops sending: true if any music was played
+// (the station works).
 // (The decoder as void *: the sketch's own prototypes are made before any #include is looked at.)
-static bool radioStream(void *decoder, uint8_t *in, size_t inSize, int16_t *pcm) {
+static bool radioStream(void *decoder, uint8_t *in, size_t inSize, int16_t *pcm, int16_t *out) {
   uint32_t asked = radioAsked;
   NetworkClientSecure client;
 
@@ -2211,7 +2250,7 @@ static bool radioStream(void *decoder, uint8_t *in, size_t inSize, int16_t *pcm)
   bool played = false;
   unsigned long heard = millis();
 
-  while (radioState == RADIO_PLAYING && !radioHeld && asked == radioAsked && WiFi.status() == WL_CONNECTED) {
+  while (radioState == RADIO_PLAYING && asked == radioAsked && WiFi.status() == WL_CONNECTED) {
     int ready = client.available();
 
     if (ready > 0 && have < inSize) {
@@ -2280,15 +2319,26 @@ static bool radioStream(void *decoder, uint8_t *in, size_t inSize, int16_t *pcm)
       continue;
     }
 
-    speakerAt(info.samprate);
     int samples = info.outputSamps / (info.nChans > 1 ? 2 : 1);
 
     for (int i = 0; i < samples; i++) {
-      float sample = info.nChans > 1 ? (pcm[2 * i] + pcm[2 * i + 1]) * 0.5f : pcm[i];
-      pcm[i] = (int16_t)(sample * RADIO_VOLUME);
+      pcm[i] = info.nChans > 1 ? (int16_t)((pcm[2 * i] + pcm[2 * i + 1]) / 2) : pcm[i];
     }
 
-    talkSpeaker.write((uint8_t *)pcm, samples * 2);
+    int made = radioTo16k(pcm, samples, info.samprate, out);
+    float volume = radioDucked ? RADIO_DUCKED : RADIO_VOLUME;
+
+    for (int i = 0; i < made; i++) {
+      out[i] = (int16_t)(out[i] * volume);
+    }
+
+    // The talk is speaking: this piece is let go, and the music goes on, live, underneath.
+    if (xSemaphoreTake(speakerLock, 0) == pdTRUE) {
+      talkSpeaker.write((uint8_t *)out, made * 2);
+      echoHeard((uint8_t *)out, made * 2);
+      xSemaphoreGive(speakerLock);
+    }
+
     played = true;
   }
 
@@ -2305,11 +2355,12 @@ void radioTask(void *) {
   static const size_t IN_SIZE = 8192;
   uint8_t *in = nullptr;
   int16_t *pcm = nullptr;
+  int16_t *out = nullptr;   // a piece made 16 kHz: twice as long, at most, as one from an 8 kHz station
   int failures = 0;
   uint32_t failing = 0;
 
   for (;;) {
-    if (radioState != RADIO_PLAYING || radioHeld || !radioUrl[0] || WiFi.status() != WL_CONNECTED) {
+    if (radioState != RADIO_PLAYING || !radioUrl[0] || WiFi.status() != WL_CONNECTED) {
       delay(100);
       continue;
     }
@@ -2320,8 +2371,9 @@ void radioTask(void *) {
       heap_caps_malloc_extmem_enable(CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL);
       in = (uint8_t *)heap_caps_malloc(IN_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
       pcm = (int16_t *)heap_caps_malloc(MAX_NSAMP * MAX_NGRAN * MAX_NCHAN * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      out = (int16_t *)heap_caps_malloc(MAX_NSAMP * MAX_NGRAN * 2 * 2 + 64, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
-      if (!decoder || !in || !pcm) {
+      if (!decoder || !in || !pcm || !out) {
         Serial.println("[jarvis] radio: no room for the music decoder; the toy cannot play music");
         radioState = RADIO_OFF;
         continue;
@@ -2336,12 +2388,9 @@ void radioTask(void *) {
       failures = 0;
     }
 
-    xSemaphoreTake(speakerLock, portMAX_DELAY);
-    bool played = radioStream((void *)decoder, in, IN_SIZE, pcm);
-    speakerAt(TALK_RATE);
-    xSemaphoreGive(speakerLock);
+    bool played = radioStream((void *)decoder, in, IN_SIZE, pcm, out);
 
-    if (radioState == RADIO_PLAYING && !radioHeld && failing == radioAsked) {
+    if (radioState == RADIO_PLAYING && failing == radioAsked) {
       failures = played ? 0 : failures + 1;
 
       if (failures >= RADIO_TRIES) {
@@ -2353,10 +2402,124 @@ void radioTask(void *) {
     }
   }
 }
+
+// ---- Taking the toy's own sound back out of what it hears ----
+// While music plays: the microphone's 20 ms frames through Espressif's echo canceller (aec_pro, its 16 ms
+// pieces, so a piece's wait between them), beside what the speaker played then; every ten seconds, how
+// much quieter it made what was heard, to tune ECHO_LAG by. Off, and started afresh, when the music is.
+static const int AEC_PIECE = 256;   // 16 ms
+static void *echoCanceller = nullptr;
+static int16_t *aecIn = nullptr;    // AEC_PIECE + TALK_FRAME
+static int16_t *aecOut = nullptr;   // 2 * AEC_PIECE + TALK_FRAME
+static int aecInHave = 0;
+static int aecOutHave = 0;
+static bool aecOn = false;
+static uint32_t echoRead = 0;
+static double aecHeardPower = 0.0;
+static double aecKeptPower = 0.0;
+static unsigned long aecSaidAt = 0;
+
+static bool startEchoCanceller() {
+  echoRing = (int16_t *)heap_caps_calloc(ECHO_RING, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  aecIn = (int16_t *)heap_caps_malloc((AEC_PIECE + TALK_FRAME) * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  aecOut = (int16_t *)heap_caps_malloc((2 * AEC_PIECE + TALK_FRAME) * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  echoCanceller = (echoRing && aecIn && aecOut) ? aec_pro_create(16, 1, 4) : nullptr;   // aggressive, in PSRAM
+
+  if (!echoCanceller) {
+    Serial.println("[jarvis] echo: the canceller did not start; Hey Jarvis is harder to hear over music");
+    return false;
+  }
+
+  Serial.printf("[jarvis] echo: canceller ready (%u bytes of internal memory free)\n",
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+  return true;
+}
+
+// What the speaker played for the [count] samples the microphone has just given, or quiet if it played nothing.
+static void echoTake(int16_t *ref, int count) {
+  uint32_t written = echoWritten;
+  uint32_t ahead = written - echoRead;
+
+  if (ahead > ECHO_LAG + ECHO_RING / 2) {   // fallen far behind (the music started, or stalled): catch up
+    echoRead = written - ECHO_LAG;
+    ahead = ECHO_LAG;
+  }
+
+  if (ahead < ECHO_LAG + count) {
+    memset(ref, 0, count * 2);
+    return;
+  }
+
+  for (int i = 0; i < count; i++) {
+    ref[i] = echoRing[(echoRead + i) % ECHO_RING];
+  }
+
+  echoRead += count;
+}
+
+// [frame] with the toy's own sound taken out, while music plays; its new level (as readFrame's), or -1 if
+// it was left as it was.
+static float cancelEcho(int16_t *frame) {
+  if (!echoCanceller) {
+    return -1.0f;
+  }
+
+  if (radioState != RADIO_PLAYING) {
+    aecOn = false;
+    return -1.0f;
+  }
+
+  if (!aecOn) {
+    aecOn = true;
+    aecInHave = 0;
+    aecOutHave = AEC_PIECE;   // a piece of quiet first: the wait between its pieces and ours
+    memset(aecOut, 0, AEC_PIECE * 2);
+    echoRead = echoWritten - ECHO_LAG;
+  }
+
+  memcpy(aecIn + aecInHave, frame, TALK_FRAME * 2);
+  aecInHave += TALK_FRAME;
+  int16_t ref[AEC_PIECE];
+
+  while (aecInHave >= AEC_PIECE) {
+    echoTake(ref, AEC_PIECE);
+    aec_process(echoCanceller, aecIn, ref, aecOut + aecOutHave);
+
+    for (int i = 0; i < AEC_PIECE; i++) {
+      aecHeardPower += (double)aecIn[i] * aecIn[i];
+      aecKeptPower += (double)aecOut[aecOutHave + i] * aecOut[aecOutHave + i];
+    }
+
+    aecOutHave += AEC_PIECE;
+    aecInHave -= AEC_PIECE;
+    memmove(aecIn, aecIn + AEC_PIECE, aecInHave * 2);
+  }
+
+  memcpy(frame, aecOut, TALK_FRAME * 2);
+  aecOutHave -= TALK_FRAME;
+  memmove(aecOut, aecOut + TALK_FRAME, aecOutHave * 2);
+
+  if (millis() - aecSaidAt >= 10000UL && aecKeptPower > 0.0) {
+    aecSaidAt = millis();
+    Serial.printf("[jarvis] echo: what was heard over the music made %.1f dB quieter\n",
+                  10.0 * log10(aecHeardPower / aecKeptPower));
+    aecHeardPower = aecKeptPower = 0.0;
+  }
+
+  float total = 0.0f;
+
+  for (int i = 0; i < TALK_FRAME; i++) {
+    total += fabsf((float)frame[i]);
+  }
+
+  return total / TALK_FRAME;
+}
 #else
 static void speakerForTalk() {}
 static void speakerDone() {}
 static bool radioPlaying() { return false; }
+static void echoHeard(const uint8_t *, size_t) {}
+static float cancelEcho(int16_t *) { return -1.0f; }
 #endif
 
 
@@ -2530,6 +2693,7 @@ static int playAnswer(HTTPClient &https, bool fond) {
     toyVoice = level > 1.0f ? 1.0f : level;
     toyMood = fond ? TOY_SPEAKING_FOND : TOY_SPEAKING;
     taken += talkSpeaker.write(chunk, have);
+    echoHeard(chunk, have);
     played += have;
   }
 
@@ -2581,14 +2745,16 @@ void talkTask(void *) {
 
   for (;;) {
     float level = readFrame(frame);
+    float cleaned = cancelEcho(frame);   // while music plays: the toy's own sound taken out first
+    level = cleaned >= 0.0f ? cleaned : level;
     listenForWake(frame);
     bool button = digitalRead(TALK_BUTTON_PIN) == LOW;
     float trigger = quietLevel * TALK_START_TIMES;
 
 #ifdef JARVIS_TOY_CLOUD
-    // Music playing: BOOT pauses it; "Hey Jarvis" stops it for the command that follows; anything else
+    // Music playing: BOOT pauses it; "Hey Jarvis" ducks it for the command that follows; anything else
     // the microphone hears is the music, never a recording.
-    if (radioPlaying()) {
+    if (radioPlaying() && !radioDucked) {
       if (button) {
         radioState = RADIO_PAUSED;
         Serial.println("[jarvis] radio: paused (BOOT)");
@@ -2607,18 +2773,18 @@ void talkTask(void *) {
         continue;
       }
 
-      radioHeld = true;
+      radioDucked = true;
       wakeHoldAt = millis();
       loudRun = 0;
       prerollCount = 0;
-      Serial.println("[jarvis] radio: quiet for Hey Jarvis");
+      Serial.println("[jarvis] radio: ducked for Hey Jarvis");
       continue;
     }
 
-    // "Hey Jarvis" and then nothing: the music comes back.
+    // "Hey Jarvis" and then nothing: the music comes back up.
     if (wakeHoldAt && millis() - wakeHoldAt > RADIO_WAKE_HOLD_MS && !button && loudRun == 0) {
       wakeHoldAt = 0;
-      radioHeld = false;
+      radioDucked = false;
     }
 
     // Paused: BOOT pressed briefly resumes it; held, it is a question as ever.
@@ -2673,7 +2839,6 @@ void talkTask(void *) {
         speakerForTalk();
         sayWhatWasSeen();
         speakerDone();
-        radioHeld = false;
         loudRun = 0;
         prerollCount = 0;
       }
@@ -2706,6 +2871,8 @@ void talkTask(void *) {
 
     while (got + sizeof(frame) <= most) {
       level = readFrame(frame);
+      cleaned = cancelEcho(frame);
+      level = cleaned >= 0.0f ? cleaned : level;
       listenForWake(frame);
       memcpy(talkBuffer + WAV_HEADER + got, frame, sizeof(frame));
       got += sizeof(frame);
@@ -2719,7 +2886,13 @@ void talkTask(void *) {
           break;
         }
       } else {
-        quietRun = level < quietLevel * TALK_END_TIMES ? quietRun + 1 : 0;
+        // Over ducked music the room is never as quiet as it was: the end is also where it falls well
+        // below the loudest of what was said.
+        float endBelow = quietLevel * TALK_END_TIMES;
+#ifdef JARVIS_TOY_CLOUD
+        endBelow = radioState == RADIO_PLAYING && loudest * 0.25f > endBelow ? loudest * 0.25f : endBelow;
+#endif
+        quietRun = level < endBelow ? quietRun + 1 : 0;
 
         if (quietRun >= TALK_END_FRAMES) {
           break;
@@ -2747,7 +2920,7 @@ void talkTask(void *) {
       toyMood = TOY_IDLE;
 #ifdef JARVIS_TOY_CLOUD
       wakeHoldAt = 0;
-      radioHeld = false;
+      radioDucked = false;
 #endif
       continue;
     }
@@ -2763,7 +2936,7 @@ void talkTask(void *) {
     speakerDone();
 #ifdef JARVIS_TOY_CLOUD
     wakeHoldAt = 0;
-    radioHeld = false;   // the music, if any, carries on (or does what it was told)
+    radioDucked = false;   // the music, if any, back up (or doing what it was told)
 #endif
     toyMood = TOY_IDLE;
     followUntil = answered > 0 ? asked + TOY_FOLLOW_MS : 0;
@@ -3093,7 +3266,7 @@ void startTalk() {
   startWake();
 #ifdef JARVIS_TOY_CLOUD
   speakerLock = xSemaphoreCreateMutex();
-  speakerRate = TALK_RATE;
+  startEchoCanceller();
 
   // Its stack in internal memory: the network (lwIP) will not open a connection from a task whose stack
   // is in PSRAM -- tried, it stopped the board ("lwip_hook_tcp_isn ... esp_ptr_external_ram", 1 November 2026).
