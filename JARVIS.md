@@ -1830,15 +1830,18 @@ as `X-Jarvis-Play` -- its HTTPS address, or "pause", "resume" or "stop" -- read 
 ends the request and acted on after it is said (`radioCommand`). The radio task (core 1) joins
 the stream itself (HTTP/1.0, `Icy-MetaData: 0`, up to three redirects, HTTPS checked against
 the core's own bundle of public roots, `setCACertBundle`), decodes the MP3 on the chip
-(libhelix, in the core), makes it mono and 16 kHz like the talk (`radioTo16k`, low-passed first),
+(libhelix, in the core), makes it mono and 16 kHz like the talk (`radioTo16k`, low-passed first by two Butterworth stages at 7 kHz),
 plays it at RADIO_VOLUME (0.5), and joins again when dropped, letting the station go after RADIO_TRIES (3) failures running. One
 speaker: `speakerLock` is held by whoever writes to it; the talk takes it for answers and the
-cloud's words (`speakerForTalk`), and the music's pieces are let go meanwhile, carrying on live
-underneath. Echo cancellation: everything the speaker plays, music and answers, is kept
+cloud's words (`speakerForTalk`), and the music reads nothing from its station meanwhile
+(`radioWaits`), so only one secure connection is busy at a time (two at once ran internal memory out,
+"esp-aes: Failed to allocate memory"); it carries on from where it was. The radio task runs above the
+talk's priority so the speaker is never kept waiting (it crackled). Echo cancellation: everything the speaker plays, music and answers, is kept
 (`echoHeard`, a PSRAM ring) and, while music plays, taken back out of each microphone frame by
-Espressif's echo canceller (ESP-SR's `aec_pro_create(16, 1, 4)`, already in the core) before the
-"Hey Jarvis" ear hears it (`cancelEcho`); its reference is read ECHO_LAG (1200 samples, 75 ms)
-behind the speaker, and "echo: ... dB quieter" is logged every ten seconds to tune it by (1 November
+Espressif's echo canceller (ESP-SR's `aec_pro_create(16, 1, 5)`, already in the core; this core's
+library makes only modes 5 and 6, and mode 4 silently gave nothing) before the "Hey Jarvis" ear hears it
+(`cancelEcho`); its reference is read ECHO_LAG (1760 samples, 110 ms) behind the speaker, past the
+speaker's 90 ms queue, and "decoder ready" says whether the canceller is on, and "echo: ... dB quieter" is logged every ten seconds to tune it by (1 November
 2026: before it, Hey Jarvis was heard over the music only with the speaker held away from the
 microphone). While music plays nothing else the microphone hears is recorded; BOOT pauses it, and
 a press under RADIO_RESUME_TAP_MS resumes it (held longer, it is a question); "Hey Jarvis" heard

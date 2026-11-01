@@ -2058,6 +2058,7 @@ static int playAnswer(HTTPClient &https, bool fond);
 enum RadioState { RADIO_OFF, RADIO_PLAYING, RADIO_PAUSED };
 static volatile int radioState = RADIO_OFF;
 static volatile bool radioDucked = false;       // quiet while a command is heard
+static volatile bool radioWaits = false;        // the talk has the speaker (and its own secure connection)
 static volatile uint32_t radioAsked = 0;        // bumped with each new station: the stream starts again
 static char radioUrl[420] = "";
 static SemaphoreHandle_t speakerLock = nullptr;
@@ -2074,11 +2075,13 @@ extern const uint8_t radioRootsEnd[] asm("_binary_x509_crt_bundle_end");
 
 // ---- What the speaker played, kept for the echo canceller ----
 // The last ECHO_RING samples played (16 kHz), and how many have been, ever. The microphone hears a sample
-// some time after it is written -- the speaker's queue, then the microphone's -- so the canceller is given
-// what was written ECHO_LAG samples before; its own filter covers the rest of the way (AEC_FILTER_LENGTH).
+// some time after it is written -- the speaker's queue (6 x 240 samples, 90 ms), then the microphone's --
+// so the canceller is given what was written ECHO_LAG samples before, never later than the echo itself;
+// its own filter covers the rest of the way. At 75 ms it came after the echo, which no canceller can use.
 static const uint32_t ECHO_RING = 16384;
-static const uint32_t ECHO_LAG = 1200;          // 75 ms: no later than the echo itself can be
+static const uint32_t ECHO_LAG = 1760;          // 110 ms: the speaker's queue and a microphone frame
 static int16_t *echoRing = nullptr;
+static void *echoCanceller = nullptr;   // Espressif's echo canceller, once started
 static volatile uint32_t echoWritten = 0;
 
 static void echoHeard(const uint8_t *bytes, size_t count) {
@@ -2095,8 +2098,13 @@ static void echoHeard(const uint8_t *bytes, size_t count) {
   echoWritten = at;
 }
 
-// The talk's turn at the speaker: the music's next piece waits, and is let go.
+// The talk's turn at the speaker: the music's next piece waits, and is let go. The music stops reading its
+// station meanwhile, so only one secure connection is busy at a time: two at once ran internal memory out
+// ("esp-aes: Failed to allocate memory" in the station's connection, 1 November 2026). The station keeps
+// what it sends meanwhile, and the music carries on from there.
 static void speakerForTalk() {
+  radioWaits = true;
+
   if (speakerLock) {
     xSemaphoreTake(speakerLock, portMAX_DELAY);
   }
@@ -2106,20 +2114,59 @@ static void speakerDone() {
   if (speakerLock) {
     xSemaphoreGive(speakerLock);
   }
+
+  radioWaits = false;
 }
 
 static bool radioPlaying() {
   return radioState == RADIO_PLAYING;
 }
 
-// The music, any rate, mono, made 16 kHz: a little low-passed first when it comes faster (no harshness
-// folded down from above 8 kHz), then read off between its samples. Carries on from piece to piece.
-static int radioTo16k(const int16_t *in, int count, int rate, int16_t *out) {
+// The music, any rate, mono, made 16 kHz: low-passed first when it comes faster (two Butterworth stages at
+// 7 kHz, so nothing from above 8 kHz folds down as grit -- 1 November 2026, the one-pole filter before this
+// let cymbals through as crackle), then read off between its samples. Carries on from piece to piece.
+static int radioTo16k(int16_t *in, int count, int rate, int16_t *out) {
   static float at = 0.0f;       // where the next sample is read, from this piece's first sample
   static float before = 0.0f;   // the last sample of the piece before
-  static float smooth = 0.0f;
+  static int filtered = 0;      // the rate the filter is made for
+  static float b0, b1, b2, a1, a2;
+  static float x1[2], x2[2], y1[2], y2[2];
+  bool filter = rate > TALK_RATE * 1.05f;
+
+  if (filter && filtered != rate) {
+    filtered = rate;
+    float w = 2.0f * (float)M_PI * 7000.0f / rate;
+    float alpha = sinf(w) / (2.0f * 0.7071f);
+    float norm = 1.0f + alpha;
+    b0 = (1.0f - cosf(w)) / 2.0f / norm;
+    b1 = (1.0f - cosf(w)) / norm;
+    b2 = b0;
+    a1 = -2.0f * cosf(w) / norm;
+    a2 = (1.0f - alpha) / norm;
+    memset(x1, 0, sizeof(x1));
+    memset(x2, 0, sizeof(x2));
+    memset(y1, 0, sizeof(y1));
+    memset(y2, 0, sizeof(y2));
+  }
+
+  if (filter) {
+    for (int i = 0; i < count; i++) {
+      float v = in[i];
+
+      for (int k = 0; k < 2; k++) {
+        float y = b0 * v + b1 * x1[k] + b2 * x2[k] - a1 * y1[k] - a2 * y2[k];
+        x2[k] = x1[k];
+        x1[k] = v;
+        y2[k] = y1[k];
+        y1[k] = y;
+        v = y;
+      }
+
+      in[i] = (int16_t)(v > 32767.0f ? 32767 : (v < -32768.0f ? -32768 : v));
+    }
+  }
+
   float step = rate / (float)TALK_RATE;
-  float keep = rate > TALK_RATE * 1.5f ? 0.55f : 1.0f;
   int made = 0;
 
   for (;;) {
@@ -2131,9 +2178,7 @@ static int radioTo16k(const int16_t *in, int count, int rate, int16_t *out) {
 
     float a = whole < 0 ? before : in[whole];
     float b = in[whole + 1];
-    float frac = at - whole;
-    smooth += keep * ((a + (b - a) * frac) - smooth);
-    out[made++] = (int16_t)smooth;
+    out[made++] = (int16_t)(a + (b - a) * (at - whole));
     at += step;
   }
 
@@ -2251,6 +2296,12 @@ static bool radioStream(void *decoder, uint8_t *in, size_t inSize, int16_t *pcm,
   unsigned long heard = millis();
 
   while (radioState == RADIO_PLAYING && asked == radioAsked && WiFi.status() == WL_CONNECTED) {
+    if (radioWaits) {   // the talk is asking the cloud: nothing read until it is done
+      delay(20);
+      heard = millis();
+      continue;
+    }
+
     int ready = client.available();
 
     if (ready > 0 && have < inSize) {
@@ -2379,8 +2430,8 @@ void radioTask(void *) {
         continue;
       }
 
-      Serial.printf("[jarvis] radio: decoder ready (%u bytes of internal memory free)\n",
-                    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+      Serial.printf("[jarvis] radio: decoder ready (%u bytes of internal memory free; the echo canceller %s)\n",
+                    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), echoCanceller ? "on" : "OFF");
     }
 
     if (failing != radioAsked) {
@@ -2408,7 +2459,6 @@ void radioTask(void *) {
 // pieces, so a piece's wait between them), beside what the speaker played then; every ten seconds, how
 // much quieter it made what was heard, to tune ECHO_LAG by. Off, and started afresh, when the music is.
 static const int AEC_PIECE = 256;   // 16 ms
-static void *echoCanceller = nullptr;
 static int16_t *aecIn = nullptr;    // AEC_PIECE + TALK_FRAME
 static int16_t *aecOut = nullptr;   // 2 * AEC_PIECE + TALK_FRAME
 static int aecInHave = 0;
@@ -2423,14 +2473,18 @@ static bool startEchoCanceller() {
   echoRing = (int16_t *)heap_caps_calloc(ECHO_RING, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   aecIn = (int16_t *)heap_caps_malloc((AEC_PIECE + TALK_FRAME) * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   aecOut = (int16_t *)heap_caps_malloc((2 * AEC_PIECE + TALK_FRAME) * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  echoCanceller = (echoRing && aecIn && aecOut) ? aec_pro_create(16, 1, 4) : nullptr;   // aggressive, in PSRAM
+  size_t freeBefore = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+  // Mode 5, aggressive and made for the ESP32-S3: this core's library makes only modes 5 and 6, whatever its
+  // header says, and gave nothing for 4 -- the canceller never ran (1 November 2026).
+  echoCanceller = (echoRing && aecIn && aecOut) ? aec_pro_create(16, 1, 5) : nullptr;
 
   if (!echoCanceller) {
     Serial.println("[jarvis] echo: the canceller did not start; Hey Jarvis is harder to hear over music");
     return false;
   }
 
-  Serial.printf("[jarvis] echo: canceller ready (%u bytes of internal memory free)\n",
+  Serial.printf("[jarvis] echo: canceller ready (it took %d bytes of internal memory; %u free)\n",
+                (int)(freeBefore - heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
   return true;
 }
@@ -3270,7 +3324,9 @@ void startTalk() {
 
   // Its stack in internal memory: the network (lwIP) will not open a connection from a task whose stack
   // is in PSRAM -- tried, it stopped the board ("lwip_hook_tcp_isn ... esp_ptr_external_ram", 1 November 2026).
-  if (!speakerLock || xTaskCreatePinnedToCore(radioTask, "radio", 12288, nullptr, 1, nullptr, 1) != pdPASS) {
+  // Above the talk's priority: the music only works when the speaker wants more, and waits for it the rest
+  // of the time; at the talk's, the wake word and the echo canceller kept it waiting and it crackled.
+  if (!speakerLock || xTaskCreatePinnedToCore(radioTask, "radio", 12288, nullptr, 2, nullptr, 1) != pdPASS) {
     Serial.println("[jarvis] radio: could not start; the toy cannot play music");
   }
 #endif

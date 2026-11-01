@@ -47,8 +47,10 @@ check("MP3FindSyncWord" in radio and "ERR_MP3_INDATA_UNDERFLOW" in radio and "ER
       and "int made = radioTo16k(pcm, samples, info.samprate, out);" in radio and "speakerAt" not in sketch
       and "RADIO_VOLUME = 0.5f" in radio,
       "MP3 decoded on the chip, stereo made mono, made 16 kHz like the talk, quieter than talk")
-check("static int radioTo16k(" in radio and "keep = rate > TALK_RATE * 1.5f" in radio,
-      "one rate on the speaker: any station's rate low-passed and read off at 16 kHz, so the echo canceller "
+check("static int radioTo16k(" in radio and "7000.0f / rate" in radio and "for (int k = 0; k < 2; k++) {" in radio
+      and "keep = rate" not in radio,
+      "one rate on the speaker: any station's rate low-passed (two Butterworth stages at 7 kHz, not the one-pole "
+      "filter that let cymbals through as crackle, 1 November 2026) and read off at 16 kHz, so the echo canceller "
       "hears what the speaker plays")
 check("if (xSemaphoreTake(speakerLock, 0) == pdTRUE) {\n      talkSpeaker.write((uint8_t *)out, made * 2);\n"
       "      echoHeard((uint8_t *)out, made * 2);\n      xSemaphoreGive(speakerLock);" in radio
@@ -71,10 +73,19 @@ check("RADIO_WAKE_HOLD_MS" in task and "radioDucked = false;   // the music, if 
       "and it is back up after the answer, when nothing follows, or when what was said stays on the toy")
 check(sketch.count("echoHeard(") >= 3 and "echoHeard(chunk, have);" in sketch,
       "what the speaker plays, music and answers, kept to be taken back out of the microphone")
-check('#include "esp_aec.h"' in sketch and "aec_pro_create(16, 1, 4)" in radio and "ECHO_LAG = 1200" in radio
+check('#include "esp_aec.h"' in sketch and "aec_pro_create(16, 1, 5)" in radio and "aec_pro_create(16, 1, 4)" not in sketch
       and "echo: canceller ready" in radio,
-      "Espressif's echo canceller (ESP-SR, already in the core), 16 ms frames, in PSRAM, its reference lagged to "
-      "meet the echo")
+      "1 November 2026, the canceller never ran: Espressif's echo canceller (ESP-SR, already in the core) in mode 5, "
+      "as this core's library makes only modes 5 and 6 and gave nothing for 4")
+check("ECHO_LAG = 1760" in radio,
+      "its reference read 110 ms behind the speaker, past the speaker's 90 ms queue: at 75 ms it came after "
+      "the echo, which no canceller can use")
+check('the echo canceller %s' in radio and 'echoCanceller ? "on" : "OFF"' in radio,
+      "whether the canceller is on said each time the music starts, not only at start-up")
+check("radioWaits = true;" in radio and "radioWaits = false;" in radio
+      and radio.index("if (radioWaits) {") < radio.index("int ready = client.available();"),
+      "1 November 2026, 'esp-aes: Failed to allocate memory' in the station's connection: the music reads "
+      "nothing while the talk asks the cloud, so one secure connection is busy at a time")
 check(task.count("cancelEcho(frame)") == 2
       and task.index("float cleaned = cancelEcho(frame);") < task.index("listenForWake(frame);"),
       "1 November 2026, Hey Jarvis heard over the music only with the speaker held away: every frame cleaned of "
@@ -88,10 +99,11 @@ check("loudRun = 0;\n        continue;" in task or "loudRun = 0;\n        contin
       "the music itself is never recorded as speech")
 check("radioState != RADIO_PLAYING" in task, "what the camera sees waits until the music is paused or stopped")
 check("RADIO_TRIES" in radio and 'radioState = RADIO_OFF;' in radio, "a station that keeps failing is let go")
-check('xTaskCreatePinnedToCore(radioTask, "radio", 12288, nullptr, 1, nullptr, 1)' in sketch
+check('xTaskCreatePinnedToCore(radioTask, "radio", 12288, nullptr, 2, nullptr, 1)' in sketch
       and "WithCaps(radioTask" not in sketch and "speakerLock = xSemaphoreCreateMutex();" in sketch,
-      "the music on its own task, started with the talk, its stack in internal memory: lwIP stops the board "
-      "if a connection is opened from a stack in PSRAM (1 November 2026)")
+      "the music on its own task, started with the talk, above the talk's priority so it is never kept waiting "
+      "(it crackled), its stack in internal memory: lwIP stops the board if a connection is opened from a "
+      "stack in PSRAM (1 November 2026)")
 check("if (!decoder) {" in radio and "heap_caps_malloc_extmem_enable(32);" in radio
       and "MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT" not in radio[radio.index("void radioTask"):],
       "1 November 2026, the next question's secure connection out of internal memory: the decoder made "
