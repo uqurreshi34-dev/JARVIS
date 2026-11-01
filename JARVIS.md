@@ -1825,6 +1825,20 @@ because ten minutes passed while they sat there. Every other question is the clo
 LIVE writes its own search words, searched thoroughly (Tavily "advanced"), then the past
 week's news if those pages do not answer it; each decision and search is in Render's log.
 The faces, and where the toy lives, are kept in the cloud's database (Neon), never here.
+Music, in cloud mode: "Hey Jarvis, play some jazz" gets a station from the cloud (Radio Browser)
+as `X-Jarvis-Play` -- its HTTPS address, or "pause", "resume" or "stop" -- read before the answer
+ends the request and acted on after it is said (`radioCommand`). The radio task (core 1) joins
+the stream itself (HTTP/1.0, `Icy-MetaData: 0`, up to three redirects, HTTPS checked against
+the core's own bundle of public roots, `setCACertBundle`), decodes the MP3 on the chip
+(libhelix, in the core), makes it mono, plays it at its own rate and RADIO_VOLUME (0.5), and
+joins again when dropped, letting the station go after RADIO_TRIES (3) failures running. One
+speaker: `speakerLock` is held by whoever writes to it; the talk takes it for answers and the
+cloud's words (`speakerForTalk`, `radioHeld` asking the music to let go, the speaker back at
+TALK_RATE). While music plays nothing the microphone hears is recorded; BOOT pauses it, and a
+press under RADIO_RESUME_TAP_MS resumes it (held longer, it is a question); "Hey Jarvis" heard
+over it quiets it for the command, and it comes back after the answer, or after
+RADIO_WAKE_HOLD_MS (6 s) if nothing follows. What the camera sees waits until it is paused or
+stopped. `tools/test_toy_radio.py`.
 
 An ESP32-CAM (AI Thinker) takes a picture only when asked. It reports
 "online" to `/sensor` like any board, named after its room ("my room cam"),

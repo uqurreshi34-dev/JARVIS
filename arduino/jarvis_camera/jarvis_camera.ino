@@ -66,6 +66,10 @@
 #include "esp32-hal-rmt.h"
 #endif
 
+#ifdef JARVIS_TOY_CLOUD
+#include "mp3dec.h"
+#endif
+
 // The toy's "Hey Jarvis" ear, when tools/toy_wake_model.py has made it (wake/, kept out of git).
 #if defined(JARVIS_BOARD_DFR1154) && __has_include("hey_jarvis_model.h") && \
     __has_include("tensorflow/lite/experimental/microfrontend/lib/frontend.h")
@@ -2035,6 +2039,308 @@ static void letGo(unsigned long ms) {
 
 static int playAnswer(HTTPClient &https, bool fond);
 
+#ifdef JARVIS_TOY_CLOUD
+// ---- Music: internet radio ("Hey Jarvis, play some jazz") ------------------------------------------------
+// The cloud finds a station (Radio Browser) and sends its address in X-Jarvis-Play; the toy plays the
+// MP3 stream itself (libhelix, in the core), over HTTPS checked against the core's own bundle of public
+// roots, on its own task. "pause", "resume" and "stop" come the same way. A live station cannot carry on
+// where it paused, so resuming joins it again.
+//
+// One speaker: whoever writes to it holds speakerLock. The talk takes it for its answers and the cloud's
+// words (radioHeld asks the radio to let go first), and while it hears "Hey Jarvis" over the music, the
+// music stops for the command and comes back after. BOOT pauses it; pressed again (briefly), it resumes;
+// held, it is a question, as ever.
+enum RadioState { RADIO_OFF, RADIO_PLAYING, RADIO_PAUSED };
+static volatile int radioState = RADIO_OFF;
+static volatile bool radioHeld = false;         // the talk has, or wants, the speaker
+static volatile uint32_t radioAsked = 0;        // bumped with each new station: the stream starts again
+static char radioUrl[420] = "";
+static SemaphoreHandle_t speakerLock = nullptr;
+static uint32_t speakerRate = 0;                // what the speaker runs at now; TALK_RATE for talk
+static const float RADIO_VOLUME = 0.5f;         // of full: music is loud on a small speaker
+static const unsigned long RADIO_STALL_MS = 10000UL;
+static const int RADIO_TRIES = 3;               // a station that fails this often running is let go
+static const unsigned long RADIO_RESUME_TAP_MS = 700UL;
+static const unsigned long RADIO_WAKE_HOLD_MS = 6000UL;   // "Hey Jarvis" with nothing after it: music back
+
+extern const uint8_t radioRoots[] asm("_binary_x509_crt_bundle_start");
+extern const uint8_t radioRootsEnd[] asm("_binary_x509_crt_bundle_end");
+
+static void speakerAt(uint32_t rate) {
+  if (rate == speakerRate) {
+    return;
+  }
+
+  talkSpeaker.end();
+  talkSpeaker.setPins(TALK_SPEAKER_BCLK_PIN, TALK_SPEAKER_LRC_PIN, TALK_SPEAKER_DOUT_PIN);
+
+  if (!talkSpeaker.begin(I2S_MODE_STD, rate, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO)) {
+    Serial.printf("[jarvis] radio: the speaker would not run at %u Hz\n", (unsigned)rate);
+  }
+
+  speakerRate = rate;
+}
+
+// The talk's turn at the speaker: the music lets go of it first.
+static void speakerForTalk() {
+  radioHeld = true;
+
+  if (speakerLock) {
+    xSemaphoreTake(speakerLock, portMAX_DELAY);
+  }
+
+  speakerAt(TALK_RATE);
+}
+
+static void speakerDone() {
+  if (speakerLock) {
+    xSemaphoreGive(speakerLock);
+  }
+}
+
+static bool radioPlaying() {
+  return radioState == RADIO_PLAYING && !radioHeld;
+}
+
+// What the cloud said to do with the music (X-Jarvis-Play): a station's address, "pause", "resume" or "stop".
+static void radioCommand(const String &play) {
+  if (play.length() == 0) {
+    return;
+  }
+
+  if (play == "stop") {
+    radioState = RADIO_OFF;
+  } else if (play == "pause") {
+    radioState = radioState == RADIO_PLAYING ? RADIO_PAUSED : radioState;
+  } else if (play == "resume") {
+    radioState = radioState == RADIO_PAUSED && radioUrl[0] ? RADIO_PLAYING : radioState;
+  } else if (play.startsWith("https://") && play.length() < sizeof(radioUrl)) {
+    strncpy(radioUrl, play.c_str(), sizeof(radioUrl) - 1);
+    radioUrl[sizeof(radioUrl) - 1] = 0;
+    radioAsked++;
+    radioState = RADIO_PLAYING;
+  } else {
+    Serial.println("[jarvis] radio: not a station it can play");
+    return;
+  }
+
+  Serial.printf("[jarvis] radio: %s\n", radioState == RADIO_PLAYING ? radioUrl : (radioState == RADIO_PAUSED ? "paused" : "off"));
+}
+
+// Joins [url] (https://host[:port]/path), following up to three redirects, and leaves [client] at the start
+// of the stream; false if it cannot.
+static bool radioConnect(NetworkClientSecure &client, String url) {
+  for (int hop = 0; hop < 4; hop++) {
+    if (!url.startsWith("https://")) {
+      return false;
+    }
+
+    String rest = url.substring(8);
+    int slash = rest.indexOf('/');
+    String hostPort = slash < 0 ? rest : rest.substring(0, slash);
+    String path = slash < 0 ? "/" : rest.substring(slash);
+    int colon = hostPort.indexOf(':');
+    String host = colon < 0 ? hostPort : hostPort.substring(0, colon);
+    uint16_t port = colon < 0 ? 443 : (uint16_t)hostPort.substring(colon + 1).toInt();
+
+    client.stop();
+
+    if (!client.connect(host.c_str(), port)) {
+      Serial.printf("[jarvis] radio: could not reach %s\n", host.c_str());
+      return false;
+    }
+
+    // HTTP/1.0: the stream comes as it is, never chunked; no ICY metadata mixed into the music.
+    client.print(String("GET ") + path + " HTTP/1.0\r\nHost: " + host + "\r\nUser-Agent: JARVIS-toy/1.0\r\n" +
+                 "Icy-MetaData: 0\r\nAccept: */*\r\nConnection: close\r\n\r\n");
+    client.setTimeout(8);
+    String status = client.readStringUntil('\n');
+    int code = status.substring(status.indexOf(' ') + 1).toInt();
+    String moved;
+
+    for (;;) {
+      String line = client.readStringUntil('\n');
+      line.trim();
+
+      if (line.length() == 0) {
+        break;
+      }
+
+      if (line.substring(0, 9).equalsIgnoreCase("location:")) {
+        moved = line.substring(9);
+        moved.trim();
+      }
+    }
+
+    if (code == 200) {
+      return true;
+    }
+
+    if ((code == 301 || code == 302 || code == 303 || code == 307 || code == 308) && moved.length()) {
+      url = moved;
+      continue;
+    }
+
+    Serial.printf("[jarvis] radio: the station answered %d\n", code);
+    return false;
+  }
+
+  return false;
+}
+
+// Plays the station until it is paused, stopped, changed, held for the talk, or stops sending: true if
+// any music was played (the station works).
+// (The decoder as void *: the sketch's own prototypes are made before any #include is looked at.)
+static bool radioStream(void *decoder, uint8_t *in, size_t inSize, int16_t *pcm) {
+  uint32_t asked = radioAsked;
+  NetworkClientSecure client;
+  client.setCACertBundle(radioRoots, radioRootsEnd - radioRoots);
+  client.setHandshakeTimeout(HANDSHAKE_SECONDS);
+
+  if (!radioConnect(client, String(radioUrl))) {
+    client.stop();
+    return false;
+  }
+
+  size_t have = 0;
+  bool played = false;
+  unsigned long heard = millis();
+
+  while (radioState == RADIO_PLAYING && !radioHeld && asked == radioAsked && WiFi.status() == WL_CONNECTED) {
+    int ready = client.available();
+
+    if (ready > 0 && have < inSize) {
+      size_t room = inSize - have;
+      int got = client.read(in + have, (size_t)ready < room ? (size_t)ready : room);
+
+      if (got > 0) {
+        have += got;
+        heard = millis();
+      }
+    } else if (ready <= 0) {
+      if (!client.connected() || millis() - heard > RADIO_STALL_MS) {
+        break;
+      }
+
+      if (have < 1024) {
+        delay(5);
+        continue;
+      }
+    }
+
+    int sync = MP3FindSyncWord(in, have);
+
+    if (sync < 0) {
+      have = 0;
+      continue;
+    }
+
+    if (sync > 0) {
+      memmove(in, in + sync, have - sync);
+      have -= sync;
+    }
+
+    unsigned char *at = in;
+    int left = have;
+    int error = MP3Decode((HMP3Decoder)decoder, &at, &left, pcm, 0);
+
+    if (error == ERR_MP3_INDATA_UNDERFLOW) {   // the frame is not all here yet
+      if (have == inSize) {                     // a full buffer that still will not decode: start afresh
+        have = 0;
+      } else if (client.available() <= 0) {
+        delay(5);
+      }
+
+      continue;
+    }
+
+    if (error == ERR_MP3_MAINDATA_UNDERFLOW) {  // the frame needs the ones before it: used up, nothing to play
+      memmove(in, at, left);
+      have = left;
+      continue;
+    }
+
+    if (error != ERR_MP3_NONE) {
+      memmove(in, in + 1, have - 1);   // not a real frame: look past it
+      have--;
+      continue;
+    }
+
+    memmove(in, at, left);
+    have = left;
+    MP3FrameInfo info;
+    MP3GetLastFrameInfo((HMP3Decoder)decoder, &info);
+
+    if (info.samprate <= 0 || info.outputSamps <= 0) {
+      continue;
+    }
+
+    speakerAt(info.samprate);
+    int samples = info.outputSamps / (info.nChans > 1 ? 2 : 1);
+
+    for (int i = 0; i < samples; i++) {
+      float sample = info.nChans > 1 ? (pcm[2 * i] + pcm[2 * i + 1]) * 0.5f : pcm[i];
+      pcm[i] = (int16_t)(sample * RADIO_VOLUME);
+    }
+
+    talkSpeaker.write((uint8_t *)pcm, samples * 2);
+    played = true;
+  }
+
+  client.stop();
+  return played;
+}
+
+void radioTask(void *) {
+  HMP3Decoder decoder = MP3InitDecoder();
+  static const size_t IN_SIZE = 8192;
+  uint8_t *in = (uint8_t *)heap_caps_malloc(IN_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  int16_t *pcm = (int16_t *)heap_caps_malloc(MAX_NSAMP * MAX_NGRAN * MAX_NCHAN * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+
+  if (!decoder || !in || !pcm) {
+    Serial.println("[jarvis] radio: no room for the music decoder; the toy cannot play music");
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  int failures = 0;
+  uint32_t failing = 0;
+
+  for (;;) {
+    if (radioState != RADIO_PLAYING || radioHeld || !radioUrl[0] || WiFi.status() != WL_CONNECTED) {
+      delay(100);
+      continue;
+    }
+
+    if (failing != radioAsked) {
+      failing = radioAsked;
+      failures = 0;
+    }
+
+    xSemaphoreTake(speakerLock, portMAX_DELAY);
+    bool played = radioStream((void *)decoder, in, IN_SIZE, pcm);
+    speakerAt(TALK_RATE);
+    xSemaphoreGive(speakerLock);
+
+    if (radioState == RADIO_PLAYING && !radioHeld && failing == radioAsked) {
+      failures = played ? 0 : failures + 1;
+
+      if (failures >= RADIO_TRIES) {
+        Serial.println("[jarvis] radio: the station is not answering; stopped");
+        radioState = RADIO_OFF;
+      } else {
+        delay(1000UL * (failures + 1));   // dropped: join again
+      }
+    }
+  }
+}
+#else
+static void speakerForTalk() {}
+static void speakerDone() {}
+static bool radioPlaying() { return false; }
+#endif
+
+
 // Sends [pcm] bytes of recording and plays the answer as it comes: 1 if an answer was played, 0 if
 // JARVIS had nothing to say (it was not said to him), -1 if he could not be reached. With the toy's
 // cloud brain: to the cloud in cloud mode, or in PC mode while the PC does not answer (saying so,
@@ -2072,8 +2378,8 @@ static int askAndPlay(size_t pcm, bool button, bool named = false, bool toCloud 
   // "wake": "Jarvis" was heard on this chip, perhaps just before the recording began, so the name
   // may not be in what is sent: JARVIS and the cloud take it as his without looking for it again.
   https.addHeader("X-Jarvis-Toy", button ? "button" : (named ? "wake" : "sound"));
-  const char *wanted[] = {"X-Jarvis-Mood", "X-Jarvis-Switch", "X-Jarvis-Faces"};
-  https.collectHeaders(wanted, 3);
+  const char *wanted[] = {"X-Jarvis-Mood", "X-Jarvis-Switch", "X-Jarvis-Faces", "X-Jarvis-Play"};
+  https.collectHeaders(wanted, 4);
 
   unsigned long sent = millis();
   int code = https.POST(talkBuffer, WAV_HEADER + pcm);
@@ -2120,7 +2426,9 @@ static int askAndPlay(size_t pcm, bool button, bool named = false, bool toCloud 
   // facing it and the ring can breathe white while it learns.
   int facesWanted = https.header("X-Jarvis-Faces").toInt();
   bool fond = https.header("X-Jarvis-Mood") == "affection";
+  String play = https.header("X-Jarvis-Play");   // read before playAnswer ends the request
   int played = playAnswer(https, fond);
+  radioCommand(play);
 
   if (facesWanted > 0) {
     toyLearnUntil = millis() + TOY_LEARN_MS;
@@ -2250,12 +2558,67 @@ void talkTask(void *) {
   int prerollCount = 0;
   int loudRun = 0;
   unsigned long followUntil = 0;
+  unsigned long wakeHoldAt = 0;   // when "Hey Jarvis" stopped the music for a command
 
   for (;;) {
     float level = readFrame(frame);
     listenForWake(frame);
     bool button = digitalRead(TALK_BUTTON_PIN) == LOW;
     float trigger = quietLevel * TALK_START_TIMES;
+
+#ifdef JARVIS_TOY_CLOUD
+    // Music playing: BOOT pauses it; "Hey Jarvis" stops it for the command that follows; anything else
+    // the microphone hears is the music, never a recording.
+    if (radioPlaying()) {
+      if (button) {
+        radioState = RADIO_PAUSED;
+        Serial.println("[jarvis] radio: paused (BOOT)");
+
+        while (digitalRead(TALK_BUTTON_PIN) == LOW) {
+          delay(20);
+        }
+
+        loudRun = 0;
+        prerollCount = 0;
+        continue;
+      }
+
+      if (!wakeEverHeard || millis() - wakeHeardAt > 1000UL) {
+        loudRun = 0;
+        continue;
+      }
+
+      radioHeld = true;
+      wakeHoldAt = millis();
+      loudRun = 0;
+      prerollCount = 0;
+      Serial.println("[jarvis] radio: quiet for Hey Jarvis");
+      continue;
+    }
+
+    // "Hey Jarvis" and then nothing: the music comes back.
+    if (wakeHoldAt && millis() - wakeHoldAt > RADIO_WAKE_HOLD_MS && !button && loudRun == 0) {
+      wakeHoldAt = 0;
+      radioHeld = false;
+    }
+
+    // Paused: BOOT pressed briefly resumes it; held, it is a question as ever.
+    if (radioState == RADIO_PAUSED && button) {
+      unsigned long pressed = millis();
+
+      while (digitalRead(TALK_BUTTON_PIN) == LOW && millis() - pressed < RADIO_RESUME_TAP_MS) {
+        delay(10);
+      }
+
+      if (digitalRead(TALK_BUTTON_PIN) != LOW) {
+        radioState = RADIO_PLAYING;
+        Serial.println("[jarvis] radio: resumed (BOOT)");
+        loudRun = 0;
+        prerollCount = 0;
+        continue;
+      }
+    }
+#endif
 
     if (trigger < TALK_LEAST_LEVEL) {
       trigger = TALK_LEAST_LEVEL;
@@ -2287,8 +2650,11 @@ void talkTask(void *) {
       }
 
 #ifdef JARVIS_TOY_CLOUD
-      if (toyAnnounceDue && WiFi.status() == WL_CONNECTED) {
+      if (toyAnnounceDue && WiFi.status() == WL_CONNECTED && radioState != RADIO_PLAYING) {
+        speakerForTalk();
         sayWhatWasSeen();
+        speakerDone();
+        radioHeld = false;
         loudRun = 0;
         prerollCount = 0;
       }
@@ -2360,6 +2726,10 @@ void talkTask(void *) {
       Serial.printf("[jarvis] talk: %lu ms heard, no \"Hey Jarvis\": kept on the toy, nothing sent (the ear heard "
                     "it at most %d of 32767, and was at most %d%% sure)\n", heard, wakeLoudest, wakeSurest());
       toyMood = TOY_IDLE;
+#ifdef JARVIS_TOY_CLOUD
+      wakeHoldAt = 0;
+      radioHeld = false;
+#endif
       continue;
     }
 
@@ -2369,7 +2739,13 @@ void talkTask(void *) {
                   button ? " with BOOT held" : (named ? ", Hey Jarvis heard" : (following ? ", a follow-up" : "")),
                   quietLevel, loudest);
     unsigned long asked = millis();
+    speakerForTalk();
     int answered = askAndPlay(got, button, named);
+    speakerDone();
+#ifdef JARVIS_TOY_CLOUD
+    wakeHoldAt = 0;
+    radioHeld = false;   // the music, if any, carries on (or does what it was told)
+#endif
     toyMood = TOY_IDLE;
     followUntil = answered > 0 ? asked + TOY_FOLLOW_MS : 0;
 
@@ -2696,6 +3072,14 @@ void startTalk() {
 #endif
   chime();
   startWake();
+#ifdef JARVIS_TOY_CLOUD
+  speakerLock = xSemaphoreCreateMutex();
+  speakerRate = TALK_RATE;
+
+  if (!speakerLock || xTaskCreatePinnedToCore(radioTask, "radio", 12288, nullptr, 1, nullptr, 1) != pdPASS) {
+    Serial.println("[jarvis] radio: could not start; the toy cannot play music");
+  }
+#endif
 
   if (xTaskCreatePinnedToCore(talkTask, "talk", 12288, nullptr, 1, nullptr, 1) != pdPASS) {
     Serial.println("[jarvis] talk: could not start");

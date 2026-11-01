@@ -737,6 +737,13 @@ In cloud mode the toy also knows, with the PC off:
 | (someone it knows walks in) | I can see you, Umer (or Good evening, Umer): it waits a moment for the face, and looks for faces every 10 s even when it sees no person |
 | Hey Jarvis, who am I / who do you know | the face it saw last, by name; everyone it knows |
 | Hey Jarvis, forget my face / forget Sarah / forget everyone | deleted |
+| Hey Jarvis, play some jazz / play Capital FM / play a Quran station / play something relaxing | internet radio: a station by name, else by genre (the AI picks the genre for "something relaxing") |
+| (BOOT, while music plays) | pauses it; a brief press resumes it |
+| Hey Jarvis, pause / resume / stop | the music, any time: it goes quiet as soon as it hears "Hey Jarvis" and comes back after |
+
+Music is internet radio (Radio Browser's free directory of stations), in cloud mode: a station
+or a genre, not a particular song. A live station cannot pick up where it paused, so resuming
+joins it again.
 
 Anyone can teach it their face, each by their own name, and it greets them by
 name as they come into view ("Good evening, Sarah.", once in ten minutes; "I can
