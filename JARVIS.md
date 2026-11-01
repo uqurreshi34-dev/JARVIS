@@ -1841,12 +1841,16 @@ talk's priority so the speaker is never kept waiting (it crackled). Echo cancell
 Espressif's echo canceller (ESP-SR's `aec_pro_create(16, 1, 5)`, already in the core; this core's
 library makes only modes 5 and 6, and mode 4 silently gave nothing) before the "Hey Jarvis" ear hears it
 (`cancelEcho`). Its reference starts ECHO_LAG (1760 samples, 110 ms) behind the speaker; then each
-second the toy matches what it heard (its loudness every 1 ms) against the music it played, 150 ms
-either way, and when two measurements agree keeps its reference 10 ms ahead of the echo
+half second the toy matches what it heard (its loudness every 1 ms) against the music it played, 250 ms
+either way, and on a clear match (0.6), or two fair ones (0.4) that agree, keeps its reference 10 ms
+ahead of the echo
 (`lineUpEcho`, "echo: lined up again"); after every answer it finds its place afresh. The reference is
 quiet only when the music is not written yet (needing ECHO_LAG more fed it quiet with each burst, and it
 stayed at 6 dB). "decoder ready" says whether the canceller is on, and "echo: ... dB quieter" is logged
-every ten seconds, with how often it lined up (1 November
+every ten seconds, with how often it lined up, the last match and where, how often the microphone lost
+sound for being read late (`micOverflows`, the microphone's queue full) and how long each 20 ms frame
+takes to hear. No cloud ping while music plays: the music arriving shows the network works, and a second
+secure connection beside the station's ran internal memory out ("BIGNUM - Memory allocation failed") (1 November
 2026: before it, Hey Jarvis was heard over the music only with the speaker held away from the
 microphone). While music plays nothing else the microphone hears is recorded; BOOT pauses it, and
 a press under RADIO_RESUME_TAP_MS resumes it (held longer, it is a question); "Hey Jarvis" heard

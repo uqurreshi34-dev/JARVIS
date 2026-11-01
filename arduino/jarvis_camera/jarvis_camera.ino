@@ -2000,6 +2000,17 @@ static float dcOut = 0.0f;
 static const float DC_KEEP = 0.995f;
 
 // One frame of the microphone into [frame], its offset taken out; its level, the mean of the samples' size.
+// How well the talk keeps up with the microphone: sound lost because it was read too late (the microphone's
+// queue full), and the time each frame took to hear, past reading it. Logged with the echo canceller's line.
+static volatile uint32_t micOverflows = 0;
+static uint32_t talkFrames = 0;
+static uint32_t talkBusyMicros = 0;
+
+static bool IRAM_ATTR micOverflowed(i2s_chan_handle_t, i2s_event_data_t *, void *) {
+  micOverflows = micOverflows + 1;
+  return false;
+}
+
 static float readFrame(int16_t *frame) {
   size_t got = 0;
 
@@ -2475,14 +2486,15 @@ static double aecKeptPower = 0.0;
 static unsigned long aecSaidAt = 0;
 static uint32_t aecQuietPieces = 0;         // pieces with no music written yet to compare with
 
-// Lining up: every second of what the microphone heard (its loudness every 1 ms, ECHO_SLOTS of them, each
+// Lining up: every half second of what the microphone heard (its loudness every 1 ms, ECHO_SLOTS of them, each
 // with where in the speaker's music its reference was) is matched against the music itself, ECHO_SEARCH
 // samples either way. The music is then moved so the reference is ECHO_LEAD samples ahead of its echo --
-// the canceller can only take out what it was told of first -- when two measurements agree and it is
-// ECHO_MOVE_AT or more out.
+// the canceller can only take out what it was told of first -- when it is ECHO_MOVE_AT or more out and
+// the match is clear (0.6), or two fair ones (0.4) agree. A second's windows, two to agree, 150 ms either
+// way and nothing else, lined up never on the toy (1 November 2026).
 static const int ECHO_SLOT = 16;            // 1 ms
-static const int ECHO_SLOTS = 1000;         // a second
-static const int ECHO_SEARCH = 2400;        // 150 ms either way
+static const int ECHO_SLOTS = 500;          // half a second: little time for anything to drift within it
+static const int ECHO_SEARCH = 4000;        // 250 ms either way
 static const int ECHO_LEAD = 160;           // 10 ms
 static const int ECHO_MOVE_AT = 48;         // 3 ms
 static float *echoHeardLoud = nullptr;      // ECHO_SLOTS
@@ -2491,6 +2503,8 @@ static int echoSlots = 0;
 static uint32_t echoFirstTag = 0;           // the reference's place for the first slot
 static int echoLastOff = 1 << 30;           // the measurement before, to agree with
 static uint32_t echoLinedUp = 0;            // times moved
+static float echoBestMatch = -1.0f;         // the last measurement, for the log: how clearly, and where
+static int echoBestOff = 0;
 
 static bool startEchoCanceller() {
   echoRing = (int16_t *)heap_caps_calloc(ECHO_RING, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -2628,17 +2642,19 @@ static void lineUpEcho() {
   }
 
   echoSlots = 0;
+  echoBestMatch = playedLevel < 30.0f ? -1.0f : best;
+  echoBestOff = bestOff;
 
   if (best < 0.4f || playedLevel < 30.0f) {   // not clear, or the music too quiet to tell (ducked, between songs)
     echoLastOff = 1 << 30;
     return;
   }
 
-  bool agrees = abs(bestOff - echoLastOff) <= 2 * ECHO_SLOT;
+  bool agrees = abs(bestOff - echoLastOff) <= 4 * ECHO_SLOT;
   echoLastOff = bestOff;
   int move = bestOff - ECHO_LEAD;
 
-  if (!agrees || abs(move) < ECHO_MOVE_AT) {
+  if ((!agrees && best < 0.6f) || abs(move) < ECHO_MOVE_AT) {
     return;
   }
 
@@ -2720,9 +2736,18 @@ static float cancelEcho(int16_t *frame) {
 
   if (millis() - aecSaidAt >= 10000UL && aecKeptPower > 0.0) {
     aecSaidAt = millis();
-    Serial.printf("[jarvis] echo: what was heard over the music made %.1f dB quieter (lined up %u times; "
-                  "%u pieces with no music yet to compare)\n", 10.0 * log10(aecHeardPower / aecKeptPower),
-                  (unsigned)echoLinedUp, (unsigned)aecQuietPieces);
+    static uint32_t overflowsBefore = 0;
+    uint32_t overflows = micOverflows;
+    Serial.printf("[jarvis] echo: what was heard over the music made %.1f dB quieter (lined up %u times; last "
+                  "match %.2f with the music %.1f ms behind its copy; %u pieces with no music yet to compare) | "
+                  "microphone: %u frames heard, %u times sound lost for being read late, %.1f ms of each 20 to "
+                  "hear\n", 10.0 * log10(aecHeardPower / aecKeptPower), (unsigned)echoLinedUp, echoBestMatch,
+                  echoBestOff / 16.0f, (unsigned)aecQuietPieces, (unsigned)talkFrames,
+                  (unsigned)(overflows - overflowsBefore),
+                  talkFrames ? talkBusyMicros / 1000.0f / talkFrames : 0.0f);
+    overflowsBefore = overflows;
+    talkFrames = 0;
+    talkBusyMicros = 0;
     aecHeardPower = aecKeptPower = 0.0;
     aecQuietPieces = 0;
   }
@@ -2966,9 +2991,12 @@ void talkTask(void *) {
 
   for (;;) {
     float level = readFrame(frame);
+    unsigned long busyFrom = micros();
     float cleaned = cancelEcho(frame);   // while music plays: the toy's own sound taken out first
     level = cleaned >= 0.0f ? cleaned : level;
     listenForWake(frame);
+    talkBusyMicros += micros() - busyFrom;
+    talkFrames++;
     bool button = digitalRead(TALK_BUTTON_PIN) == LOW;
     float trigger = quietLevel * TALK_START_TIMES;
 
@@ -3471,6 +3499,12 @@ void startTalk() {
     return;
   }
 
+  i2s_event_callbacks_t micEvents = {};
+  micEvents.on_recv_q_ovf = micOverflowed;   // counted, to tell sound lost from sound not heard
+  i2s_channel_disable(talkMic.rxChan());
+  i2s_channel_register_event_callback(talkMic.rxChan(), &micEvents, nullptr);
+  i2s_channel_enable(talkMic.rxChan());
+
   if (!talkSpeaker.begin(I2S_MODE_STD, TALK_RATE, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO)) {
     Serial.println("[jarvis] talk: the speaker did not start");
     return;
@@ -3596,9 +3630,16 @@ void loop() {
 
 #ifdef JARVIS_TOY_CLOUD
   // While the cloud is where the toy talks, it is kept in touch with (and counts as JARVIS reached).
+  // Not while music plays: the music arriving shows the network works, and a second secure connection beside
+  // the station's ran internal memory out ("BIGNUM - Memory allocation failed", 1 November 2026).
   if (toyUsesCloud() && (lastCloudPing == 0 || now - lastCloudPing >= CLOUD_PING_MS)) {
     lastCloudPing = now;
-    cloudPing();
+
+    if (radioPlaying()) {
+      lastDelivered = now;
+    } else {
+      cloudPing();
+    }
   }
 
   // Cloud mode asks the PC nothing: pictures and live view are PC mode's.

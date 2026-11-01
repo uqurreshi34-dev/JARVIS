@@ -84,14 +84,24 @@ check("if (ahead < (uint32_t)count) {" in radio and "ahead < ECHO_LAG + count" n
       "1 November 2026, stuck at 6 dB: the reference quiet only when the music is not written yet, never "
       "whenever it was under ECHO_LAG ahead, which fed the canceller quiet each time the music came in a burst")
 line = radio[radio.index("static void lineUpEcho()"):radio.index("static float cancelEcho(")]
-check("ECHO_SLOTS = 1000" in radio and "ECHO_SEARCH = 2400" in radio and "ECHO_LEAD = 160" in radio
-      and "best < 0.4f || playedLevel < 30.0f" in line and "bool agrees = abs(bestOff - echoLastOff) <= 2 * ECHO_SLOT;" in line
+check("ECHO_SLOTS = 500" in radio and "ECHO_SEARCH = 4000" in radio and "ECHO_LEAD = 160" in radio
+      and "best < 0.4f || playedLevel < 30.0f" in line and "bool agrees = abs(bestOff - echoLastOff) <= 4 * ECHO_SLOT;" in line
+      and "(!agrees && best < 0.6f)" in line
       and "echoRead -= move;" in line and "if (echoSlots >= ECHO_SLOTS) {\n        lineUpEcho();" in radio,
-      "the toy finds the music in what it heard itself, each second (150 ms either way), and keeps its copy 10 ms "
-      "ahead of the echo when two measurements agree -- no fixed guess to lose its place")
+      "the toy finds the music in what it heard itself, each half second (250 ms either way), and keeps its copy "
+      "10 ms ahead of the echo on a clear match or two fair ones that agree (1 November 2026: a second's "
+      "windows, 150 ms either way and two to agree never lined up on the toy)")
+check("match %.2f with the music %.1f ms behind its copy" in radio and "times sound lost for being read late" in radio
+      and "ms of each 20 to" in radio and "micEvents.on_recv_q_ovf = micOverflowed;" in sketch
+      and "talkBusyMicros += micros() - busyFrom;" in sketch,
+      "the ten-second line says how clearly the music was found and where, whether the microphone lost sound for "
+      "being read late, and how long each frame takes to hear")
 check("ECHO_RING = 32768" in radio, "two seconds of the music kept: a second to measure, and the echo's way")
 check("aecAfresh = true;" in radio[radio.index("static void speakerDone()"):] and "radioState != RADIO_PLAYING || aecAfresh" in radio,
       "after each answer the canceller starts its place again: the microphone was not read while the toy spoke")
+check("if (radioPlaying()) {\n      lastDelivered = now;\n    } else {\n      cloudPing();" in sketch,
+      "1 November 2026, 'BIGNUM - Memory allocation failed': no cloud ping while music plays -- the music arriving "
+      "shows the network works, and a second secure connection ran internal memory out")
 check("lined up %u times" in radio and "pieces with no music yet to compare" in radio,
       "the ten-second line says how often it lined up, and how often it had nothing to compare")
 check('the echo canceller %s' in radio and 'echoCanceller ? "on" : "OFF"' in radio,
