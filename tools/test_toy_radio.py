@@ -57,8 +57,17 @@ check("loudRun = 0;\n        continue;" in task or "loudRun = 0;\n        contin
       "the music itself is never recorded as speech")
 check("radioState != RADIO_PLAYING" in task, "what the camera sees waits until the music is paused or stopped")
 check("RADIO_TRIES" in radio and 'radioState = RADIO_OFF;' in radio, "a station that keeps failing is let go")
-check('xTaskCreatePinnedToCore(radioTask, "radio", 12288' in sketch and "speakerLock = xSemaphoreCreateMutex();" in sketch,
-      "the music on its own task, started with the talk")
+check('xTaskCreatePinnedToCoreWithCaps(radioTask, "radio", 12288, nullptr, 1, nullptr, 1, MALLOC_CAP_SPIRAM)' in sketch
+      and "speakerLock = xSemaphoreCreateMutex();" in sketch,
+      "the music on its own task, started with the talk, its stack in PSRAM")
+check("if (!decoder) {" in radio and "heap_caps_malloc_extmem_enable(32);" in radio
+      and "MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT" not in radio[radio.index("void radioTask"):],
+      "1 November 2026, the next question's secure connection out of internal memory: the decoder made "
+      "only when a station first plays, and all of the music's memory in PSRAM")
+check("WAKE_TENSOR_ARENA, MALLOC_CAP_SPIRAM" in sketch and "WAKE_TENSOR_ARENA, MALLOC_CAP_INTERNAL" not in sketch,
+      "and the wake word's working memory in PSRAM too, keeping internal memory for the connections")
+check("radioAsked++" not in sketch and "toyFacesWanted--" not in sketch,
+      "no ++ or -- on the shared (volatile) counters: the build is free of warnings")
 
 failed = [label for ok, label in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(failed)} of {len(RESULTS)} passed")

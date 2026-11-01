@@ -1659,7 +1659,7 @@ void detectTask(void *) {
 #ifdef JARVIS_TOY_CLOUD
         lastFaceSent = millis();
         if (toyFacesWanted > 0) {
-          toyFacesWanted--;
+          toyFacesWanted = toyFacesWanted - 1;
           Serial.printf("[jarvis] face: sent to learn, %d more wanted\n", (int)toyFacesWanted);
         }
 #endif
@@ -1825,10 +1825,10 @@ static bool startWake() {
     return false;
   }
 
-  // Its working memory in the fast internal memory if there is room, else in PSRAM.
-  uint8_t *arena = (uint8_t *)heap_caps_aligned_alloc(16, WAKE_TENSOR_ARENA, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-  arena = arena ? arena : (uint8_t *)heap_caps_aligned_alloc(16, WAKE_TENSOR_ARENA, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  uint8_t *variables = (uint8_t *)heap_caps_aligned_alloc(16, WAKE_VARIABLE_ARENA, MALLOC_CAP_8BIT);
+  // Its working memory in PSRAM: the fast internal memory is kept for the secure connections, which ran
+  // short of it once the music was added (1 November 2026). A small model, run every 30 ms: PSRAM is fast enough.
+  uint8_t *arena = (uint8_t *)heap_caps_aligned_alloc(16, WAKE_TENSOR_ARENA, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  uint8_t *variables = (uint8_t *)heap_caps_aligned_alloc(16, WAKE_VARIABLE_ARENA, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
   if (!arena || !variables) {
     Serial.println("[jarvis] wake: no room for the ear: every recording goes to be checked for Jarvis");
@@ -2117,7 +2117,7 @@ static void radioCommand(const String &play) {
   } else if (play.startsWith("https://") && play.length() < sizeof(radioUrl)) {
     strncpy(radioUrl, play.c_str(), sizeof(radioUrl) - 1);
     radioUrl[sizeof(radioUrl) - 1] = 0;
-    radioAsked++;
+    radioAsked = radioAsked + 1;
     radioState = RADIO_PLAYING;
   } else {
     Serial.println("[jarvis] radio: not a station it can play");
@@ -2291,18 +2291,15 @@ static bool radioStream(void *decoder, uint8_t *in, size_t inSize, int16_t *pcm)
   return played;
 }
 
+// Everything the music needs lives in PSRAM -- its task's stack, the decoder, its buffers -- and the decoder
+// is made only when a station is first played: the board's fast internal memory is what every secure
+// connection needs, and with the music's own there first, the next question's connection failed
+// ("esp-aes: Failed to allocate memory", 1 November 2026).
 void radioTask(void *) {
-  HMP3Decoder decoder = MP3InitDecoder();
+  HMP3Decoder decoder = nullptr;
   static const size_t IN_SIZE = 8192;
-  uint8_t *in = (uint8_t *)heap_caps_malloc(IN_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  int16_t *pcm = (int16_t *)heap_caps_malloc(MAX_NSAMP * MAX_NGRAN * MAX_NCHAN * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-
-  if (!decoder || !in || !pcm) {
-    Serial.println("[jarvis] radio: no room for the music decoder; the toy cannot play music");
-    vTaskDelete(nullptr);
-    return;
-  }
-
+  uint8_t *in = nullptr;
+  int16_t *pcm = nullptr;
   int failures = 0;
   uint32_t failing = 0;
 
@@ -2310,6 +2307,23 @@ void radioTask(void *) {
     if (radioState != RADIO_PLAYING || radioHeld || !radioUrl[0] || WiFi.status() != WL_CONNECTED) {
       delay(100);
       continue;
+    }
+
+    if (!decoder) {
+      heap_caps_malloc_extmem_enable(32);   // the decoder's own pieces to PSRAM too, then as before
+      decoder = MP3InitDecoder();
+      heap_caps_malloc_extmem_enable(CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL);
+      in = (uint8_t *)heap_caps_malloc(IN_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      pcm = (int16_t *)heap_caps_malloc(MAX_NSAMP * MAX_NGRAN * MAX_NCHAN * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+      if (!decoder || !in || !pcm) {
+        Serial.println("[jarvis] radio: no room for the music decoder; the toy cannot play music");
+        radioState = RADIO_OFF;
+        continue;
+      }
+
+      Serial.printf("[jarvis] radio: decoder ready (%u bytes of internal memory free)\n",
+                    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     }
 
     if (failing != radioAsked) {
@@ -3076,7 +3090,8 @@ void startTalk() {
   speakerLock = xSemaphoreCreateMutex();
   speakerRate = TALK_RATE;
 
-  if (!speakerLock || xTaskCreatePinnedToCore(radioTask, "radio", 12288, nullptr, 1, nullptr, 1) != pdPASS) {
+  if (!speakerLock ||
+      xTaskCreatePinnedToCoreWithCaps(radioTask, "radio", 12288, nullptr, 1, nullptr, 1, MALLOC_CAP_SPIRAM) != pdPASS) {
     Serial.println("[jarvis] radio: could not start; the toy cannot play music");
   }
 #endif

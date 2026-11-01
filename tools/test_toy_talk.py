@@ -425,7 +425,7 @@ check(loop.index("if (toyCloudMode) {") < loop.index("reportOnline()") and "pcRe
 check('"X-Jarvis-Faces"' in ask and "toyFacesWanted = facesWanted > 10 ? 10 : facesWanted;" in ask,
       "'learn my face': the cloud asks for faces, at most ten")
 faces_part = detect[detect.index("#ifdef JARVIS_FACES"):]
-check("if (toyFacesWanted > 0) {" in faces_part and "toyFacesWanted--;" in faces_part
+check("if (toyFacesWanted > 0) {" in faces_part and "toyFacesWanted = toyFacesWanted - 1;" in faces_part
       and faces_part.index("faceSent = false;") < faces_part.index("sendFace(face);"),
       "and the face finder sends one from each look with someone in it until they are given")
 check("bool arriving = personHere && !faceSent && faceLooks < FACE_LOOKS;" in faces_part
