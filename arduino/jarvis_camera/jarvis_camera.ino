@@ -2143,7 +2143,11 @@ static bool radioConnect(NetworkClientSecure &client, String url) {
     String host = colon < 0 ? hostPort : hostPort.substring(0, colon);
     uint16_t port = colon < 0 ? 443 : (uint16_t)hostPort.substring(colon + 1).toInt();
 
+    // stop() wipes the connection's settings, the bundle of roots with them ("No CA Chain is set",
+    // 1 November 2026): set again before each connection.
     client.stop();
+    client.setCACertBundle(radioRoots, radioRootsEnd - radioRoots);
+    client.setHandshakeTimeout(HANDSHAKE_SECONDS);
 
     if (!client.connect(host.c_str(), port)) {
       Serial.printf("[jarvis] radio: could not reach %s\n", host.c_str());
@@ -2194,8 +2198,6 @@ static bool radioConnect(NetworkClientSecure &client, String url) {
 static bool radioStream(void *decoder, uint8_t *in, size_t inSize, int16_t *pcm) {
   uint32_t asked = radioAsked;
   NetworkClientSecure client;
-  client.setCACertBundle(radioRoots, radioRootsEnd - radioRoots);
-  client.setHandshakeTimeout(HANDSHAKE_SECONDS);
 
   if (!radioConnect(client, String(radioUrl))) {
     client.stop();

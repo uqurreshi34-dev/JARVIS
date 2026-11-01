@@ -31,6 +31,9 @@ check('"X-Jarvis-Play"' in ask and "collectHeaders(wanted, 4)" in ask
       "the cloud's X-Jarvis-Play read before the answer ends the request, and acted on once it has been said")
 check('play == "stop"' in radio and 'play == "pause"' in radio and 'play == "resume"' in radio
       and 'play.startsWith("https://")' in radio, "a station's address, or pause, resume and stop")
+check(radio.index("client.stop();\n    client.setCACertBundle(radioRoots, radioRootsEnd - radioRoots);")
+      < radio.index("client.connect(host.c_str(), port)"),
+      "1 November 2026, 'No CA Chain is set': the roots set again after stop(), which wipes them, before each connection")
 check("setCACertBundle(radioRoots, radioRootsEnd - radioRoots)" in radio and "setInsecure" not in radio
       and '!url.startsWith("https://")' in radio,
       "only HTTPS stations, checked against the core's own bundle of public roots, never setInsecure")
