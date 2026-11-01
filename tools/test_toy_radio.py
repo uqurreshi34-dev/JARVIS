@@ -65,9 +65,10 @@ check("if (radioPlaying() && !radioDucked) {" in task
 check("RADIO_RESUME_TAP_MS" in task and 'radioState = RADIO_PLAYING;\n        Serial.println("[jarvis] radio: resumed (BOOT)");' in task,
       "and a brief press resumes it; held, it is a question as ever")
 check("millis() - wakeHeardAt > 1000UL" in task and "radioDucked = true;\n      wakeHoldAt = millis();" in task
-      and "RADIO_DUCKED = 0.08f" in radio and "radioDucked ? RADIO_DUCKED : RADIO_VOLUME" in radio
+      and "RADIO_DUCKED = 0.03f" in radio and "radioDucked ? RADIO_DUCKED : RADIO_VOLUME" in radio
       and "radioHeld" not in sketch,
-      "Hey Jarvis over the music ducks it, still playing, for the command (as Alexa does)")
+      "Hey Jarvis over the music ducks it, still playing, for the command (as Alexa does); low enough that its "
+      "words are not taken for the command (1 November 2026, 'pause' heard as something else at 0.08)")
 check("RADIO_WAKE_HOLD_MS" in task and "radioDucked = false;   // the music, if any, back up (or doing what it was told)" in task
       and task.count("radioDucked = false;") == 3,
       "and it is back up after the answer, when nothing follows, or when what was said stays on the toy")
@@ -77,9 +78,22 @@ check('#include "esp_aec.h"' in sketch and "aec_pro_create(16, 1, 5)" in radio a
       and "echo: canceller ready" in radio,
       "1 November 2026, the canceller never ran: Espressif's echo canceller (ESP-SR, already in the core) in mode 5, "
       "as this core's library makes only modes 5 and 6 and gave nothing for 4")
-check("ECHO_LAG = 1760" in radio,
-      "its reference read 110 ms behind the speaker, past the speaker's 90 ms queue: at 75 ms it came after "
-      "the echo, which no canceller can use")
+check("ECHO_LAG = 1760" in radio and "echoRead = written - echoLag;" in radio and "echoRead = echoWritten - echoLag;" in radio,
+      "its reference starts 110 ms behind the speaker, from where the music was last found after that")
+check("if (ahead < (uint32_t)count) {" in radio and "ahead < ECHO_LAG + count" not in sketch,
+      "1 November 2026, stuck at 6 dB: the reference quiet only when the music is not written yet, never "
+      "whenever it was under ECHO_LAG ahead, which fed the canceller quiet each time the music came in a burst")
+line = radio[radio.index("static void lineUpEcho()"):radio.index("static float cancelEcho(")]
+check("ECHO_SLOTS = 1000" in radio and "ECHO_SEARCH = 2400" in radio and "ECHO_LEAD = 160" in radio
+      and "best < 0.4f || playedLevel < 30.0f" in line and "bool agrees = abs(bestOff - echoLastOff) <= 2 * ECHO_SLOT;" in line
+      and "echoRead -= move;" in line and "if (echoSlots >= ECHO_SLOTS) {\n        lineUpEcho();" in radio,
+      "the toy finds the music in what it heard itself, each second (150 ms either way), and keeps its copy 10 ms "
+      "ahead of the echo when two measurements agree -- no fixed guess to lose its place")
+check("ECHO_RING = 32768" in radio, "two seconds of the music kept: a second to measure, and the echo's way")
+check("aecAfresh = true;" in radio[radio.index("static void speakerDone()"):] and "radioState != RADIO_PLAYING || aecAfresh" in radio,
+      "after each answer the canceller starts its place again: the microphone was not read while the toy spoke")
+check("lined up %u times" in radio and "pieces with no music yet to compare" in radio,
+      "the ten-second line says how often it lined up, and how often it had nothing to compare")
 check('the echo canceller %s' in radio and 'echoCanceller ? "on" : "OFF"' in radio,
       "whether the canceller is on said each time the music starts, not only at start-up")
 check("radioWaits = true;" in radio and "radioWaits = false;" in radio

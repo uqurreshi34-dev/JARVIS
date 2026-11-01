@@ -1840,12 +1840,17 @@ talk's priority so the speaker is never kept waiting (it crackled). Echo cancell
 (`echoHeard`, a PSRAM ring) and, while music plays, taken back out of each microphone frame by
 Espressif's echo canceller (ESP-SR's `aec_pro_create(16, 1, 5)`, already in the core; this core's
 library makes only modes 5 and 6, and mode 4 silently gave nothing) before the "Hey Jarvis" ear hears it
-(`cancelEcho`); its reference is read ECHO_LAG (1760 samples, 110 ms) behind the speaker, past the
-speaker's 90 ms queue, and "decoder ready" says whether the canceller is on, and "echo: ... dB quieter" is logged every ten seconds to tune it by (1 November
+(`cancelEcho`). Its reference starts ECHO_LAG (1760 samples, 110 ms) behind the speaker; then each
+second the toy matches what it heard (its loudness every 1 ms) against the music it played, 150 ms
+either way, and when two measurements agree keeps its reference 10 ms ahead of the echo
+(`lineUpEcho`, "echo: lined up again"); after every answer it finds its place afresh. The reference is
+quiet only when the music is not written yet (needing ECHO_LAG more fed it quiet with each burst, and it
+stayed at 6 dB). "decoder ready" says whether the canceller is on, and "echo: ... dB quieter" is logged
+every ten seconds, with how often it lined up (1 November
 2026: before it, Hey Jarvis was heard over the music only with the speaker held away from the
 microphone). While music plays nothing else the microphone hears is recorded; BOOT pauses it, and
 a press under RADIO_RESUME_TAP_MS resumes it (held longer, it is a question); "Hey Jarvis" heard
-over it ducks it (RADIO_DUCKED, 0.08, still playing) for the command, which ends when the voice
+over it ducks it (RADIO_DUCKED, 0.03, still playing, low enough that its words are not taken for the command) for the command, which ends when the voice
 drops below a quarter of its loudest, and it is back up after the answer, or after
 RADIO_WAKE_HOLD_MS (6 s) if nothing follows. What the camera sees waits until it is paused or
 stopped. The music's memory is in PSRAM -- the decoder (made only when a station first plays) and

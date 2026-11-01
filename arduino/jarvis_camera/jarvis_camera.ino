@@ -2063,7 +2063,8 @@ static volatile uint32_t radioAsked = 0;        // bumped with each new station:
 static char radioUrl[420] = "";
 static SemaphoreHandle_t speakerLock = nullptr;
 static const float RADIO_VOLUME = 0.5f;         // of full: music is loud on a small speaker
-static const float RADIO_DUCKED = 0.08f;        // while "Hey Jarvis, ..." is being said
+static const float RADIO_DUCKED = 0.03f;        // while "Hey Jarvis, ..." is being said: low enough that its
+                                                // words are not taken for the command (0.08 was, 1 November 2026)
 static const unsigned long RADIO_STALL_MS = 10000UL;
 static const unsigned long RADIO_ANSWER_MS = 8000UL;   // for the station to start answering
 static const int RADIO_TRIES = 3;               // a station that fails this often running is let go
@@ -2075,13 +2076,15 @@ extern const uint8_t radioRootsEnd[] asm("_binary_x509_crt_bundle_end");
 
 // ---- What the speaker played, kept for the echo canceller ----
 // The last ECHO_RING samples played (16 kHz), and how many have been, ever. The microphone hears a sample
-// some time after it is written -- the speaker's queue (6 x 240 samples, 90 ms), then the microphone's --
-// so the canceller is given what was written ECHO_LAG samples before, never later than the echo itself;
-// its own filter covers the rest of the way. At 75 ms it came after the echo, which no canceller can use.
-static const uint32_t ECHO_RING = 16384;
-static const uint32_t ECHO_LAG = 1760;          // 110 ms: the speaker's queue and a microphone frame
+// some time after it is written -- the speaker's queue (6 x 240 samples, 90 ms), then the microphone's. The
+// canceller starts with what was written ECHO_LAG samples before, and the toy then measures where the
+// music really is in what it hears (lineUpEcho) and keeps it just ahead of the echo, as the canceller
+// needs: a fixed guess held for ten seconds and then lost its place (6 dB, 1 November 2026).
+static const uint32_t ECHO_RING = 32768;        // two seconds: a second's measuring, and the echo's way
+static const uint32_t ECHO_LAG = 1760;          // 110 ms to start with: the speaker's queue and a frame
 static int16_t *echoRing = nullptr;
 static void *echoCanceller = nullptr;   // Espressif's echo canceller, once started
+static volatile bool aecAfresh = false;  // the talk had the speaker: start the canceller's place again
 static volatile uint32_t echoWritten = 0;
 
 static void echoHeard(const uint8_t *bytes, size_t count) {
@@ -2116,6 +2119,7 @@ static void speakerDone() {
   }
 
   radioWaits = false;
+  aecAfresh = true;   // the microphone was not read while it spoke: the canceller's place found again
 }
 
 static bool radioPlaying() {
@@ -2465,18 +2469,41 @@ static int aecInHave = 0;
 static int aecOutHave = 0;
 static bool aecOn = false;
 static uint32_t echoRead = 0;
+static uint32_t echoLag = ECHO_LAG;         // where the music was last found, behind the speaker
 static double aecHeardPower = 0.0;
 static double aecKeptPower = 0.0;
 static unsigned long aecSaidAt = 0;
+static uint32_t aecQuietPieces = 0;         // pieces with no music written yet to compare with
+
+// Lining up: every second of what the microphone heard (its loudness every 1 ms, ECHO_SLOTS of them, each
+// with where in the speaker's music its reference was) is matched against the music itself, ECHO_SEARCH
+// samples either way. The music is then moved so the reference is ECHO_LEAD samples ahead of its echo --
+// the canceller can only take out what it was told of first -- when two measurements agree and it is
+// ECHO_MOVE_AT or more out.
+static const int ECHO_SLOT = 16;            // 1 ms
+static const int ECHO_SLOTS = 1000;         // a second
+static const int ECHO_SEARCH = 2400;        // 150 ms either way
+static const int ECHO_LEAD = 160;           // 10 ms
+static const int ECHO_MOVE_AT = 48;         // 3 ms
+static float *echoHeardLoud = nullptr;      // ECHO_SLOTS
+static float *echoPlayedLoud = nullptr;     // ECHO_SLOTS + 2 * ECHO_SEARCH / ECHO_SLOT + 2
+static int echoSlots = 0;
+static uint32_t echoFirstTag = 0;           // the reference's place for the first slot
+static int echoLastOff = 1 << 30;           // the measurement before, to agree with
+static uint32_t echoLinedUp = 0;            // times moved
 
 static bool startEchoCanceller() {
   echoRing = (int16_t *)heap_caps_calloc(ECHO_RING, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   aecIn = (int16_t *)heap_caps_malloc((AEC_PIECE + TALK_FRAME) * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   aecOut = (int16_t *)heap_caps_malloc((2 * AEC_PIECE + TALK_FRAME) * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  echoHeardLoud = (float *)heap_caps_malloc(ECHO_SLOTS * sizeof(float), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  echoPlayedLoud = (float *)heap_caps_malloc((ECHO_SLOTS + 2 * ECHO_SEARCH / ECHO_SLOT + 2) * sizeof(float),
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   size_t freeBefore = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
   // Mode 5, aggressive and made for the ESP32-S3: this core's library makes only modes 5 and 6, whatever its
   // header says, and gave nothing for 4 -- the canceller never ran (1 November 2026).
-  echoCanceller = (echoRing && aecIn && aecOut) ? aec_pro_create(16, 1, 5) : nullptr;
+  echoCanceller = (echoRing && aecIn && aecOut && echoHeardLoud && echoPlayedLoud) ? aec_pro_create(16, 1, 5)
+                                                                                  : nullptr;
 
   if (!echoCanceller) {
     Serial.println("[jarvis] echo: the canceller did not start; Hey Jarvis is harder to hear over music");
@@ -2489,19 +2516,24 @@ static bool startEchoCanceller() {
   return true;
 }
 
-// What the speaker played for the [count] samples the microphone has just given, or quiet if it played nothing.
-static void echoTake(int16_t *ref, int count) {
+// What the speaker played for the [count] samples the microphone has just given, or quiet if it has not been
+// written yet (the music stalled); false then. Only data not yet written is quiet: requiring ECHO_LAG more
+// than that fed the canceller quiet whenever the music came in a burst.
+static bool echoTake(int16_t *ref, int count) {
   uint32_t written = echoWritten;
   uint32_t ahead = written - echoRead;
 
-  if (ahead > ECHO_LAG + ECHO_RING / 2) {   // fallen far behind (the music started, or stalled): catch up
-    echoRead = written - ECHO_LAG;
-    ahead = ECHO_LAG;
+  if (ahead > ECHO_RING - 4096) {   // far behind (the music started, or stalled): from its last place
+    echoRead = written - echoLag;
+    ahead = echoLag;
+    echoSlots = 0;
   }
 
-  if (ahead < ECHO_LAG + count) {
+  if (ahead < (uint32_t)count) {
     memset(ref, 0, count * 2);
-    return;
+    aecQuietPieces++;
+    echoSlots = 0;
+    return false;
   }
 
   for (int i = 0; i < count; i++) {
@@ -2509,6 +2541,113 @@ static void echoTake(int16_t *ref, int count) {
   }
 
   echoRead += count;
+  return true;
+}
+
+// The loudness of [count] samples of the speaker's music from [at], as one slot.
+static float echoPlayedSlot(uint32_t at) {
+  float total = 0.0f;
+
+  for (int i = 0; i < ECHO_SLOT; i++) {
+    total += fabsf((float)echoRing[(at + i) % ECHO_RING]);
+  }
+
+  return total / ECHO_SLOT;
+}
+
+// A second of what was heard matched against the music: the reference moved to ECHO_LEAD ahead of its echo
+// when it is found clearly, twice alike, and far enough out.
+static void lineUpEcho() {
+  int reach = ECHO_SEARCH / ECHO_SLOT;
+  int count = ECHO_SLOTS + 2 * reach;
+  uint32_t base = echoFirstTag - ECHO_SEARCH;
+  uint32_t written = echoWritten;
+
+  if (written - base > ECHO_RING - ECHO_SLOT) {   // the oldest of what it would be matched with is gone
+    count = 0;
+  } else if ((int32_t)(written - base) < count * ECHO_SLOT) {   // the newest not played yet: only so far
+    count = (int)((written - base) / ECHO_SLOT);
+  }
+
+  float heardMean = 0.0f;
+
+  for (int i = 0; i < ECHO_SLOTS; i++) {
+    heardMean += echoHeardLoud[i];
+  }
+
+  heardMean /= ECHO_SLOTS;
+  float heardSpread = 0.0f;
+
+  for (int i = 0; i < ECHO_SLOTS; i++) {
+    heardSpread += (echoHeardLoud[i] - heardMean) * (echoHeardLoud[i] - heardMean);
+  }
+
+  int bestOff = 0;
+  float best = 0.0f;
+  float playedLevel = 0.0f;
+
+  if (count >= ECHO_SLOTS && heardSpread > 0.0f) {
+    for (int j = 0; j < count; j++) {
+      echoPlayedLoud[j] = echoPlayedSlot(base + j * ECHO_SLOT);
+      playedLevel += echoPlayedLoud[j];
+    }
+
+    playedLevel /= count;
+
+    // Slot i heard the music [off] samples behind its reference: the music's slot (i + reach - off / ECHO_SLOT).
+    for (int step = -reach; step <= reach; step++) {
+      int from = reach - step;
+
+      if (from + ECHO_SLOTS > count) {   // music not played yet that far ahead
+        continue;
+      }
+
+      float playedMean = 0.0f;
+
+      for (int i = 0; i < ECHO_SLOTS; i++) {
+        playedMean += echoPlayedLoud[from + i];
+      }
+
+      playedMean /= ECHO_SLOTS;
+      float together = 0.0f;
+      float playedSpread = 0.0f;
+
+      for (int i = 0; i < ECHO_SLOTS; i++) {
+        float played = echoPlayedLoud[from + i] - playedMean;
+        together += (echoHeardLoud[i] - heardMean) * played;
+        playedSpread += played * played;
+      }
+
+      float match = playedSpread > 0.0f ? together / sqrtf(heardSpread * playedSpread) : 0.0f;
+
+      if (match > best) {
+        best = match;
+        bestOff = step * ECHO_SLOT;
+      }
+    }
+  }
+
+  echoSlots = 0;
+
+  if (best < 0.4f || playedLevel < 30.0f) {   // not clear, or the music too quiet to tell (ducked, between songs)
+    echoLastOff = 1 << 30;
+    return;
+  }
+
+  bool agrees = abs(bestOff - echoLastOff) <= 2 * ECHO_SLOT;
+  echoLastOff = bestOff;
+  int move = bestOff - ECHO_LEAD;
+
+  if (!agrees || abs(move) < ECHO_MOVE_AT) {
+    return;
+  }
+
+  echoRead -= move;
+  echoLag = echoWritten - echoRead;
+  echoLastOff = 1 << 30;
+  echoLinedUp++;
+  Serial.printf("[jarvis] echo: lined up again -- its copy of the music moved %.1f ms (match %.2f), now %.1f ms "
+                "behind the speaker\n", fabsf(move) / 16.0f, best, echoLag / 16.0f);
 }
 
 // [frame] with the toy's own sound taken out, while music plays; its new level (as readFrame's), or -1 if
@@ -2518,17 +2657,22 @@ static float cancelEcho(int16_t *frame) {
     return -1.0f;
   }
 
-  if (radioState != RADIO_PLAYING) {
+  if (radioState != RADIO_PLAYING || aecAfresh) {
     aecOn = false;
-    return -1.0f;
+    aecAfresh = false;
+
+    if (radioState != RADIO_PLAYING) {
+      return -1.0f;
+    }
   }
 
-  if (!aecOn) {
+  if (!aecOn) {   // the music started, or the talk had the speaker and the microphone was not read meanwhile
     aecOn = true;
     aecInHave = 0;
     aecOutHave = AEC_PIECE;   // a piece of quiet first: the wait between its pieces and ours
     memset(aecOut, 0, AEC_PIECE * 2);
-    echoRead = echoWritten - ECHO_LAG;
+    echoRead = echoWritten - echoLag;
+    echoSlots = 0;
   }
 
   memcpy(aecIn + aecInHave, frame, TALK_FRAME * 2);
@@ -2536,7 +2680,28 @@ static float cancelEcho(int16_t *frame) {
   int16_t ref[AEC_PIECE];
 
   while (aecInHave >= AEC_PIECE) {
-    echoTake(ref, AEC_PIECE);
+    uint32_t tag = echoRead;
+
+    if (echoTake(ref, AEC_PIECE)) {
+      if (echoSlots == 0) {
+        echoFirstTag = tag;
+      }
+
+      for (int s = 0; s < AEC_PIECE && echoSlots < ECHO_SLOTS; s += ECHO_SLOT) {
+        float total = 0.0f;
+
+        for (int i = 0; i < ECHO_SLOT; i++) {
+          total += fabsf((float)aecIn[s + i]);
+        }
+
+        echoHeardLoud[echoSlots++] = total / ECHO_SLOT;
+      }
+
+      if (echoSlots >= ECHO_SLOTS) {
+        lineUpEcho();
+      }
+    }
+
     aec_process(echoCanceller, aecIn, ref, aecOut + aecOutHave);
 
     for (int i = 0; i < AEC_PIECE; i++) {
@@ -2555,9 +2720,11 @@ static float cancelEcho(int16_t *frame) {
 
   if (millis() - aecSaidAt >= 10000UL && aecKeptPower > 0.0) {
     aecSaidAt = millis();
-    Serial.printf("[jarvis] echo: what was heard over the music made %.1f dB quieter\n",
-                  10.0 * log10(aecHeardPower / aecKeptPower));
+    Serial.printf("[jarvis] echo: what was heard over the music made %.1f dB quieter (lined up %u times; "
+                  "%u pieces with no music yet to compare)\n", 10.0 * log10(aecHeardPower / aecKeptPower),
+                  (unsigned)echoLinedUp, (unsigned)aecQuietPieces);
     aecHeardPower = aecKeptPower = 0.0;
+    aecQuietPieces = 0;
   }
 
   float total = 0.0f;
