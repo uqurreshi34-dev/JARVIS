@@ -1835,8 +1835,13 @@ plays it at RADIO_VOLUME (0.5), and joins again when dropped, letting the statio
 speaker: `speakerLock` is held by whoever writes to it; the talk takes it for answers and the
 cloud's words (`speakerForTalk`), and the music reads nothing from its station meanwhile
 (`radioWaits`), so only one secure connection is busy at a time (two at once ran internal memory out,
-"esp-aes: Failed to allocate memory"); it carries on from where it was. The radio task runs above the
-talk's priority so the speaker is never kept waiting (it crackled). Echo cancellation: everything the speaker plays, music and answers, is kept
+"esp-aes: Failed to allocate memory"); it carries on from where it was. The radio task runs on core 0,
+above detection's priority so the speaker is never kept waiting (it crackled), leaving core 1 to the
+wake word and the echo canceller; camera detection, whose convolutions take half of each layer on
+core 1, rests while music plays (with it, each 20 ms of sound took 22 ms to hear and the microphone lost
+sound 50 to 90 times every ten seconds). The canceller's sound is used only while it has found the music
+in the last three seconds; otherwise what was heard goes on as it was (out of line, it took half of the
+voice with the music). Echo cancellation: everything the speaker plays, music and answers, is kept
 (`echoHeard`, a PSRAM ring) and, while music plays, taken back out of each microphone frame by
 Espressif's echo canceller (ESP-SR's `aec_pro_create(16, 1, 5)`, already in the core; this core's
 library makes only modes 5 and 6, and mode 4 silently gave nothing) before the "Hey Jarvis" ear hears it

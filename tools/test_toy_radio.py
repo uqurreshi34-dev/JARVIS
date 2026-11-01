@@ -91,7 +91,7 @@ check("ECHO_SLOTS = 500" in radio and "ECHO_SEARCH = 4000" in radio and "ECHO_LE
       "the toy finds the music in what it heard itself, each half second (250 ms either way), and keeps its copy "
       "10 ms ahead of the echo on a clear match or two fair ones that agree (1 November 2026: a second's "
       "windows, 150 ms either way and two to agree never lined up on the toy)")
-check("match %.2f with the music %.1f ms behind its copy" in radio and "times sound lost for being read late" in radio
+check("match %.2f with the music %.1f ms behind its copy" in radio and "times sound lost for " in radio and "being read late" in radio
       and "ms of each 20 to" in radio and "micEvents.on_recv_q_ovf = micOverflowed;" in sketch
       and "talkBusyMicros += micros() - busyFrom;" in sketch,
       "the ten-second line says how clearly the music was found and where, whether the microphone lost sound for "
@@ -123,11 +123,22 @@ check("loudRun = 0;\n        continue;" in task or "loudRun = 0;\n        contin
       "the music itself is never recorded as speech")
 check("radioState != RADIO_PLAYING" in task, "what the camera sees waits until the music is paused or stopped")
 check("RADIO_TRIES" in radio and 'radioState = RADIO_OFF;' in radio, "a station that keeps failing is let go")
-check('xTaskCreatePinnedToCore(radioTask, "radio", 12288, nullptr, 2, nullptr, 1)' in sketch
+check('xTaskCreatePinnedToCore(radioTask, "radio", 12288, nullptr, 2, nullptr, 0)' in sketch
       and "WithCaps(radioTask" not in sketch and "speakerLock = xSemaphoreCreateMutex();" in sketch,
-      "the music on its own task, started with the talk, above the talk's priority so it is never kept waiting "
-      "(it crackled), its stack in internal memory: lwIP stops the board if a connection is opened from a "
-      "stack in PSRAM (1 November 2026)")
+      "the music on its own task on core 0, leaving core 1 to the wake word and the echo canceller (together each "
+      "20 ms of sound took 22 ms to hear), above detection's priority so it is never kept waiting (it crackled), "
+      "its stack in internal memory: lwIP stops the board if a connection is opened from a stack in PSRAM "
+      "(1 November 2026)")
+detect = sketch[sketch.index("void detectTask(void *) {"):]
+check("#ifdef JARVIS_TOY_CLOUD\n    if (radioPlaying()) {\n      continue;\n    }\n#endif" in detect[:3000],
+      "1 November 2026, sound lost 50 to 90 times every ten seconds: camera detection (half of it on core 1) "
+      "rests while music plays, faces with it")
+check("bool trusted = echoFoundAt && millis() - echoFoundAt < 3000UL;" in radio
+      and "memcpy(frame, asHeard, sizeof(asHeard));" in radio and "echoFoundAt = millis();" in radio,
+      "the canceller's sound used only while it has found the music in the last three seconds; else what was "
+      "heard goes on as it was (out of line, it took half of the voice with the music)")
+check("(%.1f in the canceller)" in radio and "aecMicros += micros() - aecFrom;" in radio,
+      "the time the canceller itself takes, logged")
 check("if (!decoder) {" in radio and "heap_caps_malloc_extmem_enable(32);" in radio
       and "MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT" not in radio[radio.index("void radioTask"):],
       "1 November 2026, the next question's secure connection out of internal memory: the decoder made "

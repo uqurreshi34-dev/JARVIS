@@ -1449,6 +1449,10 @@ void reserveDetection() {
 #endif
 }
 
+#ifdef JARVIS_TOY_CLOUD
+static bool radioPlaying();
+#endif
+
 void detectTask(void *) {
   size_t rgb_size = DETECT_RGB_SIZE;
   uint8_t *rgb = detectRgb;
@@ -1461,6 +1465,15 @@ void detectTask(void *) {
     if (WiFi.status() != WL_CONNECTED) {
       continue;
     }
+
+    // Resting while music plays: its convolutions take half of each layer on core 1 too, where the talk hears
+    // "Hey Jarvis" through the echo canceller -- with them, each 20 ms of sound took 22 ms to hear and the
+    // microphone lost sound 50 to 90 times every ten seconds (1 November 2026). Faces wait with it.
+#ifdef JARVIS_TOY_CLOUD
+    if (radioPlaying()) {
+      continue;
+    }
+#endif
 
     if (!esp_nn_conv_s8_simd_fast_size()) {
       takeFastBuffer();
@@ -2505,6 +2518,9 @@ static int echoLastOff = 1 << 30;           // the measurement before, to agree 
 static uint32_t echoLinedUp = 0;            // times moved
 static float echoBestMatch = -1.0f;         // the last measurement, for the log: how clearly, and where
 static int echoBestOff = 0;
+static unsigned long echoFoundAt = 0;       // when the music was last found clearly in what was heard
+static uint32_t aecMicros = 0;              // time in the canceller itself, for the log
+static uint32_t aecRawFrames = 0;           // frames passed on as heard: the canceller not lined up yet
 
 static bool startEchoCanceller() {
   echoRing = (int16_t *)heap_caps_calloc(ECHO_RING, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -2650,6 +2666,8 @@ static void lineUpEcho() {
     return;
   }
 
+  echoFoundAt = millis();
+
   bool agrees = abs(bestOff - echoLastOff) <= 4 * ECHO_SLOT;
   echoLastOff = bestOff;
   int move = bestOff - ECHO_LEAD;
@@ -2691,6 +2709,16 @@ static float cancelEcho(int16_t *frame) {
     echoSlots = 0;
   }
 
+  // Not lined up with the music (just started, or lost it): what it heard passed on as it was, the canceller
+  // still learning. Out of line, it took half of everything, the voice with the music (6 dB, 1 November 2026).
+  bool trusted = echoFoundAt && millis() - echoFoundAt < 3000UL;
+  int16_t asHeard[TALK_FRAME];
+
+  if (!trusted) {
+    memcpy(asHeard, frame, sizeof(asHeard));
+    aecRawFrames++;
+  }
+
   memcpy(aecIn + aecInHave, frame, TALK_FRAME * 2);
   aecInHave += TALK_FRAME;
   int16_t ref[AEC_PIECE];
@@ -2718,7 +2746,9 @@ static float cancelEcho(int16_t *frame) {
       }
     }
 
+    unsigned long aecFrom = micros();
     aec_process(echoCanceller, aecIn, ref, aecOut + aecOutHave);
+    aecMicros += micros() - aecFrom;
 
     for (int i = 0; i < AEC_PIECE; i++) {
       aecHeardPower += (double)aecIn[i] * aecIn[i];
@@ -2734,20 +2764,28 @@ static float cancelEcho(int16_t *frame) {
   aecOutHave -= TALK_FRAME;
   memmove(aecOut, aecOut + TALK_FRAME, aecOutHave * 2);
 
+  if (!trusted) {
+    memcpy(frame, asHeard, sizeof(asHeard));
+  }
+
   if (millis() - aecSaidAt >= 10000UL && aecKeptPower > 0.0) {
     aecSaidAt = millis();
     static uint32_t overflowsBefore = 0;
     uint32_t overflows = micOverflows;
     Serial.printf("[jarvis] echo: what was heard over the music made %.1f dB quieter (lined up %u times; last "
                   "match %.2f with the music %.1f ms behind its copy; %u pieces with no music yet to compare) | "
-                  "microphone: %u frames heard, %u times sound lost for being read late, %.1f ms of each 20 to "
-                  "hear\n", 10.0 * log10(aecHeardPower / aecKeptPower), (unsigned)echoLinedUp, echoBestMatch,
-                  echoBestOff / 16.0f, (unsigned)aecQuietPieces, (unsigned)talkFrames,
+                  "microphone: %u frames heard (%u as heard, the canceller not lined up), %u times sound lost for "
+                  "being read late, %.1f ms of each 20 to hear (%.1f in the canceller)\n",
+                  10.0 * log10(aecHeardPower / aecKeptPower), (unsigned)echoLinedUp, echoBestMatch,
+                  echoBestOff / 16.0f, (unsigned)aecQuietPieces, (unsigned)talkFrames, (unsigned)aecRawFrames,
                   (unsigned)(overflows - overflowsBefore),
-                  talkFrames ? talkBusyMicros / 1000.0f / talkFrames : 0.0f);
+                  talkFrames ? talkBusyMicros / 1000.0f / talkFrames : 0.0f,
+                  talkFrames ? aecMicros / 1000.0f / talkFrames : 0.0f);
     overflowsBefore = overflows;
     talkFrames = 0;
     talkBusyMicros = 0;
+    aecMicros = 0;
+    aecRawFrames = 0;
     aecHeardPower = aecKeptPower = 0.0;
     aecQuietPieces = 0;
   }
@@ -3525,9 +3563,11 @@ void startTalk() {
 
   // Its stack in internal memory: the network (lwIP) will not open a connection from a task whose stack
   // is in PSRAM -- tried, it stopped the board ("lwip_hook_tcp_isn ... esp_ptr_external_ram", 1 November 2026).
-  // Above the talk's priority: the music only works when the speaker wants more, and waits for it the rest
-  // of the time; at the talk's, the wake word and the echo canceller kept it waiting and it crackled.
-  if (!speakerLock || xTaskCreatePinnedToCore(radioTask, "radio", 12288, nullptr, 2, nullptr, 1) != pdPASS) {
+  // On core 0, beside the network, while the talk has core 1 to itself for the wake word and the echo canceller
+  // (both on core 1, each 20 ms of sound took 22 ms to hear, 1 November 2026); camera detection, the other
+  // user of core 0, rests while music plays. Above its priority: the music only works when the speaker wants
+  // more, and waits for it the rest of the time; kept waiting, it crackled.
+  if (!speakerLock || xTaskCreatePinnedToCore(radioTask, "radio", 12288, nullptr, 2, nullptr, 0) != pdPASS) {
     Serial.println("[jarvis] radio: could not start; the toy cannot play music");
   }
 #endif
