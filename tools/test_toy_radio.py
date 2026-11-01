@@ -57,9 +57,10 @@ check("loudRun = 0;\n        continue;" in task or "loudRun = 0;\n        contin
       "the music itself is never recorded as speech")
 check("radioState != RADIO_PLAYING" in task, "what the camera sees waits until the music is paused or stopped")
 check("RADIO_TRIES" in radio and 'radioState = RADIO_OFF;' in radio, "a station that keeps failing is let go")
-check('xTaskCreatePinnedToCoreWithCaps(radioTask, "radio", 12288, nullptr, 1, nullptr, 1, MALLOC_CAP_SPIRAM)' in sketch
-      and "speakerLock = xSemaphoreCreateMutex();" in sketch,
-      "the music on its own task, started with the talk, its stack in PSRAM")
+check('xTaskCreatePinnedToCore(radioTask, "radio", 12288, nullptr, 1, nullptr, 1)' in sketch
+      and "WithCaps(radioTask" not in sketch and "speakerLock = xSemaphoreCreateMutex();" in sketch,
+      "the music on its own task, started with the talk, its stack in internal memory: lwIP stops the board "
+      "if a connection is opened from a stack in PSRAM (1 November 2026)")
 check("if (!decoder) {" in radio and "heap_caps_malloc_extmem_enable(32);" in radio
       and "MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT" not in radio[radio.index("void radioTask"):],
       "1 November 2026, the next question's secure connection out of internal memory: the decoder made "

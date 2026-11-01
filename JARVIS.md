@@ -1838,8 +1838,8 @@ TALK_RATE). While music plays nothing the microphone hears is recorded; BOOT pau
 press under RADIO_RESUME_TAP_MS resumes it (held longer, it is a question); "Hey Jarvis" heard
 over it quiets it for the command, and it comes back after the answer, or after
 RADIO_WAKE_HOLD_MS (6 s) if nothing follows. What the camera sees waits until it is paused or
-stopped. All of the music's memory is in PSRAM -- its task's stack, the decoder (made only when a
-station first plays) and its buffers -- and so is the wake word's working memory: the fast internal
+stopped. The music's memory is in PSRAM -- the decoder (made only when a station first plays) and
+its buffers, though not its task's stack, which lwIP will not open a connection from -- and so is the wake word's working memory: the fast internal
 memory is what each secure connection needs, and with them there the next question's connection
 failed ("esp-aes: Failed to allocate memory"). `tools/test_toy_radio.py`.
 

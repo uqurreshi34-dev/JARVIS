@@ -2291,7 +2291,7 @@ static bool radioStream(void *decoder, uint8_t *in, size_t inSize, int16_t *pcm)
   return played;
 }
 
-// Everything the music needs lives in PSRAM -- its task's stack, the decoder, its buffers -- and the decoder
+// Everything the music needs but its task's stack lives in PSRAM -- the decoder, its buffers -- and the decoder
 // is made only when a station is first played: the board's fast internal memory is what every secure
 // connection needs, and with the music's own there first, the next question's connection failed
 // ("esp-aes: Failed to allocate memory", 1 November 2026).
@@ -3090,8 +3090,9 @@ void startTalk() {
   speakerLock = xSemaphoreCreateMutex();
   speakerRate = TALK_RATE;
 
-  if (!speakerLock ||
-      xTaskCreatePinnedToCoreWithCaps(radioTask, "radio", 12288, nullptr, 1, nullptr, 1, MALLOC_CAP_SPIRAM) != pdPASS) {
+  // Its stack in internal memory: the network (lwIP) will not open a connection from a task whose stack
+  // is in PSRAM -- tried, it stopped the board ("lwip_hook_tcp_isn ... esp_ptr_external_ram", 1 November 2026).
+  if (!speakerLock || xTaskCreatePinnedToCore(radioTask, "radio", 12288, nullptr, 1, nullptr, 1) != pdPASS) {
     Serial.println("[jarvis] radio: could not start; the toy cannot play music");
   }
 #endif
