@@ -1842,7 +1842,8 @@ stopped. The music's memory is in PSRAM -- the decoder (made only when a station
 its buffers, though not its task's stack, which lwIP will not open a connection from -- and so is the wake word's working memory: the fast internal
 memory is what each secure connection needs, and with them there the next question's connection
 failed ("esp-aes: Failed to allocate memory"). The bundle of roots is set again after each
-`stop()`, which wipes a connection's settings ("No CA Chain is set"). `tools/test_toy_radio.py`.
+`stop()`, which wipes a connection's settings ("No CA Chain is set"). The station is given RADIO_ANSWER_MS
+(8 s) to answer -- Stream's `setTimeout` counts milliseconds, and 8 of them read as "answered 0". `tools/test_toy_radio.py`.
 
 An ESP32-CAM (AI Thinker) takes a picture only when asked. It reports
 "online" to `/sensor` like any board, named after its room ("my room cam"),

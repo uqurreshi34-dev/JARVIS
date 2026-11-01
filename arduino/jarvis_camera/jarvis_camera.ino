@@ -2059,6 +2059,7 @@ static SemaphoreHandle_t speakerLock = nullptr;
 static uint32_t speakerRate = 0;                // what the speaker runs at now; TALK_RATE for talk
 static const float RADIO_VOLUME = 0.5f;         // of full: music is loud on a small speaker
 static const unsigned long RADIO_STALL_MS = 10000UL;
+static const unsigned long RADIO_ANSWER_MS = 8000UL;   // for the station to start answering
 static const int RADIO_TRIES = 3;               // a station that fails this often running is let go
 static const unsigned long RADIO_RESUME_TAP_MS = 700UL;
 static const unsigned long RADIO_WAKE_HOLD_MS = 6000UL;   // "Hey Jarvis" with nothing after it: music back
@@ -2157,7 +2158,9 @@ static bool radioConnect(NetworkClientSecure &client, String url) {
     // HTTP/1.0: the stream comes as it is, never chunked; no ICY metadata mixed into the music.
     client.print(String("GET ") + path + " HTTP/1.0\r\nHost: " + host + "\r\nUser-Agent: JARVIS-toy/1.0\r\n" +
                  "Icy-MetaData: 0\r\nAccept: */*\r\nConnection: close\r\n\r\n");
-    client.setTimeout(8);
+    // Milliseconds (Stream's), not seconds: at 8 the status line was given up on before the station
+    // could answer, and read as "answered 0" (1 November 2026).
+    client.setTimeout(RADIO_ANSWER_MS);
     String status = client.readStringUntil('\n');
     int code = status.substring(status.indexOf(' ') + 1).toInt();
     String moved;
@@ -2185,7 +2188,7 @@ static bool radioConnect(NetworkClientSecure &client, String url) {
       continue;
     }
 
-    Serial.printf("[jarvis] radio: the station answered %d\n", code);
+    Serial.printf("[jarvis] radio: the station answered %d (\"%s\")\n", code, status.substring(0, 60).c_str());
     return false;
   }
 

@@ -37,6 +37,9 @@ check(radio.index("client.stop();\n    client.setCACertBundle(radioRoots, radioR
 check("setCACertBundle(radioRoots, radioRootsEnd - radioRoots)" in radio and "setInsecure" not in radio
       and '!url.startsWith("https://")' in radio,
       "only HTTPS stations, checked against the core's own bundle of public roots, never setInsecure")
+check("client.setTimeout(RADIO_ANSWER_MS);" in radio and "RADIO_ANSWER_MS = 8000UL" in radio
+      and "client.setTimeout(8);" not in radio,
+      "1 November 2026, 'the station answered 0': the wait for its answer in milliseconds, as Stream counts it")
 check("HTTP/1.0" in radio and "Icy-MetaData: 0" in radio and "hop < 4" in radio,
       "the stream asked for whole and without metadata in it, following at most three redirects")
 check("MP3FindSyncWord" in radio and "ERR_MP3_INDATA_UNDERFLOW" in radio and "ERR_MP3_MAINDATA_UNDERFLOW" in radio
