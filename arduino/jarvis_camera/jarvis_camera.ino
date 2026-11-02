@@ -314,6 +314,10 @@ static volatile bool toyAnnounceDue = false;   // the cloud has words about what
 // face finder sends one from each look with someone in it until they are given -- not just the one
 // it sends when someone comes into view.
 static volatile int toyFacesWanted = 0;
+// "Hey Jarvis, mute": the cloud keeps it (in its database) and says so on every answer (X-Jarvis-Muted)
+// and to its ping (/health): the ring pulses a dim red while it is, so a muted toy never looks broken
+// (2 November 2026: muted overnight, it heard Hey Jarvis and said nothing, and nothing showed why).
+static volatile bool toyMuted = false;
 // Learning stops here even if faces are still wanted, as the cloud gives up after a minute too.
 static const unsigned long TOY_LEARN_MS = 60UL * 1000UL;
 static volatile unsigned long toyLearnUntil = 0;
@@ -366,7 +370,23 @@ bool cloudPing() {
   }
 
   https.setTimeout(POST_TIMEOUT_MS);
+  // With its token and name, the cloud also says whether this toy is muted: red from start-up.
+  https.addHeader("X-Jarvis-Token", TOY_CLOUD_TOKEN);
+  https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
   int code = https.GET();
+
+  if (code == HTTP_CODE_OK) {
+    String answer = https.getString();
+    answer.replace(" ", "");
+    bool muted = answer.indexOf("\"muted\":true") >= 0;
+
+    if (muted != toyMuted) {
+      Serial.printf("[jarvis] cloud: the toy is %s\n", muted ? "muted (say Hey Jarvis, unmute)" : "listening");
+    }
+
+    toyMuted = muted;
+  }
+
   https.end();
 
   if (code == HTTP_CODE_OK) {
@@ -2844,13 +2864,25 @@ static int askAndPlay(size_t pcm, bool button, bool named = false, bool toCloud 
   // "wake": "Jarvis" was heard on this chip, perhaps just before the recording began, so the name
   // may not be in what is sent: JARVIS and the cloud take it as his without looking for it again.
   https.addHeader("X-Jarvis-Toy", button ? "button" : (named ? "wake" : "sound"));
-  const char *wanted[] = {"X-Jarvis-Mood", "X-Jarvis-Switch", "X-Jarvis-Faces", "X-Jarvis-Play"};
-  https.collectHeaders(wanted, 4);
+  const char *wanted[] = {"X-Jarvis-Mood", "X-Jarvis-Switch", "X-Jarvis-Faces", "X-Jarvis-Play", "X-Jarvis-Muted"};
+  https.collectHeaders(wanted, 5);
 
   unsigned long sent = millis();
   int code = https.POST(talkBuffer, WAV_HEADER + pcm);
 
+#ifdef JARVIS_TOY_CLOUD
+  if (cloud && (code == 204 || code == HTTP_CODE_OK) && https.hasHeader("X-Jarvis-Muted")) {
+    toyMuted = https.header("X-Jarvis-Muted") == "1";
+  }
+#endif
+
   if (code == 204) {
+#ifdef JARVIS_TOY_CLOUD
+    Serial.printf("[jarvis] talk: nothing to say (%s)\n", toyMuted ? "muted: say Hey Jarvis, unmute"
+                                                                   : "not taken as said to JARVIS");
+#else
+    Serial.println("[jarvis] talk: nothing to say (not taken as said to JARVIS)");
+#endif
     https.end();
     return 0;
   }
@@ -3273,6 +3305,7 @@ static void chime() {
 // breadboard, never from the board; their ground joined to the board's.
 //   hearing you: blue, steady        waiting for JARVIS: amber, breathing
 //   speaking: green, pulsing with his voice, the head nodding        something warm: red, pulsing
+//   learning a face: white, breathing                                   muted: dim red, slowly pulsing
 //   otherwise: off
 // The colours are the HUD's (hud.py's palette): amber thinking, as on the desk.
 // The head turns to whoever detection sees (toySawPeople), and back to the middle when nobody has
@@ -3423,6 +3456,10 @@ void toyBodyTask(void *) {
       // Learning a face: a slow white breath until it has enough, so he knows to keep still.
       float amount = 0.15f + 0.85f * breath;
       toyRing(toyScale(255, amount), toyScale(255, amount), toyScale(255, amount));
+    } else if (toyMuted) {
+      // Muted: a slow, dim red pulse, unlike his warm words' bright one, until "Hey Jarvis, unmute".
+      float amount = 0.05f + 0.45f * (0.5f + 0.5f * sinf(2.0f * PI * now / 2400.0f));
+      toyRing(toyScale(255, amount), 0, 0);
 #endif
     } else {
       toyRing(0, 0, 0);

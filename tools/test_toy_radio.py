@@ -26,7 +26,7 @@ ask = sketch[sketch.index("static int askAndPlay("):sketch.index("static int pla
 check(radio.startswith("// ---- Music") and "#ifdef JARVIS_TOY_CLOUD" in sketch[sketch.index("// ---- Music") - 40:
                                                                               sketch.index("// ---- Music")],
       "music only with the toy's cloud brain, which finds the stations")
-check('"X-Jarvis-Play"' in ask and "collectHeaders(wanted, 4)" in ask
+check('"X-Jarvis-Play"' in ask and "collectHeaders(wanted, 5)" in ask
       and ask.index('String play = https.header("X-Jarvis-Play");') < ask.index("int played = playAnswer(https, fond);")
       < ask.index("radioCommand(play);"),
       "the cloud's X-Jarvis-Play read before the answer ends the request, and acted on once it has been said")

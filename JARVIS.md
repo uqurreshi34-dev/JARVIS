@@ -1761,7 +1761,11 @@ own echo is let go. Answers are raised so their loudest moment is TOY_TALK_PEAK
 (0.95) of full scale, at most four times (`speech.to_pcm16`'s peak): the desk's
 voice was quiet on the toy's small speaker. "Jarvis, mute" (or "be quiet") said
 to the toy mutes it in `_toy_mute_asked`, before the command is run: then only
-"Jarvis, unmute" is answered, BOOT held or not; not kept across a restart.
+"Jarvis, unmute" is answered, BOOT held or not; not kept across a restart. In
+cloud mode the cloud keeps the mute in its database and says so on every answer
+(`X-Jarvis-Muted`, silence included) and to the toy's ping (`/health` with its
+token and name), and the ring pulses a dim red while muted (`toyMuted`); an answer
+of silence is logged ("talk: nothing to say (muted ...)").
 Its body (`startToyBody`, `toyBodyTask`): a WS2812 light ring on Gravity 43
 (RMT, 10 MHz, GRB) and an SG90 servo on Gravity 44, both on the power bank's
 5 V from the breadboard with grounds joined, follow `toyMood`, set by the talk:

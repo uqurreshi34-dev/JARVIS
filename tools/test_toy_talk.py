@@ -448,6 +448,20 @@ check(ca.count("-----BEGIN CERTIFICATE-----") == 4 and "TOY_CLOUD_CA[]" in ca,
 ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
 check("arduino/jarvis_camera/toy_cloud.h" in ignored, "the toy's cloud token kept out of git")
 
+# ---- muted, shown (2 November 2026) --------------------------------------------------------------
+body = sketch[sketch.index("void toyBodyTask(void *) {"):]
+check('"X-Jarvis-Muted"' in ask and 'toyMuted = https.header("X-Jarvis-Muted") == "1";' in ask
+      and ask.index('toyMuted = https.header("X-Jarvis-Muted")') < ask.index("if (code == 204) {"),
+      "2 November 2026, muted overnight it said nothing and nothing showed why: every cloud answer, silence "
+      "included, says whether the toy is muted")
+check("talk: nothing to say (%s)" in ask, "an answer of silence is logged, with why")
+check('https.addHeader("X-Jarvis-Camera", SENSOR_NAME);' in sketch[sketch.index("bool cloudPing() {"):]
+      and '"\\"muted\\":true"' in sketch[sketch.index("bool cloudPing() {"):],
+      "the cloud's ping, with the toy's token and name, says so from start-up")
+check("} else if (toyMuted) {" in body and "sinf(2.0f * PI * now / 2400.0f)" in body
+      and body.index("} else if (toyMuted) {") > body.index("} else if (toyFacesWanted > 0) {"),
+      "while muted and otherwise idle, the ring pulses a slow, dim red")
+
 failed = [label for ok, label in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(failed)} of {len(RESULTS)} passed")
 sys.exit(1 if failed else 0)

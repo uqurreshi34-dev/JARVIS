@@ -696,11 +696,13 @@ it hears to be checked for "Jarvis", as before, and says so as it starts.
 
 | Say to the toy | Does |
 |---|---|
-| Hey Jarvis, mute / Hey Jarvis, be quiet | the toy stops answering anything, BOOT included |
+| Hey Jarvis, mute / Hey Jarvis, be quiet | the toy stops answering anything, BOOT included; its ring pulses a dim red while muted |
 | Hey Jarvis, unmute | it answers again |
 
 Muting the toy leaves the desk as it was, and the desk's mute leaves the toy.
-A JARVIS started again always answers on the toy.
+In PC mode, a JARVIS started again always answers on the toy. In cloud mode the
+mute is kept in the cloud's database: unplugging the toy, or the cloud
+restarting, leaves it muted until "Hey Jarvis, unmute".
 
 If you talk to the toy in the same room as the desk, mute the desk (the
 microphone on the HUD), or both answer. Three quick blinks: no answer came
@@ -738,6 +740,7 @@ In cloud mode the toy also knows, with the PC off:
 | Hey Jarvis, who am I / who do you know | the face it saw last, by name; everyone it knows |
 | Hey Jarvis, forget my face / forget Sarah / forget everyone | deleted |
 | Hey Jarvis, play some jazz / play Capital FM / play a Quran station / play something relaxing | internet radio: a station by name, else by genre (the AI picks the genre for "something relaxing") |
+| Hey Jarvis, play Bob Marley / play Kendrick Lamar | a station named for the artist if there is one; else a station of their genre, and it says it cannot choose their songs on the radio |
 | (BOOT, while music plays) | pauses it; a brief press resumes it |
 | Hey Jarvis, pause / resume / stop | the music, any time: it ducks (goes quiet, still playing) as soon as it hears "Hey Jarvis" and comes back up after |
 
