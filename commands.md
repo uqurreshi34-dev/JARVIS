@@ -741,11 +741,14 @@ In cloud mode the toy also knows, with the PC off:
 | Hey Jarvis, forget my face / forget Sarah / forget everyone | deleted |
 | Hey Jarvis, play some jazz / play Capital FM / play a Quran station / play something relaxing | internet radio: a station by name, else by genre (the AI picks the genre for "something relaxing") |
 | Hey Jarvis, play Bob Marley / play Kendrick Lamar | a station named for the artist if there is one; else a station of their genre, and it says it cannot choose their songs on the radio |
+| Hey Jarvis, play some hip hop from Jamendo / play Jamendo jazz / play Jamendo | independent artists' songs from Jamendo, one after another (free to stream; needs the cloud's Jamendo client id) |
+| Hey Jarvis, what's playing / who is this / what song is this | the Jamendo song and its artist, or the radio station |
 | (BOOT, while music plays) | pauses it; a brief press resumes it |
 | Hey Jarvis, pause / resume / stop | the music, any time: it ducks (goes quiet, still playing) as soon as it hears "Hey Jarvis" and comes back up after |
 
 Music is internet radio (Radio Browser's free directory of stations), in cloud mode: a station
-or a genre, not a particular song. A live station cannot pick up where it paused, so resuming
+or a genre, not a particular song; or Jamendo's independent artists, song after song, and from
+Jamendo too when no station matches at all. Resuming Jamendo moves on to the next song. A live station cannot pick up where it paused, so resuming
 joins it again. The toy takes its own music out of what it hears (echo cancellation), so
 "Hey Jarvis" works with the speaker where it is, over the music.
 

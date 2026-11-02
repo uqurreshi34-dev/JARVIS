@@ -1829,9 +1829,14 @@ because ten minutes passed while they sat there. Every other question is the clo
 LIVE writes its own search words, searched thoroughly (Tavily "advanced"), then the past
 week's news if those pages do not answer it; each decision and search is in Render's log.
 The faces, and where the toy lives, are kept in the cloud's database (Neon), never here.
-Music, in cloud mode: "Hey Jarvis, play some jazz" gets a station from the cloud (Radio Browser)
+Music, in cloud mode: "Hey Jarvis, play some jazz" gets a station from the cloud (Radio Browser),
+or "play some hip hop from Jamendo" a list of Jamendo's independent artists' songs: the cloud gives
+the toy `/toy/music/<list>`, which redirects to the next song each time the toy joins it, and the
+toy, joining again when a song ends as it does when a station drops, plays them one after another
+with no change of its own ("what's playing" names the song and its artist, as Jamendo's terms ask;
+free for non-commercial use only). A station either way, it arrives
 as `X-Jarvis-Play` -- its HTTPS address, or "pause", "resume" or "stop" -- read before the answer
-ends the request and acted on after it is said (`radioCommand`). The radio task (core 1) joins
+ends the request and acted on after it is said (`radioCommand`). The radio task (core 0) joins
 the stream itself (HTTP/1.0, `Icy-MetaData: 0`, up to three redirects, HTTPS checked against
 the core's own bundle of public roots, `setCACertBundle`), decodes the MP3 on the chip
 (libhelix, in the core), makes it mono and 16 kHz like the talk (`radioTo16k`, low-passed first by two Butterworth stages at 7 kHz),
