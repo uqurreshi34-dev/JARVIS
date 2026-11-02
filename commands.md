@@ -743,6 +743,7 @@ In cloud mode the toy also knows, with the PC off:
 | Hey Jarvis, play Bob Marley / play Kendrick Lamar | a station named for the artist if there is one; else a station of their genre, and it says it cannot choose their songs on the radio |
 | Hey Jarvis, play some hip hop from Jamendo / play Jamendo jazz / play Jamendo | independent artists' songs from Jamendo, one after another (free to stream; needs the cloud's Jamendo client id) |
 | Hey Jarvis, what's playing / who is this / what song is this | the Jamendo song and its artist, or the radio station |
+| Hey Jarvis, do a light show / show me your lights / rainbow | both rings run through every colour of the wheel (12 colours, half a second each), three times round; Hey Jarvis ends it |
 | Hey Jarvis, next song / skip / another song | Jamendo's next song, in the same genre until you ask for another; a live station's songs cannot be skipped, and it says so |
 | (BOOT, while music plays) | pauses it; a brief press resumes it |
 | Hey Jarvis, pause / resume / stop | the music, any time: it ducks (goes quiet, still playing) as soon as it hears "Hey Jarvis" and comes back up after |

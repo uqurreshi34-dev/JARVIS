@@ -1773,7 +1773,10 @@ hearing you blue, waiting for the answer amber breathing (the HUD's thinking
 colour), speaking green pulsing with his voice (`toyVoice`, the level of each
 piece the speaker plays) with the head nodding 12 degrees either side -- red
 when JARVIS marks the answer warm (`X-Jarvis-Mood: affection`, from
-`social.kind` in `phone.py`) -- otherwise off. The head faces the nearest
+`social.kind` in `phone.py`) -- otherwise off. "Hey Jarvis, do a light show" (cloud
+mode, `X-Jarvis-Show: lights`): after his words both rings run through the colour wheel, twelve
+colours (`toyHue`) half a second each blended into the next, three times round (18 s); "Hey
+Jarvis" ends it. The head faces the nearest
 person detection sees (`toySawPeople`, every look: 60% of the way, from a
 90-degree view, 30 to 150 degrees), back to the middle after 30 s of nobody;
 which way turns toward them is learnt (`toyTurnSign`, flipped after two turns

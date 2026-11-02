@@ -462,6 +462,17 @@ check("} else if (toyMuted) {" in body and "sinf(2.0f * PI * now / 2400.0f)" in 
       and body.index("} else if (toyMuted) {") > body.index("} else if (toyFacesWanted > 0) {"),
       "while muted and otherwise idle, the ring pulses a slow, dim red")
 
+# ---- the light show (2 November 2026) ------------------------------------------------------------
+check('"X-Jarvis-Show"' in ask and ask.index('bool show = https.header("X-Jarvis-Show") == "lights";')
+      < ask.index("int played = playAnswer(https, fond);") < ask.index("toyShowFrom = millis() | 1;"),
+      "'do a light show': read before the answer ends the request, begun once it has been said")
+check("TOY_SHOW_COLOURS = 12" in sketch and "TOY_SHOW_STEP_MS = 500" in sketch and "TOY_SHOW_ROUNDS = 3" in sketch
+      and "toyHue(step * (360.0f / TOY_SHOW_COLOURS), red, green, blue);" in body,
+      "every colour of the wheel, twelve of them half a second each, three times round")
+check("if (toyShowFrom && (mood != TOY_IDLE || showing >= TOY_SHOW_MS)) {" in body
+      and body.index("if (toyShowFrom) {") < body.index("} else if (mood == TOY_LISTENING) {"),
+      "it ends when done, or at once for Hey Jarvis")
+
 failed = [label for ok, label in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(failed)} of {len(RESULTS)} passed")
 sys.exit(1 if failed else 0)

@@ -1772,6 +1772,9 @@ static const unsigned long TALK_AFTER_ANSWER_MS = 400UL;   // its own voice's ec
 // What the toy is doing, for its light ring and head (toyBodyTask, below): set as the talk goes.
 enum ToyMood { TOY_IDLE, TOY_LISTENING, TOY_THINKING, TOY_SPEAKING, TOY_SPEAKING_FOND };
 static volatile int toyMood = TOY_IDLE;
+// "Hey Jarvis, do a light show" (the cloud's X-Jarvis-Show: lights): when it began, after his words; 0 when
+// none is running. Both rings show every colour of the wheel, TOY_SHOW_ROUNDS times round.
+static volatile unsigned long toyShowFrom = 0;
 
 // How loud his answer is right now, 0 to 1, from what the speaker is playing: the ring pulses with it.
 static volatile float toyVoice = 0.0f;
@@ -2899,8 +2902,9 @@ static int askAndPlay(size_t pcm, bool button, bool named = false, bool toCloud 
   // "wake": "Jarvis" was heard on this chip, perhaps just before the recording began, so the name
   // may not be in what is sent: JARVIS and the cloud take it as his without looking for it again.
   https.addHeader("X-Jarvis-Toy", button ? "button" : (named ? "wake" : "sound"));
-  const char *wanted[] = {"X-Jarvis-Mood", "X-Jarvis-Switch", "X-Jarvis-Faces", "X-Jarvis-Play", "X-Jarvis-Muted"};
-  https.collectHeaders(wanted, 5);
+  const char *wanted[] = {"X-Jarvis-Mood", "X-Jarvis-Switch", "X-Jarvis-Faces", "X-Jarvis-Play", "X-Jarvis-Muted",
+                          "X-Jarvis-Show"};
+  https.collectHeaders(wanted, 6);
 
   unsigned long sent = millis();
   int code = https.POST(talkBuffer, WAV_HEADER + pcm);
@@ -2960,8 +2964,14 @@ static int askAndPlay(size_t pcm, bool button, bool named = false, bool toCloud 
   int facesWanted = https.header("X-Jarvis-Faces").toInt();
   bool fond = https.header("X-Jarvis-Mood") == "affection";
   String play = https.header("X-Jarvis-Play");   // read before playAnswer ends the request
+  bool show = https.header("X-Jarvis-Show") == "lights";
   int played = playAnswer(https, fond);
   radioCommand(play);
+
+  if (show) {
+    toyShowFrom = millis() | 1;   // never 0, which is none
+    Serial.println("[jarvis] toy: light show");
+  }
 
   if (facesWanted > 0) {
     toyLearnUntil = millis() + TOY_LEARN_MS;
@@ -3341,6 +3351,7 @@ static void chime() {
 //   hearing you: blue, steady        waiting for JARVIS: amber, breathing
 //   speaking: green, pulsing with his voice, the head nodding        something warm: red, pulsing
 //   learning a face: white, breathing                                   muted: dim red, slowly pulsing
+//   "do a light show": every colour of the wheel, three times round
 //   otherwise: off
 // The colours are the HUD's (hud.py's palette): amber thinking, as on the desk.
 // The head turns to whoever detection sees (toySawPeople), and back to the middle when nobody has
@@ -3453,6 +3464,26 @@ void toySawPeople(const Seen *seen, int count) {
   }
 }
 
+// The light show: the colour wheel in TOY_SHOW_COLOURS steps (red, orange, yellow, lime, green, spring
+// green, cyan, azure, blue, violet, magenta, rose), each held TOY_SHOW_STEP_MS and blended into the next
+// over its last TOY_SHOW_BLEND_MS, TOY_SHOW_ROUNDS times round: 18 seconds, at TOY_BRIGHT.
+static const int TOY_SHOW_COLOURS = 12;
+static const unsigned long TOY_SHOW_STEP_MS = 500;
+static const unsigned long TOY_SHOW_BLEND_MS = 150;
+static const int TOY_SHOW_ROUNDS = 3;
+static const unsigned long TOY_SHOW_MS = TOY_SHOW_STEP_MS * TOY_SHOW_COLOURS * TOY_SHOW_ROUNDS;
+
+// The full-strength colour at [hue] degrees round the wheel, as 0..1 of red, green and blue.
+static void toyHue(float hue, float &red, float &green, float &blue) {
+  hue = fmodf(hue, 360.0f) / 60.0f;
+  float rise = hue - floorf(hue);
+  int sector = (int)hue;
+  float r[] = {1, 1 - rise, 0, 0, rise, 1}, g[] = {rise, 1, 1, 1 - rise, 0, 0}, b[] = {0, 0, rise, 1, 1, 1 - rise};
+  red = r[sector % 6];
+  green = g[sector % 6];
+  blue = b[sector % 6];
+}
+
 static uint8_t toyScale(int colour, float amount) {
   return (uint8_t)(colour * amount * TOY_BRIGHT / 255.0f);
 }
@@ -3477,7 +3508,21 @@ void toyBodyTask(void *) {
     voice = heard > voice ? voice + (heard - voice) * 0.6f : voice + (heard - voice) * 0.15f;
     float pulse = 0.15f + 0.85f * (voice > 1.0f ? 1.0f : voice);
 
-    if (mood == TOY_LISTENING) {
+    unsigned long showing = toyShowFrom ? now - toyShowFrom : 0;
+
+    if (toyShowFrom && (mood != TOY_IDLE || showing >= TOY_SHOW_MS)) {
+      toyShowFrom = 0;   // done, or "Hey Jarvis" again: what he does now shows instead
+    }
+
+    if (toyShowFrom) {
+      unsigned long into = showing % TOY_SHOW_STEP_MS;
+      float step = (float)(showing / TOY_SHOW_STEP_MS);
+      step += into > TOY_SHOW_STEP_MS - TOY_SHOW_BLEND_MS
+                  ? (float)(into - (TOY_SHOW_STEP_MS - TOY_SHOW_BLEND_MS)) / TOY_SHOW_BLEND_MS : 0.0f;
+      float red, green, blue;
+      toyHue(step * (360.0f / TOY_SHOW_COLOURS), red, green, blue);
+      toyRing(toyScale(255, red), toyScale(255, green), toyScale(255, blue));
+    } else if (mood == TOY_LISTENING) {
       toyRing(0, 0, TOY_BRIGHT);
     } else if (mood == TOY_THINKING) {
       float amount = 0.15f + 0.85f * breath;
