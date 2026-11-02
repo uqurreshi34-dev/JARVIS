@@ -1833,8 +1833,11 @@ Music, in cloud mode: "Hey Jarvis, play some jazz" gets a station from the cloud
 or "play some hip hop from Jamendo" a list of Jamendo's independent artists' songs: the cloud gives
 the toy `/toy/music/<list>`, which redirects to the next song each time the toy joins it, and the
 toy, joining again when a song ends as it does when a station drops, plays them one after another
-with no change of its own ("what's playing" names the song and its artist, as Jamendo's terms ask;
-free for non-commercial use only). A station either way, it arrives
+("what's playing" names the song and its artist, as Jamendo's terms ask; free for non-commercial
+use only; songs of 90 seconds to 15 minutes, not the short cuts made for videos). Paused, the toy
+keeps where the song came from at last and how far into it (`radioResumeUrl`, `radioResumeAt`), and
+resuming asks that address for the rest (an HTTP range, 206), so it carries on where it stopped
+instead of joining the list again, which gave the next song; a live station ignores the range. A station either way, it arrives
 as `X-Jarvis-Play` -- its HTTPS address, or "pause", "resume" or "stop" -- read before the answer
 ends the request and acted on after it is said (`radioCommand`). The radio task (core 0) joins
 the stream itself (HTTP/1.0, `Icy-MetaData: 0`, up to three redirects, HTTPS checked against

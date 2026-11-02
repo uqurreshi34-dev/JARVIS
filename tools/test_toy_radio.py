@@ -145,6 +145,16 @@ check("if (!decoder) {" in radio and "heap_caps_malloc_extmem_enable(32);" in ra
       "only when a station first plays, and all of the music's memory in PSRAM")
 check("WAKE_TENSOR_ARENA, MALLOC_CAP_SPIRAM" in sketch and "WAKE_TENSOR_ARENA, MALLOC_CAP_INTERNAL" not in sketch,
       "and the wake word's working memory in PSRAM too, keeping internal memory for the connections")
+check('(from ? String("Range: bytes=") + from + "-\\r\\n" : String(""))' in radio
+      and "code == 200 || (from && code == 206)" in radio and "landed = url;" in radio,
+      "a song can be asked for part way in (an HTTP range), from wherever its redirects landed")
+check("radioState == RADIO_PAUSED && asked == radioAsked && played" in radio
+      and "radioResumeAt = taken > have ? taken - have : 0;" in radio
+      and radio.index("resumed = radioConnect(client, String(radioResumeUrl), landed, taken);")
+      < radio.index("if (!radioConnect(client, String(radioUrl), landed, 0)) {")
+      and "radioResumeUrl[0] = 0;" in radio,
+      "2 November 2026, resuming Jamendo gave the next song: a paused song resumes where it stopped, less what "
+      "was waiting to be played; a new station, a stop or a server that cannot joins as before")
 check("radioAsked++" not in sketch and "toyFacesWanted--" not in sketch,
       "no ++ or -- on the shared (volatile) counters: the build is free of warnings")
 

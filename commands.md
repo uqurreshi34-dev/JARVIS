@@ -748,7 +748,8 @@ In cloud mode the toy also knows, with the PC off:
 
 Music is internet radio (Radio Browser's free directory of stations), in cloud mode: a station
 or a genre, not a particular song; or Jamendo's independent artists, song after song, and from
-Jamendo too when no station matches at all. Resuming Jamendo moves on to the next song. A live station cannot pick up where it paused, so resuming
+Jamendo too when no station matches at all. Pausing and resuming a Jamendo song carries on where it
+stopped; a live station carries on live. A live station cannot pick up where it paused, so resuming
 joins it again. The toy takes its own music out of what it hears (echo cancellation), so
 "Hey Jarvis" works with the speaker where it is, over the music.
 

@@ -2260,9 +2260,18 @@ static void radioCommand(const String &play) {
   Serial.printf("[jarvis] radio: %s\n", radioState == RADIO_PLAYING ? radioUrl : (radioState == RADIO_PAUSED ? "paused" : "off"));
 }
 
+// Where a paused song stopped: the address it came from at last (past the cloud's list and any redirect),
+// and how far into it, so resuming carries on there (an HTTP range) instead of joining the list again,
+// which gave the next song (2 November 2026). For [radioResumeAsked]'s music only; a live station ignores
+// the range and plays live, as before.
+static char radioResumeUrl[420] = "";
+static uint32_t radioResumeAt = 0;
+static uint32_t radioResumeAsked = 0;
+
 // Joins [url] (https://host[:port]/path), following up to three redirects, and leaves [client] at the start
-// of the stream; false if it cannot.
-static bool radioConnect(NetworkClientSecure &client, String url) {
+// of the stream -- or [from] bytes into it, when the server can -- with the address it came from in
+// [landed]; false if it cannot.
+static bool radioConnect(NetworkClientSecure &client, String url, String &landed, uint32_t from) {
   for (int hop = 0; hop < 4; hop++) {
     if (!url.startsWith("https://")) {
       return false;
@@ -2289,7 +2298,8 @@ static bool radioConnect(NetworkClientSecure &client, String url) {
 
     // HTTP/1.0: the stream comes as it is, never chunked; no ICY metadata mixed into the music.
     client.print(String("GET ") + path + " HTTP/1.0\r\nHost: " + host + "\r\nUser-Agent: JARVIS-toy/1.0\r\n" +
-                 "Icy-MetaData: 0\r\nAccept: */*\r\nConnection: close\r\n\r\n");
+                 "Icy-MetaData: 0\r\nAccept: */*\r\nConnection: close\r\n" +
+                 (from ? String("Range: bytes=") + from + "-\r\n" : String("")) + "\r\n");
     // Milliseconds (Stream's), not seconds: at 8 the status line was given up on before the station
     // could answer, and read as "answered 0" (1 November 2026).
     client.setTimeout(RADIO_ANSWER_MS);
@@ -2311,7 +2321,8 @@ static bool radioConnect(NetworkClientSecure &client, String url) {
       }
     }
 
-    if (code == 200) {
+    if (code == 200 || (from && code == 206)) {   // 200 with a range asked for: from the start, or live
+      landed = url;
       return true;
     }
 
@@ -2333,10 +2344,25 @@ static bool radioConnect(NetworkClientSecure &client, String url) {
 static bool radioStream(void *decoder, uint8_t *in, size_t inSize, int16_t *pcm, int16_t *out) {
   uint32_t asked = radioAsked;
   NetworkClientSecure client;
+  String landed;
+  uint32_t taken = 0;   // bytes of this song or stream read, to resume a paused one where it stopped
+  bool resumed = false;
 
-  if (!radioConnect(client, String(radioUrl))) {
-    client.stop();
-    return false;
+  if (radioResumeUrl[0] && radioResumeAsked == asked) {
+    taken = radioResumeAt;
+    resumed = radioConnect(client, String(radioResumeUrl), landed, taken);
+    Serial.printf("[jarvis] radio: %s\n", resumed ? "resumed where it was paused" : "could not resume there");
+  }
+
+  radioResumeUrl[0] = 0;
+
+  if (!resumed) {
+    taken = 0;
+
+    if (!radioConnect(client, String(radioUrl), landed, 0)) {
+      client.stop();
+      return false;
+    }
   }
 
   size_t have = 0;
@@ -2358,6 +2384,7 @@ static bool radioStream(void *decoder, uint8_t *in, size_t inSize, int16_t *pcm,
 
       if (got > 0) {
         have += got;
+        taken += got;
         heard = millis();
       }
     } else if (ready <= 0) {
@@ -2439,6 +2466,14 @@ static bool radioStream(void *decoder, uint8_t *in, size_t inSize, int16_t *pcm,
     }
 
     played = true;
+  }
+
+  // Paused part way: kept where it stopped -- what was read, less what was waiting to be played.
+  if (radioState == RADIO_PAUSED && asked == radioAsked && played && landed.length() < sizeof(radioResumeUrl)) {
+    strncpy(radioResumeUrl, landed.c_str(), sizeof(radioResumeUrl) - 1);
+    radioResumeUrl[sizeof(radioResumeUrl) - 1] = 0;
+    radioResumeAt = taken > have ? taken - have : 0;
+    radioResumeAsked = asked;
   }
 
   client.stop();
