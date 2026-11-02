@@ -3484,6 +3484,37 @@ static void toyHue(float hue, float &red, float &green, float &blue) {
   blue = b[sector % 6];
 }
 
+// The light show's colour now, as 0..1 of red, green and blue; false when none is to be shown. It is begun
+// the moment his words have been sent to the speaker, while he still counts as speaking (the request is
+// still being closed): it waits for that, and ends only when he listens or thinks again, or it is done.
+// Ending it whenever he was not idle ended it before its first colour, every time (2 November 2026).
+static bool toyShowColour(int mood, unsigned long now, float &red, float &green, float &blue) {
+  unsigned long from = toyShowFrom;
+
+  if (!from) {
+    return false;
+  }
+
+  long showing = (long)(now - from);
+  showing = showing < 0 ? 0 : showing;   // begun after [now] was read
+
+  if (mood == TOY_LISTENING || mood == TOY_THINKING || showing >= (long)TOY_SHOW_MS) {
+    toyShowFrom = 0;
+    return false;
+  }
+
+  if (mood != TOY_IDLE) {
+    return false;
+  }
+
+  unsigned long into = showing % TOY_SHOW_STEP_MS;
+  float step = (float)(showing / TOY_SHOW_STEP_MS);
+  step += into > TOY_SHOW_STEP_MS - TOY_SHOW_BLEND_MS
+              ? (float)(into - (TOY_SHOW_STEP_MS - TOY_SHOW_BLEND_MS)) / TOY_SHOW_BLEND_MS : 0.0f;
+  toyHue(step * (360.0f / TOY_SHOW_COLOURS), red, green, blue);
+  return true;
+}
+
 static uint8_t toyScale(int colour, float amount) {
   return (uint8_t)(colour * amount * TOY_BRIGHT / 255.0f);
 }
@@ -3508,20 +3539,10 @@ void toyBodyTask(void *) {
     voice = heard > voice ? voice + (heard - voice) * 0.6f : voice + (heard - voice) * 0.15f;
     float pulse = 0.15f + 0.85f * (voice > 1.0f ? 1.0f : voice);
 
-    unsigned long showing = toyShowFrom ? now - toyShowFrom : 0;
+    float showRed, showGreen, showBlue;
 
-    if (toyShowFrom && (mood != TOY_IDLE || showing >= TOY_SHOW_MS)) {
-      toyShowFrom = 0;   // done, or "Hey Jarvis" again: what he does now shows instead
-    }
-
-    if (toyShowFrom) {
-      unsigned long into = showing % TOY_SHOW_STEP_MS;
-      float step = (float)(showing / TOY_SHOW_STEP_MS);
-      step += into > TOY_SHOW_STEP_MS - TOY_SHOW_BLEND_MS
-                  ? (float)(into - (TOY_SHOW_STEP_MS - TOY_SHOW_BLEND_MS)) / TOY_SHOW_BLEND_MS : 0.0f;
-      float red, green, blue;
-      toyHue(step * (360.0f / TOY_SHOW_COLOURS), red, green, blue);
-      toyRing(toyScale(255, red), toyScale(255, green), toyScale(255, blue));
+    if (toyShowColour(mood, now, showRed, showGreen, showBlue)) {
+      toyRing(toyScale(255, showRed), toyScale(255, showGreen), toyScale(255, showBlue));
     } else if (mood == TOY_LISTENING) {
       toyRing(0, 0, TOY_BRIGHT);
     } else if (mood == TOY_THINKING) {

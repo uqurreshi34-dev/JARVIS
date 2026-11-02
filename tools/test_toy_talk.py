@@ -466,12 +466,17 @@ check("} else if (toyMuted) {" in body and "sinf(2.0f * PI * now / 2400.0f)" in 
 check('"X-Jarvis-Show"' in ask and ask.index('bool show = https.header("X-Jarvis-Show") == "lights";')
       < ask.index("int played = playAnswer(https, fond);") < ask.index("toyShowFrom = millis() | 1;"),
       "'do a light show': read before the answer ends the request, begun once it has been said")
+show = sketch[sketch.index("static bool toyShowColour("):sketch.index("static uint8_t toyScale(")]
 check("TOY_SHOW_COLOURS = 12" in sketch and "TOY_SHOW_STEP_MS = 500" in sketch and "TOY_SHOW_ROUNDS = 3" in sketch
-      and "toyHue(step * (360.0f / TOY_SHOW_COLOURS), red, green, blue);" in body,
+      and "toyHue(step * (360.0f / TOY_SHOW_COLOURS), red, green, blue);" in show,
       "every colour of the wheel, twelve of them half a second each, three times round")
-check("if (toyShowFrom && (mood != TOY_IDLE || showing >= TOY_SHOW_MS)) {" in body
-      and body.index("if (toyShowFrom) {") < body.index("} else if (mood == TOY_LISTENING) {"),
-      "it ends when done, or at once for Hey Jarvis")
+check("if (mood == TOY_LISTENING || mood == TOY_THINKING || showing >= (long)TOY_SHOW_MS) {" in show
+      and "if (mood != TOY_IDLE) {\n    return false;\n  }" in show and "mood != TOY_IDLE ||" not in show,
+      "2 November 2026, no colour ever showed: begun while he still counts as speaking (the request still "
+      "closing), it waits for that, and ends only when he listens or thinks again, or it is done")
+check("showing = showing < 0 ? 0 : showing;" in show, "begun just after the ring read the time, it still shows")
+check(body.index("if (toyShowColour(mood, now, showRed, showGreen, showBlue)) {")
+      < body.index("} else if (mood == TOY_LISTENING) {"), "while it runs, it is what the rings show")
 
 failed = [label for ok, label in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(failed)} of {len(RESULTS)} passed")
