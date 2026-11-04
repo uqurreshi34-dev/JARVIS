@@ -2900,6 +2900,57 @@ static float cancelEcho(int16_t *) { return -1.0f; }
 // JARVIS had nothing to say (it was not said to him), -1 if he could not be reached. With the toy's
 // cloud brain: to the cloud in cloud mode, or in PC mode while the PC does not answer (saying so,
 // X-Jarvis-Fallback); a PC that stops answering mid-ask is asked of the cloud at once [toCloud].
+#ifdef JARVIS_TOY_CLOUD
+// "Hey Jarvis, what can you see?": the cloud said "Let me look, sir." with X-Jarvis-Look, so a picture
+// is taken now and sent to /camera/look, where its bigger brain names everything in it -- what the toy's
+// own brain never noticed too (4 November 2026: bottles in view, and "nothing I recognise"). Its words
+// come back as an announcement. Sent from the talk, while the music still waits for it, so only one
+// secure connection is busy at a time (speakerForTalk), and on the talk's own connection.
+static void sendLookNow() {
+  camera_fb_t *frame = esp_camera_fb_get();
+
+  if (!frame) {
+    Serial.println("[jarvis] look: no picture to send");
+    return;
+  }
+
+  if (frame->format != PIXFORMAT_JPEG) {
+    esp_camera_fb_return(frame);
+    Serial.println("[jarvis] look: the camera is not making JPEGs");
+    return;
+  }
+
+  HTTPClient https;
+
+  if (!https.begin(cloudTalkLink, cloudUrl("/camera/look"))) {
+    esp_camera_fb_return(frame);
+    return;
+  }
+
+  unsigned long started = millis();
+  https.setTimeout(15000);
+  https.addHeader("X-Jarvis-Token", TOY_CLOUD_TOKEN);
+  https.addHeader("Content-Type", "image/jpeg");
+  https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
+  int code = https.POST(frame->buf, frame->len);
+  size_t sent = frame->len;
+  esp_camera_fb_return(frame);
+
+  if (code == HTTP_CODE_OK) {
+    String answer = https.getString();
+    answer.replace(" ", "");
+
+    if (answer.indexOf("\"say\":true") >= 0) {
+      toyAnnounceDue = true;
+    }
+  }
+
+  https.end();
+  Serial.printf("[jarvis] look: %u bytes sent, the cloud answered %d in %lu ms\n", (unsigned)sent, code,
+                millis() - started);
+}
+#endif
+
 static int askAndPlay(size_t pcm, bool button, bool named = false, bool toCloud = false) {
   wavHeader(talkBuffer, pcm);
 
@@ -2934,8 +2985,8 @@ static int askAndPlay(size_t pcm, bool button, bool named = false, bool toCloud 
   // may not be in what is sent: JARVIS and the cloud take it as his without looking for it again.
   https.addHeader("X-Jarvis-Toy", button ? "button" : (named ? "wake" : "sound"));
   const char *wanted[] = {"X-Jarvis-Mood", "X-Jarvis-Switch", "X-Jarvis-Faces", "X-Jarvis-Play", "X-Jarvis-Muted",
-                          "X-Jarvis-Show"};
-  https.collectHeaders(wanted, 6);
+                          "X-Jarvis-Show", "X-Jarvis-Look"};
+  https.collectHeaders(wanted, 7);
 
   unsigned long sent = millis();
   int code = https.POST(talkBuffer, WAV_HEADER + pcm);
@@ -2996,8 +3047,13 @@ static int askAndPlay(size_t pcm, bool button, bool named = false, bool toCloud 
   bool fond = https.header("X-Jarvis-Mood") == "affection";
   String play = https.header("X-Jarvis-Play");   // read before playAnswer ends the request
   bool show = https.header("X-Jarvis-Show") == "lights";
+  bool look = https.header("X-Jarvis-Look") == "1";
   int played = playAnswer(https, fond);
   radioCommand(play);
+
+  if (look && cloud) {
+    sendLookNow();
+  }
 
   if (show) {
     toyShowFrom = millis() | 1;   // never 0, which is none

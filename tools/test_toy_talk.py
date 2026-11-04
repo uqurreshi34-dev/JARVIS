@@ -427,6 +427,16 @@ check('sendLook("/camera/check", -1.0f);' in check_part and "toyCheckWanted = fa
       "and the toy sends that look's picture at once, after its report and before the face finder")
 check("if (faceScore >= 0) {" in face_part and '"X-Jarvis-Face"' in face_part,
       "a second look's picture is not a face: no face score on it")
+look_part = sketch[sketch.index("static void sendLookNow()"):sketch.index("static int askAndPlay(")]
+check('"X-Jarvis-Look"' in ask and 'https.collectHeaders(wanted, 7);' in ask
+      and 'bool look = https.header("X-Jarvis-Look") == "1";' in ask
+      and ask.index("int played = playAnswer(https, fond);") < ask.index("sendLookNow();"),
+      "'what can you see': told to look, the toy sends a picture once 'let me look' has been said")
+check('cloudUrl("/camera/look")' in look_part and "https.begin(cloudTalkLink" in look_part
+      and "esp_camera_fb_return(frame);" in look_part and "toyAnnounceDue = true;" in look_part,
+      "on the talk's own connection, the camera's frame handed back, and the big brain's words fetched after")
+check(sketch.index("speakerForTalk();\n    int answered = askAndPlay(") > 0,
+      "and while the music still waits for the talk, so one secure connection at a time")
 check("sayWhatWasSeen();" in task and 'cloudUrl("/toy/announce")' in talk_part,
       "the words fetched and said between recordings, never over anyone")
 loop = sketch[sketch.index("void loop() {"):]

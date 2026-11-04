@@ -1825,6 +1825,13 @@ see; what it does not see is not said, nor named by "what can you see", while it
 and what is not checked within 20 s is not said either. On 79 of the toy's own pictures the second
 look saw none of the 24 airplanes or 27 suitcases the toy had imagined; it also missed some real
 things (half the laptops). `tools/test_toy_talk.py`, `tools/test_detections.py`.
+Asked "what can you see", the cloud (with its checker) answers "Let me look, sir." with
+`X-Jarvis-Look: 1`, and the toy, once that is said and while the music still waits for the talk
+(`speakerForTalk`, one secure connection at a time), takes a frame and posts it on the talk's own
+connection to `/camera/look` (`sendLookNow`); the big brain names everything it is sure of, the
+person it last knew by name, and the words come back as an announcement. So the toy stays quiet
+about bottles by itself but names them when asked (4 November 2026: bottles in view were "nothing I
+recognise", as the toy's own brain never reported them).
 "Jarvis, learn my face, I'm Sarah", heard by the cloud, answers with `X-Jarvis-Faces`
 (how many faces it wants, at most ten, `toyFacesWanted`, set once the answer has been
 played, so he has heard "look at me"): the face finder then runs on

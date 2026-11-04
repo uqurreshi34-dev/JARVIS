@@ -734,7 +734,7 @@ In cloud mode the toy also knows, with the PC off:
 | Hey Jarvis, what's the weather like / will it rain tomorrow | the weather where the toy is |
 | Hey Jarvis, I live in Leeds | where it is, kept, for the time and the weather |
 | Hey Jarvis, who's top of the Premier League / who's first in the Bundesliga | the AI decides itself whether it needs a live search (no list of words), writes its own search words, and tries the past week's news if the first search misses |
-| Hey Jarvis, what can you see / is anyone there | what its camera sees now |
+| Hey Jarvis, what can you see / is anyone there | "Let me look, sir.", then a fresh picture goes to the cloud's big brain, which names everything it sees in it: "I can see you, Umer, and two bottles." (even things the toy would not announce by itself) |
 | (something new comes into view: a cup, a laptop) | the cloud looks again at that picture with a bigger brain, and the toy says it only if both see it: "I can see a laptop, sir." An airplane in a bright ceiling, or a suitcase in a pillow, is not said |
 | Hey Jarvis, learn my face, I'm Sarah (or casually: can you remember me, I'm Sarah) | the ring breathes white: look at it until it stops (a minute at most), and it knows Sarah from then on |
 | (someone it knows walks in) | I can see you, Umer (or Good evening, Umer): it waits a moment for the face, and looks for faces every 10 s even when it sees no person |
