@@ -735,6 +735,7 @@ In cloud mode the toy also knows, with the PC off:
 | Hey Jarvis, I live in Leeds | where it is, kept, for the time and the weather |
 | Hey Jarvis, who's top of the Premier League / who's first in the Bundesliga | the AI decides itself whether it needs a live search (no list of words), writes its own search words, and tries the past week's news if the first search misses |
 | Hey Jarvis, what can you see / is anyone there | what its camera sees now |
+| (something new comes into view: a cup, a laptop) | the cloud looks again at that picture with a bigger brain, and the toy says it only if both see it: "I can see a laptop, sir." An airplane in a bright ceiling, or a suitcase in a pillow, is not said |
 | Hey Jarvis, learn my face, I'm Sarah (or casually: can you remember me, I'm Sarah) | the ring breathes white: look at it until it stops (a minute at most), and it knows Sarah from then on |
 | (someone it knows walks in) | I can see you, Umer (or Good evening, Umer): it waits a moment for the face, and looks for faces every 10 s even when it sees no person |
 | Hey Jarvis, who am I / who do you know | the face it saw last, by name; everyone it knows |
@@ -754,6 +755,14 @@ Jamendo too when no station matches at all. Pausing and resuming a Jamendo song 
 stopped; a live station carries on live. A live station cannot pick up where it paused, so resuming
 joins it again. The toy takes its own music out of what it hears (echo cancellation), so
 "Hey Jarvis" works with the speaker where it is, over the music.
+
+Two brains: the toy's own (YOLO26n, small, on its chip) notices things; the cloud's (YOLO26s, four
+times bigger, at six times the pixels) checks them. When something new comes into view, the toy sends
+that one picture to the cloud, which looks again and lets the toy say only what both see. What the
+cloud does not see is not said, and not named by "what can you see", while it stays in view; if the
+cloud cannot look within 20 seconds, it is not said either (quiet rather than wrong). People are not
+checked this way: their faces are. The toy says less than before, but what it says is there. Render's
+`TOY_CHECK=0` turns the second look off.
 
 Anyone can teach it their face, each by their own name, and it greets them by
 name as they come into view ("Good evening, Sarah.", once in ten minutes; "I can

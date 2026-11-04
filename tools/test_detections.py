@@ -340,10 +340,10 @@ check("esp_camera_fb_return(frame);" in detect_part
       and detect_part.index("esp_camera_fb_return(frame);") < detect_part.index("run_model();"),
       "a frame is handed back before the model runs, so live view never waits on it")
 face_part = detect_part[detect_part.index("#ifdef JARVIS_FACES\n    // After the report"):]
-send_face = sketch[sketch.index("static void sendFace("):sketch.index("// A decoded frame:")]
+send_face = sketch[sketch.index("static void sendLook("):sketch.index("// A decoded frame:")]
 check("/camera/seen" in sketch and "\\\"box\\\"" in sketch and "image/jpeg" not in detect_part
       and "image/jpeg" in send_face,
-      "the look itself sends what it found; a picture only from sendFace")
+      "the look itself sends what it found; a picture only from sendLook (a face, or the cloud's second look)")
 check("if (face >= FACE_SURE) {" in face_part and face_part.index("if (face >= FACE_SURE) {") < face_part.index("sendFace(face)")
       and "faceLooks < FACE_LOOKS" in face_part and "looked[i].label == 0" in face_part
       and "!faceSent" in face_part and face_part.index("sendFace(face);") < face_part.index("faceSent = true;"),

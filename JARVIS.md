@@ -1813,6 +1813,18 @@ picture polls); the cloud's `/health` every minute counts as JARVIS reached, so 
 board does not restart for want of the PC. In cloud mode `/camera/seen` answers
 `"say": true` when something has come into view and the talk task fetches the words
 from `/toy/announce`, between recordings. `tools/test_toy_cloud_setup.py`.
+Two brains, the cloud's second look (4 November 2026): three rounds of retraining the toy's
+YOLO26n on Kaggle (rooms, ceilings, the toy's own frames) stopped the airplane in his ceiling only
+by losing beds and sofas, and did not help in rooms it never saw. So when something new (but a
+person) comes into view, `/camera/seen` also answers `"check": true` (`toyCheckWanted`), and the
+detect task at once sends that look's own JPEG (`lookJpeg`, kept for the face finder, so only with
+faces built) to the cloud's `/camera/check` through `sendLook`, which `sendFace` now shares (a face
+carries `X-Jarvis-Face`, a second look does not). The cloud looks again with YOLO26s at 640 x 640
+in full precision (its `toy/check.py`, onnxruntime) and says only what both see, as many as both
+see; what it does not see is not said, nor named by "what can you see", while it stays in view,
+and what is not checked within 20 s is not said either. On 79 of the toy's own pictures the second
+look saw none of the 24 airplanes or 27 suitcases the toy had imagined; it also missed some real
+things (half the laptops). `tools/test_toy_talk.py`, `tools/test_detections.py`.
 "Jarvis, learn my face, I'm Sarah", heard by the cloud, answers with `X-Jarvis-Faces`
 (how many faces it wants, at most ten, `toyFacesWanted`, set once the answer has been
 played, so he has heard "look at me"): the face finder then runs on

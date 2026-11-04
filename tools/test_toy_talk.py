@@ -415,8 +415,18 @@ check(sketch.count("setCACert(TOY_CLOUD_CA);") == 3 and "setInsecure()" not in s
 seen_part = sketch[sketch.index("void sendSeen"):sketch.index("// FEMTO-ML runs each conv")]
 check('cloudUrl("/camera/seen")' in seen_part and "toyAnnounceDue = true;" in seen_part,
       "what the toy sees goes to the cloud in cloud mode, which says when there are words for it")
-face_part = sketch[sketch.index("static void sendFace"):sketch.index("void reserveDetection")]
-check('cloudUrl("/camera/face")' in face_part, "and the faces it finds")
+face_part = sketch[sketch.index("static void sendLook"):sketch.index("void reserveDetection")]
+check("cloudUrl(path)" in face_part and 'sendLook("/camera/face", score);' in face_part, "and the faces it finds")
+check('toyCheckWanted = answer.indexOf("\\"check\\":true") >= 0;' in seen_part,
+      "a report the cloud wants a second look at: it says so on its answer")
+check_part = detect[detect.index("if (toyCheckWanted) {"):]
+check('sendLook("/camera/check", -1.0f);' in check_part and "toyCheckWanted = false;" in check_part
+      and "if (lookJpegLength) {" in check_part
+      and detect.index("sendSeen(seen, count, took);") < detect.index("if (toyCheckWanted) {")
+      < detect.index("face_run_model_int8_input();"),
+      "and the toy sends that look's picture at once, after its report and before the face finder")
+check("if (faceScore >= 0) {" in face_part and '"X-Jarvis-Face"' in face_part,
+      "a second look's picture is not a face: no face score on it")
 check("sayWhatWasSeen();" in task and 'cloudUrl("/toy/announce")' in talk_part,
       "the words fetched and said between recordings, never over anyone")
 loop = sketch[sketch.index("void loop() {"):]

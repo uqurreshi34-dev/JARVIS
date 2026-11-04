@@ -310,6 +310,10 @@ static Preferences toyPrefs;
 static volatile bool toyCloudMode = true;
 static volatile bool pcReachable = false;   // the PC answered its last heartbeat
 static volatile bool toyAnnounceDue = false;   // the cloud has words about what the toy sees
+// The cloud's second look (4 November 2026): when the toy reports something new, the cloud answers
+// "check": true and the toy sends that look's picture to /camera/check, where a bigger brain looks
+// again. Only what both see is said, so the toy no longer says an airplane in a bright ceiling.
+static volatile bool toyCheckWanted = false;
 // "Jarvis, learn my face, I'm Sarah": the cloud asks for this many faces (X-Jarvis-Faces), and the
 // face finder sends one from each look with someone in it until they are given -- not just the one
 // it sends when someone comes into view.
@@ -1253,6 +1257,8 @@ void sendSeen(const Seen *seen, int count, unsigned long took, const Seen *now =
     if (answer.indexOf("\"say\":true") >= 0) {
       toyAnnounceDue = true;
     }
+
+    toyCheckWanted = answer.indexOf("\"check\":true") >= 0;
   }
 #endif
 
@@ -1385,12 +1391,14 @@ static float bestFace() {
   return best;
 }
 
-// The look's own picture, with a face in it, to JARVIS: untouched, as the camera made it.
-static void sendFace(float score) {
+// The look's own picture to JARVIS, untouched, as the camera made it: with a face in it
+// (/camera/face, with how sure the face finder was, [faceScore]), or, in cloud mode, the look the toy
+// just reported something new from, for the cloud's second look (/camera/check, [faceScore] < 0).
+static void sendLook(const char *path, float faceScore) {
   HTTPClient https;
 #ifdef JARVIS_TOY_CLOUD
   bool cloud = toyUsesCloud();
-  String url = cloud ? cloudUrl("/camera/face") : String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + "/camera/face";
+  String url = cloud ? cloudUrl(path) : String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + path;
 
   if (!https.begin(cloud ? cloudDetectLink : detectLink, url)) {
     return;
@@ -1398,7 +1406,7 @@ static void sendFace(float score) {
 
   https.addHeader("X-Jarvis-Token", cloud ? TOY_CLOUD_TOKEN : JARVIS_TOKEN);
 #else
-  String url = String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + "/camera/face";
+  String url = String("https://") + JARVIS_HOST + ":" + JARVIS_PORT + path;
 
   if (!https.begin(detectLink, url)) {
     return;
@@ -1410,11 +1418,16 @@ static void sendFace(float score) {
   https.setTimeout(8000);
   https.addHeader("Content-Type", "image/jpeg");
   https.addHeader("X-Jarvis-Camera", SENSOR_NAME);
-  https.addHeader("X-Jarvis-Face", String(score, 2));
+
+  if (faceScore >= 0) {
+    https.addHeader("X-Jarvis-Face", String(faceScore, 2));
+  }
+
   int code = https.POST(lookJpeg, lookJpegLength);
 
 #ifdef JARVIS_TOY_CLOUD
-  // A known face is greeted by name, and a face lesson says how it went: fetched and said by the talk task.
+  // A known face is greeted by name, a face lesson says how it went, and what the second look agreed
+  // on is said: fetched and said by the talk task.
   if (cloud && code == HTTP_CODE_OK) {
     String answer = https.getString();
     answer.replace(" ", "");
@@ -1428,8 +1441,12 @@ static void sendFace(float score) {
   https.end();
 
   if (code != HTTP_CODE_OK) {
-    Serial.printf("[jarvis] face: JARVIS answered %d\n", code);
+    Serial.printf("[jarvis] %s: JARVIS answered %d\n", path, code);
   }
+}
+
+static void sendFace(float score) {
+  sendLook("/camera/face", score);
 }
 #endif
 
@@ -1621,6 +1638,20 @@ void detectTask(void *) {
       lastKinds = now;
       lastSent = millis();
     }
+
+#if defined(JARVIS_TOY_CLOUD) && defined(JARVIS_FACES)
+    // Something new in that report: this look's picture, for the cloud's second look. Without it the
+    // cloud says nothing of it (people aside), so it is sent at once, before the face finder runs.
+    if (toyCheckWanted) {
+      toyCheckWanted = false;
+
+      if (lookJpegLength) {
+        unsigned long checkStarted = millis();
+        sendLook("/camera/check", -1.0f);
+        Serial.printf("[jarvis] check: the look sent for a second look in %lu ms\n", millis() - checkStarted);
+      }
+    }
+#endif
 
 #ifdef JARVIS_FACES
     // After the report, so JARVIS has begun the sighting the picture belongs to.
