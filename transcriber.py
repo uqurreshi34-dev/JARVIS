@@ -20,6 +20,8 @@ from collections import deque
 from dataclasses import dataclass
 import threading
 import numpy as np
+
+import request_log
 from dotenv import load_dotenv
 
 
@@ -301,6 +303,15 @@ class SegmentingEngine:
     name = "segmenting"
     supports_grammar = False
 
+    # Set by voice.py when the wake-word model runs: called with when the utterance began (monotonic),
+    # it says whether the utterance is for JARVIS. One that is not is never written out -- with Groq,
+    # never sent -- only counted (request_log.ignored).
+    gate = None
+
+    # How the last utterance written out was heard: {"engine", "online", "ms", "audio_seconds",
+    # "fell_back"}, for request_log.
+    last_heard = None
+
     def __init__(self, block_seconds):
         self._block_seconds = block_seconds
         self._pre_roll = deque(maxlen=_PRE_ROLL_BLOCKS)
@@ -389,6 +400,7 @@ class SegmentingEngine:
 
     def _finish(self):
         audio = np.concatenate(self._buffer) if self._buffer else np.array([])
+        began = self._started
 
         if TIMING and self._started:
             print(
@@ -402,11 +414,25 @@ class SegmentingEngine:
         if len(audio) < SAMPLE_RATE * _MIN_UTTERANCE_SECONDS:
             return None
 
+        seconds = len(audio) / SAMPLE_RATE
+
+        if self.gate is not None and not self.gate(began):
+            print(f"[wake] {seconds:.1f}s heard without \"Hey Jarvis\": not written out")
+            request_log.ignored("no wake word", engine="wake model", online=False, audio_seconds=seconds)
+            return None
+
+        self._used_cloud = self._fell_back = False
+        writing = time.monotonic()
+
         try:
             text = self._transcribe(audio)
         except Exception as error:
             print(f"[JARVIS] transcription failed: {error}")
             return None
+
+        self.last_heard = {"engine": self.name, "online": self._used_cloud,
+                           "ms": (time.monotonic() - writing) * 1000, "audio_seconds": seconds,
+                           "fell_back": self._fell_back}
 
         if not text:
             return None
@@ -640,7 +666,11 @@ class GroqWhisperEngine(SegmentingEngine):
                 text = self._cloud(audio)
             except Exception as error:
                 self._rest_after(error)
+                self._fell_back = True
+                request_log.fallback("groq-whisper>local")
             else:
+                self._used_cloud = True
+
                 if self._rest:
                     print("[JARVIS] cloud transcription is back", flush=True)
 

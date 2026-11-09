@@ -104,6 +104,8 @@ _PROTECTED_NAMES = frozenset({
 _PROTECTED_PATTERNS = (
     re.compile(r"^jarvis-log-.+\.txt$", re.IGNORECASE),
     re.compile(r"^usage-\d{4}-\d{2}\.jsonl$", re.IGNORECASE),
+    # The monthly request record (request_log.py).
+    re.compile(r"^requests-\d{4}-\d{2}\.jsonl$", re.IGNORECASE),
     # Copies of mcp.json kept before an edit ("mcp.json.before-..."). They
     # hold the same keys and tokens, so they stay where they are too.
     re.compile(r"^mcp\.json\..+$", re.IGNORECASE),

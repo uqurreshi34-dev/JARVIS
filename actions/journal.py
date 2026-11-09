@@ -125,6 +125,11 @@ def command(spoken, intent, free_path, detail=None):
 
     write("command", line)
 
+    # How it was understood, for the request under way (request_log).
+    import request_log
+
+    request_log.route(intent, free_path)
+
 
 def action(intent, detail, succeeded, spoken=None):
     """Record something that changed the machine or a file.

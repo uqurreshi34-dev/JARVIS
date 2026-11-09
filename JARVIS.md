@@ -1441,6 +1441,38 @@ said at once. Every wake is printed with what was heard (`[wake] woken by
 only when the transcript has something like the name in it
 (`_strip_wake` returns None otherwise), so "oh yeah" no longer wakes him. `tools/test_follow_up_named.py`.
 
+### "Hey Jarvis" on this PC - `wake_model.py`, `voice.py`, `transcriber.py`
+Until November 2026 the desk found its name by writing out everything the
+microphone heard -- with Groq Whisper, on Groq's servers -- and looking for
+"Jarvis" in the words. Every sentence said in the room, and the television,
+went to the cloud first, cost a Groq request and waited on the network.
+Now openWakeWord's "hey jarvis" model listens to the sound itself, on the PC,
+for the engines that write out whole utterances (Whisper and Groq; Vosk
+already heard the name on the PC). An utterance is written out only when
+"Hey Jarvis" was heard in it or in the 2 seconds before it
+(WAKE_LOOKBACK_SECONDS), or when it began in a follow-up window. Anything
+else is dropped before transcription (`[wake] ... not written out` in the
+console) and counted in the request record as kept on the PC.
+
+The model is three small ONNX files (a melspectrogram, Google's speech
+embedding and the "hey jarvis" classifier), fetched once from openWakeWord's
+v0.5.1 release into `JARVIS\models\wake`, checked against their SHA-256 and
+run with onnxruntime, which JARVIS already has: no new package. The streaming
+steps are openWakeWord's own, written out in wake_model.py; checked against
+the openwakeword package, the scores agree to within 0.004. It costs about
+6 ms per quarter second of audio on one thread. It answers "Hey Jarvis", not
+plain "Jarvis" (which scores near zero), so the desk phrase is "Hey Jarvis".
+After JARVIS speaks, and on unmute, the model forgets what it heard, so his
+own voice cannot linger in it. If the files cannot be fetched (no internet
+the first time) or the model fails, the desk works as before, finding the
+name in the words. Settings: `JARVIS_WAKE_MODEL` ("hey_jarvis", or "off" for
+the old way) and `JARVIS_WAKE_THRESHOLD` (0.5).
+
+Licence: openWakeWord's code is Apache-2.0, but its pre-trained models,
+"hey jarvis" among them, are CC BY-NC-SA 4.0: free for personal,
+non-commercial use. A JARVIS that is sold would train its own wake model
+(openWakeWord trains one from synthetic speech). `tools/test_wake_model.py`.
+
 ### Status report - `actions/status_report.py`
 "Status report" is JARVIS on himself, with no model call: connected
 services up and down (mcp_services.configured and connected), the boards
@@ -1464,6 +1496,34 @@ piece, so two sentences waited for both to be synthesised.
 _speakable_chunks starts a reply with its first sentence alone when that
 sentence is long enough to stand alone, unless the whole reply is already
 cached and plays at once.
+
+### The request record and report - `request_log.py`, `actions/request_report.py`
+Every request gets one line of JSON in `requests-YYYY-MM.jsonl` in the
+JARVIS folder: where it came from (desk or phone), how it was heard (engine,
+online or not, how long the writing out took, how long the audio was,
+whether Groq fell back to local Whisper, and whether the wake model or a
+follow-up let it through), whether it was understood locally (the phrase
+list) or by the model, each AI call (provider, model, kind, tokens, time),
+what was spoken (voice, online or not, characters, time to sound, which
+voice stood in), anything that failed over, the outcome, the times (total,
+to first word, deciding, responding) and which parts went online
+(hearing, ai, voice). The words themselves are not kept: jarvis-log.txt
+has them. So the record can be shared to make JARVIS faster or cheaper
+without giving away what was asked.
+
+Two other kinds of line: "ignored" (something heard that was not for him:
+turned away by the wake model before it was written out, or written out
+and no name found) and "fallback" (a part that failed over outside a
+request). A phone request that begins during a desk one is recorded too,
+marked "overlapped". Writing the record never raises.
+
+"Request report" (also "weekly report", "how much went online") reads it
+back over 7 days: how many requests, how many needed the internet and for
+what, how many stayed on the PC, the typical and slowest time to his first
+word, what the wake word kept on the PC, and what failed over. "Status
+report" adds one line: how many of today's requests needed the internet.
+`python -m actions.request_report 30` prints every number as a table.
+No model call. `tools/test_request_log.py`.
 
 ### His voice - `voices.py`, `speech.py`
 On 10 October 2026 Edge's Read Aloud service, where the Ryan voice came
@@ -2302,8 +2362,8 @@ whine read as a siren; the test keeps the check mostly quiet between pings.
 ## How a command travels
 
 ```
-voice.py        hears you, checks the wake word
-transcriber.py  turns audio into text (Whisper or Vosk)
+voice.py        hears you; "Hey Jarvis" heard on the PC (wake_model.py)
+transcriber.py  turns audio into text (Whisper or Vosk), only once woken
 commands.py     decides what you meant
 actions/*.py    does it
 speech.py       says the reply (voices.py makes it: Google, Azure, Kokoro or Edge)
@@ -3162,6 +3222,7 @@ voice, Graph credentials, weather fallback, `TAVILY_API_KEY` for research.
 | `tools/gold_backtest.py` | how the gold strategy (Bollinger touch, RSI turning back, a confirmation candle, 10:00 to 14:00 UK) would have done over the last three years of gold (OANDA's, or spot from Dukascopy), with fixed $10/$30 exits, exits from the bands, or an ATR trailing stop that moves to breakeven at 1 R, with or without a 200-candle trend filter, every open choice side by side and each split into a part a year, and one trade at a time against several |
 | `tts_debug.py` | why the neural voice is not playing |
 | `wake_test.py` | how reliably the wake word is heard |
+| `python -m actions.request_report 7` | every number in the request record for the last 7 days: requests, what went online and why, times, fallbacks, what the wake word kept on the PC |
 | `tools/test_console.py` | typed commands, no microphone (a console, not a suite: tools/run_tests.py leaves it out) |
 | `tools/test_type.py` | whether typing lands exactly, into a window you click (manual: it really types, so tools/run_tests.py leaves it out) |
 | "status report" | how quickly he has been answering, among the rest |

@@ -14,6 +14,7 @@ import sounddevice as sd
 import soundfile as sf
 
 
+import request_log
 import voices
 
 
@@ -242,11 +243,18 @@ def first_sound():
     return _first_sound
 
 
+# When the sound of what is being said now first played (for request_log), reset by each speak().
+_said_sound_at = None
+
+
 def _sounding():
-    global _first_sound
+    global _first_sound, _said_sound_at
 
     if _first_sound is None:
         _first_sound = time.monotonic()
+
+    if _said_sound_at is None:
+        _said_sound_at = time.monotonic()
 
 
 def speech_epoch():
@@ -325,6 +333,7 @@ class SpeechEngine:
 
     def __init__(self, voice=VOICE, engine=ENGINE):
         self.engine = engine
+        self._stood_in = None
 
         # What the cache keys phrases by. Azure and Edge make the same Ryan,
         # so a phrase either one has said plays from the cache for both.
@@ -413,7 +422,13 @@ class SpeechEngine:
             if self.engine in voices.LOCAL:
                 voices.local().wait(_LOCAL_LOAD_WAIT)
 
-            global _neural_failed_at
+            global _neural_failed_at, _said_sound_at
+
+            # For request_log: which voice said it, whether it went online, how long until it was heard.
+            _said_sound_at = None
+            asked = time.monotonic()
+            self._stood_in = None
+            went_online = False
 
             try:
                 if _neural_busy.is_set():
@@ -431,6 +446,8 @@ class SpeechEngine:
                     self._speak_fallback(text)
 
                 else:
+                    went_online = self.engine not in voices.LOCAL and not self._is_cached(text)
+
                     try:
                         self._speak_neural(text)
                     except Exception as error:
@@ -450,6 +467,12 @@ class SpeechEngine:
                 _report_speaking(False)
                 _priority.clear()
                 _bump_epoch()
+
+                if self._stood_in:
+                    request_log.fallback(f"{self.engine}>{self._stood_in}")
+
+                heard = None if _said_sound_at is None else (_said_sound_at - asked) * 1000
+                request_log.voice(self.engine, went_online, len(text), heard, self._stood_in)
 
     def play_file(self, path):
         """Play an audio file through the same path as synthesised speech.
@@ -1169,11 +1192,14 @@ class SpeechEngine:
                 print(f"[JARVIS] the Kokoro voice failed too ({error}); "
                       f"using the Windows voice.")
             else:
+                self._stood_in = "kokoro"
+
                 if not _stop.is_set():
                     self._play_reactive(data, samplerate, boundaries)
 
                 return
 
+        self._stood_in = "windows"
         self._speak_windows(text)
 
     def _speak_windows(self, text):

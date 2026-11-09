@@ -181,9 +181,18 @@ def _usage(summary=None):
     return said + "."
 
 
+def _requests():
+    try:
+        from actions import request_report
+
+        return request_report.line_for_status()
+    except Exception:
+        return None
+
+
 def report():
     """The status report, as said."""
-    parts = [part for part in (_services(), _boards(), _record(), _replies(), _usage()) if part]
+    parts = [part for part in (_services(), _boards(), _record(), _replies(), _usage(), _requests()) if part]
     parts[0] = "Status report, sir. " + parts[0]
     return " ".join(parts)
 

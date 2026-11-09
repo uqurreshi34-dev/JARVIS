@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from anthropic import AnthropicFoundry
 
+import request_log
 import usage
 
 try:
@@ -1132,6 +1133,7 @@ def chat(messages, response_format=None, temperature=0, max_tokens=None,
 
     for index, provider in enumerate(order):
         try:
+            asked = time.monotonic()
             content = provider.chat(
                 messages,
                 response_format=response_format,
@@ -1139,6 +1141,7 @@ def chat(messages, response_format=None, temperature=0, max_tokens=None,
                 max_tokens=max_tokens,
                 reasoning_effort=reasoning_effort,
             )
+            request_log.model_time(provider.name, (time.monotonic() - asked) * 1000)
 
             # It answered, so it is clearly available again.
             provider.wake()
@@ -1163,6 +1166,7 @@ def chat(messages, response_format=None, temperature=0, max_tokens=None,
                 reason = f"model unavailable ({provider.model})"
 
             remaining = len(order) - index - 1
+            request_log.fallback(f"{provider.name}>{order[index + 1].name}" if remaining else f"{provider.name}>none")
 
             if remaining:
                 print(

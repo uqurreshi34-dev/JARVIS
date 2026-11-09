@@ -79,6 +79,7 @@ from actions import (
     sensor_history,
     sensors,
     social,
+    request_report,
     status_report,
     tasks,
     project_setup,
@@ -288,6 +289,11 @@ _FAST_PHRASES = (
       "whats your status", "what is your status",
       "how are your systems", "status check"),
      "status_report"),
+    (("request report", "give me a request report", "requests report", "weekly report",
+      "give me a weekly report", "how much went online", "what went online",
+      "what went online today", "how much did you use the internet",
+      "how much of that went online"),
+     "request_report"),
     (("how are my trades going", "hows my trading", "how is my trading",
       "how are my trades doing", "my trade journal", "read my trade journal",
       "how am i doing with my trades", "whats my trading record"),
@@ -6832,6 +6838,9 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
     if intent == "status_report":
         return _query(intent, status_report.report)
+
+    if intent == "request_report":
+        return _query(intent, request_report.report)
 
     if intent == "trading_record":
         return _query(intent, trade_journal.report)

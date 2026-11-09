@@ -99,6 +99,7 @@ from actions.watch import watcher, catch_up
 from actions.gold_trader import trader as gold_trader
 from actions.trend_trader import trader as trend_trader
 import phrases
+import request_log
 from actions.markets import market_monitor
 from actions.patterns import pattern_monitor
 from phone import phone_server
@@ -637,6 +638,16 @@ class Assistant:
                     self._run_action(result)
 
     def _on_phone_command(self, text):
+        """A command from the phone, recorded as its own request (request_log)."""
+        request = request_log.begin("phone")
+        started = time.monotonic()
+
+        try:
+            return self._phone_command(text)
+        finally:
+            request_log.end(request, "answered", decide=time.monotonic() - started)
+
+    def _phone_command(self, text):
         """Run a command that came from the phone, and return the words.
 
         Deliberately does not go through _run_query/_run_action: those
@@ -847,6 +858,9 @@ class Assistant:
             self._begin_interaction()
             self._state(THINKING)
 
+            # One record per request: how it was heard, which way it went, which AI and voice, how long.
+            request = request_log.begin("desk")
+
             # Spoken at the desk: you are in the room, so movement there now
             # is you and not a return. (A command from the phone could come
             # from anywhere, so it does not count.)
@@ -864,6 +878,7 @@ class Assistant:
             except Exception as error:
                 print(f"[JARVIS] command error: {error}")
                 self._say(phrases.pick("wrong"))
+                request_log.end(request, "error", decide=time.monotonic() - _heard_at)
                 self._close_turn()
                 continue
 
@@ -871,6 +886,7 @@ class Assistant:
                 # Not understood: likely not meant for him. The turn ends here -- no follow-up window, and
                 # anything that queued behind it (a gold trade, a battery warning) is said now.
                 self._say(phrases.pick("unknown"))
+                request_log.end(request, "not understood", decide=time.monotonic() - _heard_at)
                 self._close_turn()
                 continue
 
@@ -878,6 +894,7 @@ class Assistant:
                 print(
                     f"[JARVIS] {result.get('intent')} needs his name in a follow-up; not done")
                 self._say(phrases.pick("name_first"))
+                request_log.end(request, "needs his name", decide=time.monotonic() - _heard_at)
                 self._close_turn()
                 continue
 
@@ -891,6 +908,13 @@ class Assistant:
             # How long from hearing you to his first word, for "status report".
             if first_sound() is not None:
                 status_report.note_turn(first_sound() - _heard_at)
+
+            request_log.end(
+                request, "stopped" if self._turn_stopped.is_set() else "answered",
+                to_first_word=(first_sound() - _heard_at) if first_sound() is not None else None,
+                decide=_handled_at - _heard_at,
+                respond=time.monotonic() - _handled_at,
+            )
 
             # The night just gone, once a morning, after the first answer of
             # it: queued like any announcement, so it waits for the turn.

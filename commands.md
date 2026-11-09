@@ -9,6 +9,18 @@ everything. General-knowledge questions, asking the camera what it sees,
 and drafting a commit message need a live model request. A command phrased
 in a way not listed here may also fall through to the language model.
 
+**At the desk, say "Hey Jarvis", not just "Jarvis".** With Groq or
+Whisper listening (STT_ENGINE), a small wake-word model on the PC listens
+for "Hey Jarvis" in the sound itself. Only what you say with it, or in a follow-up window,
+is written out -- and with Groq, sent. Everything else said in the room,
+and the television, stays on the PC. Plain "Jarvis" on its own is not
+enough for the model: say "Hey Jarvis, what time is it". The model's
+three small files are fetched once, the first time JARVIS starts (it
+needs the internet that once). `JARVIS_WAKE_MODEL=off` in `.env` goes
+back to the old way: everything is written out and "Jarvis" is looked for
+in the words. With STT_ENGINE=vosk nothing changes: Vosk hears "Jarvis"
+on the PC already.
+
 Personal-memory questions are different: JARVIS retrieves remembered facts
 locally using semantic memory, so a strong match skips the command-classifier
 API call. When a language model is available, the final answer uses one model
@@ -79,7 +91,8 @@ stays on the PC.
 | what time is it | date and time |
 | what's the weather like | forecast for wherever you've said you are |
 | how's my system | CPU, memory, disk, battery |
-| status report | JARVIS himself: which connected services are up, the sensor boards, today's sensor record and its gaps, how quickly he has been answering, and the last day's model calls with the share read from the cache (also "run diagnostics", "run a self check") |
+| status report | JARVIS himself: which connected services are up, the sensor boards, today's sensor record and its gaps, how quickly he has been answering, and the last day's model calls with the share read from the cache, and how many of today's requests needed the internet (also "run diagnostics", "run a self check") |
+| request report | How JARVIS's requests were handled over the last 7 days: how many, how many needed the internet and for what (hearing you, the AI, his voice), how many stayed on the PC, how long to his first word, what the wake word kept on the PC, and what failed over. Read from requests-YYYY-MM.jsonl; no model call, and no words are kept in it (also "weekly report", "how much went online", "what went online today") |
 | how are my trades going | Your own trades at OANDA, the ones placed by hand: how many, won and lost, the result overall and in R, how many reached the target or the stop; then the gold trader's record. Kept in manual-trades.csv (also "how's my trading", "read my trade journal") |
 | show me the top traders | The trader board: Hyperliquid's best recent performers, judged on their whole record -- consistent ones first, with profit curves, each part of the period, deepest fall and the working. Read-only (also "best traders", "copy traders") |
 | show trader three | One trader's record in full on the board: the curve with its falls shaded, every trade, the calculations, open positions and how close each is to liquidation |

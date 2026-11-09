@@ -150,6 +150,11 @@ def record(provider, model, kind, response):
             with open(_ledger(now), "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(entry) + "\n")
 
+        # The request this call was made for (request_log), if one is under way.
+        import request_log
+
+        request_log.model_call(provider, model, kind, counts)
+
     except Exception as error:
         if not _warned:
             _warned = True

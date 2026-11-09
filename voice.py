@@ -10,7 +10,9 @@ import numpy as np
 import sounddevice as sd
 from vosk import KaldiRecognizer, Model
 
+import request_log
 import transcriber
+import wake_model
 from speech import is_speaking, speech_epoch
 
 
@@ -106,6 +108,79 @@ model = Model(MODEL_PATH)
 engine = transcriber.build_engine(model, BLOCK_SIZE)
 
 print(f"[JARVIS] speech engine: {engine.name}")
+
+# "Hey Jarvis" heard by a wake-word model on this PC (wake_model.py), for the engines that write out whole
+# utterances (Whisper, Groq): only an utterance with "Hey Jarvis" in it, or just before it, or one said in a
+# follow-up window, is written out -- with Groq, sent. Everything else stays here. Until it has loaded (or
+# when it cannot), everything heard is written out and the name looked for in the words, as before.
+WAKE_LOOKBACK_SECONDS = 2.0
+
+_wake = {"detector": None, "heard_at": 0.0, "armed_at_start": False, "woke": False, "lock": threading.Lock()}
+
+
+def _wake_ready(detector):
+    with _wake["lock"]:
+        _wake["detector"] = detector
+
+    engine.gate = _gate
+
+
+def _gate(began):
+    """Whether the utterance that began at [began] is for JARVIS: said in a listening window, or with
+    "Hey Jarvis" heard in it or just before it."""
+    if not REQUIRE_WAKE_WORD or _wake["armed_at_start"] or _armed():
+        _wake["woke"] = False
+        return True
+
+    began = began if began is not None else time.monotonic()
+    _wake["woke"] = _wake["heard_at"] >= began - WAKE_LOOKBACK_SECONDS
+    return _wake["woke"]
+
+
+def _hear_wake(block):
+    """Run the wake-word model over one block of audio."""
+    detector = _wake["detector"]
+
+    if detector is None:
+        return
+
+    try:
+        score = detector.feed(block)
+    except Exception as error:   # noqa: BLE001 - a broken model must not stop the microphone
+        print(f"[JARVIS] wake word model failed ({error}); finding the name in the words instead")
+        _wake["detector"] = None
+        engine.gate = None
+        return
+
+    if score >= wake_model.threshold():
+        if time.monotonic() - _wake["heard_at"] > 1.5:
+            print(f"[wake] \"Hey Jarvis\" heard on this PC ({score:.2f})")
+
+        _wake["heard_at"] = time.monotonic()
+
+
+def _reset_wake():
+    detector = _wake["detector"]
+
+    if detector is not None:
+        detector.reset()
+
+    _wake["heard_at"] = 0.0
+
+
+if REQUIRE_WAKE_WORD and isinstance(engine, transcriber.SegmentingEngine):
+    wake_model.start(on_ready=_wake_ready)
+
+
+def _heard(how):
+    """Note for request_log how the command about to be returned was heard."""
+    info = getattr(engine, "last_heard", None)
+
+    if not isinstance(info, dict):
+        info = {"engine": getattr(engine, "name", None), "online": False}
+
+    request_log.heard(info.get("engine", getattr(engine, "name", None)), info.get("online", False), info.get("ms"),
+                      info.get("audio_seconds"), how, info.get("fell_back", False))
 
 _armed_until = 0.0
 _phone_active = threading.Event()
@@ -573,6 +648,7 @@ def listen():
             if was_muted:
                 was_muted = False
                 engine.reset()
+                _reset_wake()
 
                 if waker:
                     waker.Reset()
@@ -596,6 +672,7 @@ def listen():
                 time.sleep(SETTLE_SECONDS)
                 _drain_queue()
                 engine.reset()
+                _reset_wake()
 
                 if waker:
                     waker.Reset()
@@ -621,6 +698,7 @@ def listen():
                 _report_status()
 
             _report_levels(data)
+            _hear_wake(data)
 
             if waker and waker.AcceptWaveform(data):
                 heard = json.loads(waker.Result()).get("text", "")
@@ -635,6 +713,7 @@ def listen():
             if not getattr(engine, "active", False):
                 armed_at_start = _armed()
 
+            _wake["armed_at_start"] = armed_at_start
             result = engine.feed(data)
 
             if result is None:
@@ -652,6 +731,7 @@ def listen():
 
             if not REQUIRE_WAKE_WORD:
                 print(f"You said: {text}")
+                _heard("no wake word needed")
                 return text
 
             if armed_at_start or _armed():
@@ -670,6 +750,7 @@ def listen():
 
                 print(f"You said: {command}")
                 _report_status()
+                _heard("follow-up")
 
                 return command
 
@@ -688,8 +769,27 @@ def listen():
 
             wake_pending = False
 
+            # The wake-word model heard "Hey Jarvis" for this utterance, but the words lost the name (Whisper
+            # wrote "Hey Jervis" or left it out): it was for him, all the same.
+            woke = getattr(engine, "gate", None) is not None and _wake["woke"]
+            _wake["woke"] = False
+
+            if woke and not addressed:
+                stripped = _strip_wake(text)
+                remainder = (stripped if stripped is not None else text).strip()
+
+                if remainder.split()[:1] in (["hey"], ["hi"], ["ok"], ["okay"]):
+                    remainder = " ".join(remainder.split()[1:])
+
+                addressed = True
+
             if not addressed:
                 print(f'[ignored] "{text}" (no wake word)')
+                heard_info = getattr(engine, "last_heard", None)
+                heard_info = heard_info if isinstance(heard_info, dict) else {}
+                request_log.ignored("written out, no name", engine=heard_info.get("engine", engine.name),
+                                    online=heard_info.get("online", False),
+                                    audio_seconds=heard_info.get("audio_seconds"))
                 continue
 
             # What woke him, as heard: a name he answers to that was not meant for him shows here.
@@ -698,6 +798,7 @@ def listen():
             if remainder:
                 _last_named = True
                 print(f"You said: {remainder}")
+                _heard("wake model" if woke else "name")
                 return remainder
 
             woken_by_name = True

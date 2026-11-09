@@ -86,6 +86,21 @@ def activate():
     except Exception:
         pass
 
+    # The request record and the wake-word model's files likewise find their own folders.
+    try:
+        import request_log
+
+        request_log._folder = lambda: holder
+    except Exception:
+        pass
+
+    try:
+        import wake_model
+
+        wake_model.folder = lambda: os.path.join(holder, "models", "wake")
+    except Exception:
+        pass
+
     atexit.register(_cleanup)
 
     return holder
