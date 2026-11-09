@@ -41,6 +41,8 @@ import request_log  # noqa: E402
 import transcriber  # noqa: E402
 import wake_model  # noqa: E402
 
+request_log.enable()
+
 transcriber.build_engine = lambda model, block: MagicMock(name="engine")
 
 import voice  # noqa: E402
@@ -120,6 +122,7 @@ os.environ.pop("JARVIS_WAKE_THRESHOLD", None)
 check(not hasattr(voice.engine, "gate") or voice.engine.gate is None or isinstance(voice.engine, MagicMock),
       "a stand-in engine is not given the wake-word model")
 check(wake_model.status() == "not started", "nor is the model started for it")
+check(not voice._wake["started"], "importing voice.py starts nothing: the model loads when listening begins")
 
 # ---- the gate ----------------------------------------------------------------
 

@@ -115,7 +115,8 @@ print(f"[JARVIS] speech engine: {engine.name}")
 # when it cannot), everything heard is written out and the name looked for in the words, as before.
 WAKE_LOOKBACK_SECONDS = 2.0
 
-_wake = {"detector": None, "heard_at": 0.0, "armed_at_start": False, "woke": False, "lock": threading.Lock()}
+_wake = {"detector": None, "heard_at": 0.0, "armed_at_start": False, "woke": False, "started": False,
+         "lock": threading.Lock()}
 
 
 def _wake_ready(detector):
@@ -168,8 +169,16 @@ def _reset_wake():
     _wake["heard_at"] = 0.0
 
 
-if REQUIRE_WAKE_WORD and isinstance(engine, transcriber.SegmentingEngine):
-    wake_model.start(on_ready=_wake_ready)
+def _start_wake_model():
+    """Load the wake-word model, once, when listening first begins -- not on import, so a program that only
+    imports this module (a test) never has a thread loading onnxruntime as it exits, which Windows can hang on."""
+    if _wake["started"]:
+        return
+
+    _wake["started"] = True
+
+    if REQUIRE_WAKE_WORD and isinstance(engine, transcriber.SegmentingEngine):
+        wake_model.start(on_ready=_wake_ready)
 
 
 def _heard(how):
@@ -597,6 +606,7 @@ def user_talking():
 
 def listen():
     """Block until an addressed command is heard, then return it."""
+    _start_wake_model()
     engine.reset()
 
     waker = _make_wake_recognizer() if REQUIRE_WAKE_WORD else None

@@ -1466,7 +1466,10 @@ After JARVIS speaks, and on unmute, the model forgets what it heard, so his
 own voice cannot linger in it. If the files cannot be fetched (no internet
 the first time) or the model fails, the desk works as before, finding the
 name in the words. Settings: `JARVIS_WAKE_MODEL` ("hey_jarvis", or "off" for
-the old way) and `JARVIS_WAKE_THRESHOLD` (0.5).
+the old way) and `JARVIS_WAKE_THRESHOLD` (0.5). The model loads when listening
+first begins (`voice._start_wake_model`), not when voice.py is imported: a test
+that imports it and exits at once left a thread loading onnxruntime as Python
+shut down, and on Windows test_boot hung for 84 minutes.
 
 Licence: openWakeWord's code is Apache-2.0, but its pre-trained models,
 "hey jarvis" among them, are CC BY-NC-SA 4.0: free for personal,
@@ -1515,7 +1518,10 @@ Two other kinds of line: "ignored" (something heard that was not for him:
 turned away by the wake model before it was written out, or written out
 and no name found) and "fallback" (a part that failed over outside a
 request). A phone request that begins during a desk one is recorded too,
-marked "overlapped". Writing the record never raises.
+marked "overlapped". Writing the record never raises. It is off until
+`request_log.enable()`, which main.py calls as JARVIS starts: the suites run the
+same providers and transcriber code with pretend failures, and before this one
+test run added "groq-whisper>local" fourteen times to the real record.
 
 "Request report" (also "weekly report", "how much went online") reads it
 back over 7 days: how many requests, how many needed the internet and for
@@ -2434,7 +2440,10 @@ beam joining them to the HUD.
 Every suite in `tools/` (test_*.py) is a script that exits non-zero when
 anything in it failed, runs offline in a sandboxed JARVIS folder and needs
 no keys. `tools/run_tests.py` runs them all, each in its own Python with the
-panels drawn offscreen, a time limit and no keyboard, and sums up:
+panels drawn offscreen, a time limit and no keyboard, and sums up. A suite
+that runs out of time is stopped with everything it started (`taskkill /T` on
+Windows): a process it left behind kept the output pipe open, and the 10-minute
+limit once became 84 minutes.
 
 ```text
 python tools/run_tests.py

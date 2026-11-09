@@ -63,6 +63,17 @@ def why(output):
     return failed[:40] + (["..."] if failed else []) + tail
 
 
+def _kill_tree(process):
+    """Stop a suite that ran out of time, and anything it started: on Windows a process it left running
+    keeps the output pipe open, and the wait for that output then never ends (test_boot once took 84
+    minutes against a 10-minute limit)."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        process.kill()
+
+
 def run(path, timeout):
     """Run one suite. (passed, seconds, output)."""
     environment = dict(os.environ)
@@ -71,15 +82,23 @@ def run(path, timeout):
     environment.setdefault("PYTHONIOENCODING", "utf-8")
     started = time.monotonic()
 
+    # No keyboard: a suite that ever asked for input gets an empty line, not a wait.
+    process = subprocess.Popen([sys.executable, str(path)], cwd=str(ROOT), env=environment,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
     try:
-        # No keyboard: a suite that ever asked for input gets an empty line, not a wait.
-        finished = subprocess.run([sys.executable, str(path)], cwd=str(ROOT), env=environment,
-                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                  timeout=timeout)
-        output = finished.stdout.decode("utf-8", "replace")
-        passed = finished.returncode == 0
-    except subprocess.TimeoutExpired as expired:
-        output = (expired.stdout or b"").decode("utf-8", "replace") + f"\n[run_tests] timed out after {timeout}s\n"
+        data, _ = process.communicate(timeout=timeout)
+        output = data.decode("utf-8", "replace")
+        passed = process.returncode == 0
+    except subprocess.TimeoutExpired:
+        _kill_tree(process)
+
+        try:
+            data, _ = process.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            data = b""
+
+        output = (data or b"").decode("utf-8", "replace") + f"\n[run_tests] timed out after {timeout}s\n"
         passed = False
 
     return passed, time.monotonic() - started, output

@@ -14,6 +14,10 @@ Also recorded, as their own lines:
               the Google voice to Kokoro or Windows
 
 Never raises: a request is never lost because its record could not be written.
+
+Off until enable() is called, which main.py does as JARVIS starts. Test suites import the same code
+(providers, transcriber, voice) and make their pretend failovers; without this they were added to the
+real record ("groq-whisper>local" fourteen times in one test run).
 """
 
 import json
@@ -24,7 +28,7 @@ from datetime import datetime, timedelta
 
 _FOLDER_NAME = "JARVIS"
 _lock = threading.Lock()
-_state = {"current": None, "heard": None, "warned": False}
+_state = {"current": None, "heard": None, "warned": False, "on": False}
 
 # A transcription this old when a request begins is not this request's.
 _HEARD_FRESH_SECONDS = 30.0
@@ -40,7 +44,15 @@ def _ledger(day):
     return os.path.join(_folder(), f"requests-{day:%Y-%m}.jsonl")
 
 
+def enable(on=True):
+    """Start (or stop) writing records. JARVIS calls this as he starts; a test that checks records too."""
+    _state["on"] = bool(on)
+
+
 def _write(entry):
+    if not _state["on"]:
+        return
+
     try:
         now = datetime.now()
         entry = {"at": now.isoformat(timespec="seconds"), **entry}

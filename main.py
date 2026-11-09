@@ -1075,6 +1075,9 @@ def _report_fault(kind, error, trace):
 
 def main():
     sys.excepthook = _report_fault
+
+    # Requests are recorded only by JARVIS himself: a test that imports the same code adds nothing.
+    request_log.enable()
     app = QApplication(sys.argv)
 
     # Says in the console when the HUD freezes, for how long, and in what.

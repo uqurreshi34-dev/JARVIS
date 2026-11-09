@@ -38,6 +38,9 @@ def check(condition, message):
     failures += not condition
 
 
+request_log.fallback("groq>gemini")
+check(not request_log.entries(7), "nothing is recorded until JARVIS turns it on: a test's pretend failover is not his")
+request_log.enable()
 check(request_log._folder() == sandbox.directory(), "in tests the record is kept in the sandbox")
 check(request_report.report(7).startswith("I have no requests on record"), "no records: said plainly")
 check(request_report.line_for_status() is None, "and the status report says nothing of it")
