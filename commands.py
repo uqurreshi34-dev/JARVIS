@@ -44,7 +44,6 @@ from actions import (
     clipboard,
     contacts,
     diary,
-    dex_intelligence,
     documents,
     file_hologram,
     house,
@@ -527,6 +526,10 @@ _FAST_PHRASES = (
     (("close sandbox", "close the sandbox", "stop sandbox",
       "stop the sandbox", "hide sandbox", "hide the sandbox",
       "dismiss the sandbox", "dismiss sandbox"), "close_sandbox"),
+    (("open arbitrage", "start arbitrage", "begin arbitrage",
+      "open arb", "start arb", "open arbitrage sandbox", "begin arbitrage sandbox"), "open_arb_sandbox"),
+    (("close arbitrage", "stop arbitrage", "close arb", "stop arb",
+      "close arbitrage sandbox", "stop arbitrage sandbox"), "close_arb_sandbox"),
 )
 
 _FAST_LOOKUP = {
@@ -1724,6 +1727,41 @@ def _sandbox_hide():
     return "Sandbox closed, sir."
 
 
+_arb_sandbox_listener = None
+
+
+def set_arb_sandbox_listener(listener):
+    """Register a callable taking "show" or "hide" to control the arb panel."""
+    global _arb_sandbox_listener
+    _arb_sandbox_listener = listener
+
+
+def _arb_sandbox_show():
+    if _arb_sandbox_listener:
+        try:
+            _arb_sandbox_listener("show")
+        except Exception as e:
+            print(f"[JARVIS] could not show arb sandbox: {e}")
+            return "I couldn't open the arbitrage sandbox, sir."
+    return "Arbitrage sandbox ready, sir. Press ARM on the panel to start the scanner."
+
+
+def _arb_sandbox_hide():
+    try:
+        from actions import arb_runner
+        arb_runner.disarm(lambda s: None)  # Silently disarm on hide
+    except Exception as e:
+        print(f"[JARVIS] could not disarm arb sandbox: {e}")
+
+    if _arb_sandbox_listener:
+        try:
+            _arb_sandbox_listener("hide")
+        except Exception as e:
+            print(f"[JARVIS] could not hide arb sandbox: {e}")
+
+    return "Arbitrage sandbox closed, sir."
+
+
 _camera_listener = None
 _camera_grid_listener = None
 
@@ -2348,7 +2386,8 @@ def _camera_grid(command):
     names = [cameras.normal_name(camera["name"]) for camera in showing]
     _grid.extend(names)
     cameras.watch_all(names)
-    _tell_grid("grid", [{"name": name, "title": name.upper()} for name in names])
+    _tell_grid("grid", [{"name": name, "title": name.upper()}
+               for name in names])
 
     away = [camera["name"] for camera in cameras.gone()]
     said = f"Here are your {_NUMBERS.get(len(names), len(names))} cameras, sir."
@@ -2394,7 +2433,8 @@ def _highlight_camera(wanted):
 
     # "save it" is the highlights' only while something is highlighted.
     if wanted.get("save"):
-        showing = [camera for camera in cameras.cameras() if highlight.active(camera["name"])]
+        showing = [camera for camera in cameras.cameras(
+        ) if highlight.active(camera["name"])]
         return showing[0] if showing else (_on_screen() if wanted.get("known") else None)
 
     shown = _on_screen()
@@ -2435,7 +2475,8 @@ def _camera_sighting(command):
                 with open(found, "rb") as kept:
                     _camera_listener(kept.read(), title)
 
-                sightings._log(f"viewed  {os.path.basename(os.path.dirname(found))}")
+                sightings._log(
+                    f"viewed  {os.path.basename(os.path.dirname(found))}")
             except OSError:
                 pass
 
@@ -4282,13 +4323,6 @@ def _fast_path(command):
     # look -- so the module decides rather than the router.
     if aircraft.wanted(text):
         return _blank_result("aircraft_overhead")
-
-    # Explicit read-only market scanning; never a transaction submission. Dismissal first, as with the radar.
-    if dex_intelligence.dismissed(command):
-        return _blank_result("dex_scan_hide")
-
-    if dex_intelligence.asked(command):
-        return _blank_result("dex_scan")
 
     # The trade plan: "shall I buy or sell gold", "should I go long on
     # oil". A market from trade-plan.json and a question about trading it
@@ -6264,18 +6298,17 @@ def _handle_command(command, *, fast_only=False, probe=False):
 
         return _query(intent, sky)
 
-    if intent == "dex_scan":
-        return _query(intent, dex_intelligence.describe)
-
-    if intent == "dex_scan_hide":
-        return _query(intent, lambda: "Arbitrage scan closed, sir." if dex_intelligence.hide()
-                      else "The arbitrage scan isn't open, sir.")
-
     if intent == "open_sandbox":
         return _query(intent, lambda: _sandbox_show())
 
     if intent == "close_sandbox":
         return _query(intent, lambda: _sandbox_hide())
+
+    if intent == "open_arb_sandbox":
+        return _query(intent, lambda: _arb_sandbox_show())
+
+    if intent == "close_arb_sandbox":
+        return _query(intent, lambda: _arb_sandbox_hide())
 
     if intent == "trade_plan_hide":
         return _query(intent, lambda: "Trade plan closed, sir." if trade_plan.hide()

@@ -18,6 +18,7 @@ from speech import set_speaking_listener, stop_speaking as stop_speech
 from speech import first_sound, mark_turn, start_voice
 from news_panel import NewsPanel
 from mev_panel import MevPanel
+from arb_panel import ArbPanel
 from quran_panel import QuranPanel
 from radar_panel import RadarPanel
 from brain_panel import BrainPanel
@@ -83,13 +84,13 @@ from actions import (
     blender_fidelity,
     folder_guard,
     log_search,
+    arb_runner,
     mev_runner,
     quran,
     report_search,
     recitation,
     trader_watch,
     trade_plan,
-    dex_intelligence,
     line_watch,
     signal_watch,
     detections,
@@ -190,7 +191,8 @@ class Assistant:
         # What the cameras recognise, said in order on a thread of their own, so the board
         # reporting it is answered at once rather than after JARVIS has said it.
         self._sightings = queue.Queue()
-        threading.Thread(target=self._say_sightings, name="sightings", daemon=True).start()
+        threading.Thread(target=self._say_sightings,
+                         name="sightings", daemon=True).start()
 
         # The HUD stop button ends the spoken part of a turn. Actions are
         # never touched; only what JARVIS was going to say is dropped.
@@ -552,7 +554,8 @@ class Assistant:
 
                     self._speak_alert_locked(text, phone=False)
             except Exception as error:   # noqa: BLE001 - one bad sighting must not stop the rest
-                print(f"[JARVIS] could not say a sighting: {error}", flush=True)
+                print(
+                    f"[JARVIS] could not say a sighting: {error}", flush=True)
 
     def _on_sensor(self, payload):
         """A board on the wifi has reported. Returns what was said.
@@ -645,7 +648,8 @@ class Assistant:
         try:
             return self._phone_command(text)
         finally:
-            request_log.end(request, "answered", decide=time.monotonic() - started)
+            request_log.end(request, "answered",
+                            decide=time.monotonic() - started)
 
     def _phone_command(self, text):
         """Run a command that came from the phone, and return the words.
@@ -878,7 +882,8 @@ class Assistant:
             except Exception as error:
                 print(f"[JARVIS] command error: {error}")
                 self._say(phrases.pick("wrong"))
-                request_log.end(request, "error", decide=time.monotonic() - _heard_at)
+                request_log.end(request, "error",
+                                decide=time.monotonic() - _heard_at)
                 self._close_turn()
                 continue
 
@@ -886,7 +891,8 @@ class Assistant:
                 # Not understood: likely not meant for him. The turn ends here -- no follow-up window, and
                 # anything that queued behind it (a gold trade, a battery warning) is said now.
                 self._say(phrases.pick("unknown"))
-                request_log.end(request, "not understood", decide=time.monotonic() - _heard_at)
+                request_log.end(request, "not understood",
+                                decide=time.monotonic() - _heard_at)
                 self._close_turn()
                 continue
 
@@ -894,7 +900,8 @@ class Assistant:
                 print(
                     f"[JARVIS] {result.get('intent')} needs his name in a follow-up; not done")
                 self._say(phrases.pick("name_first"))
-                request_log.end(request, "needs his name", decide=time.monotonic() - _heard_at)
+                request_log.end(request, "needs his name",
+                                decide=time.monotonic() - _heard_at)
                 self._close_turn()
                 continue
 
@@ -911,7 +918,8 @@ class Assistant:
 
             request_log.end(
                 request, "stopped" if self._turn_stopped.is_set() else "answered",
-                to_first_word=(first_sound() - _heard_at) if first_sound() is not None else None,
+                to_first_word=(
+                    first_sound() - _heard_at) if first_sound() is not None else None,
                 decide=_handled_at - _heard_at,
                 respond=time.monotonic() - _handled_at,
             )
@@ -1036,14 +1044,16 @@ def _install_interrupt(app, hud):
                 signal.signal(number, handle)
             except (ValueError, OSError) as error:
                 # Not the main thread, or the platform will not take it: Ctrl+C then keeps its default.
-                print(f"[JARVIS] could not install the {name} handler: {error}")
+                print(
+                    f"[JARVIS] could not install the {name} handler: {error}")
 
     # Python runs a signal handler only when the interpreter regains control; this wakes it five times a
     # second whatever the HUD is doing, so Ctrl+C still lands when the HUD itself has frozen.
     pulse = QTimer(app)
     pulse.timeout.connect(lambda: None)
     pulse.start(200)
-    app._jarvis_interrupt_pulse = pulse   # a reference, so it is not garbage-collected
+    # a reference, so it is not garbage-collected
+    app._jarvis_interrupt_pulse = pulse
 
 
 def _report_fault(kind, error, trace):
@@ -1581,6 +1591,42 @@ def main():
         lambda: threading.Thread(
             target=mev_runner.disarm, daemon=True).start())
 
+    # --- ARBITRAGE PANEL ---
+    arb_sandbox = ArbPanel()
+    arb_sandbox.set_anchor(hud)
+    arb_sandbox_beam = Beam(arb_sandbox, hud)
+
+    def arb_sandbox_update(action):
+        if action == "show":
+            arb_sandbox.show_requested.emit()
+            arb_sandbox_beam.shown.emit()
+        else:
+            arb_sandbox.hide_requested.emit()
+            arb_sandbox_beam.hidden.emit()
+
+    commands.set_arb_sandbox_listener(arb_sandbox_update)
+
+    # Connect the ARM button to the runner (both block, so use a thread)
+    arb_sandbox.arm_clicked.connect(
+        lambda: threading.Thread(target=arb_runner.arm, args=(
+            arb_sandbox.line_received.emit, arb_sandbox.status_changed.emit
+        ), daemon=True).start()
+    )
+    arb_sandbox.disarm_clicked.connect(
+        lambda: threading.Thread(target=arb_runner.disarm, args=(
+            arb_sandbox.status_changed.emit,
+        ), daemon=True).start()
+    )
+
+    # Closing the panel or shutting JARVIS down stops the bot
+    arb_sandbox.closed.connect(arb_sandbox_beam.hidden.emit)
+    arb_sandbox.closed.connect(
+        lambda: threading.Thread(target=arb_runner.disarm, args=(
+            lambda s: None,), daemon=True).start()
+    )
+    hud.shutdown.connect(arb_sandbox.hide_requested.emit)
+    hud.shutdown.connect(arb_sandbox_beam.hidden.emit)
+
     # Runner to panel: signals only, since the runner emits from its own
     # thread and Qt widgets may only be touched on the main thread.
     def mev_event(kind, text):
@@ -1660,43 +1706,24 @@ def main():
     # Every Signal Desk market (trade-plan.json's signal_markets) read after each fifteen-minute close: a
     # setup confirming is said, unasked, through the same gate, and a briefing is kept after each four-hour
     # close.
-    signal_watch.set_listeners(on_say=assistant._on_alert, on_show=trade_plan.present)
+    signal_watch.set_listeners(
+        on_say=assistant._on_alert, on_show=trade_plan.present)
     signal_watch.start()
     hud.shutdown.connect(signal_watch.stop)
 
     # What the house cam recognises on its own board: what comes into view reaches the phone at once, with
     # the camera to open, and is said aloud at once -- held only while you are mid-sentence, and not said
     # at all if your question has just been answered with it (Assistant._on_sighting).
-    detections.set_listeners(on_say=assistant._on_sighting, on_phone=phone_server.sighting)
-
-    # The DEX scan: each pair's price on both exchanges and whether the gap would pay, beside the HUD.
-    dex_view = DexPanel()
-    dex_view.set_anchor(hud)
-    dex_beam = Beam(dex_view, hud)
-
-    def dex_shown(report):
-        dex_view.show_scan.emit(report)
-        dex_beam.shown.emit()
-
-    def dex_hidden():
-        dex_view.hide_requested.emit()
-        dex_beam.hidden.emit()
-
-    def dex_progress(label, done, total):
-        hud.progress_changed.emit("dex", label or "", done, total)
-
-    dex_intelligence.set_listeners(
-        on_scan=dex_shown, on_hide=dex_hidden, on_progress=dex_progress)
-    dex_view.closed.connect(dex_beam.hidden.emit)
-    hud.shutdown.connect(dex_view.hide_requested.emit)
-    hud.shutdown.connect(dex_beam.hidden.emit)
+    detections.set_listeners(
+        on_say=assistant._on_sighting, on_phone=phone_server.sighting)
 
     hud.stop_clicked.connect(assistant.stop_speaking)
 
     # Minimise: the HUD and every panel showing give way to a small core, and
     # clicking the core brings them all back. The beams look after themselves.
     mini_core = MiniCore()
-    minimiser = Minimiser(hud, mini_core, skip=lambda widget: isinstance(widget, Beam))
+    minimiser = Minimiser(
+        hud, mini_core, skip=lambda widget: isinstance(widget, Beam))
     hud.minimise_clicked.connect(minimiser.minimise)
     hud.state_changed.connect(mini_core.state_changed.emit)
     hud.muted_changed.connect(mini_core.muted_changed.emit)
