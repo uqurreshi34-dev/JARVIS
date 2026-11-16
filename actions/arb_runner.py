@@ -1,4 +1,4 @@
-"""Runs the read-only arbitrage scanner in its own subprocess, using the MEV venv."""
+"""Runs the read-only arbitrage scanner in its own subprocess, using the Rust executable."""
 import os
 import subprocess
 import sys
@@ -11,37 +11,42 @@ _lock = threading.Lock()
 _process = None
 
 
-def _mev_python():
-    """The .venv-mev interpreter (web3 lives there), found from the repo, not a hardcoded user path."""
-    candidates = [ROOT / ".venv-mev" / "Scripts" / "python.exe",   # Windows
-                  ROOT / ".venv-mev" / "bin" / "python"]           # elsewhere
-    for path in candidates:
-        if path.exists():
-            return str(path)
-    return None
-
-
 def arm(log_callback, status_callback):
     """Start the scanner; its output lines go to [log_callback]."""
     global _process
     with _lock:
         if _process is not None:
             return
-        python = _mev_python()
-        if python is None:
-            log_callback("[ARB] .venv-mev not found in the JARVIS folder; cannot start.")
+
+        # Point to your new Rust executable!
+        exe_path = Path(r"C:\rust_arb\target\release\rust_arb.exe")
+
+        if not exe_path.exists():
+            log_callback(
+                f"[ARB] Rust executable not found at {exe_path}. Did you run cargo build?")
             status_callback("STOPPED")
             return
+
         status_callback("ARMING")
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+        flags = getattr(subprocess, "CREATE_NO_WINDOW",
+                        0) if sys.platform == "win32" else 0
+
         process = subprocess.Popen(
-            [python, "-m", "actions.mev.main_arb"],
-            cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace", bufsize=1, env=env,
-            creationflags=flags)
+            [str(exe_path)],  # Run the Rust .exe directly
+            cwd=str(ROOT),   # Run from JARVIS folder so it finds the .env file
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            env=env,
+            creationflags=flags
+        )
         _process = process
+
     status_callback("ARMED")
 
     def read_output():
